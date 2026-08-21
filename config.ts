@@ -6,11 +6,12 @@ export const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 export const PATHS = {
 	root: ROOT,
-	extensions: path.join(ROOT, "extensions"),
-	teacherPrompt: path.join(ROOT, "teacher", "system-prompt.md"),
+	/** Teacher system prompt — the agent's instructions (src/agent/). */
+	teacherPrompt: path.join(ROOT, "src", "agent", "system-prompt.md"),
 	data: path.join(ROOT, "data"),
-	/** Hermetic pi agentDir: settings, auth, and NOTHING from ~/.pi/agent except a symlinked auth.json. */
-	agentDir: path.join(ROOT, "data", "agent"),
+	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
+	chats: path.join(ROOT, "data", "chats"),
+	/** Old pi session JSONLs — retroactive bootstrap input only. */
 	sessions: path.join(ROOT, "data", "sessions"),
 	graph: path.join(ROOT, "data", "graph"),
 } as const;

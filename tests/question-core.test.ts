@@ -1,5 +1,5 @@
 /**
- * Unit tests — question-core (pure logic, no pi, no server, no LLM).
+ * Unit tests — question-core (pure logic, no server, no LLM).
  */
 
 import assert from "node:assert/strict";
@@ -18,7 +18,7 @@ import {
 	shuffleOptions,
 	type QuestionData,
 	toClientQuestion,
-} from "../extensions/core/question-core.ts";
+} from "../src/core/question-core.ts";
 
 // ─── normalizeOptions ───────────────────────────────────────────────────────
 

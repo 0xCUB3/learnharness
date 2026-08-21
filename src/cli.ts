@@ -2,18 +2,15 @@
 /**
  * learning-harness CLI
  *
- *   teach [message]   launch an interactive teaching session (full pi TUI)
- *   doctor [--web]    non-interactive smoke test of the teacher wiring
- *                     (--web checks the web-dispatch extension set)
- *   serve             start the web server (teacher agent + REST + WebSocket)
  *   ingest <file>     normalize a session JSONL and print the canonical document
  *                     (Stage 1 only — extractor/merger not yet implemented)
  *   graph             print graph/ledger stats
  *   what-next         (not yet implemented)
+ *
+ * The web app (Next.js + AI SDK): npm run dev
  */
 
 import * as fs from "node:fs";
-import { doctor, runTeachingSession } from "./teacher/create-session.ts";
 import { normalizeSession } from "./extract/normalize.ts";
 import { ledgers } from "./ledger.ts";
 import { deriveAll } from "./derive.ts";
@@ -23,15 +20,6 @@ async function main() {
 	const [command, ...rest] = process.argv.slice(2);
 
 	switch (command) {
-		case "teach": {
-			await runTeachingSession(rest.join(" ") || undefined);
-			break;
-		}
-		case "doctor": {
-			const mode = rest.includes("--web") ? "web" : "tui";
-			await doctor(mode);
-			break;
-		}
 		case "ingest": {
 			const file = rest[0];
 			if (!file) {
@@ -69,7 +57,7 @@ async function main() {
 			process.exit(1);
 		}
 		default: {
-			console.log("Commands: teach [message] | doctor | ingest <file> | graph | what-next");
+			console.log("Commands: ingest <file> | graph | what-next");
 			process.exit(command ? 1 : 0);
 		}
 	}
