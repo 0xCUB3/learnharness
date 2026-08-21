@@ -12,5 +12,5 @@
 		"noEmit": true,
 		"skipLibCheck": true
 	},
-	"include": ["config.ts", "src/**/*.ts"]
+	"include": ["config.ts", "src/**/*.ts", "extensions/core/**/*.ts"]
 }

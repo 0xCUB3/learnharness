@@ -9,9 +9,18 @@ import {
 	wrapTextWithAnsi,
 } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import {
+	type OptionAnswer,
+	type QuizOption,
+	isCorrect,
+	normalizeOptions,
+	resolveCorrect,
+	shuffleOptions,
+} from "./core/question-core.ts";
 
 // ────────────────────────────────────────────────────────────────────────────
-// quiz — a GRADED sibling of ask_user_question.
+// quiz — a GRADED sibling of ask_user_question (TERMINAL mode: blocks on an
+// interactive pi-tui component until the learner answers).
 //
 // Where ask_user_question collects a preference/decision with no notion of
 // right or wrong, `quiz` poses a question that HAS a correct answer, grades the
@@ -21,24 +30,15 @@ import { Type } from "@sinclair/typebox";
 // It is intentionally options-only: single-select or multi-select. There is no
 // free-text mode and no "Other" option, because a free-text answer can't be
 // graded against a correct index.
+//
+// Pure logic (normalize/shuffle/resolve/grade) lives in ./core/question-core.ts,
+// shared with the web dispatch variant (quiz-web.ts).
 // ────────────────────────────────────────────────────────────────────────────
-
-interface QuizOption {
-	label: string;
-	value: string;
-	description?: string;
-}
 
 interface DisplayOption extends QuizOption {
 	id: string;
 	index: number;
 	isSubmit?: boolean;
-}
-
-interface OptionAnswer {
-	label: string;
-	value: string;
-	index: number; // 1-based, matches the number shown to the user
 }
 
 // The always-present "I don't know" choice. It is NOT a real option: it never
@@ -60,26 +60,6 @@ interface QuizResponse {
 
 type QuizStatus = "answered" | "cancelled" | "unavailable";
 type QuizMode = "single-select" | "multi-select";
-
-interface DisplayedOption {
-	index: number; // 1-based, in the final (possibly shuffled) display order
-	label: string;
-}
-
-interface QuizResultDetails {
-	status: QuizStatus;
-	question: string;
-	context?: string;
-	mode: QuizMode;
-	answers: OptionAnswer[];
-	correctIndices: number[];
-	options?: DisplayedOption[]; // full option list in display order, for the transcript
-	correct?: boolean;
-	dontKnow?: boolean; // user selected "I don't know" instead of guessing
-	note?: string; // optional free-text from the always-present note field (any answer)
-	explanation?: string;
-	message?: string;
-}
 
 const OptionSchema = Type.Object({
 	label: Type.String({ description: "Display label for the answer option." }),
@@ -120,80 +100,6 @@ const QuizParams = Type.Object({
 	),
 });
 
-function normalizeOptions(
-	options: Array<{ label: string; value?: string; description?: string }> | undefined,
-): QuizOption[] {
-	const seen = new Set<string>();
-	return (options || [])
-		.map((option) => ({
-			label: option.label.trim(),
-			value: option.value?.trim() || option.label.trim(),
-			description: option.description?.trim() || undefined,
-		}))
-		.filter((option) => {
-			if (option.label.length === 0) return false;
-			if (seen.has(option.value)) throw new Error(`duplicate option value "${option.value}"`);
-			seen.add(option.value);
-			return true;
-		});
-}
-
-// Fisher-Yates shuffle over a copy. Safe to reorder for display because
-// correctAnswer is keyed by value, not position — indices are resolved AFTER
-// shuffling, so grading always matches what the user actually sees.
-function shuffleOptions(options: QuizOption[]): QuizOption[] {
-	const out = [...options];
-	for (let i = out.length - 1; i > 0; i--) {
-		const j = Math.floor(Math.random() * (i + 1));
-		[out[i], out[j]] = [out[j], out[i]];
-	}
-	return out;
-}
-
-// Resolve author-supplied option value(s) to 1-based indices. Keying by value
-// (not position) makes the correct answer self-documenting: the author writes
-// `correctAnswer: "mercury"` and a typo becomes a hard error instead of a
-// silent wrong grade.
-// The harness sometimes delivers a multi-select `correctAnswer` array as a
-// JSON-stringified string (e.g. '["a", "b"]') instead of a real array, because
-// the schema union lists String first. Detect that case and parse it back into
-// an array so grading resolves against real option values. A plain single value
-// is wrapped as-is.
-function coerceCorrectAnswer(correctAnswer: string | string[]): string[] {
-	if (Array.isArray(correctAnswer)) return correctAnswer;
-	const trimmed = correctAnswer.trim();
-	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-		try {
-			const parsed = JSON.parse(trimmed);
-			if (Array.isArray(parsed)) return parsed.map((v) => String(v));
-		} catch {
-			// Not valid JSON — fall through and treat as a single literal value.
-		}
-	}
-	return [correctAnswer];
-}
-
-function resolveCorrect(
-	correctAnswer: string | string[] | undefined,
-	options: QuizOption[],
-): { indices: number[]; error?: string } {
-	if (correctAnswer === undefined) return { indices: [], error: "correctAnswer is required" };
-	const arr = coerceCorrectAnswer(correctAnswer);
-	if (arr.length === 0) return { indices: [], error: "correctAnswer is required" };
-	const byValue = new Map(options.map((o, i) => [o.value, i + 1]));
-	const indices: number[] = [];
-	for (const raw of arr) {
-		const v = typeof raw === "string" ? raw.trim() : raw;
-		const idx = byValue.get(v);
-		if (idx === undefined) {
-			const known = options.map((o) => `"${o.value}"`).join(", ");
-			return { indices: [], error: `correctAnswer "${v}" does not match any option value (${known})` };
-		}
-		indices.push(idx);
-	}
-	return { indices: Array.from(new Set(indices)).sort((a, b) => a - b) };
-}
-
 function createEditorTheme(theme: any): EditorTheme {
 	return {
 		borderColor: (s) => theme.fg("accent", s),
@@ -212,13 +118,6 @@ function addWrapped(lines: string[], text: string, width: number, indent = ""): 
 	for (const line of wrapTextWithAnsi(text, contentWidth)) {
 		lines.push(truncateToWidth(`${indent}${line}`, width));
 	}
-}
-
-function isCorrect(selectedIndices: number[], correctIndices: number[]): boolean {
-	if (selectedIndices.length !== correctIndices.length) return false;
-	const a = [...selectedIndices].sort((x, y) => x - y);
-	const b = [...correctIndices].sort((x, y) => x - y);
-	return a.every((v, i) => v === b[i]);
 }
 
 function buildStructuredResult(
@@ -256,6 +155,26 @@ function unavailableResult(question: string, mode: QuizMode, message: string, co
 function formatOptionRef(options: QuizOption[], index: number): string {
 	const opt = options.find((o, i) => i + 1 === index);
 	return `${index}. ${opt ? opt.label : "(unknown)"}`;
+}
+
+interface DisplayedOption {
+	index: number; // 1-based, in the final (possibly shuffled) display order
+	label: string;
+}
+
+interface QuizResultDetails {
+	status: QuizStatus;
+	question: string;
+	context?: string;
+	mode: QuizMode;
+	answers: OptionAnswer[];
+	correctIndices: number[];
+	options?: DisplayedOption[]; // full option list in display order, for the transcript
+	correct?: boolean;
+	dontKnow?: boolean; // user selected "I don't know" instead of guessing
+	note?: string; // optional free-text from the always-present note field (any answer)
+	explanation?: string;
+	message?: string;
 }
 
 function buildResult(

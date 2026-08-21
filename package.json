@@ -7,16 +7,41 @@
 	"scripts": {
 		"teach": "tsx src/cli.ts teach",
 		"doctor": "tsx src/cli.ts doctor",
+		"doctor:web": "tsx src/cli.ts doctor --web",
+		"test": "tsx --test tests/*.test.ts",
+		"test:unit": "tsx --test tests/question-core.test.ts tests/bridge.test.ts",
+		"e2e:live": "tsx scripts/e2e.ts",
+		"serve": "tsx src/server/index.ts",
+		"web": "vite",
+		"dev": "concurrently -n server,web -c blue,green \"npm:serve\" \"npm:web\"",
+		"build": "vite build",
+		"start": "npm run build && npm run serve",
 		"ingest": "tsx src/cli.ts ingest",
 		"graph": "tsx src/cli.ts graph",
-		"what-next": "tsx src/cli.ts what-next"
+		"what-next": "tsx src/cli.ts what-next",
+		"typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json"
 	},
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "0.84.2"
+		"@earendil-works/pi-coding-agent": "0.84.2",
+		"@fastify/static": "^8.0.0",
+		"@fastify/websocket": "^11.0.0",
+		"fastify": "^5.0.0",
+		"katex": "^0.16.11",
+		"mermaid": "^11.4.0",
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1",
+		"react-markdown": "^9.0.1",
+		"rehype-katex": "^7.0.1",
+		"remark-math": "^6.0.0"
 	},
 	"devDependencies": {
 		"@types/node": "^24.0.0",
+		"@types/react": "^18.3.5",
+		"@types/react-dom": "^18.3.0",
+		"@vitejs/plugin-react": "^4.3.1",
+		"concurrently": "^9.0.0",
 		"tsx": "^4.19.0",
-		"typescript": "^5.6.0"
+		"typescript": "^5.6.0",
+		"vite": "^6.0.0"
 	}
 }

@@ -3,7 +3,9 @@
  * learning-harness CLI
  *
  *   teach [message]   launch an interactive teaching session (full pi TUI)
- *   doctor            non-interactive smoke test of the teacher wiring
+ *   doctor [--web]    non-interactive smoke test of the teacher wiring
+ *                     (--web checks the web-dispatch extension set)
+ *   serve             start the web server (teacher agent + REST + WebSocket)
  *   ingest <file>     normalize a session JSONL and print the canonical document
  *                     (Stage 1 only — extractor/merger not yet implemented)
  *   graph             print graph/ledger stats
@@ -26,7 +28,8 @@ async function main() {
 			break;
 		}
 		case "doctor": {
-			await doctor();
+			const mode = rest.includes("--web") ? "web" : "tui";
+			await doctor(mode);
 			break;
 		}
 		case "ingest": {

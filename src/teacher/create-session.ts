@@ -23,7 +23,25 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PATHS } from "../../config.ts";
 
-export function buildTeacherRuntimeFactory(): CreateAgentSessionRuntimeFactory {
+export type TeacherMode = "tui" | "web";
+
+/** Test-only injection: replace the model + model runtime with a scripted fake. */
+export interface TeacherRuntimeOverrides {
+	model?: unknown;
+	modelRuntime?: unknown;
+}
+
+export function buildTeacherRuntimeFactory(
+	mode: TeacherMode = "tui",
+	overrides?: TeacherRuntimeOverrides,
+): CreateAgentSessionRuntimeFactory {
+	// Terminal mode: quiz/ask block on interactive pi-tui components.
+	// Web mode: quiz/ask use the dispatch shape (return immediately; the graded
+	// answer arrives as the next user message — see extensions/quiz-web.ts).
+	const extensionFiles =
+		mode === "web"
+			? [path.join(PATHS.extensions, "quiz-web.ts"), path.join(PATHS.extensions, "ask-web.ts")]
+			: [path.join(PATHS.extensions, "quiz.ts"), path.join(PATHS.extensions, "ask-user-question.ts")];
 	return async ({ cwd, sessionManager, sessionStartEvent }) => {
 		const services = await createAgentSessionServices({
 			cwd,
@@ -31,10 +49,7 @@ export function buildTeacherRuntimeFactory(): CreateAgentSessionRuntimeFactory {
 			resourceLoaderOptions: {
 				// Only the extensions we explicitly list. No discovery of ~/.pi/agent
 				// or .pi/extensions beyond what agentDir/cwd contain (they contain none).
-				additionalExtensionPaths: [
-					path.join(PATHS.extensions, "quiz.ts"),
-					path.join(PATHS.extensions, "ask-user-question.ts"),
-				],
+				additionalExtensionPaths: extensionFiles,
 				// The teacher system prompt — replaces pi's coding prompt entirely.
 				systemPrompt: PATHS.teacherPrompt,
 				// Hermetic: no skills, no prompt templates, no AGENTS.md context files.
@@ -44,6 +59,11 @@ export function buildTeacherRuntimeFactory(): CreateAgentSessionRuntimeFactory {
 				noContextFiles: true,
 			},
 		});
+		// Test injection: swap the real model runtime for a scripted fake BEFORE
+		// the session is constructed from services. Production never passes this.
+		if (overrides?.modelRuntime) {
+			(services as { modelRuntime: unknown }).modelRuntime = overrides.modelRuntime;
+		}
 		return {
 			...(await createAgentSessionFromServices({
 				services,
@@ -52,6 +72,7 @@ export function buildTeacherRuntimeFactory(): CreateAgentSessionRuntimeFactory {
 				// No read/bash/edit/write. quiz + ask_user_question (extension tools)
 				// remain enabled.
 				noTools: "builtin",
+				model: overrides?.model as never,
 			})),
 			services,
 			diagnostics: services.diagnostics,
@@ -91,9 +112,9 @@ export async function runTeachingSession(initialMessage?: string): Promise<void>
 }
 
 /** Non-interactive smoke test: verify the whole wiring boots correctly. */
-export async function doctor(): Promise<void> {
+export async function doctor(mode: TeacherMode = "tui"): Promise<void> {
 	const sessionManager = SessionManager.inMemory(PATHS.root);
-	const runtime = await buildTeacherRuntimeFactory()({
+	const runtime = await buildTeacherRuntimeFactory(mode)({
 		cwd: PATHS.root,
 		agentDir: PATHS.agentDir,
 		sessionManager,
