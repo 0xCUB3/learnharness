@@ -586,3 +586,209 @@ textarea:disabled {
 	background: var(--bg-raised);
 	border-radius: 6px;
 }
+
+/* ─── v2: transcript wrap + stick-to-bottom ─────────────────────────── */
+
+.transcript-wrap {
+	flex: 1;
+	position: relative;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.transcript-wrap .transcript {
+	flex: 1;
+}
+
+.jump-latest {
+	position: absolute;
+	bottom: 16px;
+	left: 50%;
+	transform: translateX(-50%);
+	background: var(--bg-raised);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--text);
+	font-size: 12.5px;
+	padding: 6px 14px;
+	cursor: pointer;
+	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+	z-index: 5;
+}
+.jump-latest:hover {
+	border-color: var(--accent);
+}
+
+/* ─── v2: message status (optimistic echo) ──────────────────────────── */
+
+.msg.user.sending .msg-bubble {
+	opacity: 0.55;
+}
+.msg.user.failed .msg-bubble {
+	border-color: var(--error);
+	opacity: 0.8;
+}
+.msg-status {
+	font-size: 11.5px;
+	color: var(--text-muted);
+	align-self: flex-end;
+	margin: 4px 6px 0 0;
+}
+.msg-status.error {
+	color: var(--error);
+}
+
+/* ─── v2: thinking blocks ───────────────────────────────────────────── */
+
+.thinking {
+	margin-bottom: 10px;
+}
+.thinking-toggle {
+	background: none;
+	border: none;
+	color: var(--text-muted);
+	font-size: 12.5px;
+	cursor: pointer;
+	padding: 2px 0;
+	display: inline-flex;
+	gap: 6px;
+	align-items: center;
+}
+.thinking-toggle:hover {
+	color: var(--text);
+}
+.thinking-caret {
+	font-size: 10px;
+}
+.thinking-body {
+	border-left: 2px solid var(--border);
+	padding: 4px 0 4px 12px;
+	margin-top: 6px;
+	color: var(--text-muted);
+	font-size: 13px;
+	line-height: 1.55;
+	white-space: pre-wrap;
+	max-height: 320px;
+	overflow-y: auto;
+}
+.thinking.streaming .thinking-body {
+	animation: thinking-pulse 1.6s ease-in-out infinite;
+}
+.thinking-pulse {
+	animation: thinking-pulse 1.6s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.45;
+	}
+}
+
+/* ─── v2: live streaming text ───────────────────────────────────────── */
+
+.live-text {
+	position: relative;
+}
+.stream-cursor {
+	display: inline-block;
+	width: 8px;
+	height: 15px;
+	background: var(--accent);
+	margin-left: 2px;
+	animation: cursor-blink 1s step-end infinite;
+	vertical-align: text-bottom;
+}
+@keyframes cursor-blink {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0;
+	}
+}
+
+/* ─── v2: button-based quiz options ─────────────────────────────────── */
+
+.quiz-option {
+	display: flex;
+	width: 100%;
+	text-align: left;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 9px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	cursor: pointer;
+	background: var(--bg-raised);
+	font: inherit;
+	color: inherit;
+	transition: border-color 0.12s ease;
+}
+.quiz-option:hover {
+	border-color: var(--accent);
+}
+.quiz-option.selected {
+	border-color: var(--accent);
+}
+
+.quiz-marker {
+	flex: none;
+	width: 15px;
+	height: 15px;
+	border-radius: 50%;
+	border: 1.5px solid var(--border);
+	margin-top: 3px;
+	position: relative;
+	transition: border-color 0.12s ease;
+	background: transparent;
+}
+.quiz-option.multi .quiz-marker {
+	border-radius: 4px;
+}
+.quiz-option.selected .quiz-marker {
+	border-color: var(--accent);
+}
+.quiz-option.selected .quiz-marker::after {
+	content: "";
+	position: absolute;
+	inset: 3px;
+	border-radius: 50%;
+	background: var(--accent);
+}
+.quiz-option.multi.selected .quiz-marker::after {
+	border-radius: 1px;
+}
+
+.quiz-option.dont-know {
+	border-style: dashed;
+	color: var(--text-muted);
+}
+.quiz-option.dont-know.selected {
+	color: var(--text);
+}
+
+/* answered cards: option rows are static divs — keep old marker sizing */
+.quiz-option.static .quiz-marker {
+	width: 15px;
+	height: 15px;
+	margin-top: 2px;
+}
+
+/* ─── v2: boot screen / reconnecting ────────────────────────────────── */
+
+.boot-screen {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-muted);
+	font-size: 14px;
+}
+.boot-error {
+	color: var(--error);
+}

@@ -16,7 +16,7 @@ export interface ClientToolCall {
 
 export type ClientEntry =
 	| { type: "user"; id: string; text: string }
-	| { type: "assistant"; id: string; text: string; toolCalls: ClientToolCall[] }
+	| { type: "assistant"; id: string; text: string; thinking?: string; toolCalls: ClientToolCall[] }
 	| { type: "toolResult"; id: string; toolName: string; text: string }
 	| { type: "question"; id: string; data: ClientQuestion }
 	| { type: "questionAnswered"; id: string; data: QuestionAnswerData }
@@ -36,6 +36,7 @@ export interface SessionSummary {
 
 export interface NewSessionResponse {
 	id: string;
+	file: string;
 }
 
 // ─── WS protocol ────────────────────────────────────────────────────────────
@@ -45,7 +46,7 @@ export type ServerMessage =
 	| { type: "backfill"; entries: ClientEntry[] }
 	| { type: "entry"; entry: ClientEntry }
 	| { type: "pending"; question: ClientQuestion | null }
-	| { type: "delta"; delta: string }
+	| { type: "delta"; kind: "thinking" | "text"; delta: string }
 	| { type: "streaming"; value: boolean }
 	| { type: "error"; message: string };
 

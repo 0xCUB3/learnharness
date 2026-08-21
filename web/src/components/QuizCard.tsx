@@ -1,3 +1,16 @@
+/**
+ * QuizCard — the interactive answer UI for a pending quiz/ask question.
+ *
+ * Options are BUTTONS with a custom marker: React state is the single source
+ * of truth for selection (no native radio/checkbox inputs fighting it — that
+ * desync was the v1 selection bug). One click anywhere on the row selects.
+ *
+ * Semantics mirror the terminal quiz:
+ *   - single-select: exactly one of {options, Other (ask), I-don't-know (quiz)}
+ *   - multi-select: toggle options; I-don't-know/Other are exclusive toggles
+ *   - text mode (ask): free-form answer
+ */
+
 import { useMemo, useState } from "react";
 import type { ClientQuestion } from "../../../src/shared/protocol.ts";
 
@@ -6,55 +19,64 @@ interface QuizCardProps {
 	send: (msg: unknown) => void;
 }
 
-/**
- * QuizCard — the interactive answer UI for a pending quiz/ask question.
- * Mirrors the terminal quiz semantics: single/multi-select, automatic
- * "I don't know" (quiz only), "Other" free text (ask only), optional note.
- * Grading happens server-side; the graded card arrives afterwards as a
- * questionAnswered entry.
- */
 export function QuizCard({ question, send }: QuizCardProps) {
 	const multi = question.mode === "multi-select";
 	const isQuiz = question.kind === "quiz";
 	const isText = question.mode === "text";
 
-	const [selected, setSelected] = useState<Set<string>>(new Set());
+	// Selection state — the ONLY source of truth.
+	const [selected, setSelected] = useState<string[]>([]);
 	const [dontKnow, setDontKnow] = useState(false);
+	const [otherSelected, setOtherSelected] = useState(false);
 	const [other, setOther] = useState("");
-	const [showOther, setShowOther] = useState(false);
 	const [text, setText] = useState("");
 	const [note, setNote] = useState("");
+
+	const pickOption = (value: string) => {
+		setDontKnow(false);
+		if (multi) {
+			setSelected((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+		} else {
+			setOtherSelected(false);
+			setSelected([value]);
+		}
+	};
+
+	const pickOther = () => {
+		if (multi) {
+			setOtherSelected((v) => !v);
+		} else {
+			setDontKnow(false);
+			setSelected([]);
+			setOtherSelected(true);
+		}
+	};
+
+	const pickDontKnow = () => {
+		if (dontKnow) {
+			setDontKnow(false);
+		} else {
+			setDontKnow(true);
+			setSelected([]);
+			setOtherSelected(false);
+		}
+	};
 
 	const canSubmit = useMemo(() => {
 		if (dontKnow) return true;
 		if (isText) return text.trim().length > 0;
-		if (showOther && other.trim()) return true;
-		return selected.size > 0;
-	}, [dontKnow, isText, text, showOther, other, selected]);
-
-	const toggle = (value: string) => {
-		setDontKnow(false);
-		setSelected((prev) => {
-			const next = new Set(multi ? prev : undefined);
-			if (multi) {
-				if (next.has(value)) next.delete(value);
-				else next.add(value);
-			} else {
-				next.clear();
-				next.add(value);
-			}
-			return next;
-		});
-	};
+		if (otherSelected && other.trim()) return true;
+		return selected.length > 0;
+	}, [dontKnow, isText, text, otherSelected, other, selected]);
 
 	const submit = () => {
 		if (!canSubmit) return;
 		send({
 			type: "answer",
 			questionId: question.id,
-			dontKnow,
-			values: [...selected],
-			other: showOther && other.trim() ? other.trim() : undefined,
+			dontKnow: dontKnow || undefined,
+			values: selected.length > 0 ? selected : undefined,
+			other: otherSelected && other.trim() ? other.trim() : undefined,
 			text: isText ? text.trim() : undefined,
 			note: note.trim() || undefined,
 		});
@@ -79,41 +101,45 @@ export function QuizCard({ question, send }: QuizCardProps) {
 					onChange={(e) => setText(e.target.value)}
 				/>
 			) : (
-				<div className="quiz-options">
-					{question.options.map((opt) => (
-						<label key={opt.value} className={`quiz-option ${selected.has(opt.value) ? "selected" : ""}`}>
-							<input
-								type={multi ? "checkbox" : "radio"}
-								name={question.id}
-								checked={selected.has(opt.value)}
-								onChange={() => toggle(opt.value)}
-							/>
-							<span className="quiz-option-label">
-								{opt.label}
-								{opt.description && <span className="quiz-option-desc">{opt.description}</span>}
-							</span>
-						</label>
-					))}
+				<div className="quiz-options" role="group" aria-label="options">
+					{question.options.map((opt) => {
+						const isSelected = selected.includes(opt.value);
+						return (
+							<button
+								key={opt.value}
+								type="button"
+								className={`quiz-option ${multi ? "multi" : "single"} ${isSelected ? "selected" : ""}`}
+								role={multi ? "checkbox" : "radio"}
+								aria-checked={isSelected}
+								onClick={() => pickOption(opt.value)}
+							>
+								<span className="quiz-marker" aria-hidden="true" />
+								<span className="quiz-option-label">
+									{opt.label}
+									{opt.description && <span className="quiz-option-desc">{opt.description}</span>}
+								</span>
+							</button>
+						);
+					})}
 					{!isQuiz && (
-						<label className={`quiz-option ${showOther ? "selected" : ""}`}>
-							<input
-								type={multi ? "checkbox" : "radio"}
-								name={question.id}
-								checked={showOther}
-								onChange={() => {
-									setDontKnow(false);
-									setShowOther((v) => !v);
-								}}
-							/>
+						<button
+							type="button"
+							className={`quiz-option ${multi ? "multi" : "single"} ${otherSelected ? "selected" : ""}`}
+							role={multi ? "checkbox" : "radio"}
+							aria-checked={otherSelected}
+							onClick={pickOther}
+						>
+							<span className="quiz-marker" aria-hidden="true" />
 							<span className="quiz-option-label">Other</span>
-						</label>
+						</button>
 					)}
-					{showOther && (
+					{otherSelected && (
 						<input
 							type="text"
 							className="quiz-other"
 							placeholder="Your custom answer…"
 							value={other}
+							autoFocus
 							onChange={(e) => setOther(e.target.value)}
 						/>
 					)}
@@ -121,17 +147,16 @@ export function QuizCard({ question, send }: QuizCardProps) {
 			)}
 
 			{isQuiz && (
-				<label className={`quiz-option dont-know ${dontKnow ? "selected" : ""}`}>
-					<input
-						type="checkbox"
-						checked={dontKnow}
-						onChange={() => {
-							setDontKnow((v) => !v);
-							if (!dontKnow) setSelected(new Set());
-						}}
-					/>
+				<button
+					type="button"
+					className={`quiz-option dont-know ${dontKnow ? "selected" : ""}`}
+					role="checkbox"
+					aria-checked={dontKnow}
+					onClick={pickDontKnow}
+				>
+					<span className="quiz-marker" aria-hidden="true" />
 					<span className="quiz-option-label">I don&apos;t know</span>
-				</label>
+				</button>
 			)}
 
 			<textarea

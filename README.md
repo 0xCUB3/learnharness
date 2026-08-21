@@ -34,7 +34,7 @@ npm run graph                        # ledger stats
 Three layers, LLM only at the top:
 
 1. **Unit** (`tests/question-core.test.ts`, `tests/bridge.test.ts`) — pure logic: grading, exact-set matching, option shuffling/index resolution, answer formatting, pending-question re-arm, the bridge state machine. No pi, no network.
-2. **Scripted integration** (`tests/integration-quiz.test.ts`) — the full pi agent loop with real extensions and real session persistence, but the LLM replaced by a scripted fake model (`src/testing/scripted-model.ts`). Deterministically verifies the quiz dispatch contract: question persisted → tool returns immediately → agent ends turn → answer graded → `[Quiz answer]` user message → agent continues → resume re-arms pending questions.
+2. **Scripted integration** (`tests/integration-quiz.test.ts`, `tests/server.test.ts`) — the full pi agent loop with real extensions and real session persistence, but the LLM replaced by a scripted fake model (`src/testing/scripted-model.ts`). Deterministically verifies the quiz dispatch contract: question persisted → tool returns immediately → agent ends turn → answer graded → `[Quiz answer]` user message → agent continues → resume re-arms pending questions.
 3. **Live smoke** (`scripts/e2e.ts`) — real model over real WebSocket. For verifying actual model *behavior* (does it follow the end-your-turn convention?) — which is a prompt-engineering question, verified by using the app, not by CI.
 
 ## Layout

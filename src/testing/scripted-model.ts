@@ -21,9 +21,10 @@ export interface ScriptedToolCall {
 	arguments: Record<string, unknown>;
 }
 
-/** One scripted assistant turn: tool calls and/or final text. */
+/** One scripted assistant turn: reasoning, tool calls, and/or final text. */
 export interface ScriptedTurn {
 	text?: string;
+	thinking?: string;
 	toolCalls?: ScriptedToolCall[];
 }
 
@@ -139,6 +140,17 @@ export function createScriptedRuntime(script: ScriptedTurn[]): ScriptedRuntime {
 
 		// "start"
 		stream.push({ type: "start", partial: { ...msg, content: [] } });
+
+		// thinking (reasoning) — split into two deltas so accumulation is tested
+		if (turn.thinking !== undefined && turn.thinking.length > 0) {
+			content.push({ type: "thinking", thinking: turn.thinking });
+			const idx = content.length - 1;
+			stream.push({ type: "thinking_start", contentIndex: idx, partial: { ...msg, content: [...content] } });
+			const mid = Math.ceil(turn.thinking.length / 2);
+			stream.push({ type: "thinking_delta", contentIndex: idx, delta: turn.thinking.slice(0, mid), partial: { ...msg, content: [...content] } });
+			stream.push({ type: "thinking_delta", contentIndex: idx, delta: turn.thinking.slice(mid), partial: { ...msg, content: [...content] } });
+			stream.push({ type: "thinking_end", contentIndex: idx, content: turn.thinking, partial: { ...msg, content: [...content] } });
+		}
 
 		// tool calls
 		for (const tc of turn.toolCalls ?? []) {

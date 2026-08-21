@@ -4,10 +4,10 @@ import { GraphPlaceholder } from "../components/GraphPlaceholder.tsx";
 
 interface HomeProps {
 	sessions: SessionSummary[];
-	onStart: (topic: string) => void;
-	onResume: (file: string) => void;
+	onStart: (topic: string) => Promise<void>;
+	onOpen: (file: string) => void;
 	onRefresh: () => void;
-	hasActive: boolean;
+	error: string | null;
 }
 
 function formatDate(iso: string): string {
@@ -24,7 +24,7 @@ function formatDate(iso: string): string {
 	}
 }
 
-export function Home({ sessions, onStart, onResume, onRefresh }: HomeProps) {
+export function Home({ sessions, onStart, onOpen, onRefresh, error }: HomeProps) {
 	const [topic, setTopic] = useState("");
 	const [busy, setBusy] = useState(false);
 
@@ -52,7 +52,7 @@ export function Home({ sessions, onStart, onResume, onRefresh }: HomeProps) {
 				<div className="session-list">
 					{sessions.length === 0 && <div className="empty">No sessions yet</div>}
 					{sessions.map((s) => (
-						<button key={s.id} className="session-item" onClick={() => onResume(s.file)}>
+						<button key={s.id} className="session-item" onClick={() => onOpen(s.file)}>
 							<div className="session-name">{s.name || s.preview || "Untitled"}</div>
 							<div className="session-meta">
 								{formatDate(s.updatedAt)} · {s.messageCount} msg{s.messageCount === 1 ? "" : "s"}
@@ -75,9 +75,10 @@ export function Home({ sessions, onStart, onResume, onRefresh }: HomeProps) {
 						}}
 					/>
 					<button onClick={() => void submit()} disabled={busy || !topic.trim()}>
-						{busy ? "…" : "Start"}
+						{busy ? "Starting…" : "Start"}
 					</button>
 				</div>
+				{error && <div className="error-banner">{error}</div>}
 			</main>
 		</div>
 	);
