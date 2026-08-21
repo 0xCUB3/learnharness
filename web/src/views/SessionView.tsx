@@ -10,7 +10,7 @@
  *      and the composer.
  */
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { DisplayEntry, SessionState } from "../useSession.ts";
 import { useSession } from "../useSession.ts";
 import { Markdown } from "../components/Markdown.tsx";
@@ -29,7 +29,7 @@ interface SessionViewProps {
 /** User messages already rendered as answer cards — don't duplicate them. */
 const HIDDEN_USER_PREFIXES = ["[Quiz answer]", "[Answer to your question]"];
 
-function EntryBlock({ entry }: { entry: DisplayEntry }) {
+export function EntryBlock({ entry }: { entry: DisplayEntry }) {
 	switch (entry.type) {
 		case "user":
 			if (HIDDEN_USER_PREFIXES.some((p) => entry.text.startsWith(p))) return null;
@@ -37,7 +37,9 @@ function EntryBlock({ entry }: { entry: DisplayEntry }) {
 		case "assistant":
 			return <AssistantMessage text={entry.text} thinking={entry.thinking} toolCalls={entry.toolCalls} />;
 		case "toolResult":
-			return <div className="tool-result">{entry.text}</div>;
+			// Internal plumbing for the LLM ("Quiz displayed to the learner,
+			// end your turn…") — never learner-visible.
+			return null;
 		case "question":
 			// Rendered by the pending-question flow; when answered, the
 			// questionAnswered entry renders instead.

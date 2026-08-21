@@ -7,7 +7,7 @@
  * survives reloads and resumes.
  */
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { ClientToolCall } from "../../../src/shared/protocol.ts";
 import { Markdown } from "./Markdown.tsx";
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import type { SessionSummary } from "../../../src/shared/protocol.ts";
 import { GraphPlaceholder } from "../components/GraphPlaceholder.tsx";
 

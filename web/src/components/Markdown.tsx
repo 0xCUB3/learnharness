@@ -1,8 +1,7 @@
-import { memo, useEffect, useRef, useState } from "react";
+import React, { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
 
 /**
  * Markdown — renders assistant prose with LaTeX (KaTeX) and mermaid diagrams
@@ -73,7 +72,9 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
 						return <pre>{children}</pre>;
 					},
 				}}
-			/>
+			>
+				{text}
+			</ReactMarkdown>
 		</div>
 	);
 });

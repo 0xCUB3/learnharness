@@ -4,7 +4,7 @@
  * auto-scrolling pauses and a "jump to latest" pill appears.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import React, { useEffect, useRef, useState, type ReactNode } from "react";
 
 export function Transcript({ children, scrollToken }: { children: ReactNode; scrollToken: string | number }) {
 	const ref = useRef<HTMLDivElement>(null);

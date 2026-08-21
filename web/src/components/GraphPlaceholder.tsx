@@ -1,3 +1,5 @@
+import React from "react";
+
 /**
  * GraphPlaceholder — the home view's main panel. Deliberately isolated: the
  * real knowledge graph (territory map, domain clusters, frontier) is a

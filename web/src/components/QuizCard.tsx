@@ -11,7 +11,7 @@
  *   - text mode (ask): free-form answer
  */
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import type { ClientQuestion } from "../../../src/shared/protocol.ts";
 
 interface QuizCardProps {

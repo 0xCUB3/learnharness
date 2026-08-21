@@ -10,7 +10,7 @@
  * resumes via POST before connecting.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { NewSessionResponse, SessionSummary } from "../../src/shared/protocol.ts";
 import { Home } from "./views/Home.tsx";
 import { SessionView } from "./views/SessionView.tsx";
