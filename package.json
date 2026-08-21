@@ -1,0 +1,22 @@
+{
+	"name": "learning-harness",
+	"version": "0.1.0",
+	"description": "A standalone learning harness built on the pi agent SDK: teacher agent, session artifacts, and a derived knowledge graph of what the learner knows.",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"teach": "tsx src/cli.ts teach",
+		"doctor": "tsx src/cli.ts doctor",
+		"ingest": "tsx src/cli.ts ingest",
+		"graph": "tsx src/cli.ts graph",
+		"what-next": "tsx src/cli.ts what-next"
+	},
+	"dependencies": {
+		"@earendil-works/pi-coding-agent": "0.84.2"
+	},
+	"devDependencies": {
+		"@types/node": "^24.0.0",
+		"tsx": "^4.19.0",
+		"typescript": "^5.6.0"
+	}
+}
