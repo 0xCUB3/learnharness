@@ -31,14 +31,17 @@ A single node model: propositions at one-reasoning-step grain, `requires`/`suppo
 
 Carried over unchanged from the design doc: known (evidence property) vs understood (derived structural property); event ledger as source of truth with derived state recomputed; anchored 5-level calibration rubric; misconception nodes as first-class structure; candidate node class for frontier territory.
 
-### Rendering (direction; library choice pending research)
+### Rendering (DECIDED — research report 2026-08-22)
 
-- **Lightweight above all.** Runtime performance matters; interactivity does not.
-- Physics only for **placement + stabilization** (Obsidian-style settle), then the graph goes static — near-zero idle CPU. No dragging, no force sliders, no editing interactions.
-- Pan + zoom (trivial), labels appearing at zoom thresholds.
-- Target feel: the Obsidian graph — dots, thin edges, settled physics.
-- Layout architecture options under research: client-side simulation on mount vs. precomputed coordinates (server/worker, e.g. d3-force or forceatlas2 run headless) with "run N ticks then freeze."
-- Candidates under research: sigma.js (WebGL), d3-force + custom canvas renderer, cosmos/cosmograph, react-force-graph-2d. A research report lands separately and the decision gets recorded here.
+- **Library: sigma.js v3 + graphology + graphology-layout-forceatlas2.** ~40 KB gzipped all-in — half of vis-network, a third of cytoscape, far below react-force-graph (~250 KB deps) and cosmos.gl (luma.gl stack).
+- **Layout: synchronous run-then-freeze.** `forceAtlas2.assign(graph, { iterations: 100, settings: inferSettings(graph) })` runs once, writes x/y, and no animation loop ever starts — near-zero idle CPU (sigma only redraws on camera/graph events). <150 ms at hundreds of nodes; at ~2k enable `barnesHutOptimize`, then the bundled Web Worker, then server-cached positions — in that order, only if latency bites.
+- **Labels at zoom:** sigma's `labelRenderedSizeThreshold` replicates Obsidian's "text fade threshold" exactly.
+- **Pan/zoom** built in; hover/click events (`enterNode`, `clickNode`) free. Typed edges: `EdgeArrowProgram` and/or two edge colors for `requires` vs `supports`.
+- **React integration:** thin ~40-line `useEffect` wrapper (sigma is imperative; `@react-sigma/core` exists but is optional).
+- **Obsidian internals (confirmed by research):** PixiJS **WebGL** renderer (canvas fallback), custom d3-force-style simulation (its four force sliders map 1:1 onto d3-force primitives), zoom-gated label fade, alpha-decay settling. Our chosen stack reproduces that feel with a documented, maintained library.
+- Rejected: vis-network / cytoscape.js (Canvas 2D, 3× bundle, editing features we don't need), react-force-graph-2d (best freeze API but heaviest dep tree; its strength is *animated* simulation, which we explicitly don't want), cosmos.gl (GPU forces — overkill below ~10k nodes).
+- Pre-implementation validation (cheap): 2k-node synthetic benchmark to confirm layout time + render smoothness before committing.
+- Physics is for **placement only** — no dragging, no sliders, no editing interactions. Pan + zoom only.
 
 ### Home page
 
@@ -94,7 +97,7 @@ Goal: a learning session must look and feel structurally different from a ChatGP
 
 ## 5. Open questions
 
-1. Graph rendering library + layout architecture (research in flight — record decision here when it lands).
+1. ~~Graph rendering library + layout architecture~~ — **decided 2026-08-22: sigma.js + forceatlas2, run-then-freeze** (see §1). Remaining: run the 2k-node synthetic benchmark before implementation.
 2. What exactly the naive-union v1 shows for overlapping topics across sessions (duplicate nodes acceptable until consolidation? — presumed yes, cosmetic only).
 3. How the probe phase's questions map onto tree nodes when no tree exists yet (probe happens *before* the plan is written — do probe outcomes attach to a provisional node set, or to the eventual tree retroactively?).
 4. Home-graph v1 interactions beyond pan/zoom (node click → session list? — presumed cheap yes).
