@@ -24,6 +24,8 @@ Execution plan for `docs/vision.md`. Section references (§) point into that doc
 
 **Gate 1 (me, browser):** existing sessions load clean; a live session authors a tree (verify JSON); new math delimiters render and `$` stays currency; mermaid renders properly; a research job runs async with a live indicator and the teacher receives the result via continuation. Gates green.
 
+**GATE 1 RESULTS (2026-08-22, PASSED):** old sessions clean, zero console errors. Live chain-rule session authored a 4-node tree via plan_init + plan_set_current, persisted in the chat record. \(…\) KaTeX rendered throughout the live lesson. Mermaid: valid diagram renders dark-themed with pan/zoom chrome; a model syntax error degraded gracefully into W3's dark fallback (prompt fix shipped: label-quoting rule). Research job ran 88s with live `web_search:`/`web_fetch:` activity lines; sourced brief landed. **Found+fixed:** setMessages never fires sendAutomaticallyWhen (SDK only checks inside addToolOutput) — syncFromServer now triggers the continuation, plus a mount-continuation effect for reloads. Bonus root cause (W3): missing streamdown `@source` Tailwind directive had left ALL streamdown chrome unstyled.
+
 ## Wave 2 — three parallel workers
 
 - **W4 · Graph store + home view** (§1): `src/core/graph.ts` (model + naive-union emission from session trees + tagged quiz outcomes), `data/graph/` store, emission on chat completion, `GET /api/graph`, `components/graph-view.tsx` (sigma.js + forceatlas2 run-then-freeze, state colors, labels at zoom, pan/zoom — per the rendering decision), home page integration, 2k-node synthetic benchmark script, tests.

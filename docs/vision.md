@@ -169,14 +169,14 @@ The teacher's context window and attention are precious — it has the lesson to
 
 ## 4. Roadmap (dependency-ordered)
 
-1. **Plan-tree tools + session state** — structured tools, tree persisted in the chat store, `set_current` tracking. (Everything else depends on this.)
+1. **Plan-tree tools + session state** — structured tools, tree persisted in the chat store, `set_current` tracking. (Everything else depends on this.) **✅ Wave 1 (W1): 8 DAG-validated tools, prompt fragment, live-verified (plan_init + set_current in a real session).**
 2. **Bare-bones global graph + home view** — live emission from tree tools into a graph store, naive-union merge, home page renders it with the chosen lightweight renderer. *This is the "see something appear even from a partial session" milestone.*
 3. **Phase separation** — probe/teach marker, transcript divider, collapsed teach-phase checks.
 4. **Right-panel tree view** — persistent, current-position highlight.
 5. **Background consolidation** — merge adjudication, calibration, prose-only edges.
 6. **Demo capability** — the `demo` artifact contract (sandboxed iframe, error-fix loop) + the **demo-builder sub-agent** that tests code before delivery (§2.5). High value; slots in any time after step 1.
-6b. **Researcher tool** — fact verification for the teacher (§2.5); cheap port of proven pi pieces.
-7. **Presentation fixes** — LaTeX delimiters, line breaks, mermaid integration.
+6b. **Researcher tool** — fact verification for the teacher (§2.5); cheap port of proven pi pieces. **✅ Wave 1 (W2): async job protocol, live activity card, sourced brief, teacher continuation. Live-verified.**
+7. **Presentation fixes** — LaTeX delimiters, line breaks, mermaid integration. **✅ Wave 1 (W3): \(…\)/\[…\] contract ($ literal forever), remark-breaks, dark mermaid + styled streamdown chrome. Live-verified.**
 8. **Structural-identity candidates** (from §2 ideation, pending selection): sectioned lesson-document transcript, gated progression, typed blocks, session-state strip.
 9. **Later:** dictation (Deepgram token-mint + AudioWorklet capture), frontier expansion + what-next queries (new territory / repairs / conversions), spaced repetition on the event ledger, practice exercises, Electron.
 
