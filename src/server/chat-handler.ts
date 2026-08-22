@@ -51,10 +51,13 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 			// W4: fold this chat into the knowledge-graph ledgers (tree nodes /
 			// edges, quiz outcomes, taught events) — synchronous but tiny
 			// (append-only JSONL), and errors never touch the response.
-			try {
-				emitChat(chatId);
-			} catch (err) {
-				console.error(`[chat ${chatId}] graph emission failed:`, err);
+			// Skipped under tests: scripted chats are fixtures, not knowledge.
+			if (process.env.NODE_ENV !== "test") {
+				try {
+					emitChat(chatId);
+				} catch (err) {
+					console.error(`[chat ${chatId}] graph emission failed:`, err);
+				}
 			}
 		},
 	});
