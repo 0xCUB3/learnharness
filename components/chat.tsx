@@ -22,7 +22,7 @@ import { SidebarToggle } from "@/components/sidebar";
 import type { TeacherUIMessage } from "@/src/agent/ui-message";
 import type { ArtifactPartProps } from "@/src/core/contracts";
 import type { QuestionAnswerData } from "@/src/core/question-core";
-import { findPendingToolCall } from "@/src/core/pending";
+import { findPendingJobCall, findPendingToolCall } from "@/src/core/pending";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
@@ -92,7 +92,11 @@ export function Chat({
 		(messages.at(-1)?.parts.some((p) => isToolUIPart(p) && p.state === "input-streaming") ?? false);
 
 	const [text, setText] = useState("");
-	const canSend = text.trim().length > 0 && !pending;
+	// Jobs gate sending too (an unanswered tool call in the outbound list would
+	// break provider conversion — contracts.ts "THE ASYNC PROTOCOL" §5), but
+	// they don't dock: the running job's activity card sits in the transcript.
+	const pendingJob = findPendingJobCall(messages);
+	const canSend = text.trim().length > 0 && !pending && !pendingJob;
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
@@ -103,7 +107,7 @@ export function Chat({
 
 	const onSend = () => {
 		const t = text.trim();
-		if (!t || busy || pending) return;
+		if (!t || busy || pending || pendingJob) return;
 		setText("");
 		void sendMessage({ text: t });
 	};
