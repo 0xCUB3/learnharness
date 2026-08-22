@@ -96,7 +96,7 @@ export function Chat({
 
 			<div className="relative min-h-0 flex-1">
 				<Conversation className="h-full">
-					<ConversationContent className="h-full gap-0 p-0">
+					<ConversationContent className="min-h-full gap-0 p-0">
 						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
 							{messages.length === 0 && !busy && (
 								<ConversationEmptyState
@@ -204,22 +204,60 @@ function DockOverlay({
 	composer: React.ReactNode;
 	onSubmitAnswer: (output: QuestionAnswerData) => void;
 }) {
-	const { isAtBottom, scrollToBottom } = useStickToBottomContext();
-	const [forceOpen, setForceOpen] = useState(false);
-	useEffect(() => {
-		if (!isAtBottom) setForceOpen(false);
-	}, [isAtBottom]);
-	const expanded = isAtBottom || forceOpen;
+	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
+	const [expanded, setExpanded] = useState(true);
 
-	const mode = pending ? `question:${pending.toolCallId}` : "chat";
-
-	// A new question while the learner is at the bottom: scroll so the dock
-	// never covers the transcript tail. (Scrolled up → collapsed bar, no yank.)
 	const pendingId = pending?.toolCallId ?? null;
+
+	// New question: open expanded if the learner is following at the bottom
+	// (scroll to reveal it); if they're reading history, arrive as the slim bar.
 	useEffect(() => {
-		if (pendingId && isAtBottom) void scrollToBottom();
+		if (pendingId) {
+			setExpanded(isAtBottom);
+			if (isAtBottom) void scrollToBottom();
+		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- fire only when a NEW question lands
 	}, [pendingId]);
+
+	// ── Collapse state machine with hysteresis ──
+	// Collapsing frees ~Δpx of flow height. If it happened while the learner is
+	// within Δ of the bottom, the browser clamps scrollTop to the new max —
+	// landing them AT the bottom, which re-expands the dock, which re-collapses…
+	// the oscillation. So: collapse only once scrolled a full dock-height past
+	// the bottom (clamp-proof), expand only within 16px of the bottom, and leave
+	// a wide dead band between the two thresholds. Heights measured live.
+	const expandedRef = useRef(expanded);
+	expandedRef.current = expanded;
+	const pendingRef = useRef(!!pending);
+	pendingRef.current = !!pending;
+	const expandedHRef = useRef(0);
+	const collapsedHRef = useRef(42);
+
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		const onScroll = () => {
+			if (!pendingRef.current) return;
+			const d = el.scrollHeight - el.clientHeight - el.scrollTop;
+			const delta = Math.max(expandedHRef.current - collapsedHRef.current, 240);
+			if (expandedRef.current) {
+				if (d > delta + 64) setExpanded(false);
+			} else if (d < 16) {
+				setExpanded(true);
+				void scrollToBottom();
+			}
+		};
+		el.addEventListener("scroll", onScroll, { passive: true });
+		return () => el.removeEventListener("scroll", onScroll);
+	}, [scrollRef, scrollToBottom]);
+
+	const recordHeight = (h: number) => {
+		if (!pendingRef.current) return;
+		if (expandedRef.current) expandedHRef.current = h;
+		else collapsedHRef.current = h;
+	};
+
+	const mode = pending ? `question:${pending.toolCallId}` : "chat";
 
 	// Height morph: animate the shell from its previous height to its new one
 	// whenever the variant (chat ↔ question ↔ collapsed bar) changes. Typing
@@ -235,11 +273,16 @@ function DockOverlay({
 			// Same variant: keep the settled height fresh, but never measure while
 			// a morph is in flight — getBoundingClientRect would read the ANIMATED
 			// value and corrupt the start height of the next morph.
-			if (el.getAnimations().length === 0) p.height = el.getBoundingClientRect().height;
+			if (el.getAnimations().length === 0) {
+				const h = el.getBoundingClientRect().height;
+				p.height = h;
+				recordHeight(h);
+			}
 			return;
 		}
 		el.getAnimations().forEach((a) => a.cancel()); // flush to natural height before measuring
 		const h = el.getBoundingClientRect().height;
+		recordHeight(h);
 		if (p && Math.abs(p.height - h) > 1) {
 			el.animate([{ height: `${p.height}px` }, { height: `${h}px` }], {
 				duration: 180,
@@ -263,7 +306,7 @@ function DockOverlay({
 									input={pending.input as never}
 									expanded={expanded}
 									onExpand={() => {
-										setForceOpen(true);
+										setExpanded(true);
 										void scrollToBottom();
 									}}
 									onSubmit={onSubmitAnswer}
