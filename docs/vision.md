@@ -86,6 +86,26 @@ The note field is not an auxiliary input — it's the channel where the learner 
 2. **Transport + transcription:** the pi `dictate` extension's proven recipe ports directly — Deepgram streaming (`nova-3`, `smart_format`, `punctuate`, `endpointing=300`), per-utterance finals. Architecture: a server route mints a **short-lived Deepgram token**, the browser connects to Deepgram's WSS directly (API key never touches the client). On-device whisper (transformers.js/WebGPU) is the private/offline alternative — deferred unless Deepgram disappoints.
 3. **UX:** mic button in the composer blob; live level meter (AnalyserNode — the pi extension's responsive visuals rebuilt for web); transcript lands in the textarea/field, editable before send; Escape cancels; **a finished dictation is never lost** (carried over from the pi extension's hard-won UX lessons).
 
+### It is not a chat — the presentation principle (DECIDED direction, 2026-08-22)
+
+A session is functionally a conversation — the learner talks, reasons, and steers constantly; that two-way flow is *how it works best*. But it must never be **presented** as a chat. Forget the chat interface entirely. The resolution of this paradox:
+
+**Asymmetry of artifact.** In a chat, both parties produce the same object (messages) in the same lane — that's what makes it *look* like a chat. In a lesson, the two parties produce fundamentally different kinds of things:
+
+- **The teacher writes the document.** Prose, sections, diagrams, demos, checks — the teacher's output is structural; it becomes the lesson artifact itself. The teacher doesn't "send messages"; it *writes the lesson*. (The whiteboard.)
+- **The learner writes in the margins.** Responses, questions, reasoning, yaps — the learner's output is contributory; it *anchors to points in the document*: margin notes, response slots, Q&A quote-boxes. (The floor / the voice.)
+
+Two different instruments, not two identical keyboards. Consequences:
+
+- **Bubbles die.** Teacher text renders as document typography (headings, prose, full-width blocks). Learner text renders as annotation blocks (bordered note cards, anchored quotes) — never right-aligned bubbles.
+- **The unit is the block, not the message.** Sections, paragraphs, diagrams, demos, checks, Q&A boxes, margin notes.
+- **Chronology yields to structure.** Scroll order is the document's order (tree sections), not pure time. A question about §2 asked while the teacher writes §4 anchors to §2.
+- **Q&A becomes document furniture.** A learner question renders as a quoted card with the teacher's answer as prose beneath — a textbook "reader question" box, not a turn pair.
+- **The composer becomes a response field.** Same floating blob, reframed: its output lands as an annotation anchored to the current position, not as the next bubble in a stream.
+- What stays: turn-taking underneath — the LLM still sees a conversation. This is a **presentation-layer** change, not an interaction-model change.
+
+References: textbook marginalia, Hypothesis/Genius annotations, Observable notebooks (a document of live cells), the whiteboard-and-floor seminar. Vocabulary matters: they're **sessions/lessons**, never "chats."
+
 ### Structural identity — how a session differs from a chat (ideation, 2026-08-22)
 
 A chat has two bubble types, amnesia per message, and no state. What the medium lets us do instead — strongest candidates first:
