@@ -99,6 +99,9 @@ export interface LedgerEvent {
 	kind: LedgerEventKind;
 	chatId: string;
 	at: string;
+	/** Idempotency key: the quiz part's toolCallId or `taught:<treeNodeId>` —
+	 * re-emission of the same chat must never double-record an event. */
+	ref?: string;
 	/** The learner's quiz note — diagnostic gold (vision §1 calibration). */
 	note?: string;
 	/** The quiz question text, when nodeId is null (later attribution input). */
@@ -205,6 +208,24 @@ export interface VisualResult {
 	svg: string;
 	notes?: string;
 }
+
+// ─── Demo iframe bridge (W6) ────────────────────────────────────────────────
+// postMessage protocol between the sandboxed demo iframe and its parent card.
+// The bridge script is auto-injected into every demo HTML by the demo-card
+// renderer (never the model's job): ResizeObserver → DEMO_RESIZE with the
+// document height; window.onerror → DEMO_ERROR with the message.
+
+export interface DemoResizeMessage {
+	type: "demo-resize";
+	height: number;
+}
+
+export interface DemoErrorMessage {
+	type: "demo-error";
+	message: string;
+}
+
+export type DemoBridgeMessage = DemoResizeMessage | DemoErrorMessage;
 
 // ─── Artifact renderer registry (client extension point) ────────────────────
 

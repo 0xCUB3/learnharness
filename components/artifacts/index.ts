@@ -1,6 +1,9 @@
 import type { ComponentType } from "react";
 import type { ArtifactPartProps } from "@/src/core/contracts";
+import { DemoCard } from "@/components/artifacts/demo-card";
 import { JobCard } from "@/components/artifacts/job-card";
+import { PlanDivider } from "@/components/artifacts/plan-divider";
+import { VisualCard } from "@/components/artifacts/visual-card";
 
 /**
  * Artifact renderer registry — the extension point for tool-part UI.
@@ -16,5 +19,9 @@ import { JobCard } from "@/components/artifacts/job-card";
  */
 export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>> = {
 	research: JobCard,
-	// W6: "demo" → sandboxed iframe card, "visual" → svg card
+	// Phase divider where the plan lands (W5 fills in the component):
+	plan_init: PlanDivider,
+	// Artifacts (W6 fills in the components):
+	demo: DemoCard,
+	visual: VisualCard,
 };

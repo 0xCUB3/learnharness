@@ -37,6 +37,8 @@ const COLUMN = "mx-auto w-full max-w-3xl px-4";
 export const ChatActionsContext = createContext<{
 	chatId: string;
 	syncFromServer: () => Promise<void>;
+	/** Send a user message into the session (demo error-fix loop, W6). */
+	sendText: (text: string) => void;
 } | null>(null);
 
 /** useLayoutEffect that is silent during SSR (client components still render on the server in Next). */
@@ -143,7 +145,7 @@ export function Chat({
 	};
 
 	return (
-		<ChatActionsContext.Provider value={{ chatId, syncFromServer }}>
+		<ChatActionsContext.Provider value={{ chatId, syncFromServer, sendText: (t: string) => void sendMessage({ text: t }) }}>
 		<div className="flex h-dvh flex-col">
 			<header className="flex items-center gap-3 px-3 py-2">
 				<SidebarToggle />
