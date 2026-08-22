@@ -127,3 +127,33 @@ body {
 .dock-variant {
 	animation: dock-variant-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+
+/* ============================================================
+ * W3 — presentation fixes (appended 2026-08-22)
+ * ============================================================ */
+
+/* Streamdown's internal UI chrome (code blocks, tables, mermaid containers,
+   copy/download buttons) is styled with Tailwind utilities living in its dist
+ * bundle. Tailwind v4 never scans node_modules, so without this line those
+ * classes are dead — code blocks and mermaid containers rendered unstyled.
+ * (Streamdown README, "Tailwind CSS setup".) */
+@source "../node_modules/streamdown/dist/*.js";
+
+/* Token the streamdown utilities reference (code-block/mermaid chrome uses
+ * bg-sidebar / border-sidebar): map it onto the app's card surface. */
+@theme inline {
+	--color-sidebar: var(--card);
+}
+
+/* Mermaid diagrams: keep wide charts inside the content column. Mermaid
+ * inlines a px max-width on the svg, so !important is required to win. */
+[data-streamdown="mermaid"] svg {
+	max-width: 100% !important;
+	height: auto !important;
+}
+
+/* Display math: long equations scroll instead of overflowing the column. */
+.katex-display {
+	overflow-x: auto;
+	overflow-y: hidden;
+}

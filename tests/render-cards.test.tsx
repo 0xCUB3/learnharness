@@ -112,29 +112,34 @@ describe("render smoke tests", () => {
 });
 
 describe("math rendering (streamdown + KaTeX)", () => {
-	it("renders INLINE math ($...$) — the LLM-native convention", () => {
+	// New delimiter contract (W3): the teacher writes \(...\) / \[...\]; a
+	// bare $ is ALWAYS literal currency (singleDollarTextMath: false kills it
+	// structurally). transformMathDelimiters rewrites both to the two-dollar
+	// forms remark-math still parses. Full coverage: render-markdown.test.tsx.
+	it("renders $...$ as LITERAL text — a $ is never math (the currency fix)", () => {
 		const html = renderToStaticMarkup(<MessageResponse>{"The map $f(x) = x^2$ is smooth."}</MessageResponse>);
-		assert.ok(html.includes("katex"), `inline math should render as KaTeX, got: ${html.slice(0, 300)}`);
+		assert.ok(!html.includes("katex"), `$-math must not render, got: ${html.slice(0, 300)}`);
+		assert.match(html, /\$f\(x\) = x\^2\$/, "old-contract math renders verbatim");
 	});
 
-	it("renders display math ($$ fenced on own lines — the prompt contract)", () => {
+	it("renders display math ($$ fenced on own lines — the transform's target form)", () => {
 		const html = renderToStaticMarkup(<MessageResponse>{"$$\n\\int_0^1 x^2\\,dx = \\tfrac{1}{3}\n$$"}</MessageResponse>);
 		assert.ok(html.includes("katex-display"), "fenced display math should render as display KaTeX");
 	});
 
-	it("one-line $$...$$ degrades to inline (micromark behavior — prompt forbids it)", () => {
+	it("one-line $$...$$ renders inline (micromark behavior — the transform relies on it for \(...\))", () => {
 		// micromark treats a one-line $$...$$ inside a paragraph as 2-dollar
-		// inline mathText, not flow math. The system prompt instructs the fenced
-		// form, so the model never emits this; pin the behavior so a renderer
-		// swap can't silently change it.
+		// inline mathText, not flow math. That is exactly how the transformed
+		// \(...\) renders inline; pin the behavior so a renderer swap can't
+		// silently change it.
 		const html = renderToStaticMarkup(<MessageResponse>{"$$\\int_0^1 x^2\\,dx$$"}</MessageResponse>);
 		assert.ok(html.includes("katex") && !html.includes("katex-display"), "one-liner should render inline");
 	});
 
-	it("does NOT eat escaped currency (\\$5 stays text — the prompt contract)", () => {
-		// micromark-extension-math@3.1 lacks pandoc's closing-digit rule, so bare
-		// "$5 and $10" would parse as math. The defense is at the source: the
-		// system prompt instructs the teacher to escape currency (\$5 / 5 USD).
+	it("does NOT eat escaped currency (\\$5 stays text — belt and suspenders)", () => {
+		// With singleDollarTextMath: false even a bare $5 can't parse as math;
+		// an escaped \$ is doubly safe. The prompt contract still asks the
+		// teacher to prefer plain "$5" (it renders literally now).
 		const html = renderToStaticMarkup(<MessageResponse>{"It costs \\$5 and \\$10 more."}</MessageResponse>);
 		assert.ok(!html.includes("katex"), "escaped currency must not parse as math");
 		assert.match(html, /\$5/);
@@ -142,10 +147,10 @@ describe("math rendering (streamdown + KaTeX)", () => {
 
 	it("quiz cards render math in question, options, and explanation", () => {
 		const mathQuiz = {
-			question: "What is $\\frac{dy}{dx}$ of $y = x^2$?",
-			options: [{ label: "$2x$" }, { label: "$x^2$" }, { label: "$x$" }],
-			correctAnswer: "$2x$",
-			explanation: "The power rule gives $\\frac{dy}{dx} = 2x$.",
+			question: "What is \\(\\frac{dy}{dx}\\) of \\(y = x^2\\)?",
+			options: [{ label: "\\(2x\\)" }, { label: "\\(x^2\\)" }, { label: "\\(x\\)" }],
+			correctAnswer: "\\(2x\\)",
+			explanation: "The power rule gives \\(\\frac{dy}{dx} = 2x\\).",
 		};
 		const pendingHtml = renderDock({ toolName: "quiz", toolCallId: "m1", input: mathQuiz as never });
 		assert.ok(pendingHtml.includes("katex"), "pending dock: question/options math renders");
@@ -162,7 +167,7 @@ describe("math rendering (streamdown + KaTeX)", () => {
 			createdAt: new Date().toISOString(),
 		};
 		const answeredHtml = renderToStaticMarkup(
-			<AnsweredCard answer={buildAnswer(qd, { values: ["$2x$"] })} />,
+			<AnsweredCard answer={buildAnswer(qd, { values: ["\\(2x\\)"] })} />,
 		);
 		assert.ok(answeredHtml.includes("katex"), "answered card: option/explanation math renders");
 	});

@@ -15,9 +15,10 @@ import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { createMathPlugin } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
+import { createMermaidPlugin } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import type { MermaidConfig } from "mermaid";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
 import {
   createContext,
@@ -28,7 +29,14 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Streamdown, type PluginConfig } from "streamdown";
+import remarkBreaks from "remark-breaks";
+import {
+  type MermaidOptions,
+  Streamdown,
+  type PluginConfig,
+} from "streamdown";
+import { MermaidError } from "@/components/mermaid-error.tsx";
+import { transformMathDelimiters } from "@/src/core/math-delims.ts";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -324,26 +332,69 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 // Type-only version skew: @streamdown/code bundles shiki@3 types while
 // streamdown@2.5 expects shiki@4 types. Both work at runtime (each ships its
 // own highlighter); the cast papers over the .d.ts mismatch.
-// singleDollarTextMath: the teacher prompt instructs $...$ inline math (the
-// LLM-native convention); remark-math's default here is false.
+//
+// singleDollarTextMath: false — a bare $ is ALWAYS literal currency (the
+// teacher-prompt contract). Inline math arrives as \(...\) and display math
+// as \[...\]; transformMathDelimiters (below) rewrites both to the
+// two-dollar forms remark-math still parses. $ can never start math.
+//
+// remark-breaks rides in the cjk plugin's remarkPluginsAfter slot (public
+// PluginConfig API): Streamdown's bare `remarkPlugins` PROP would REPLACE the
+// defaults ([remark-gfm, codeMeta]), silently dropping GFM and code-fence
+// metastring parsing. The slot appends after the defaults, which is the
+// standard remark-gfm → remark-breaks order.
+//
+// mermaid: the plugin supplies the renderer; the `mermaid` PROP (below)
+// carries the dark theme + the error fallback component.
 const streamdownPlugins = {
-  cjk,
+  cjk: {
+    ...cjk,
+    remarkPluginsAfter: [...cjk.remarkPluginsAfter, remarkBreaks],
+  },
   code,
-  math: createMathPlugin({ singleDollarTextMath: true }),
-  mermaid,
+  math: createMathPlugin({ singleDollarTextMath: false }),
+  mermaid: createMermaidPlugin(),
 } as unknown as PluginConfig;
 
+// The app is dark-only (html.dark in the root layout) — diagrams render in
+// mermaid's dark theme; parse failures degrade to the dark-styled fallback.
+const mermaidTheme: MermaidConfig = {
+  fontFamily: "ui-sans-serif, system-ui, sans-serif",
+  securityLevel: "strict",
+  theme: "dark",
+};
+
+const mermaidOptions: MermaidOptions = {
+  config: mermaidTheme,
+  errorComponent: MermaidError,
+};
+
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
-    <Streamdown
-      className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        className
-      )}
-      plugins={streamdownPlugins}
-      {...props}
-    />
-  ),
+  ({ className, children, ...props }: MessageResponseProps) => {
+    // Delimiter preprocessing is a single linear scan (no markdown parsing)
+    // — cheap enough for the render path of this children-memoized
+    // component. Unbalanced delimiters pass through untouched, so mid-stream
+    // chunks render literally until the closing delimiter arrives and the
+    // full text is re-transformed.
+    const content =
+      typeof children === "string"
+        ? transformMathDelimiters(children)
+        : children;
+
+    return (
+      <Streamdown
+        className={cn(
+          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          className
+        )}
+        mermaid={mermaidOptions}
+        plugins={streamdownPlugins}
+        {...props}
+      >
+        {content}
+      </Streamdown>
+    );
+  },
   (prevProps, nextProps) =>
     prevProps.children === nextProps.children &&
     nextProps.isAnimating === prevProps.isAnimating
