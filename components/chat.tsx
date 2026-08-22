@@ -19,6 +19,7 @@ import { artifactRenderers } from "@/components/artifacts";
 import { Composer } from "@/components/composer";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
+import { TreePanel } from "@/components/tree-panel";
 import type { TeacherUIMessage } from "@/src/agent/ui-message";
 import type { ArtifactPartProps } from "@/src/core/contracts";
 import type { QuestionAnswerData } from "@/src/core/question-core";
@@ -161,8 +162,11 @@ export function Chat({
 				<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
 			</header>
 
-			<div className="relative min-h-0 flex-1">
-				<Conversation className="h-full" initial="instant">
+			{/* The session row: transcript scroller + the persistent plan-tree panel
+			    (W7, vision §2). The panel is a flex SIBLING of the scroller — the dock
+			    stays sticky inside the scroller, untouched. */}
+			<div className="relative flex min-h-0 flex-1">
+				<Conversation className="h-full min-w-0 flex-1" initial="instant">
 					<ConversationContent className="min-h-full gap-0 p-0">
 						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
 							{messages.length === 0 && !busy && (
@@ -256,6 +260,7 @@ export function Chat({
 					</ConversationContent>
 					<ConversationScrollButton />
 				</Conversation>
+				<TreePanel messages={messages} />
 			</div>
 		</div>
 		</ChatActionsContext.Provider>
