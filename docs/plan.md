@@ -43,6 +43,8 @@ Execution plan for `docs/vision.md`. Section references (§) point into that doc
 
 **Gate 3 (me, browser):** tree panel behaviors; new session on a previously-touched topic visibly personalizes probing (inspect the injected context); full regression sweep; final gates.
 
+**GATE 3 RESULTS (2026-08-22, PASSED):** tree panel renders 4 nodes in topo order with "3/4" progress + current-node summary; collapse-to-rail persists via localStorage across reload and re-expands. Personalization verified live: a fresh "teach me the product rule" session opened with "Welcome back! I see we've done the chain rule together — composition as function machines, rates multiplying through gears, and the formula" — the teacher reading the injected graph — then probed at the foundation. Home graph + regression sweep clean. Follow-up observed: GLM teacher occasionally emits a quiz whose correctAnswer matches no option value (question-core logs + degrades gracefully) — schema/prompt hardening candidate.
+
 ## Deferred (recorded, not in this plan)
 
 Dictation (§2), not-a-chat presentation overhaul + structural-identity items (§2, LOW PRIORITY), DB migration (JSON stores suffice now), retroactive bootstrap of the ~15 vault POC sessions (awaits the full extraction/consolidation pipeline), spaced repetition, practice exercises, Electron, Pyodide.
