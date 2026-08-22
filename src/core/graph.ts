@@ -4,7 +4,10 @@
  *
  * emitChat(chatId) folds ONE chat into the global graph — naive union,
  * deterministic, no LLM:
- *   plan-tree nodes   → GraphNodes (statement = title, aliases empty)
+ *   plan-tree nodes   → GraphNodes (statement = title, aliases empty;
+ *                       W8: a title exactly matching an existing statement
+ *                       or alias — case-insensitive, trimmed — maps onto the
+ *                       existing node instead of appending a duplicate)
  *   plan-tree edges   → `requires` GraphEdges (from = prerequisite)
  *   answered quizzes  → ledger events (probe-* before the first plan_init
  *                       output, check / dont-know after; ref = toolCallId)
@@ -22,6 +25,11 @@ import type { GraphEdge, GraphNode, LedgerEvent, LedgerEventKind, PlanTree, Plan
 import type { QuestionAnswerData } from "./question-core.ts";
 import { getChat, listChats } from "../store/chats.ts";
 import { graphLedgers, newGraphNodeId } from "../store/graph.ts";
+
+/** The ledger surface emitChat needs (the real one is src/store/graph.ts).
+ *  Injectable so tests can fold fixtures into an in-memory ledger instead of
+ *  the live data/graph files. */
+export type GraphLedgers = typeof graphLedgers;
 
 // ─── transcript scanning ─────────────────────────────────────────────────────
 
@@ -91,8 +99,11 @@ export interface EmissionStats {
  * Fold one chat into the graph ledgers. Idempotent — safe to call after every
  * turn (chat-handler onFinish) and again on catch-up (GET /api/graph). Sync
  * and fast: a handful of small-file reads plus one append per new record.
+ *
+ * `ledgers` is injectable for tests (in-memory ledger); production always
+ * uses the live store.
  */
-export function emitChat(chatId: string): EmissionStats {
+export function emitChat(chatId: string, ledgers: GraphLedgers = graphLedgers): EmissionStats {
 	const record = getChat(chatId);
 	if (!record) return { nodes: 0, edges: 0, events: 0 };
 	const stats: EmissionStats = { nodes: 0, edges: 0, events: 0 };
@@ -100,7 +111,7 @@ export function emitChat(chatId: string): EmissionStats {
 	// 1. This chat's existing mappings — the identity map is per-chat (v1 is
 	// naive union: two sessions' tree nodes never merge into one graph node).
 	const mapping = new Map<string, string>();
-	for (const m of graphLedgers.readMappings()) {
+	for (const m of ledgers.readMappings()) {
 		if (m.chatId === chatId) mapping.set(m.treeNodeId, m.graphNodeId);
 	}
 
@@ -112,10 +123,33 @@ export function emitChat(chatId: string): EmissionStats {
 	const tree =
 		record.tree && record.tree.nodes.length > 0 ? record.tree : replayFinalTree(record.messages);
 
-	// 3. Tree nodes without a mapping → GraphNode + mapping.
+	// 3. Tree nodes without a mapping → GraphNode + mapping. W8 merge
+	// improvement: a title that EXACTLY matches (case-insensitive, trimmed) an
+	// existing node's statement or alias maps onto that node instead of
+	// appending a duplicate — the mapping line is still appended so provenance
+	// stays honest. Fuzzy/embedding matching stays deferred (vision §1
+	// consolidation pipeline).
+	const norm = (s: string): string => s.trim().toLowerCase();
+	const existingByTitle = new Map<string, string>();
+	for (const node of ledgers.readNodes()) {
+		const statementKey = norm(node.statement);
+		if (statementKey && !existingByTitle.has(statementKey)) existingByTitle.set(statementKey, node.id);
+		for (const alias of node.aliases) {
+			const aliasKey = norm(alias);
+			if (aliasKey && !existingByTitle.has(aliasKey)) existingByTitle.set(aliasKey, node.id);
+		}
+	}
 	const now = new Date().toISOString();
 	for (const node of tree.nodes) {
 		if (mapping.has(node.id)) continue;
+		const titleKey = norm(node.title);
+		const existingId = titleKey ? existingByTitle.get(titleKey) : undefined;
+		if (existingId !== undefined) {
+			// Exact match: reuse the node, record the mapping, append nothing.
+			ledgers.appendMapping({ chatId, treeNodeId: node.id, graphNodeId: existingId });
+			mapping.set(node.id, existingId);
+			continue;
+		}
 		const graphNode: GraphNode = {
 			id: newGraphNodeId(),
 			// statement is the title; the summary stays out (contracts).
@@ -124,8 +158,9 @@ export function emitChat(chatId: string): EmissionStats {
 			kind: "truth",
 			createdAt: now,
 		};
-		graphLedgers.appendNode(graphNode);
-		graphLedgers.appendMapping({ chatId, treeNodeId: node.id, graphNodeId: graphNode.id });
+		ledgers.appendNode(graphNode);
+		ledgers.appendMapping({ chatId, treeNodeId: node.id, graphNodeId: graphNode.id });
+		existingByTitle.set(titleKey, graphNode.id);
 		mapping.set(node.id, graphNode.id);
 		stats.nodes++;
 	}
@@ -134,7 +169,7 @@ export function emitChat(chatId: string): EmissionStats {
 	// whole ledger: an existing assertion just gains this chatId as
 	// provenance (appended as a new line; reads merge).
 	const asserted = new Map<string, Set<string>>();
-	for (const line of graphLedgers.readEdges()) {
+	for (const line of ledgers.readEdges()) {
 		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
 		let provenance = asserted.get(key);
 		if (!provenance) {
@@ -150,7 +185,7 @@ export function emitChat(chatId: string): EmissionStats {
 		const key = `${from}\u0000${to}\u0000requires`;
 		const provenance = asserted.get(key);
 		if (provenance?.has(chatId)) continue; // already asserted by this chat
-		graphLedgers.appendEdge({ from, to, type: "requires", provenance: [chatId] });
+		ledgers.appendEdge({ from, to, type: "requires", provenance: [chatId] });
 		if (provenance) provenance.add(chatId);
 		else asserted.set(key, new Set([chatId]));
 		stats.edges++;
@@ -161,7 +196,7 @@ export function emitChat(chatId: string): EmissionStats {
 	// chat-scoped (a quiz toolCallId or taught:<treeNodeId>) — a ref already
 	// in the ledger means this turn was folded before.
 	const seenRefs = new Set<string>();
-	for (const event of graphLedgers.readEvents()) {
+	for (const event of ledgers.readEvents()) {
 		if (event.chatId === chatId && event.ref) seenRefs.add(event.ref);
 	}
 	let planSeen = false;
@@ -173,7 +208,7 @@ export function emitChat(chatId: string): EmissionStats {
 		if (part.name === "quiz" && part.state === "output-available") {
 			const event = quizEvent(part, chatId, mapping, planSeen, now);
 			if (event?.ref !== undefined && !seenRefs.has(event.ref)) {
-				graphLedgers.appendEvent(event);
+				ledgers.appendEvent(event);
 				seenRefs.add(event.ref);
 				stats.events++;
 			}
@@ -185,7 +220,7 @@ export function emitChat(chatId: string): EmissionStats {
 			if (result?.ok && typeof input?.id === "string") {
 				const ref = `taught:${input.id}`;
 				if (!seenRefs.has(ref)) {
-					graphLedgers.appendEvent({
+					ledgers.appendEvent({
 						nodeId: mapping.get(input.id) ?? null,
 						kind: "taught",
 						chatId,
@@ -200,7 +235,7 @@ export function emitChat(chatId: string): EmissionStats {
 	}
 
 	// 6. Checkpoint: this chat is folded through its current updatedAt.
-	graphLedgers.appendCheckpoint({ chatId, foldedAt: record.updatedAt });
+	ledgers.appendCheckpoint({ chatId, foldedAt: record.updatedAt });
 	return stats;
 }
 

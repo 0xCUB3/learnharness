@@ -12,6 +12,10 @@ import { createTeacherTools } from "./tools.ts";
  * The model is injectable so tests can pass a MockLanguageModelV4 and drive
  * deterministic scripted lessons (see tests/chat-flow.test.ts).
  *
+ * The optional graphContext (buildGraphContext() in src/core/graph-context.ts,
+ * wired by the chat-handler per request) is appended after the composed
+ * fragments; absent/empty means a new learner — nothing is injected.
+ *
  * The system prompt is COMPOSED: system-prompt.md is the base, then every
  * src/agent/prompts/*.md fragment in sorted filename order (workers add
  * fragments — nobody edits shared sections of the base prompt). Prefix
@@ -36,7 +40,19 @@ function composeInstructions(): string {
 
 const instructions = composeInstructions();
 
-export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet) {
+/**
+ * Compose the full instruction string: base prompt + fragments, then — when
+ * the session carries graph context (W8, vision §1 "the graph as session
+ * context") — the auto-generated knowledge-graph block appended after them as
+ * a clearly-delimited section (the 50-graph-context.md fragment teaches the
+ * teacher how to read it). The fragment mechanism itself stays untouched.
+ */
+function withGraphContext(graphContext: string | null | undefined): string {
+	if (!graphContext) return instructions;
+	return `${instructions}\n\n---\n\n${graphContext}`;
+}
+
+export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet, graphContext?: string | null) {
 	return new ToolLoopAgent({
 		model:
 			model ??
@@ -45,7 +61,7 @@ export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet) {
 				// they stream as reasoning parts into the UI's collapsible block.
 				reasoning: { enabled: true, effort: "medium" },
 			}),
-		instructions,
+		instructions: withGraphContext(graphContext),
 		// Tools are per-request (plan tools close over chatId); chat-handler
 		// passes createTeacherTools({ chatId }). Tests pass a mock model and get
 		// the default question-only set.

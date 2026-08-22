@@ -3,6 +3,7 @@ import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts
 import { createTeacherTools } from "../agent/tools.ts";
 import { spawnPendingJobs } from "../agent/subagents/runner.ts";
 import { emitChat } from "../core/graph.ts";
+import { buildGraphContext } from "../core/graph-context.ts";
 import { getChat, saveMessages } from "../store/chats.ts";
 
 /**
@@ -29,8 +30,20 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		return Response.json({ error: "messages must be an array" }, { status: 400 });
 	}
 
+	// W8 (vision §1 "the graph as session context"): the learner's knowledge
+	// graph rides along as part of the teacher's instructions. Built per
+	// request — stateless, and self-updating as the graph grows mid-session
+	// (the emission hook below folds each turn). A read failure must never
+	// take the lesson down: the block is context, not a dependency.
+	let graphContext: string | null = null;
+	try {
+		graphContext = buildGraphContext();
+	} catch (err) {
+		console.error(`[chat ${chatId}] graph context build failed:`, err);
+	}
+
 	return createAgentUIStreamResponse({
-		agent: agent ?? createTeacherAgent(undefined, createTeacherTools({ chatId })),
+		agent: agent ?? createTeacherAgent(undefined, createTeacherTools({ chatId }), graphContext),
 		uiMessages: body.messages as UIMessage[],
 		onFinish: ({ messages, isAborted }) => {
 			// Persist even when aborted: the partial transcript (including any
