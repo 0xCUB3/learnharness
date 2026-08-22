@@ -57,6 +57,12 @@ function scriptedModel(calls: string[][]) {
 							{ type: "reasoning-start", id: "r1" },
 							{ type: "reasoning-delta", id: "r1", delta: "Probe the basics first." },
 							{ type: "reasoning-end", id: "r1" },
+							// Same shape real providers use: input streams as deltas,
+							// then the completed call. (This is what makes the client's
+							// 'Writing a question…' indicator possible.)
+							{ type: "tool-input-start", id: "call-1", toolName: "quiz" },
+							{ type: "tool-input-delta", id: "call-1", delta: JSON.stringify(QUIZ_INPUT) },
+							{ type: "tool-input-end", id: "call-1" },
 							{
 								type: "tool-call",
 								toolCallId: "call-1",
@@ -186,6 +192,23 @@ describe("teacher chat flow (scripted model)", () => {
 	it("rejects unknown chats", async () => {
 		const res = await handleChatRequest(post("chat_nonexistent", []));
 		assert.equal(res.status, 404);
+	});
+
+	it("streams tool-input-start before tool-input-available (protocol pin for the 'Writing a question…' indicator)", async () => {
+		// The client's writing indicator keys off tool parts in state
+		// 'input-streaming', which the stream processor sets from the
+		// tool-input-start chunk. If a transport change ever stopped emitting
+		// it, the indicator would silently die — pin the protocol.
+		const agent = createTeacherAgent(scriptedModel([]));
+		const chat = createChat("Test: protocol pin");
+		createdChats.push(chat.id);
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
+		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+		const startIdx = body.indexOf('"type":"tool-input-start"');
+		const availIdx = body.indexOf('"type":"tool-input-available"');
+		assert.ok(startIdx !== -1, "tool-input-start chunk present in the stream");
+		assert.ok(availIdx !== -1, "tool-input-available chunk present in the stream");
+		assert.ok(startIdx < availIdx, "start precedes available");
 	});
 
 	it("persists even when the stream is aborted (resume keeps partial state)", async () => {

@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowDownIcon } from "lucide-react";
-import { useStickToBottomContext } from "use-stick-to-bottom";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
@@ -26,40 +25,27 @@ import {
  * the bottom field (note for select modes, the answer for free-text asks,
  * "Other" text when Other is picked) plus the Submit button send together.
  *
- * Collapse: scroll up and the dock folds into a slim bar (question one-liner);
- * click it (or scroll back to the bottom) to re-expand. The expanded content
- * stays MOUNTED while collapsed (hidden, not unmounted) so a half-made
- * selection survives scrolling.
- *
- * Rendered inside <Conversation> to read the stick-to-bottom context.
- * Content only — the persistent shell lives in the chat view's overlay.
+ * Collapse behavior (scroll-up → slim bar) is owned by the DockOverlay in the
+ * chat view, which also owns the persistent shell and its height morph. This
+ * component is content only. The expanded form stays MOUNTED while collapsed
+ * (hidden, not unmounted) so a half-made selection survives scrolling.
  */
 
 export interface QuestionDockProps {
 	toolName: "quiz" | "ask_user_question";
 	toolCallId: string;
 	input: QuizToolInput | AskToolInput;
+	/** Collapse state, owned by the DockOverlay (it drives the shell's height morph). */
+	expanded: boolean;
+	onExpand: () => void;
 	onSubmit: (output: QuestionAnswerData) => void;
 }
 
-export function QuestionDock({ toolName, toolCallId, input, onSubmit }: QuestionDockProps) {
-	const { isAtBottom, scrollToBottom } = useStickToBottomContext();
-	const [forceOpen, setForceOpen] = useState(false);
-	useEffect(() => {
-		if (!isAtBottom) setForceOpen(false);
-	}, [isAtBottom]);
-	const expanded = isAtBottom || forceOpen;
-
-	const expand = () => {
-		setForceOpen(true);
-		void scrollToBottom();
-	};
-
+export function QuestionDock({ toolName, toolCallId, input, expanded, onExpand, onSubmit }: QuestionDockProps) {
 	return (
 		<>
-			{!expanded && <QuestionDockBar toolName={toolName} question={input.question} onExpand={expand} />}
-			{/* Stays mounted while collapsed — selection state survives scrolling. */}
-			<div className={expanded ? undefined : "invisible h-0 overflow-hidden"}>
+			{!expanded && <QuestionDockBar toolName={toolName} question={input.question} onExpand={onExpand} />}
+			<div className={expanded ? "dock-variant" : "invisible h-0 overflow-hidden"}>
 				<QuestionDockForm
 					toolName={toolName}
 					toolCallId={toolCallId}
@@ -97,7 +83,7 @@ export function QuestionDockBar({
 			type="button"
 			data-testid="question-dock-bar"
 			onClick={onExpand}
-			className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/40"
+			className="dock-variant flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/40"
 		>
 			<span className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{toolName === "quiz" ? "Quiz" : "Question"}
@@ -111,7 +97,7 @@ export function QuestionDockBar({
 }
 
 /** The expanded question: label, question, options, and the unified bottom row. */
-function QuestionDockForm({ toolName, toolCallId, input, onSubmit }: QuestionDockProps) {
+function QuestionDockForm({ toolName, toolCallId, input, onSubmit }: Omit<QuestionDockProps, "expanded" | "onExpand">) {
 	const kind = toolName === "quiz" ? ("quiz" as const) : ("ask" as const);
 
 	// Canonical QuestionData, built once per question. Quiz options are

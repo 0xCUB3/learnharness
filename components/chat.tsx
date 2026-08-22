@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
+import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
 	Conversation,
 	ConversationContent,
@@ -24,19 +25,17 @@ import { findPendingToolCall } from "@/src/core/pending";
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
 
+/** useLayoutEffect that is silent during SSR (client components still render on the server in Next). */
+const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
 /**
  * The teaching session. All chat state lives in useChat; the server persists
  * the canonical transcript after every turn.
  *
- * The bottom blob is ONE persistent shell (never remounts — this is what a
- * future chat→question morph animation will animate). Its contents swap:
- *   - no pending question → the chat Composer
- *   - question streaming in → "Preparing a question…" shimmer
- *   - pending quiz/ask    → the QuestionDock (question + options + the
- *                           unified note/answer field + Submit answer)
- * A pending question is always the transcript tail (the lesson can't continue
- * before it's answered), so docking it at the bottom loses nothing; on submit
- * it lands in the transcript as an AnsweredCard.
+ * The bottom blob is ONE persistent shell whose contents swap (chat composer ↔
+ * question dock ↔ collapsed bar). The shell is sticky INSIDE the scroller —
+ * never overlapping the transcript at rest, never covering the scrollbar —
+ * and DockOverlay animates its height on variant changes.
  */
 export function Chat({
 	chatId,
@@ -71,8 +70,8 @@ export function Chat({
 	const pending = findPendingToolCall(messages);
 	const busy = status === "submitted" || status === "streaming";
 
-	// A tool call still streaming its input (question being generated): the
-	// blob shows a shimmer instead of the composer.
+	// A tool call still streaming its input: the teacher is writing a question.
+	// Shown as a transcript shimmer, exactly like the thinking indicator.
 	const questionStreaming =
 		!pending &&
 		messages.at(-1)?.role === "assistant" &&
@@ -95,107 +94,186 @@ export function Chat({
 				<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
 			</header>
 
-			{/* Transcript scrolls full-height; the blob floats on top of it. */}
 			<div className="relative min-h-0 flex-1">
 				<Conversation className="h-full">
-					<ConversationContent className={`${COLUMN} gap-4 pt-4 ${pending || questionStreaming ? "pb-[32rem]" : "pb-44"}`}>
-						{messages.length === 0 && !busy && (
-							<ConversationEmptyState
-								title="New session"
-								description="The teacher will open by probing what you already know."
-							/>
-						)}
+					<ConversationContent className="h-full gap-0 p-0">
+						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
+							{messages.length === 0 && !busy && (
+								<ConversationEmptyState
+									title="New session"
+									description="The teacher will open by probing what you already know."
+								/>
+							)}
 
-						{messages.map((m, mi) => (
-							<Message key={m.id} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
-								<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
-									{m.role === "user" ? (
-										// User text renders plain: the model's LaTeX pipeline is not
-										// applied to learner-authored text ($ stays $, no surprises).
-										<div className="whitespace-pre-wrap">
-											{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
-										</div>
-									) : (
-										m.parts.map((part, pi) => {
-											const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
-											switch (part.type) {
-												case "text":
-													return <MessageResponse key={pi}>{part.text}</MessageResponse>;
-												case "reasoning":
-													return (
-														<Reasoning key={pi} isStreaming={status === "streaming" && isLastPart} className="mb-2">
-															<ReasoningTrigger />
-															<ReasoningContent>{part.text}</ReasoningContent>
-														</Reasoning>
-													);
-												case "step-start":
-													return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
-												case "tool-quiz":
-												case "tool-ask_user_question": {
-													// Pending/streaming questions live in the dock, not the
-													// transcript; answered ones render as graded records.
-													if (part.state === "output-available") {
-														return <AnsweredCard key={pi} answer={part.output as QuestionAnswerData} />;
+							{messages.map((m, mi) => (
+								<Message key={m.id} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
+									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
+										{m.role === "user" ? (
+											// User text renders plain: the model's LaTeX pipeline is not
+											// applied to learner-authored text ($ stays $, no surprises).
+											<div className="whitespace-pre-wrap">
+												{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
+											</div>
+										) : (
+											m.parts.map((part, pi) => {
+												const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
+												switch (part.type) {
+													case "text":
+														return <MessageResponse key={pi}>{part.text}</MessageResponse>;
+													case "reasoning":
+														return (
+															<Reasoning key={pi} isStreaming={status === "streaming" && isLastPart} className="mb-2">
+																<ReasoningTrigger />
+																<ReasoningContent>{part.text}</ReasoningContent>
+															</Reasoning>
+														);
+													case "step-start":
+														return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
+													case "tool-quiz":
+													case "tool-ask_user_question": {
+														// Pending/streaming questions live in the dock, not the
+														// transcript; answered ones render as graded records.
+														if (part.state === "output-available") {
+															return <AnsweredCard key={pi} answer={part.output as QuestionAnswerData} />;
+														}
+														return null;
 													}
-													return null;
+													default:
+														return null;
 												}
-												default:
-													return null;
-											}
-										})
-									)}
-								</MessageContent>
-							</Message>
-						))}
+											})
+										)}
+									</MessageContent>
+								</Message>
+							))}
 
-						{status === "submitted" && <Shimmer className="text-sm">Thinking…</Shimmer>}
-						{error && (
-							<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
-								Something went wrong: {error.message}
-							</div>
-						)}
+							{status === "submitted" && <Shimmer className="text-sm">Thinking…</Shimmer>}
+							{questionStreaming && <Shimmer className="text-sm">Writing a question…</Shimmer>}
+							{error && (
+								<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
+									Something went wrong: {error.message}
+								</div>
+							)}
+						</div>
+
+						<DockOverlay
+							pending={pending}
+							composer={
+								<Composer
+									busy={busy}
+									value={text}
+									onChange={setText}
+									onSend={onSend}
+									onStop={() => stop()}
+									canSend={canSend}
+								/>
+							}
+							onSubmitAnswer={(output) => {
+								if (!pending) return;
+								void addToolOutput({
+									tool: pending.tool as "quiz" | "ask_user_question",
+									toolCallId: pending.toolCallId,
+									output,
+								});
+							}}
+						/>
 					</ConversationContent>
 					<ConversationScrollButton />
+				</Conversation>
+			</div>
+		</div>
+	);
+}
 
-					{/* The floating blob. ONE persistent shell — contents swap by mode.
-					    Content fades out behind it. */}
-					<div className="pointer-events-none absolute inset-x-0 bottom-0">
-						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-						<div className="bg-background pb-4">
-							<div className={COLUMN}>
-								<div className="pointer-events-auto rounded-2xl border bg-card shadow-lg">
-									{pending ? (
-										<QuestionDock
-											toolName={pending.tool as "quiz" | "ask_user_question"}
-											toolCallId={pending.toolCallId}
-											input={pending.input as never}
-											onSubmit={(output) =>
-												void addToolOutput({
-													tool: pending.tool as "quiz" | "ask_user_question",
-													toolCallId: pending.toolCallId,
-													output,
-												})
-											}
-										/>
-									) : questionStreaming ? (
-										<div className="p-4">
-											<Shimmer className="text-sm">Preparing a question…</Shimmer>
-										</div>
-									) : (
-										<Composer
-											busy={busy}
-											value={text}
-											onChange={setText}
-											onSend={onSend}
-											onStop={() => stop()}
-											canSend={canSend}
-										/>
-									)}
-								</div>
-							</div>
+/**
+ * The floating blob: ONE persistent shell, sticky at the bottom of the
+ * scroller (in flow — the transcript scrolls fully clear of it, and it never
+ * covers the scrollbar). Contents swap between the chat composer and the
+ * question dock; shell height morphs between variants (WAAPI, quick).
+ *
+ * Collapse: scroll up and the dock folds into a slim bar; click it (or scroll
+ * back to the bottom) to re-expand. The question form stays MOUNTED while
+ * collapsed (hidden, not unmounted) so a half-made selection survives.
+ */
+function DockOverlay({
+	pending,
+	composer,
+	onSubmitAnswer,
+}: {
+	pending: ReturnType<typeof findPendingToolCall>;
+	composer: React.ReactNode;
+	onSubmitAnswer: (output: QuestionAnswerData) => void;
+}) {
+	const { isAtBottom, scrollToBottom } = useStickToBottomContext();
+	const [forceOpen, setForceOpen] = useState(false);
+	useEffect(() => {
+		if (!isAtBottom) setForceOpen(false);
+	}, [isAtBottom]);
+	const expanded = isAtBottom || forceOpen;
+
+	const mode = pending ? `question:${pending.toolCallId}` : "chat";
+
+	// A new question while the learner is at the bottom: scroll so the dock
+	// never covers the transcript tail. (Scrolled up → collapsed bar, no yank.)
+	const pendingId = pending?.toolCallId ?? null;
+	useEffect(() => {
+		if (pendingId && isAtBottom) void scrollToBottom();
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- fire only when a NEW question lands
+	}, [pendingId]);
+
+	// Height morph: animate the shell from its previous height to its new one
+	// whenever the variant (chat ↔ question ↔ collapsed bar) changes. Typing
+	// growth keeps the same stateKey and is NOT animated.
+	const shellRef = useRef<HTMLDivElement>(null);
+	const stateKey = `${mode}:${pending ? expanded : "-"}`;
+	const prevRef = useRef<{ key: string; height: number } | null>(null);
+	useIsoLayoutEffect(() => {
+		const el = shellRef.current;
+		if (!el) return;
+		const p = prevRef.current;
+		if (p && p.key === stateKey) {
+			// Same variant: keep the settled height fresh, but never measure while
+			// a morph is in flight — getBoundingClientRect would read the ANIMATED
+			// value and corrupt the start height of the next morph.
+			if (el.getAnimations().length === 0) p.height = el.getBoundingClientRect().height;
+			return;
+		}
+		el.getAnimations().forEach((a) => a.cancel()); // flush to natural height before measuring
+		const h = el.getBoundingClientRect().height;
+		if (p && Math.abs(p.height - h) > 1) {
+			el.animate([{ height: `${p.height}px` }, { height: `${h}px` }], {
+				duration: 180,
+				easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+			});
+		}
+		prevRef.current = { key: stateKey, height: h };
+	});
+
+	return (
+		<div className="pointer-events-none sticky bottom-0 mt-auto">
+			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
+			<div className="bg-background pb-4">
+				<div className={COLUMN}>
+					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
+						<div key={mode} className="dock-variant">
+							{pending ? (
+								<QuestionDock
+									toolName={pending.tool as "quiz" | "ask_user_question"}
+									toolCallId={pending.toolCallId}
+									input={pending.input as never}
+									expanded={expanded}
+									onExpand={() => {
+										setForceOpen(true);
+										void scrollToBottom();
+									}}
+									onSubmit={onSubmitAnswer}
+								/>
+							) : (
+								composer
+							)}
 						</div>
 					</div>
-				</Conversation>
+				</div>
 			</div>
 		</div>
 	);

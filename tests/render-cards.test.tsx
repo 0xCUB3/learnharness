@@ -16,7 +16,6 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
-import { StickToBottom } from "use-stick-to-bottom";
 import { QuestionDock } from "../components/question-dock.tsx";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
@@ -44,10 +43,11 @@ function quizQD(): QuestionData {
 
 
 function renderDock(props: { toolName: "quiz" | "ask_user_question"; toolCallId: string; input: never; onSubmit?: () => void }) {
-	// The dock reads the stick-to-bottom scroll context; wrap it. In static
-	// render the context starts at isAtBottom=true → the expanded form renders.
+	// expanded=true renders the full form (the collapsed bar is covered by the
+	// QuestionDockBar test below). No scroll context needed — the DockOverlay
+	// in the chat view owns that.
 	return renderToStaticMarkup(
-		<StickToBottom><QuestionDock {...props} onSubmit={props.onSubmit ?? (() => {})} /></StickToBottom>,
+		<QuestionDock {...props} expanded={true} onExpand={() => {}} onSubmit={props.onSubmit ?? (() => {})} />,
 	);
 }
 
