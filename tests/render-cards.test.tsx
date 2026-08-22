@@ -18,6 +18,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { QuestionDock } from "../components/question-dock.tsx";
 import { AnsweredCard } from "../components/answered-card.tsx";
+import { PlanDivider } from "../components/artifacts/plan-divider.tsx";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 
 const quizInput = {
@@ -171,4 +172,92 @@ describe("math rendering (streamdown + KaTeX)", () => {
 		);
 		assert.ok(answeredHtml.includes("katex"), "answered card: option/explanation math renders");
 	});
+});
+
+describe("teach-check reveal (W5 phase separation)", () => {
+	// The collapsed dock renders the bar AND the hidden form (it stays mounted
+	// so a half-made selection survives) — assertions target the bar species.
+	it("teach-phase check collapses into the invitation bar, not the scroll bar", () => {
+		const html = renderToStaticMarkup(
+				<QuestionDock
+					toolName="quiz"
+					toolCallId="t1"
+					input={quizInput as never}
+					expanded={false}
+					reveal
+					onExpand={() => {}}
+					onSubmit={() => {}}
+				/>,
+		);
+		assert.ok(html.includes('data-testid="teach-check-reveal"'), "invitation affordance present");
+		assert.match(html, /Check your understanding/);
+		assert.match(html, /Which planet is closest/, "question teaser invites, not minimizes");
+		assert.match(html, /Open/, "a clear reveal action");
 	});
+
+	it("probe questions keep the plain collapsed bar (no invitation copy)", () => {
+		const html = renderToStaticMarkup(
+				<QuestionDock
+					toolName="quiz"
+					toolCallId="q1"
+					input={quizInput as never}
+					expanded={false}
+					onExpand={() => {}}
+					onSubmit={() => {}}
+				/>,
+		);
+		assert.ok(html.includes('data-testid="question-dock-bar"'), "the scroll-collapse strip");
+		assert.ok(!html.includes("Check your understanding"), "no invitation copy outside teach phase");
+		assert.match(html, /Answer/, "the strip keeps its Answer affordance");
+	});
+
+	it("after the reveal, the teach check renders the full form (probe default, unchanged)", () => {
+		// Post-click: expanded=true — exactly today's dock. The probe auto-open
+		// path renders the identical form; this is also the regression pin for it.
+		const html = renderDock({ toolName: "quiz", toolCallId: "t1", input: quizInput as never });
+		assert.ok(html.includes('data-testid="question-dock"'), "the form is the dock's content once expanded");
+		assert.match(html, /Submit answer/);
+	});
+});
+
+describe("PlanDivider (the probe→teach seam)", () => {
+	const tree = {
+		nodes: [
+			{ id: "a", title: "A" },
+			{ id: "b", title: "B" },
+			{ id: "c", title: "C" },
+		],
+		edges: [{ from: "a", to: "b" }],
+		currentNodeId: null,
+		doneNodeIds: [],
+		version: 1,
+	};
+
+	it("renders the quiet divider with the node count once output-available", () => {
+		const html = renderToStaticMarkup(
+				<PlanDivider part={{ type: "tool-plan_init", state: "output-available", toolCallId: "p1", output: { ok: true, tree } }} />,
+		);
+		assert.ok(html.includes('data-testid="plan-divider"'));
+		assert.match(html, /Teaching/);
+		assert.match(html, /3 nodes/, "node count from the output tree");
+		assert.ok(!html.includes("banner"), "never a loud banner");
+	});
+
+	it("renders null while the tool streams and on a failed init", () => {
+		const streaming = renderToStaticMarkup(
+				<PlanDivider part={{ type: "tool-plan_init", state: "input-streaming", toolCallId: "p1" }} />,
+		);
+		assert.equal(streaming, "", "null while input-streaming");
+		const failed = renderToStaticMarkup(
+				<PlanDivider
+					part={{
+						type: "tool-plan_init",
+						state: "output-available",
+						toolCallId: "p1",
+						output: { ok: false, error: "Tree already initialized", tree },
+					}}
+				/>,
+		);
+		assert.equal(failed, "", "a refused re-init must not draw a second seam");
+	});
+});

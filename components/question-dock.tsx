@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowDownIcon } from "lucide-react";
+import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
@@ -37,14 +37,28 @@ export interface QuestionDockProps {
 	input: QuizToolInput | AskToolInput;
 	/** Collapse state, owned by the DockOverlay (it drives the shell's height morph). */
 	expanded: boolean;
+	/**
+	 * Teach-phase check awaiting its reveal (vision §2, W5): while collapsed,
+	 * the bar is the "Check your understanding" invitation instead of the
+	 * scroll-collapse strip. Owned by the DockOverlay; false once the learner
+	 * has revealed (afterwards the normal collapse machine rules apply).
+	 */
+	reveal?: boolean;
 	onExpand: () => void;
 	onSubmit: (output: QuestionAnswerData) => void;
 }
 
-export function QuestionDock({ toolName, toolCallId, input, expanded, onExpand, onSubmit }: QuestionDockProps) {
+export function QuestionDock({ toolName, toolCallId, input, expanded, reveal = false, onExpand, onSubmit }: QuestionDockProps) {
 	return (
 		<>
-			{!expanded && <QuestionDockBar toolName={toolName} question={input.question} onExpand={onExpand} />}
+			{!expanded && (
+				<QuestionDockBar
+					toolName={toolName}
+					question={input.question}
+					onExpand={onExpand}
+					variant={reveal ? "reveal" : "collapsed"}
+				/>
+			)}
 			<div className={expanded ? "dock-variant" : "invisible h-0 overflow-hidden"}>
 				<QuestionDockForm
 					toolName={toolName}
@@ -70,16 +84,42 @@ function teaserText(q: string): string {
 		.trim();
 }
 
-/** The collapsed strip: kind chip + question one-liner; click to answer. */
+/** The collapsed strip. Two species (W5): "collapsed" is the scroll minimization
+ *  (kind chip + one-liner + Answer ↓); "reveal" is the teach-check invitation —
+ *  a distinct, more inviting affordance, because it asks the learner to start
+ *  something, not to resume something. */
 export function QuestionDockBar({
 	toolName,
 	question,
 	onExpand,
+	variant = "collapsed",
 }: {
 	toolName: "quiz" | "ask_user_question";
 	question: string;
 	onExpand: () => void;
+	variant?: "collapsed" | "reveal";
 }) {
+	if (variant === "reveal") {
+		return (
+			<button
+				type="button"
+				data-testid="teach-check-reveal"
+				onClick={onExpand}
+				className="dock-variant flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
+			>
+				<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+					<PlayIcon className="size-3.5" />
+				</span>
+				<span className="min-w-0 flex-1">
+					<span className="block text-sm font-medium">Check your understanding</span>
+					<span className="block truncate text-xs text-muted-foreground">{teaserText(question)}</span>
+				</span>
+				<span className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary">
+					Open <ChevronRightIcon className="size-3.5" />
+				</span>
+			</button>
+		);
+	}
 	return (
 		<button
 			type="button"

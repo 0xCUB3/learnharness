@@ -23,6 +23,7 @@ import type { TeacherUIMessage } from "@/src/agent/ui-message";
 import type { ArtifactPartProps } from "@/src/core/contracts";
 import type { QuestionAnswerData } from "@/src/core/question-core";
 import { findPendingJobCall, findPendingToolCall } from "@/src/core/pending";
+import { phaseAt } from "@/src/core/phases";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
@@ -104,6 +105,14 @@ export function Chat({
 
 	const pending = findPendingToolCall(messages);
 	const busy = status === "submitted" || status === "streaming";
+
+	// Teach-phase check (W5, vision §2 "two phases"): a pending question that
+	// lands after plan_init starts collapsed behind a "Check your
+	// understanding" reveal button; probe-phase questions auto-open as today.
+	// A pending question can never precede plan_init in the transcript (the
+	// teacher's turn ends at the question call), so the session's current
+	// phase IS the question's phase. Pre-plan sessions: all probe — unchanged.
+	const requiresReveal = pending !== null && phaseAt(messages) === "teach";
 
 	// A tool call still streaming its input: the teacher is writing a question.
 	// Shown as a transcript shimmer, exactly like the thinking indicator.
@@ -224,6 +233,7 @@ export function Chat({
 
 						<DockOverlay
 							pending={pending}
+							requiresReveal={requiresReveal}
 							composer={
 								<Composer
 									busy={busy}
@@ -264,27 +274,45 @@ export function Chat({
  */
 function DockOverlay({
 	pending,
+	requiresReveal,
 	composer,
 	onSubmitAnswer,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
+	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
+	requiresReveal: boolean;
 	composer: React.ReactNode;
 	onSubmitAnswer: (output: QuestionAnswerData) => void;
 }) {
 	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
-	const [expanded, setExpanded] = useState(true);
+	// Teach-phase mount (session reload with a pending check): the dock starts
+	// as the collapsed invitation too — the check must not pop open on reload.
+	const [expanded, setExpanded] = useState(!requiresReveal);
+	// Reveal state (W5): false until the learner clicks the invitation. While
+	// false, the scroll machine must NOT auto-expand at the bottom — the
+	// learner reads the teaching first and opens the check when ready. Once
+	// revealed, the normal collapse machine rules apply untouched.
+	const [revealed, setRevealed] = useState(false);
+	const revealPending = requiresReveal && !revealed;
 
 	const pendingId = pending?.toolCallId ?? null;
 	const initialPendingRef = useRef(pendingId);
 
 	// New question MID-SESSION: open expanded if the learner is following at
 	// the bottom (scroll to reveal it); reading history → arrive as the bar.
-	// On session mount the dock simply starts expanded at the bottom (the
-	// library's instant initial scroll positions us) — no scroll, no morph.
+	// Teach-phase checks ALWAYS arrive collapsed behind the reveal button,
+	// even at the bottom. On session mount the dock simply starts in its
+	// initial state (expanded for probe, invitation for teach) — no scroll, no
+	// morph.
 	useEffect(() => {
 		if (!pendingId || pendingId === initialPendingRef.current) return;
-		setExpanded(isAtBottom);
-		if (isAtBottom) void scrollToBottom();
+		if (requiresReveal) {
+			setRevealed(false);
+			setExpanded(false);
+		} else {
+			setExpanded(isAtBottom);
+			if (isAtBottom) void scrollToBottom();
+		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- fire only when a NEW question lands
 	}, [pendingId]);
 
@@ -299,6 +327,10 @@ function DockOverlay({
 	expandedRef.current = expanded;
 	const pendingRef = useRef(!!pending);
 	pendingRef.current = !!pending;
+	const requiresRevealRef = useRef(requiresReveal);
+	requiresRevealRef.current = requiresReveal;
+	const revealedRef = useRef(revealed);
+	revealedRef.current = revealed;
 	const expandedHRef = useRef(0);
 	const collapsedHRef = useRef(42);
 
@@ -311,6 +343,7 @@ function DockOverlay({
 	const intentTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const expandAndReveal = () => {
 		expandIntentRef.current = true;
+		setRevealed(true); // the teach-check invitation was accepted (W5)
 		setExpanded(true);
 		clearTimeout(intentTimerRef.current);
 		intentTimerRef.current = setTimeout(() => {
@@ -332,6 +365,9 @@ function DockOverlay({
 			if (expandedRef.current) {
 				if (d > delta + 64 && !expandIntentRef.current) setExpanded(false);
 			} else if (d < 16) {
+				// Teach checks stay collapsed until the learner opens them (W5): the
+				// at-bottom auto-expand would pop the form over the teaching.
+				if (requiresRevealRef.current && !revealedRef.current) return;
 				setExpanded(true);
 				void scrollToBottom();
 			}
@@ -397,6 +433,7 @@ function DockOverlay({
 									toolCallId={pending.toolCallId}
 									input={pending.input as never}
 									expanded={expanded}
+									reveal={revealPending}
 									onExpand={expandAndReveal}
 									onSubmit={onSubmitAnswer}
 								/>
