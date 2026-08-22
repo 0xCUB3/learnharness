@@ -346,7 +346,7 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 //
 // mermaid: the plugin supplies the renderer; the `mermaid` PROP (below)
 // carries the dark theme + the error fallback component.
-const streamdownPlugins = {
+export const streamdownPlugins = {
   cjk: {
     ...cjk,
     remarkPluginsAfter: [...cjk.remarkPluginsAfter, remarkBreaks],
@@ -364,7 +364,7 @@ const mermaidTheme: MermaidConfig = {
   theme: "dark",
 };
 
-const mermaidOptions: MermaidOptions = {
+export const mermaidOptions: MermaidOptions = {
   config: mermaidTheme,
   errorComponent: MermaidError,
 };

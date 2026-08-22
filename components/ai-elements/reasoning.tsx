@@ -7,10 +7,6 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
-import { createMathPlugin } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import {
@@ -23,8 +19,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { Streamdown, type PluginConfig } from "streamdown";
+import { Streamdown } from "streamdown";
 
+import { transformMathDelimiters } from "@/src/core/math-delims";
+import { mermaidOptions, streamdownPlugins } from "./message";
 import { Shimmer } from "./shimmer";
 
 interface ReasoningContextValue {
@@ -204,13 +202,8 @@ export type ReasoningContentProps = ComponentProps<
   children: string;
 };
 
-// See message.tsx — same streamdown plugin type skew + math config.
-const streamdownPlugins = {
-  cjk,
-  code,
-  math: createMathPlugin({ singleDollarTextMath: true }),
-  mermaid,
-} as unknown as PluginConfig;
+// Shares message.tsx's Streamdown config (math delimiters, dark mermaid,
+// remark-breaks) — reasoning renders the same contract as message text.
 
 export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => (
@@ -222,7 +215,9 @@ export const ReasoningContent = memo(
       )}
       {...props}
     >
-      <Streamdown plugins={streamdownPlugins}>{children}</Streamdown>
+      <Streamdown mermaid={mermaidOptions} plugins={streamdownPlugins}>
+        {transformMathDelimiters(children)}
+      </Streamdown>
     </CollapsibleContent>
   )
 );

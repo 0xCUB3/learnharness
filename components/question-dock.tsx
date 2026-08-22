@@ -60,7 +60,9 @@ export function QuestionDock({ toolName, toolCallId, input, expanded, onExpand, 
 /** A plain-text teaser of a question for the collapsed bar: unwrap math, flatten common LaTeX. */
 function teaserText(q: string): string {
 	return q
-		.replace(/\$\$?([^$]*)\$\$?/g, "$1")
+		.replace(/\\\(([\s\S]*?)\\\)/g, "$1") // \(...\) inline math
+		.replace(/\\\[([\s\S]*?)\\\]/g, "$1") // \[...\] display math
+		.replace(/\$\$?([^$]*)\$\$?/g, "$1") // legacy $...$ (pre-switch sessions)
 		.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1/$2")
 		.replace(/\\([a-zA-Z]+)/g, "$1")
 		.replace(/[{}]/g, "")
