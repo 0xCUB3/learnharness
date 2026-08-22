@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
+import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import {
 	Conversation,
 	ConversationContent,
@@ -13,26 +13,30 @@ import { Message, MessageContent, MessageResponse } from "@/components/ai-elemen
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Separator } from "@/components/ui/separator";
-import { QuizCard, type QuizCardSubmitApi } from "@/components/quiz-card";
 import { AnsweredCard } from "@/components/answered-card";
-import { Composer, type ComposerMode } from "@/components/composer";
+import { Composer } from "@/components/composer";
+import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import type { TeacherUIMessage } from "@/src/agent/ui-message";
-import type { AskToolInput } from "@/src/agent/tools";
 import type { QuestionAnswerData } from "@/src/core/question-core";
 import { findPendingToolCall } from "@/src/core/pending";
 
-/** One width for everything: transcript, cards, composer all share this column. */
+/** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
 
 /**
  * The teaching session. All chat state lives in useChat; the server persists
- * the canonical transcript after every turn. A pending quiz/ask is just an
- * unanswered tool part — so reload/resume mid-question works for free.
+ * the canonical transcript after every turn.
  *
- * The composer morphs while a question is pending (one text field on screen):
- * select-mode question → the blob is the note field; free-text ask → the blob
- * is the answer field and its send submits via the card's registered API.
+ * The bottom blob is ONE persistent shell (never remounts — this is what a
+ * future chat→question morph animation will animate). Its contents swap:
+ *   - no pending question → the chat Composer
+ *   - question streaming in → "Preparing a question…" shimmer
+ *   - pending quiz/ask    → the QuestionDock (question + options + the
+ *                           unified note/answer field + Submit answer)
+ * A pending question is always the transcript tail (the lesson can't continue
+ * before it's answered), so docking it at the bottom loses nothing; on submit
+ * it lands in the transcript as an AnsweredCard.
  */
 export function Chat({
 	chatId,
@@ -67,42 +71,22 @@ export function Chat({
 	const pending = findPendingToolCall(messages);
 	const busy = status === "submitted" || status === "streaming";
 
-	// The single free-text field: chat input normally; note/answer while pending.
+	// A tool call still streaming its input (question being generated): the
+	// blob shows a shimmer instead of the composer.
+	const questionStreaming =
+		!pending &&
+		messages.at(-1)?.role === "assistant" &&
+		(messages.at(-1)?.parts.some((p) => isToolUIPart(p) && p.state === "input-streaming") ?? false);
+
 	const [text, setText] = useState("");
-	// The pending card registers its submit so the composer can send on Enter.
-	const cardApi = useRef<QuizCardSubmitApi | null>(null);
-
-	// Composer mode: free-text ask → "answer"; any other pending question → "note".
-	const pendingIsTextMode =
-		pending?.tool === "ask_user_question" &&
-		(() => {
-			const ask = pending.input as AskToolInput;
-			return ask.mode === "text" || !ask.options?.length;
-		})();
-	const mode: ComposerMode = pending ? (pendingIsTextMode ? "answer" : "note") : "chat";
-
-	// canSend mirrors the card's own predicate (text-mode: non-empty text).
-	// Reading cardApi.current here would lag one commit behind — the card
-	// re-registers its api in an effect AFTER this render pass.
-	const canSend = mode === "chat" ? text.trim().length > 0 && !pending : text.trim().length > 0;
+	const canSend = text.trim().length > 0 && !pending;
 
 	const onSend = () => {
-		if (mode === "chat") {
-			const t = text.trim();
-			if (!t || busy || pending) return;
-			setText("");
-			void sendMessage({ text: t });
-		} else if (mode === "answer") {
-			cardApi.current?.submit();
-		}
+		const t = text.trim();
+		if (!t || busy || pending) return;
+		setText("");
+		void sendMessage({ text: t });
 	};
-
-	const hint =
-		mode === "note"
-			? "Answering the question above — text here becomes a note on your answer."
-			: mode === "answer"
-				? "Type your answer to the question above."
-				: null;
 
 	return (
 		<div className="flex h-dvh flex-col">
@@ -111,10 +95,10 @@ export function Chat({
 				<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
 			</header>
 
-			{/* Transcript scrolls full-height; the composer floats on top. */}
+			{/* Transcript scrolls full-height; the blob floats on top of it. */}
 			<div className="relative min-h-0 flex-1">
 				<Conversation className="h-full">
-					<ConversationContent className={`${COLUMN} gap-4 pt-4 pb-44`}>
+					<ConversationContent className={`${COLUMN} gap-4 pt-4 ${pending || questionStreaming ? "pb-[32rem]" : "pb-44"}`}>
 						{messages.length === 0 && !busy && (
 							<ConversationEmptyState
 								title="New session"
@@ -148,34 +132,12 @@ export function Chat({
 													return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
 												case "tool-quiz":
 												case "tool-ask_user_question": {
-													const tool = part.type === "tool-quiz" ? ("quiz" as const) : ("ask_user_question" as const);
+													// Pending/streaming questions live in the dock, not the
+													// transcript; answered ones render as graded records.
 													if (part.state === "output-available") {
 														return <AnsweredCard key={pi} answer={part.output as QuestionAnswerData} />;
 													}
-													if (part.state === "input-available") {
-														const isPending = pending?.toolCallId === part.toolCallId;
-														return (
-															<QuizCard
-																key={pi}
-																toolName={tool}
-																toolCallId={part.toolCallId}
-																input={part.input}
-																pendingText={isPending ? text : ""}
-																onPendingTextChange={isPending ? setText : () => {}}
-																registerSubmit={isPending ? (api) => (cardApi.current = api) : undefined}
-																onSubmit={(output) => {
-																	setText("");
-																	void addToolOutput({ tool, toolCallId: part.toolCallId, output });
-																}}
-															/>
-														);
-													}
-													// input-streaming: the question is still being generated
-													return (
-														<div key={pi} className="rounded-xl border bg-card p-4">
-															<Shimmer className="text-sm">Preparing a question…</Shimmer>
-														</div>
-													);
+													return null;
 												}
 												default:
 													return null;
@@ -194,28 +156,46 @@ export function Chat({
 						)}
 					</ConversationContent>
 					<ConversationScrollButton />
-				</Conversation>
 
-				{/* Floating composer: content fades out behind it. */}
-				<div className="pointer-events-none absolute inset-x-0 bottom-0">
-					<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-					<div className="bg-background pb-4">
-						<div className={COLUMN}>
-							{hint && <div className="mb-1.5 text-center text-xs text-muted-foreground">{hint}</div>}
-							<div className="pointer-events-auto">
-								<Composer
-									mode={mode}
-									busy={busy}
-									value={text}
-									onChange={setText}
-									onSend={onSend}
-									onStop={() => stop()}
-									canSend={canSend}
-								/>
+					{/* The floating blob. ONE persistent shell — contents swap by mode.
+					    Content fades out behind it. */}
+					<div className="pointer-events-none absolute inset-x-0 bottom-0">
+						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
+						<div className="bg-background pb-4">
+							<div className={COLUMN}>
+								<div className="pointer-events-auto rounded-2xl border bg-card shadow-lg">
+									{pending ? (
+										<QuestionDock
+											toolName={pending.tool as "quiz" | "ask_user_question"}
+											toolCallId={pending.toolCallId}
+											input={pending.input as never}
+											onSubmit={(output) =>
+												void addToolOutput({
+													tool: pending.tool as "quiz" | "ask_user_question",
+													toolCallId: pending.toolCallId,
+													output,
+												})
+											}
+										/>
+									) : questionStreaming ? (
+										<div className="p-4">
+											<Shimmer className="text-sm">Preparing a question…</Shimmer>
+										</div>
+									) : (
+										<Composer
+											busy={busy}
+											value={text}
+											onChange={setText}
+											onSend={onSend}
+											onStop={() => stop()}
+											canSend={canSend}
+										/>
+									)}
+								</div>
 							</div>
 						</div>
 					</div>
-				</div>
+				</Conversation>
 			</div>
 		</div>
 	);

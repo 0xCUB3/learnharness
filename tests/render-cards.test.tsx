@@ -16,7 +16,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
-import { QuizCard } from "../components/quiz-card.tsx";
+import { StickToBottom } from "use-stick-to-bottom";
+import { QuestionDock } from "../components/question-dock.tsx";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 
@@ -41,40 +42,43 @@ function quizQD(): QuestionData {
 	};
 }
 
+
+function renderDock(props: { toolName: "quiz" | "ask_user_question"; toolCallId: string; input: never; onSubmit?: () => void }) {
+	// The dock reads the stick-to-bottom scroll context; wrap it. In static
+	// render the context starts at isAtBottom=true → the expanded form renders.
+	return renderToStaticMarkup(
+		<StickToBottom><QuestionDock {...props} onSubmit={props.onSubmit ?? (() => {})} /></StickToBottom>,
+	);
+}
+
 describe("render smoke tests", () => {
 	it("QuizCard renders question, options, and the automatic 'I don't know'", () => {
-		const html = renderToStaticMarkup(
-			<QuizCard toolName="quiz" toolCallId="q1" input={quizInput} onSubmit={() => {}} pendingText="" onPendingTextChange={() => {}} />,
-		);
+		const html = renderDock({ toolName: "quiz", toolCallId: "q1", input: quizInput as never });
 		assert.match(html, /Which planet is closest to the sun\?/);
 		assert.match(html, /Mercury/);
 		assert.match(html, /I don&#x27;t know|I don't know/);
+		// The unified bottom row: note field + Submit answer live INSIDE the dock.
+		assert.match(html, /Add a note/, "note field is the dock's bottom row");
+		assert.match(html, /Submit answer/, "send becomes Submit answer");
 		// The v1 desync bug: options are buttons with ARIA roles, not native inputs.
 		assert.ok(!html.includes('type="radio"'), "no native radio inputs");
 		assert.ok(html.includes('role="radio"'), "button-based radio role present");
 	});
 
 	it("QuizCard never leaks the explanation or the correct answer before submit", () => {
-		const html = renderToStaticMarkup(
-			<QuizCard toolName="quiz" toolCallId="q1" input={quizInput} onSubmit={() => {}} pendingText="" onPendingTextChange={() => {}} />,
-		);
+		const html = renderDock({ toolName: "quiz", toolCallId: "q1", input: quizInput as never });
 		assert.ok(!html.includes("innermost"), "explanation must not render pre-answer");
 	});
 
-	it("ask card renders Other, no note field (note lives in the composer), no grading", () => {
-		const html = renderToStaticMarkup(
-			<QuizCard
-				toolName="ask_user_question"
-				toolCallId="a1"
-				input={{ question: "How confident are you?", options: [{ label: "Very" }, { label: "Somewhat" }] }}
-				onSubmit={() => {}}
-				pendingText=""
-				onPendingTextChange={() => {}}
-			/>,
-		);
+	it("ask dock renders Other + note field, no grading affordance", () => {
+		const html = renderDock({
+			toolName: "ask_user_question",
+			toolCallId: "a1",
+			input: { question: "How confident are you?", options: [{ label: "Very" }, { label: "Somewhat" }] } as never,
+		});
 		assert.match(html, /Other/);
 		assert.ok(!html.includes("I don&#x27;t know"), "ask has no 'I don't know'");
-		assert.ok(!html.includes("Add a note"), "note field moved to the composer blob");
+		assert.match(html, /Add a note/, "ask select-mode also gets the note row");
 	});
 
 	it("AnsweredCard grades quiz answers (✓/✗ + explanation)", () => {
@@ -143,10 +147,8 @@ describe("math rendering (streamdown + KaTeX)", () => {
 			correctAnswer: "$2x$",
 			explanation: "The power rule gives $\\frac{dy}{dx} = 2x$.",
 		};
-		const pendingHtml = renderToStaticMarkup(
-			<QuizCard toolName="quiz" toolCallId="m1" input={mathQuiz} onSubmit={() => {}} pendingText="" onPendingTextChange={() => {}} />,
-		);
-		assert.ok(pendingHtml.includes("katex"), "pending card: question/options math renders");
+		const pendingHtml = renderDock({ toolName: "quiz", toolCallId: "m1", input: mathQuiz as never });
+		assert.ok(pendingHtml.includes("katex"), "pending dock: question/options math renders");
 
 		const options = normalizeOptions(mathQuiz.options);
 		const qd: QuestionData = {
