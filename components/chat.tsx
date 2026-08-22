@@ -95,7 +95,7 @@ export function Chat({
 			</header>
 
 			<div className="relative min-h-0 flex-1">
-				<Conversation className="h-full">
+				<Conversation className="h-full" initial="instant">
 					<ConversationContent className="min-h-full gap-0 p-0">
 						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
 							{messages.length === 0 && !busy && (
@@ -208,14 +208,16 @@ function DockOverlay({
 	const [expanded, setExpanded] = useState(true);
 
 	const pendingId = pending?.toolCallId ?? null;
+	const initialPendingRef = useRef(pendingId);
 
-	// New question: open expanded if the learner is following at the bottom
-	// (scroll to reveal it); if they're reading history, arrive as the slim bar.
+	// New question MID-SESSION: open expanded if the learner is following at
+	// the bottom (scroll to reveal it); reading history → arrive as the bar.
+	// On session mount the dock simply starts expanded at the bottom (the
+	// library's instant initial scroll positions us) — no scroll, no morph.
 	useEffect(() => {
-		if (pendingId) {
-			setExpanded(isAtBottom);
-			if (isAtBottom) void scrollToBottom();
-		}
+		if (!pendingId || pendingId === initialPendingRef.current) return;
+		setExpanded(isAtBottom);
+		if (isAtBottom) void scrollToBottom();
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- fire only when a NEW question lands
 	}, [pendingId]);
 
@@ -258,6 +260,9 @@ function DockOverlay({
 	};
 
 	const mode = pending ? `question:${pending.toolCallId}` : "chat";
+	// The opening variant of a session appears instantly — the fade/rise is
+	// reserved for mid-session transitions.
+	const initialModeRef = useRef(mode);
 
 	// Height morph: animate the shell from its previous height to its new one
 	// whenever the variant (chat ↔ question ↔ collapsed bar) changes. Typing
@@ -298,7 +303,7 @@ function DockOverlay({
 			<div className="bg-background pb-4">
 				<div className={COLUMN}>
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
-						<div key={mode} className="dock-variant">
+						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
 							{pending ? (
 								<QuestionDock
 									toolName={pending.tool as "quiz" | "ask_user_question"}

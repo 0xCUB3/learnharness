@@ -17,6 +17,7 @@ export default async function ChatPage({
 	if (!chat) notFound();
 	return (
 		<Chat
+			key={chat.id}
 			chatId={chat.id}
 			title={chat.title}
 			initialMessages={chat.messages as TeacherUIMessage[]}
