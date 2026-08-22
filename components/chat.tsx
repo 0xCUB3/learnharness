@@ -81,6 +81,25 @@ export function Chat({
 		}
 	}, [initialPrompt, initialMessages.length, sendMessage]);
 
+	// Mount continuation: if the stored transcript ends with a fulfilled tool
+	// (a job result landed while no client was open), resume the lesson — the
+	// SDK's sendAutomaticallyWhen only fires inside addToolOutput, so reloads
+	// need this nudge. Once per mount; the turn that follows ends in text (or
+	// a pending question), so no loop.
+	const mountContinuation = useRef(false);
+	useEffect(() => {
+		if (mountContinuation.current) return;
+		mountContinuation.current = true;
+		if (
+			status === "ready" &&
+			messages.length > 0 &&
+			lastAssistantMessageIsCompleteWithToolCalls({ messages })
+		) {
+			void sendMessage();
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only by design
+	}, []);
+
 	const pending = findPendingToolCall(messages);
 	const busy = status === "submitted" || status === "streaming";
 
@@ -102,8 +121,19 @@ export function Chat({
 		const res = await fetch(`/api/chats/${chatId}`);
 		if (!res.ok) return;
 		const record = (await res.json()) as { messages?: TeacherUIMessage[] };
-		if (Array.isArray(record.messages)) setMessages(record.messages);
-	}, [chatId, setMessages]);
+		if (!Array.isArray(record.messages)) return;
+		setMessages(record.messages);
+		// setMessages does NOT fire sendAutomaticallyWhen (the SDK only checks
+		// it inside addToolOutput) — without this the teacher would stay silent
+		// after a job result lands. sendMessage() with no args re-requests with
+		// the current list: the continuation. (contracts.ts protocol §4.)
+		if (
+			status === "ready" &&
+			lastAssistantMessageIsCompleteWithToolCalls({ messages: record.messages })
+		) {
+			void sendMessage();
+		}
+	}, [chatId, setMessages, sendMessage, status]);
 
 	const onSend = () => {
 		const t = text.trim();
