@@ -235,6 +235,26 @@ function DockOverlay({
 	const expandedHRef = useRef(0);
 	const collapsedHRef = useRef(42);
 
+	// Explicit expand (bar click): the smooth scroll to the bottom takes
+	// hundreds of ms, during which the position is still legitimately inside
+	// the collapse zone — the machine would instantly re-collapse the dock
+	// (open → snap shut → reopen at the bottom, the flicker). Suppress the
+	// collapse branch until the reveal scroll settles or is interrupted.
+	const expandIntentRef = useRef(false);
+	const intentTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	const expandAndReveal = () => {
+		expandIntentRef.current = true;
+		setExpanded(true);
+		clearTimeout(intentTimerRef.current);
+		intentTimerRef.current = setTimeout(() => {
+			expandIntentRef.current = false;
+		}, 2000);
+		void Promise.resolve(scrollToBottom()).finally(() => {
+			clearTimeout(intentTimerRef.current);
+			expandIntentRef.current = false;
+		});
+	};
+
 	useEffect(() => {
 		const el = scrollRef.current;
 		if (!el) return;
@@ -243,7 +263,7 @@ function DockOverlay({
 			const d = el.scrollHeight - el.clientHeight - el.scrollTop;
 			const delta = Math.max(expandedHRef.current - collapsedHRef.current, 240);
 			if (expandedRef.current) {
-				if (d > delta + 64) setExpanded(false);
+				if (d > delta + 64 && !expandIntentRef.current) setExpanded(false);
 			} else if (d < 16) {
 				setExpanded(true);
 				void scrollToBottom();
@@ -310,10 +330,7 @@ function DockOverlay({
 									toolCallId={pending.toolCallId}
 									input={pending.input as never}
 									expanded={expanded}
-									onExpand={() => {
-										setExpanded(true);
-										void scrollToBottom();
-									}}
+									onExpand={expandAndReveal}
 									onSubmit={onSubmitAnswer}
 								/>
 							) : (
