@@ -43,6 +43,12 @@ Carried over unchanged from the design doc: known (evidence property) vs underst
 - Pre-implementation validation (cheap): 2k-node synthetic benchmark to confirm layout time + render smoothness before committing.
 - Physics is for **placement only** — no dragging, no sliders, no editing interactions. Pan + zoom only.
 
+### The graph as session context (DECIDED 2026-08-22)
+
+Every session starts with the learner's knowledge graph as base context for the teacher. This is what makes probing *precise* — probe questions can target subtleties and nuances at the boundary of what the learner actually holds, instead of re-discovering it from scratch each session. Personalization compounds across sessions.
+
+**The selection problem (open):** the whole graph may eventually be too much context, and pedagogical relevance ≠ semantic closeness. What matters for a new topic: (a) its **structural neighborhood** — the `requires`-edge subtree the topic stands on, regardless of surface similarity; (b) **diagnostic hotspots** — misconception / shaky / floating nodes anywhere in the graph (a live misconception is always relevant context); (c) the frontier strip near the topic. Candidate strategies, to tune on real data: whole graph while it's small; k-hop structural neighborhood around the topic's nodes; ledger-informed slices (weak/misconceived/floating first); a cheap routing pass that picks subtrees given the session topic.
+
 ### Home page
 
 The graph view replaces the current placeholder. v1: all nodes from all sessions (naive union), node color/shape by state class (taught / probed / known / not-held / candidate later), pan/zoom, labels at zoom. Clicking a node → the session(s) that touched it (cheap version: title list). Everything richer (frontier glow, rot map, blast radius) comes after the consolidation pipeline exists.
@@ -86,7 +92,7 @@ The note field is not an auxiliary input — it's the channel where the learner 
 2. **Transport + transcription:** the pi `dictate` extension's proven recipe ports directly — Deepgram streaming (`nova-3`, `smart_format`, `punctuate`, `endpointing=300`), per-utterance finals. Architecture: a server route mints a **short-lived Deepgram token**, the browser connects to Deepgram's WSS directly (API key never touches the client). On-device whisper (transformers.js/WebGPU) is the private/offline alternative — deferred unless Deepgram disappoints.
 3. **UX:** mic button in the composer blob; live level meter (AnalyserNode — the pi extension's responsive visuals rebuilt for web); transcript lands in the textarea/field, editable before send; Escape cancels; **a finished dictation is never lost** (carried over from the pi extension's hard-won UX lessons).
 
-### It is not a chat — the presentation principle (DECIDED direction, 2026-08-22)
+### It is not a chat — the presentation principle (direction, 2026-08-22 — LOW PRIORITY)
 
 A session is functionally a conversation — the learner talks, reasons, and steers constantly; that two-way flow is *how it works best*. But it must never be **presented** as a chat. Forget the chat interface entirely. The resolution of this paradox:
 
@@ -138,6 +144,20 @@ Explicitly avoided: gamification (XP, streaks, confetti). The structure is epist
 
 ---
 
+## 2.5 Sub-agent architecture (DECIDED 2026-08-22)
+
+The teacher's context window and attention are precious — it has the lesson to run and the plan-tree tools to wield. **Mechanical, token-expensive, and time-expensive work is outsourced to background sub-agents.** Rules of the house:
+
+- **Async, always.** Sub-agents run in the background, never blocking the lesson. The UI shows live **activity indicators** — what each running agent is doing right now (current tool call + arguments), not its full session. Headless workers with a status feed.
+- **Sub-agents verify; they never one-shot.** This is the asymmetry that makes outsourcing worth it:
+  - **Demo-builder** — builds interactive demos (the artifacts of §2) and **tests that the code actually runs** (headless execution) before anything reaches the session. No demo is one-shotted live.
+  - **Visual-maker** (SVG and other precise visuals) — renders, **looks at the result**, and iterates until correct. Direct port of the vault POC's `svg-maker` agent (`.pi/agents/svg-maker.md`: `write_svg` / `edit_svg` / `render_svg` + the one rule that matters — verify by looking).
+  - **Mermaid needs no sub-agent** — the teacher writes mermaid inline; LLMs are good at it and its failure mode is visible at a glance.
+- **Researcher (fact verification)** — a tool the teacher calls to check facts and information. Another agent loop with just `web_search` + `web_fetch`. Direct port of two proven pieces: the pi `web-search` / `web-fetch` extensions (`~/.pi/agent/extensions/`) and the researcher system prompt (`~/.pi/agent/extensions/interactive-subagents/agents/researcher.md`: break into facets → varied-angle searches → fetch the top primary sources → synthesize a standalone, sourced brief).
+- **Implementation shape (Next.js):** server-side background agent loops, status events streamed to the client for the indicators; results return to the teacher as tool outputs (artifact + summary), keeping raw search/render churn out of the teacher's context.
+
+---
+
 ## 3. Presentation layer (noted, not yet scheduled)
 
 - **LaTeX delimiters: switch to the ChatGPT convention.** Inline math `\(...\)`, display math `\[...\]`. The single `$` is retired from math duty and reserved for currency (ending the dollar-sign hazard for good, on both teacher output and eventually user input). Technical path: preprocess `\(...\)`/`\[...\]` → remark-math-compatible form (or a dedicated micromark extension), plus a system-prompt update. The old `$`/`$$` contract dies with this change.
@@ -154,7 +174,8 @@ Explicitly avoided: gamification (XP, streaks, confetti). The structure is epist
 3. **Phase separation** — probe/teach marker, transcript divider, collapsed teach-phase checks.
 4. **Right-panel tree view** — persistent, current-position highlight.
 5. **Background consolidation** — merge adjudication, calibration, prose-only edges.
-6. **Demo tool (artifacts)** — sandboxed-iframe `demo` tool + error-fix loop. No dependencies; high value; can slot in any time after step 1.
+6. **Demo capability** — the `demo` artifact contract (sandboxed iframe, error-fix loop) + the **demo-builder sub-agent** that tests code before delivery (§2.5). High value; slots in any time after step 1.
+6b. **Researcher tool** — fact verification for the teacher (§2.5); cheap port of proven pi pieces.
 7. **Presentation fixes** — LaTeX delimiters, line breaks, mermaid integration.
 8. **Structural-identity candidates** (from §2 ideation, pending selection): sectioned lesson-document transcript, gated progression, typed blocks, session-state strip.
 9. **Later:** dictation (Deepgram token-mint + AudioWorklet capture), frontier expansion + what-next queries (new territory / repairs / conversions), spaced repetition on the event ledger, practice exercises, Electron.
