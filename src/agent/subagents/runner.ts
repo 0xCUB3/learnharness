@@ -1,9 +1,11 @@
 import { isToolUIPart, type LanguageModel, type UIMessage } from "ai";
-import type { ResearchResult, ResearchToolInput } from "../../core/contracts.ts";
+import type { DemoResult, DemoToolInput, JobKind, ResearchResult, ResearchToolInput, VisualResult, VisualToolInput } from "../../core/contracts.ts";
 import { JOB_TOOLS } from "../../core/pending.ts";
 import { getChat, saveMessages } from "../../store/chats.ts";
 import { createJob, findJobByToolCallId, getJob, updateJob } from "../../store/jobs.ts";
+import { runDemoBuilder } from "./demo-builder.ts";
 import { createResearcherAgent } from "./researcher.ts";
+import { runVisualMaker } from "./visual-maker.ts";
 
 /**
  * The background job runner + the chat-handler spawn hook (contracts.ts
@@ -11,18 +13,22 @@ import { createResearcherAgent } from "./researcher.ts";
  *
  *   spawnPendingJobs  — called from onFinish AFTER saveMessages: finds
  *     input-available JOB_TOOLS parts in the last assistant message with no
- *     existing job and fires runResearchJob WITHOUT awaiting (the HTTP
- *     response is long gone).
+ *     existing job and fires the kind's runner WITHOUT awaiting (the HTTP
+ *     response is long gone). Kind dispatch (research/demo/visual) is a
+ *     self-contained map here, so chat-handler needs no changes for new
+ *     job kinds — anything listed in JOB_TOOLS routes automatically.
  *
- *   runResearchJob    — runs the researcher agent loop in the background,
- *     updating the job's activity line on every tool call, then rewrites the
- *     tool part in the LATEST chat record to output-available (read-modify-
- *     write; no awaits between the read and the write). The part is fulfilled
- *     BEFORE the job status flips, so a client that polls the job and then
- *     re-syncs always sees the finished part.
+ *   runResearchJob / runDemoJob / runVisualJob — run the sub-agent loop in
+ *     the background, updating the job's activity line on every iteration,
+ *     then rewrite the tool part in the LATEST chat record to
+ *     output-available (read-modify-write; no awaits between the read and
+ *     the write). The part is fulfilled BEFORE the job status flips, so a
+ *     client that polls the job and then re-syncs always sees the finished
+ *     part.
  *
- * On failure the part is still fulfilled ({brief: "Research failed: …"}) —
- * the teacher must learn the outcome — and the job is marked error.
+ * On failure the part is still fulfilled (DemoResult/VisualResult failure
+ * shape: empty html/svg + "FAILED: …" notes; research: failure brief) — the
+ * teacher must learn the outcome — and the job is marked error.
  */
 
 /**
@@ -31,10 +37,19 @@ import { createResearcherAgent } from "./researcher.ts";
  * network. Undefined in production.
  */
 export const researchModelOverride: { current?: LanguageModel } = {};
+export const demoModelOverride: { current?: LanguageModel } = {};
+export const visualModelOverride: { current?: LanguageModel } = {};
 
 export interface RunResearchJobOptions {
 	model?: LanguageModel;
 }
+
+/** The kind→runner map: everything in JOB_TOOLS routes through here. */
+const KIND_RUNNERS: Record<JobKind, (jobId: string) => Promise<void>> = {
+	research: (jobId) => runResearchJob(jobId, { model: researchModelOverride.current }),
+	demo: (jobId) => runDemoJob(jobId, { model: demoModelOverride.current }),
+	visual: (jobId) => runVisualJob(jobId, { model: visualModelOverride.current }),
+};
 
 export function spawnPendingJobs(chatId: string, messages: UIMessage[]): void {
 	const last = [...messages].reverse().find((m) => m.role === "assistant");
@@ -43,11 +58,12 @@ export function spawnPendingJobs(chatId: string, messages: UIMessage[]): void {
 		if (!isToolUIPart(part) || part.state !== "input-available") continue;
 		const tool = part.type.slice("tool-".length);
 		if (!(JOB_TOOLS as readonly string[]).includes(tool)) continue;
-		if (tool !== "research") continue; // demo/visual runners arrive in W6
+		const runner = KIND_RUNNERS[tool as JobKind];
+		if (!runner) continue;
 		if (findJobByToolCallId(chatId, part.toolCallId)) continue; // already has a job
-		const job = createJob({ kind: "research", chatId, toolCallId: part.toolCallId });
-		void runResearchJob(job.id, { model: researchModelOverride.current }).catch((err) => {
-			console.error(`[job ${job.id}] research runner crashed:`, err);
+		const job = createJob({ kind: tool as JobKind, chatId, toolCallId: part.toolCallId });
+		void runner(job.id).catch((err) => {
+			console.error(`[job ${job.id}] ${tool} runner crashed:`, err);
 			updateJob(job.id, { status: "error", error: String(err), activity: "failed" });
 		});
 	}
@@ -103,6 +119,96 @@ export async function runResearchJob(jobId: string, opts: RunResearchJobOptions 
 	}
 }
 
+// ─── demo + visual job wrappers ───────────────────────────────────────────
+
+export interface RunDemoJobOptions {
+	model?: LanguageModel;
+}
+
+/** Failure shape (W6 brief): html === "" with "FAILED: …" notes. */
+function isDemoFailure(result: DemoResult): boolean {
+	return typeof result.html !== "string" || result.html.length === 0;
+}
+
+function isVisualFailure(result: VisualResult): boolean {
+	return typeof result.svg !== "string" || result.svg.length === 0;
+}
+
+export async function runDemoJob(jobId: string, opts: RunDemoJobOptions = {}): Promise<void> {
+	const job = getJob(jobId);
+	if (!job || job.status !== "running") return;
+
+	const chat = getChat(job.chatId);
+	if (!chat) {
+		updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
+		return;
+	}
+	const input = findToolPart(chat.messages, job.toolCallId)?.input as DemoToolInput | undefined;
+	const title = typeof input?.title === "string" && input.title.trim() ? input.title : "Interactive demo";
+	const brief = typeof input?.brief === "string" ? input.brief : "";
+
+	try {
+		updateJob(jobId, { activity: "building demo" });
+		const result = await runDemoBuilder(
+			{ title, brief },
+			{
+				model: opts.model,
+				onActivity: (line) => updateJob(jobId, { activity: line }),
+			},
+		);
+		fulfillPart(job.chatId, job.toolCallId, result);
+		if (isDemoFailure(result)) {
+			updateJob(jobId, { status: "error", error: result.notes ?? "demo build failed", activity: "failed" });
+		} else {
+			updateJob(jobId, { status: "done", result });
+		}
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		const failure: DemoResult = { title, html: "", tested: true, notes: `FAILED: ${reason}` };
+		fulfillPart(job.chatId, job.toolCallId, failure);
+		updateJob(jobId, { status: "error", error: reason, activity: "failed" });
+	}
+}
+
+export interface RunVisualJobOptions {
+	model?: LanguageModel;
+}
+
+export async function runVisualJob(jobId: string, opts: RunVisualJobOptions = {}): Promise<void> {
+	const job = getJob(jobId);
+	if (!job || job.status !== "running") return;
+
+	const chat = getChat(job.chatId);
+	if (!chat) {
+		updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
+		return;
+	}
+	const input = findToolPart(chat.messages, job.toolCallId)?.input as VisualToolInput | undefined;
+	const brief = typeof input?.brief === "string" ? input.brief : "";
+
+	try {
+		updateJob(jobId, { activity: "drawing figure" });
+		const result = await runVisualMaker(
+			{ brief },
+			{
+				model: opts.model,
+				onActivity: (line) => updateJob(jobId, { activity: line }),
+			},
+		);
+		fulfillPart(job.chatId, job.toolCallId, result);
+		if (isVisualFailure(result)) {
+			updateJob(jobId, { status: "error", error: result.notes ?? "visual build failed", activity: "failed" });
+		} else {
+			updateJob(jobId, { status: "done", result });
+		}
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		const failure: VisualResult = { svg: "", notes: `FAILED: ${reason}` };
+		fulfillPart(job.chatId, job.toolCallId, failure);
+		updateJob(jobId, { status: "error", error: reason, activity: "failed" });
+	}
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function findToolPart(messages: UIMessage[], toolCallId: string) {
@@ -134,7 +240,7 @@ function hostOf(url: string | undefined): string {
  * Rewrite the tool part in the LATEST chat record to output-available.
  * Synchronous read-modify-write (no awaits) — atomic within the event loop.
  */
-function fulfillPart(chatId: string, toolCallId: string, output: ResearchResult): void {
+function fulfillPart(chatId: string, toolCallId: string, output: ResearchResult | DemoResult | VisualResult): void {
 	const chat = getChat(chatId);
 	if (!chat) return;
 	let found = false;
