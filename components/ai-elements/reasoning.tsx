@@ -9,7 +9,7 @@ import {
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
+import { createMathPlugin } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
@@ -204,8 +204,13 @@ export type ReasoningContentProps = ComponentProps<
   children: string;
 };
 
-// See message.tsx — same streamdown plugin type skew.
-const streamdownPlugins = { cjk, code, math, mermaid } as unknown as PluginConfig;
+// See message.tsx — same streamdown plugin type skew + math config.
+const streamdownPlugins = {
+  cjk,
+  code,
+  math: createMathPlugin({ singleDollarTextMath: true }),
+  mermaid,
+} as unknown as PluginConfig;
 
 export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => (

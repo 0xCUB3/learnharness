@@ -14,7 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
+import { createMathPlugin } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
@@ -324,7 +324,14 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 // Type-only version skew: @streamdown/code bundles shiki@3 types while
 // streamdown@2.5 expects shiki@4 types. Both work at runtime (each ships its
 // own highlighter); the cast papers over the .d.ts mismatch.
-const streamdownPlugins = { cjk, code, math, mermaid } as unknown as PluginConfig;
+// singleDollarTextMath: the teacher prompt instructs $...$ inline math (the
+// LLM-native convention); remark-math's default here is false.
+const streamdownPlugins = {
+  cjk,
+  code,
+  math: createMathPlugin({ singleDollarTextMath: true }),
+  mermaid,
+} as unknown as PluginConfig;
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (

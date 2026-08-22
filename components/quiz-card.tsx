@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import type { AskToolInput, QuizToolInput } from "@/src/agent/tools";
 import {
@@ -9,6 +10,7 @@ import {
 	coerceCorrectAnswer,
 	normalizeOptions,
 	resolveCorrect,
+	seededRandom,
 	shuffleOptions,
 	type AnswerRequest,
 	type QuestionAnswerData,
@@ -37,8 +39,9 @@ export function QuizCard({ toolName, toolCallId, input, onSubmit }: QuizCardProp
 	const kind = toolName === "quiz" ? ("quiz" as const) : ("ask" as const);
 
 	// Build the canonical QuestionData once per question. Quiz options are
-	// shuffled so position never leaks correctness; the display order is
-	// snapshotted into the answer record at submit time.
+	// deterministically shuffled (seeded by toolCallId) so position never leaks
+	// correctness AND server/client render the same order (hydration-safe);
+	// the display order is snapshotted into the answer record at submit time.
 	const qd = useMemo<QuestionData>(() => {
 		const quizInput = kind === "quiz" ? (input as QuizToolInput) : null;
 		const askInput = kind === "ask" ? (input as AskToolInput) : null;
@@ -50,7 +53,7 @@ export function QuizCard({ toolName, toolCallId, input, onSubmit }: QuizCardProp
 					: "single-select"
 				: (askInput?.mode ?? (askInput?.options?.length ? (multi ? "multi-select" : "single-select") : "text"));
 		const options = normalizeOptions((quizInput?.options ?? askInput?.options ?? []) as { label: string; value?: string }[]);
-		const ordered = kind === "quiz" && options.length > 0 ? shuffleOptions(options) : options;
+		const ordered = kind === "quiz" && options.length > 0 ? shuffleOptions(options, seededRandom(toolCallId)) : options;
 		const q: QuestionData = {
 			id: toolCallId,
 			kind,
@@ -125,8 +128,14 @@ export function QuizCard({ toolName, toolCallId, input, onSubmit }: QuizCardProp
 				{kind === "quiz" ? "Quiz" : "Question"}
 				{qd.mode === "multi-select" && " · select all that apply"}
 			</div>
-			<div className="mb-3 font-medium">{qd.question}</div>
-			{qd.context && <div className="mb-3 text-sm text-muted-foreground">{qd.context}</div>}
+			<div className="mb-3 font-medium">
+				<MessageResponse>{qd.question}</MessageResponse>
+			</div>
+			{qd.context && (
+				<div className="mb-3 text-sm text-muted-foreground">
+					<MessageResponse>{qd.context}</MessageResponse>
+				</div>
+			)}
 
 			{qd.mode !== "text" && (
 				<div className="flex flex-col gap-2" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
@@ -154,7 +163,7 @@ export function QuizCard({ toolName, toolCallId, input, onSubmit }: QuizCardProp
 									{isSel && <span className={cn(qd.mode === "multi-select" ? "text-[10px]" : "size-1.5 rounded-full bg-current")}>{qd.mode === "multi-select" ? "✓" : ""}</span>}
 								</span>
 								<span>
-									{opt.label}
+									<MessageResponse>{opt.label}</MessageResponse>
 									{opt.description && <span className="block text-xs text-muted-foreground">{opt.description}</span>}
 								</span>
 							</button>

@@ -115,10 +115,35 @@ export function normalizeOptions(
 
 /** Fisher-Yates over a copy. correctAnswer is keyed by value, so display
  *  order can be shuffled safely before resolving indices. */
-export function shuffleOptions(options: QuizOption[]): QuizOption[] {
+// ─── options ────────────────────────────────────────────────────────────────
+
+/** mulberry32 seeded by a string — deterministic shuffle for hydration-safe rendering. */
+export function seededRandom(seed: string): () => number {
+	let h = 2166136261;
+	for (let i = 0; i < seed.length; i++) {
+		h ^= seed.charCodeAt(i);
+		h = Math.imul(h, 16777619);
+	}
+	let a = h >>> 0;
+	return () => {
+		a |= 0;
+		a = (a + 0x6d2b79f5) | 0;
+		let t = Math.imul(a ^ (a >>> 15), 1 | a);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+/**
+ * Fisher–Yates with an injectable RNG. Pass `seededRandom(toolCallId)` in
+ * rendered components: Math.random() shuffles differently on server vs client
+ * and breaks hydration (React #418). A per-toolCallId seed keeps the order
+ * stable across reloads while still varying it per question.
+ */
+export function shuffleOptions(options: QuizOption[], rand: () => number = Math.random): QuizOption[] {
 	const out = [...options];
 	for (let i = out.length - 1; i > 0; i--) {
-		const j = Math.floor(Math.random() * (i + 1));
+		const j = Math.floor(rand() * (i + 1));
 		const a = out[i]!;
 		const b = out[j]!;
 		out[i] = b;

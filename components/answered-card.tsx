@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core/question-core";
 
 /**
@@ -36,7 +37,9 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 						<span className="rounded bg-red-500/15 px-1.5 py-0.5 text-red-500">incorrect</span>
 					))}
 			</div>
-			<div className="mb-3 font-medium">{answer.questionText}</div>
+			<div className="mb-3 font-medium">
+				<MessageResponse>{answer.questionText}</MessageResponse>
+			</div>
 
 			{answer.options && answer.options.length > 0 && (
 				<div className="flex flex-col gap-1.5 text-sm">
@@ -61,7 +64,9 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 										{!sel && key && "✓"}
 									</span>
 								)}
-								<span className={cn(!sel && "text-muted-foreground")}>{opt.label}</span>
+								<span className={cn(!sel && "text-muted-foreground")}>
+									<MessageResponse>{opt.label}</MessageResponse>
+								</span>
 							</div>
 						);
 					})}
@@ -75,7 +80,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			{isQuiz && answer.explanation && (
 				<div className="mt-3 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
 					<span className="font-medium text-foreground">Why: </span>
-					{answer.explanation}
+					<MessageResponse className="inline">{answer.explanation}</MessageResponse>
 				</div>
 			)}
 			{answer.note && <div className="mt-2 text-xs text-muted-foreground">Note: {answer.note}</div>}

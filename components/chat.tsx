@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import {
@@ -26,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { QuizCard } from "@/components/quiz-card";
 import { AnsweredCard } from "@/components/answered-card";
+import { SessionDrawer } from "@/components/session-drawer";
 import type { TeacherUIMessage } from "@/src/agent/ui-message";
 import type { QuestionAnswerData } from "@/src/core/question-core";
 import { findPendingToolCall } from "@/src/core/pending";
@@ -46,7 +46,6 @@ export function Chat({
 	initialMessages: TeacherUIMessage[];
 	initialPrompt?: string;
 }) {
-	const router = useRouter();
 	const { messages, sendMessage, addToolOutput, status, error, stop } =
 		useChat<TeacherUIMessage>({
 			id: chatId,
@@ -80,10 +79,8 @@ export function Chat({
 
 	return (
 		<div className="flex h-dvh flex-col">
-			<header className="flex items-center gap-3 border-b px-4 py-3">
-				<Button variant="ghost" size="sm" onClick={() => router.push("/")}>
-					← Sessions
-				</Button>
+			<header className="flex items-center gap-3 border-b px-3 py-2">
+				<SessionDrawer />
 				<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
 				{busy && (
 					<Button variant="outline" size="sm" onClick={() => stop()}>
@@ -105,7 +102,9 @@ export function Chat({
 						<Message key={m.id} from={m.role}>
 							<MessageContent>
 								{m.role === "user" ? (
-									<div className="whitespace-pre-wrap">{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}</div>
+									<MessageResponse>
+										{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
+									</MessageResponse>
 								) : (
 									m.parts.map((part, pi) => {
 										const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;

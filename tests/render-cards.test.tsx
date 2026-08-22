@@ -15,6 +15,7 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { QuizCard } from "../components/quiz-card.tsx";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
@@ -102,3 +103,62 @@ describe("render smoke tests", () => {
 		assert.match(html, /skipped/);
 	});
 });
+
+describe("math rendering (streamdown + KaTeX)", () => {
+	it("renders INLINE math ($...$) — the LLM-native convention", () => {
+		const html = renderToStaticMarkup(<MessageResponse>{"The map $f(x) = x^2$ is smooth."}</MessageResponse>);
+		assert.ok(html.includes("katex"), `inline math should render as KaTeX, got: ${html.slice(0, 300)}`);
+	});
+
+	it("renders display math ($$ fenced on own lines — the prompt contract)", () => {
+		const html = renderToStaticMarkup(<MessageResponse>{"$$\n\\int_0^1 x^2\\,dx = \\tfrac{1}{3}\n$$"}</MessageResponse>);
+		assert.ok(html.includes("katex-display"), "fenced display math should render as display KaTeX");
+	});
+
+	it("one-line $$...$$ degrades to inline (micromark behavior — prompt forbids it)", () => {
+		// micromark treats a one-line $$...$$ inside a paragraph as 2-dollar
+		// inline mathText, not flow math. The system prompt instructs the fenced
+		// form, so the model never emits this; pin the behavior so a renderer
+		// swap can't silently change it.
+		const html = renderToStaticMarkup(<MessageResponse>{"$$\\int_0^1 x^2\\,dx$$"}</MessageResponse>);
+		assert.ok(html.includes("katex") && !html.includes("katex-display"), "one-liner should render inline");
+	});
+
+	it("does NOT eat escaped currency (\\$5 stays text — the prompt contract)", () => {
+		// micromark-extension-math@3.1 lacks pandoc's closing-digit rule, so bare
+		// "$5 and $10" would parse as math. The defense is at the source: the
+		// system prompt instructs the teacher to escape currency (\$5 / 5 USD).
+		const html = renderToStaticMarkup(<MessageResponse>{"It costs \\$5 and \\$10 more."}</MessageResponse>);
+		assert.ok(!html.includes("katex"), "escaped currency must not parse as math");
+		assert.match(html, /\$5/);
+	});
+
+	it("quiz cards render math in question, options, and explanation", () => {
+		const mathQuiz = {
+			question: "What is $\\frac{dy}{dx}$ of $y = x^2$?",
+			options: [{ label: "$2x$" }, { label: "$x^2$" }, { label: "$x$" }],
+			correctAnswer: "$2x$",
+			explanation: "The power rule gives $\\frac{dy}{dx} = 2x$.",
+		};
+		const pendingHtml = renderToStaticMarkup(
+			<QuizCard toolName="quiz" toolCallId="m1" input={mathQuiz} onSubmit={() => {}} />,
+		);
+		assert.ok(pendingHtml.includes("katex"), "pending card: question/options math renders");
+
+		const options = normalizeOptions(mathQuiz.options);
+		const qd: QuestionData = {
+			id: "m1",
+			kind: "quiz",
+			question: mathQuiz.question,
+			mode: "single-select",
+			options,
+			correctIndices: resolveCorrect(coerceCorrectAnswer(mathQuiz.correctAnswer), options).indices,
+			explanation: mathQuiz.explanation,
+			createdAt: new Date().toISOString(),
+		};
+		const answeredHtml = renderToStaticMarkup(
+			<AnsweredCard answer={buildAnswer(qd, { values: ["$2x$"] })} />,
+		);
+		assert.ok(answeredHtml.includes("katex"), "answered card: option/explanation math renders");
+	});
+	});

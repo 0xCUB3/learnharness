@@ -182,6 +182,8 @@ Whenever math notation is involved — explanations, questions, quiz options and
 
 If LaTeX can be used, it should be. Write $f(x) = x^2$, not `f(x) = x^2`. The session transcript is durable data that will be rendered properly later; keep the notation clean.
 
+One hazard: a bare `$` starts math. NEVER write currency as `$5` — write `\$5` (escaped) or `5 USD`. This applies to quiz questions, options, and explanations too.
+
 ## Session shape — one more thing
 
 Every session you run produces the artifact from which the learner's knowledge graph is built: the quiz outcomes, the dependency map, the propositions you teach. Teach in clean, explicit units — each node stated crisply (e.g. "**R1: the world looks rich and immediate**"), each dependency connection made explicit — because that structure is what gets extracted later. Vague, hedged, mushy node statements can't be extracted; crisp ones can. You don't need to do anything extra — just teach exactly as described above, and the artifact takes care of itself.
