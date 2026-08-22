@@ -130,7 +130,9 @@ describe("teacher chat flow (scripted model)", () => {
 
 		// The pending-question gate sees it.
 		const pending = findPendingToolCall(saved1.messages);
-		assert.deepEqual(pending, { toolCallId: "call-1", tool: "quiz" });
+		assert.equal(pending?.toolCallId, "call-1");
+		assert.equal(pending?.tool, "quiz");
+		assert.deepEqual(pending?.input, QUIZ_INPUT);
 
 		// ── The learner answers: client grades, output goes back on the part ──
 		const options = normalizeOptions(QUIZ_INPUT.options);

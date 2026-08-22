@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
@@ -26,16 +26,29 @@ import {
  *
  * Quiz: graded (single/multi-select + "I don't know").
  * Ask:  not graded (single/multi-select + "Other" free text, or text mode).
+ *
+ * The card owns selection state; the free-text field lives in the composer
+ * blob (one text input on screen, never two). `pendingText` is the controlled
+ * text: the note for select modes, the answer for text mode. `registerSubmit`
+ * lets the composer trigger submit (Enter in answer mode).
  */
+
+export interface QuizCardSubmitApi {
+	submit: () => void;
+	canSubmit: () => boolean;
+}
 
 export interface QuizCardProps {
 	toolName: "quiz" | "ask_user_question";
 	toolCallId: string;
 	input: QuizToolInput | AskToolInput;
 	onSubmit: (output: QuestionAnswerData) => void;
+	pendingText: string;
+	onPendingTextChange: (v: string) => void;
+	registerSubmit?: (api: QuizCardSubmitApi | null) => void;
 }
 
-export function QuizCard({ toolName, toolCallId, input, onSubmit }: QuizCardProps) {
+export function QuizCard({ toolName, toolCallId, input, onSubmit, pendingText, onPendingTextChange, registerSubmit }: QuizCardProps) {
 	const kind = toolName === "quiz" ? ("quiz" as const) : ("ask" as const);
 
 	// Build the canonical QuestionData once per question. Quiz options are
@@ -76,8 +89,9 @@ export function QuizCard({ toolName, toolCallId, input, onSubmit }: QuizCardProp
 	const [dontKnow, setDontKnow] = useState(false);
 	const [showOther, setShowOther] = useState(false);
 	const [other, setOther] = useState("");
-	const [text, setText] = useState("");
-	const [note, setNote] = useState("");
+	// Free text lives in the composer blob: note (select modes) or answer (text mode).
+	const note = pendingText;
+	const text = pendingText;
 
 	const toggle = (idx: number) => {
 		setDontKnow(false);
@@ -117,10 +131,18 @@ export function QuizCard({ toolName, toolCallId, input, onSubmit }: QuizCardProp
 			values: [...selected].map((i) => qd.options[i]!.value),
 			other: showOther ? other : undefined,
 			text: qd.mode === "text" ? text : undefined,
-			note: note.trim() || undefined,
+			note: qd.mode !== "text" ? note.trim() || undefined : undefined,
 		};
+		onPendingTextChange("");
 		onSubmit(buildAnswer(qd, req));
 	};
+
+	// Let the composer blob submit on Enter (answer mode).
+	useEffect(() => {
+		if (!registerSubmit) return;
+		registerSubmit({ submit, canSubmit: () => canSubmit });
+		return () => registerSubmit(null);
+	});
 
 	return (
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="quiz-card">
@@ -200,23 +222,15 @@ export function QuizCard({ toolName, toolCallId, input, onSubmit }: QuizCardProp
 				</div>
 			)}
 
-			{(qd.mode === "text" || showOther) && (
+			{showOther && (
 				<textarea
 					className="mt-2 w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-					rows={qd.mode === "text" ? 4 : 2}
-					placeholder={qd.mode === "text" ? "Type your answer…" : "Type your own answer…"}
-					value={qd.mode === "text" ? text : other}
-					onChange={(e) => (qd.mode === "text" ? setText(e.target.value) : setOther(e.target.value))}
+					rows={2}
+					placeholder="Type your own answer…"
+					value={other}
+					onChange={(e) => setOther(e.target.value)}
 				/>
 			)}
-
-			<input
-				type="text"
-				className="mt-2 w-full rounded-lg border bg-background px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
-				placeholder="Add a note (optional) — anything you're unsure about"
-				value={note}
-				onChange={(e) => setNote(e.target.value)}
-			/>
 
 			<div className="mt-3 flex justify-end">
 				<Button size="sm" onClick={submit} disabled={!canSubmit}>

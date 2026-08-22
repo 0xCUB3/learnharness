@@ -8,6 +8,8 @@ import { isToolUIPart, type UIMessage } from "ai";
 export interface PendingToolCall {
 	toolCallId: string;
 	tool: string;
+	/** Tool input (quiz/ask args) — lets the composer pick note vs answer mode. */
+	input: unknown;
 }
 
 export function findPendingToolCall(messages: UIMessage[]): PendingToolCall | null {
@@ -16,7 +18,7 @@ export function findPendingToolCall(messages: UIMessage[]): PendingToolCall | nu
 		for (let p = msg.parts.length - 1; p >= 0; p--) {
 			const part = msg.parts[p]!;
 			if (isToolUIPart(part) && part.state === "input-available") {
-				return { toolCallId: part.toolCallId, tool: part.type.slice("tool-".length) };
+				return { toolCallId: part.toolCallId, tool: part.type.slice("tool-".length), input: part.input };
 			}
 		}
 	}

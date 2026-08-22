@@ -44,7 +44,7 @@ function quizQD(): QuestionData {
 describe("render smoke tests", () => {
 	it("QuizCard renders question, options, and the automatic 'I don't know'", () => {
 		const html = renderToStaticMarkup(
-			<QuizCard toolName="quiz" toolCallId="q1" input={quizInput} onSubmit={() => {}} />,
+			<QuizCard toolName="quiz" toolCallId="q1" input={quizInput} onSubmit={() => {}} pendingText="" onPendingTextChange={() => {}} />,
 		);
 		assert.match(html, /Which planet is closest to the sun\?/);
 		assert.match(html, /Mercury/);
@@ -56,22 +56,25 @@ describe("render smoke tests", () => {
 
 	it("QuizCard never leaks the explanation or the correct answer before submit", () => {
 		const html = renderToStaticMarkup(
-			<QuizCard toolName="quiz" toolCallId="q1" input={quizInput} onSubmit={() => {}} />,
+			<QuizCard toolName="quiz" toolCallId="q1" input={quizInput} onSubmit={() => {}} pendingText="" onPendingTextChange={() => {}} />,
 		);
 		assert.ok(!html.includes("innermost"), "explanation must not render pre-answer");
 	});
 
-	it("ask card renders Other + note and no grading affordance", () => {
+	it("ask card renders Other, no note field (note lives in the composer), no grading", () => {
 		const html = renderToStaticMarkup(
 			<QuizCard
 				toolName="ask_user_question"
 				toolCallId="a1"
 				input={{ question: "How confident are you?", options: [{ label: "Very" }, { label: "Somewhat" }] }}
 				onSubmit={() => {}}
+				pendingText=""
+				onPendingTextChange={() => {}}
 			/>,
 		);
 		assert.match(html, /Other/);
 		assert.ok(!html.includes("I don&#x27;t know"), "ask has no 'I don't know'");
+		assert.ok(!html.includes("Add a note"), "note field moved to the composer blob");
 	});
 
 	it("AnsweredCard grades quiz answers (✓/✗ + explanation)", () => {
@@ -141,7 +144,7 @@ describe("math rendering (streamdown + KaTeX)", () => {
 			explanation: "The power rule gives $\\frac{dy}{dx} = 2x$.",
 		};
 		const pendingHtml = renderToStaticMarkup(
-			<QuizCard toolName="quiz" toolCallId="m1" input={mathQuiz} onSubmit={() => {}} />,
+			<QuizCard toolName="quiz" toolCallId="m1" input={mathQuiz} onSubmit={() => {}} pendingText="" onPendingTextChange={() => {}} />,
 		);
 		assert.ok(pendingHtml.includes("katex"), "pending card: question/options math renders");
 

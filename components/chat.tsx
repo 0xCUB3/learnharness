@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
+import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import {
 	Conversation,
 	ConversationContent,
@@ -11,29 +11,28 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
-import {
-	PromptInput,
-	PromptInputBody,
-	PromptInputFooter,
-	PromptInputSubmit,
-	PromptInputTextarea,
-	PromptInputTools,
-	type PromptInputMessage,
-} from "@/components/ai-elements/prompt-input";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { QuizCard } from "@/components/quiz-card";
+import { QuizCard, type QuizCardSubmitApi } from "@/components/quiz-card";
 import { AnsweredCard } from "@/components/answered-card";
-import { SessionDrawer } from "@/components/session-drawer";
+import { Composer, type ComposerMode } from "@/components/composer";
+import { SidebarToggle } from "@/components/sidebar";
 import type { TeacherUIMessage } from "@/src/agent/ui-message";
+import type { AskToolInput } from "@/src/agent/tools";
 import type { QuestionAnswerData } from "@/src/core/question-core";
 import { findPendingToolCall } from "@/src/core/pending";
+
+/** One width for everything: transcript, cards, composer all share this column. */
+const COLUMN = "mx-auto w-full max-w-3xl px-4";
 
 /**
  * The teaching session. All chat state lives in useChat; the server persists
  * the canonical transcript after every turn. A pending quiz/ask is just an
  * unanswered tool part — so reload/resume mid-question works for free.
+ *
+ * The composer morphs while a question is pending (one text field on screen):
+ * select-mode question → the blob is the note field; free-text ask → the blob
+ * is the answer field and its send submits via the card's registered API.
  */
 export function Chat({
 	chatId,
@@ -68,120 +67,154 @@ export function Chat({
 	const pending = findPendingToolCall(messages);
 	const busy = status === "submitted" || status === "streaming";
 
-	const submitAnswer = (toolCallId: string, tool: "quiz" | "ask_user_question", output: QuestionAnswerData) => {
-		void addToolOutput({ tool, toolCallId, output });
+	// The single free-text field: chat input normally; note/answer while pending.
+	const [text, setText] = useState("");
+	// The pending card registers its submit so the composer can send on Enter.
+	const cardApi = useRef<QuizCardSubmitApi | null>(null);
+
+	// Composer mode: free-text ask → "answer"; any other pending question → "note".
+	const pendingIsTextMode =
+		pending?.tool === "ask_user_question" &&
+		(() => {
+			const ask = pending.input as AskToolInput;
+			return ask.mode === "text" || !ask.options?.length;
+		})();
+	const mode: ComposerMode = pending ? (pendingIsTextMode ? "answer" : "note") : "chat";
+
+	// canSend mirrors the card's own predicate (text-mode: non-empty text).
+	// Reading cardApi.current here would lag one commit behind — the card
+	// re-registers its api in an effect AFTER this render pass.
+	const canSend = mode === "chat" ? text.trim().length > 0 && !pending : text.trim().length > 0;
+
+	const onSend = () => {
+		if (mode === "chat") {
+			const t = text.trim();
+			if (!t || busy || pending) return;
+			setText("");
+			void sendMessage({ text: t });
+		} else if (mode === "answer") {
+			cardApi.current?.submit();
+		}
 	};
 
-	const onComposerSubmit = (msg: PromptInputMessage) => {
-		if (!msg.text.trim() || busy || pending) return;
-		void sendMessage({ text: msg.text });
-	};
+	const hint =
+		mode === "note"
+			? "Answering the question above — text here becomes a note on your answer."
+			: mode === "answer"
+				? "Type your answer to the question above."
+				: null;
 
 	return (
 		<div className="flex h-dvh flex-col">
-			<header className="flex items-center gap-3 border-b px-3 py-2">
-				<SessionDrawer />
+			<header className="flex items-center gap-3 px-3 py-2">
+				<SidebarToggle />
 				<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
-				{busy && (
-					<Button variant="outline" size="sm" onClick={() => stop()}>
-						Stop
-					</Button>
-				)}
 			</header>
 
-			<Conversation className="flex-1">
-				<ConversationContent className="mx-auto w-full max-w-3xl gap-4 px-4 py-6">
-					{messages.length === 0 && !busy && (
-						<ConversationEmptyState
-							title="New session"
-							description="The teacher will open by probing what you already know."
-						/>
-					)}
+			{/* Transcript scrolls full-height; the composer floats on top. */}
+			<div className="relative min-h-0 flex-1">
+				<Conversation className="h-full">
+					<ConversationContent className={`${COLUMN} gap-4 pt-4 pb-44`}>
+						{messages.length === 0 && !busy && (
+							<ConversationEmptyState
+								title="New session"
+								description="The teacher will open by probing what you already know."
+							/>
+						)}
 
-					{messages.map((m, mi) => (
-						<Message key={m.id} from={m.role}>
-							<MessageContent>
-								{m.role === "user" ? (
-									<MessageResponse>
-										{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
-									</MessageResponse>
-								) : (
-									m.parts.map((part, pi) => {
-										const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
-										switch (part.type) {
-											case "text":
-												return <MessageResponse key={pi}>{part.text}</MessageResponse>;
-											case "reasoning":
-												return (
-													<Reasoning key={pi} isStreaming={status === "streaming" && isLastPart} className="mb-2">
-														<ReasoningTrigger />
-														<ReasoningContent>{part.text}</ReasoningContent>
-													</Reasoning>
-												);
-											case "step-start":
-												return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
-											case "tool-quiz":
-											case "tool-ask_user_question": {
-												const tool = part.type === "tool-quiz" ? ("quiz" as const) : ("ask_user_question" as const);
-												if (part.state === "output-available") {
-													return <AnsweredCard key={pi} answer={part.output as QuestionAnswerData} />;
-												}
-												if (part.state === "input-available") {
+						{messages.map((m, mi) => (
+							<Message key={m.id} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
+								<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
+									{m.role === "user" ? (
+										// User text renders plain: the model's LaTeX pipeline is not
+										// applied to learner-authored text ($ stays $, no surprises).
+										<div className="whitespace-pre-wrap">
+											{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
+										</div>
+									) : (
+										m.parts.map((part, pi) => {
+											const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
+											switch (part.type) {
+												case "text":
+													return <MessageResponse key={pi}>{part.text}</MessageResponse>;
+												case "reasoning":
 													return (
-														<QuizCard
-															key={pi}
-															toolName={tool}
-															toolCallId={part.toolCallId}
-															input={part.input}
-															onSubmit={(output) => submitAnswer(part.toolCallId, tool, output)}
-														/>
+														<Reasoning key={pi} isStreaming={status === "streaming" && isLastPart} className="mb-2">
+															<ReasoningTrigger />
+															<ReasoningContent>{part.text}</ReasoningContent>
+														</Reasoning>
+													);
+												case "step-start":
+													return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
+												case "tool-quiz":
+												case "tool-ask_user_question": {
+													const tool = part.type === "tool-quiz" ? ("quiz" as const) : ("ask_user_question" as const);
+													if (part.state === "output-available") {
+														return <AnsweredCard key={pi} answer={part.output as QuestionAnswerData} />;
+													}
+													if (part.state === "input-available") {
+														const isPending = pending?.toolCallId === part.toolCallId;
+														return (
+															<QuizCard
+																key={pi}
+																toolName={tool}
+																toolCallId={part.toolCallId}
+																input={part.input}
+																pendingText={isPending ? text : ""}
+																onPendingTextChange={isPending ? setText : () => {}}
+																registerSubmit={isPending ? (api) => (cardApi.current = api) : undefined}
+																onSubmit={(output) => {
+																	setText("");
+																	void addToolOutput({ tool, toolCallId: part.toolCallId, output });
+																}}
+															/>
+														);
+													}
+													// input-streaming: the question is still being generated
+													return (
+														<div key={pi} className="rounded-xl border bg-card p-4">
+															<Shimmer className="text-sm">Preparing a question…</Shimmer>
+														</div>
 													);
 												}
-												// input-streaming: the question is still being generated
-												return (
-													<div key={pi} className="rounded-xl border bg-card p-4">
-														<Shimmer className="text-sm">Preparing a question…</Shimmer>
-													</div>
-												);
+												default:
+													return null;
 											}
-											default:
-												return null;
-										}
-									})
-								)}
-							</MessageContent>
-						</Message>
-					))}
+										})
+									)}
+								</MessageContent>
+							</Message>
+						))}
 
-					{status === "submitted" && <Shimmer className="text-sm">Thinking…</Shimmer>}
-					{error && (
-						<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
-							Something went wrong: {error.message}
-						</div>
-					)}
-				</ConversationContent>
-				<ConversationScrollButton />
-			</Conversation>
+						{status === "submitted" && <Shimmer className="text-sm">Thinking…</Shimmer>}
+						{error && (
+							<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
+								Something went wrong: {error.message}
+							</div>
+						)}
+					</ConversationContent>
+					<ConversationScrollButton />
+				</Conversation>
 
-			<div className="border-t px-4 py-3">
-				<div className="mx-auto w-full max-w-3xl">
-					{pending && (
-						<div className="mb-2 text-center text-xs text-muted-foreground">
-							Answer the question above to continue.
+				{/* Floating composer: content fades out behind it. */}
+				<div className="pointer-events-none absolute inset-x-0 bottom-0">
+					<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
+					<div className="bg-background pb-4">
+						<div className={COLUMN}>
+							{hint && <div className="mb-1.5 text-center text-xs text-muted-foreground">{hint}</div>}
+							<div className="pointer-events-auto">
+								<Composer
+									mode={mode}
+									busy={busy}
+									value={text}
+									onChange={setText}
+									onSend={onSend}
+									onStop={() => stop()}
+									canSend={canSend}
+								/>
+							</div>
 						</div>
-					)}
-					<PromptInput onSubmit={onComposerSubmit}>
-						<PromptInputBody>
-							<PromptInputTextarea
-								placeholder={pending ? "Answer the question above first…" : "Ask, answer, or steer the lesson…"}
-								disabled={!!pending}
-							/>
-						</PromptInputBody>
-						<PromptInputFooter>
-							<PromptInputTools />
-							<PromptInputSubmit status={status} disabled={busy || !!pending} />
-						</PromptInputFooter>
-					</PromptInput>
+					</div>
 				</div>
 			</div>
 		</div>

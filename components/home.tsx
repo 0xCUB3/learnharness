@@ -2,15 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { WaypointsIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { SessionDrawer } from "@/components/session-drawer";
+import { CornerDownLeftIcon, WaypointsIcon } from "lucide-react";
+import { SidebarToggle } from "@/components/sidebar";
 
 /**
  * Home — the knowledge graph is the main view (placeholder until the graph
- * pipeline lands), with the new-session input docked below it. Sessions live
- * in the hamburger drawer.
+ * pipeline lands), with the new-session blob docked below it. Sessions live
+ * in the toggleable sidebar.
  */
 export function Home() {
 	const router = useRouter();
@@ -37,7 +35,7 @@ export function Home() {
 	return (
 		<div className="flex h-dvh flex-col">
 			<header className="flex items-center gap-2 px-3 py-2">
-				<SessionDrawer />
+				<SidebarToggle />
 			</header>
 
 			{/* Graph — the main view. Placeholder until the knowledge graph lands. */}
@@ -52,26 +50,40 @@ export function Home() {
 				</div>
 			</main>
 
-			{/* New session input */}
-			<div className="px-4 pb-6">
-				<form
-					className="mx-auto flex w-full max-w-2xl gap-2"
+			{/* New session — same floating blob as the chat composer. */}
+			<div className="pb-4">
+				<div className="mx-auto w-full max-w-3xl px-4">
+					<form
+						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
 					onSubmit={(e) => {
 						e.preventDefault();
 						void start();
 					}}
 				>
-					<Input
+					<textarea
 						value={topic}
 						onChange={(e) => setTopic(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && !e.shiftKey) {
+								e.preventDefault();
+								void start();
+							}
+						}}
 						placeholder="What do you want to learn?"
 						autoFocus
-						className="h-11"
+						rows={1}
+						className="field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
 					/>
-					<Button type="submit" disabled={!topic.trim() || busy} className="h-11">
-						{busy ? "Starting…" : "Start"}
-					</Button>
-				</form>
+					<button
+						type="submit"
+						aria-label="Start session"
+						disabled={!topic.trim() || busy}
+						className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-40"
+					>
+						<CornerDownLeftIcon className="size-5" />
+						</button>
+					</form>
+				</div>
 			</div>
 		</div>
 	);
