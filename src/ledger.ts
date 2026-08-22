@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
-import { LEDGER_FILES } from "../config.ts";
+import { LEGACY_LEDGER_FILES as LEDGER_FILES } from "../config.ts";
 
 export function newId(prefix: string): string {
 	return `${prefix}_${randomBytes(5).toString("hex")}`;
