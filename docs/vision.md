@@ -93,18 +93,29 @@ A session is functionally a conversation — the learner talks, reasons, and ste
 **Asymmetry of artifact.** In a chat, both parties produce the same object (messages) in the same lane — that's what makes it *look* like a chat. In a lesson, the two parties produce fundamentally different kinds of things:
 
 - **The teacher writes the document.** Prose, sections, diagrams, demos, checks — the teacher's output is structural; it becomes the lesson artifact itself. The teacher doesn't "send messages"; it *writes the lesson*. (The whiteboard.)
-- **The learner writes in the margins.** Responses, questions, reasoning, yaps — the learner's output is contributory; it *anchors to points in the document*: margin notes, response slots, Q&A quote-boxes. (The floor / the voice.)
+- **The learner writes in the margins.** Responses, questions, reasoning, yaps — contributory, anchored to points in the document. (The floor / the voice.) *(Amended below: intact interjection cards in the spine; margins become a view, not storage.)*
 
 Two different instruments, not two identical keyboards. Consequences:
 
 - **Bubbles die.** Teacher text renders as document typography (headings, prose, full-width blocks). Learner text renders as annotation blocks (bordered note cards, anchored quotes) — never right-aligned bubbles.
 - **The unit is the block, not the message.** Sections, paragraphs, diagrams, demos, checks, Q&A boxes, margin notes.
-- **Chronology yields to structure.** Scroll order is the document's order (tree sections), not pure time. A question about §2 asked while the teacher writes §4 anchors to §2.
+- **Chronology yields to structure.** *(Amended below: one chronological spine; structure enters via typed blocks and the link overlay, not relocation.)*
 - **Q&A becomes document furniture.** A learner question renders as a quoted card with the teacher's answer as prose beneath — a textbook "reader question" box, not a turn pair.
 - **The composer becomes a response field.** Same floating blob, reframed: its output lands as an annotation anchored to the current position, not as the next bubble in a stream.
 - What stays: turn-taking underneath — the LLM still sees a conversation. This is a **presentation-layer** change, not an interaction-model change.
 
 References: textbook marginalia, Hypothesis/Genius annotations, Observable notebooks (a document of live cells), the whiteboard-and-floor seminar. Vocabulary matters: they're **sessions/lessons**, never "chats."
+
+### Refinement: the spine and the interjection (2026-08-22, after feedback)
+
+The margin model above has two real flaws, spotted in review: (a) **placement** — when a learner sends one big yap with questions about many different things, routing fragments to the right anchors needs an unreliable split-and-route step; (b) **receipt & chronology** — scattering the learner's block across margins means they hit send and *nothing visibly happens*, and the when/what of their own contribution is lost. Also: session value is mostly **in the moment** — past sessions are rarely revised — so optimizing for the re-readable artifact was misprioritized (and HTML export is deprioritized).
+
+The evolved model keeps the chat-killing (asymmetry) and drops the relocation:
+
+- **One chronological spine.** Everything renders in time order at the frontier. The learner's block stays **intact, visible, and timestamped** — always.
+- **The learner block is an "interjection" card, not a bubble.** A distinct block species: full-width, tinted, left rule, `You · 3:41 PM` kicker (mic badge when dictated). Never right-aligned, never a bubble. Chat-ness dies by **type asymmetry and document typography**, not by relocating the learner's words.
+- **The teacher's reply is woven document content.** A multi-question yap gets a **Q&A interlude**: the teacher quotes each fragment and answers in prose beneath it (LLMs are natively great at quote-then-answer — contextuality without moving the learner's text). The send moment pays off structurally: tree may visibly update (detour nodes), then the interlude writes itself.
+- **Anchoring survives as a link overlay, never a relocation.** When a question clearly refers to an earlier passage, a deep link is attached (and a backlink on the passage: "questioned here ↩"). The margin/panel can later *show* "questions attached to this node" as a computed **view** — a lens, not storage. No scattering; chronology intact; the revision aid is preserved as a byproduct.
 
 ### Structural identity — how a session differs from a chat (ideation, 2026-08-22)
 
