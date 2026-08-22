@@ -58,7 +58,7 @@ Goal: a learning session must look and feel structurally different from a ChatGP
 - The agent authors the tree via **structured tools** — `add_node`, `add_edge`, `reparent`, `remove_node`, `set_current`, … — schema-validated, with stable node identity across edits. Mermaid text as the source of truth was rejected: edits would be text surgery and identity would drift.
 - The agent may edit the tree mid-session at its own initiative (detour when the learner asks something worth exploring, go deeper, prune) — that power is explicit.
 - **"Where we are"** is tracked as structured state (a `set_current` tool), not inferred from the transcript.
-- **Mermaid survives only for ad-hoc lesson diagrams** (flows, cycles, comparisons) that are not the plan tree. Its rendering quality must improve (integrated display, working zoom/pan — current code-block-ish rendering is unacceptable), but it's now a peripheral concern.
+- **Mermaid survives only for ad-hoc lesson diagrams** (flows, cycles, comparisons) that are not the plan tree — and the teacher is explicitly **encouraged to diagram freely in explanations**; diagrams are first-class teaching output, not decoration. Its rendering quality must improve (integrated display, working zoom/pan — current code-block-ish rendering is unacceptable), but it's now a peripheral concern.
 
 ### Two phases, clearly separated (DECIDED)
 
@@ -66,6 +66,39 @@ Goal: a learning session must look and feel structurally different from a ChatGP
 - The agent signals the probe→teach transition with a structured marker → **visible divider in the transcript**.
 - **Probe-phase questions auto-open** (as now — they are the substance of probing).
 - **Teaching-phase check questions start collapsed** behind a "Check your understanding" reveal button. Rationale: a question popping up mid-lesson pressures the learner to answer immediately; the learner should read the teaching first and open the check when ready.
+
+### Interactive demos — teacher-authored artifacts (DECIDED direction)
+
+The most general and capable demo runtime is the one we already ship: **the web platform itself.**
+
+- **One format: a self-contained single-file HTML/JS document**, produced by a `demo` tool (client-side, like quiz/ask) and rendered inline in the transcript in a **sandboxed iframe** (`sandbox="allow-scripts"`, no same-origin → no access to app storage/cookies/DOM). Vanilla JS + Canvas 2D + SVG covers the overwhelming majority of teaching demos (function plots, simulations, animations, parameter sweeps); CDN imports allowed for heavier lifting (generality wins — it's the learner's own machine and the teacher wrote the code).
+- **The contract matters more than the tech:** (a) a tiny auto-injected bridge script — ResizeObserver → postMessage → parent sizes the iframe; (b) `window.onerror` capture posted to the parent → error chip on the demo → learner (or auto-flow) sends the error back to the teacher, which fixes and re-issues the demo. The fix loop is where Artifacts-quality emerges. (c) Re-calling the tool = a new version of the artifact.
+- **Persistence is free:** the HTML lives in the message's tool part, so demos re-render on session reload.
+- **Python: deferred.** Pyodide (WASM CPython; numpy works; matplotlib renders static figures) is the only no-server path — heavy (10–20 MB lazy download) and poor at interactivity (static-image-oriented re-rendering). Revisit when a session genuinely wants numpy-grade computation. **Server-side Python: rejected** (sandbox infrastructure, portability).
+- The system prompt should push demos the way it pushes diagrams: *if the concept is dynamic — a parameter to sweep, a process to animate, a distribution to sample — build the instrument, don't describe it.*
+
+### Notes, thinking out loud, and dictation (DECIDED direction; build later)
+
+The note field is not an auxiliary input — it's the channel where the learner **reasons out loud**. The lesson should evolve from it: the teacher is prompted to elicit yapping ("talk me through your reasoning"), to reference the learner's own words later, and notes feed the graph as diagnostic events (per the design doc: notes are calibration gold). Notes get more prominent treatment in the UI.
+
+**Dictation is a requirement, not a luxury** — yapping means talking, not typing. What it requires on the web:
+1. **Capture:** `getUserMedia` + AudioWorklet → 16 kHz linear16 PCM (browser-native; replaces the pi extension's sox/`rec`).
+2. **Transport + transcription:** the pi `dictate` extension's proven recipe ports directly — Deepgram streaming (`nova-3`, `smart_format`, `punctuate`, `endpointing=300`), per-utterance finals. Architecture: a server route mints a **short-lived Deepgram token**, the browser connects to Deepgram's WSS directly (API key never touches the client). On-device whisper (transformers.js/WebGPU) is the private/offline alternative — deferred unless Deepgram disappoints.
+3. **UX:** mic button in the composer blob; live level meter (AnalyserNode — the pi extension's responsive visuals rebuilt for web); transcript lands in the textarea/field, editable before send; Escape cancels; **a finished dictation is never lost** (carried over from the pi extension's hard-won UX lessons).
+
+### Structural identity — how a session differs from a chat (ideation, 2026-08-22)
+
+A chat has two bubble types, amnesia per message, and no state. What the medium lets us do instead — strongest candidates first:
+
+1. **The transcript becomes the lesson document.** Not a flat message list — a document **sectioned by tree node**, written live: each section headed by its node, collapsible, the current section highlighted. The artifact produced is a generated textbook chapter, not a chat log. Navigating the tree navigates the document. *(The biggest single break from chat-shaped UX.)*
+2. **Gated progression.** Checks are gates, not chat: demonstrating understanding is what advances the tree — nodes visibly complete, next ones unlock, and at forks **the learner chooses the branch** ("two ways from here — pick"). ChatGPT never gates anything.
+3. **Typed blocks with distinct visual grammar.** Teach / check / demo / diagram / learner-reasoning / Q&A — six block types with six looks, vs. chat's two bubbles.
+4. **Session state always visible.** A thin persistent strip: current node, phase, what's been established so far this session, the current node's prerequisites. The anti-amnesia surface.
+5. **Sessions open with retrieval.** A 60-second recall card drawn from the event ledger ("last time, on X…") before anything new — spaced-repetition seed; every session starts with retrieval practice, not a blank box.
+6. **The session compiles to a durable artifact.** A re-readable lesson page (sections, your notes, your results, your demos) — graph nodes eventually link back to the section that taught them. Chat logs are write-only; this is a personal textbook that grows.
+7. **Tree edits are visible events.** When the teacher restructures mid-session (detour, deepen, prune), the change shows — the map evolving in view reinforces that this is a journey, not a thread.
+
+Explicitly avoided: gamification (XP, streaks, confetti). The structure is epistemic, not Skinnerian.
 
 ### Persistent tree view (DECIDED)
 
@@ -90,8 +123,10 @@ Goal: a learning session must look and feel structurally different from a ChatGP
 3. **Phase separation** — probe/teach marker, transcript divider, collapsed teach-phase checks.
 4. **Right-panel tree view** — persistent, current-position highlight.
 5. **Background consolidation** — merge adjudication, calibration, prose-only edges.
-6. **Presentation fixes** — LaTeX delimiters, line breaks, mermaid integration.
-7. **Later:** frontier expansion + what-next queries (new territory / repairs / conversions), spaced repetition on the event ledger, practice exercises, Electron.
+6. **Demo tool (artifacts)** — sandboxed-iframe `demo` tool + error-fix loop. No dependencies; high value; can slot in any time after step 1.
+7. **Presentation fixes** — LaTeX delimiters, line breaks, mermaid integration.
+8. **Structural-identity candidates** (from §2 ideation, pending selection): sectioned lesson-document transcript, gated progression, typed blocks, session-state strip.
+9. **Later:** dictation (Deepgram token-mint + AudioWorklet capture), frontier expansion + what-next queries (new territory / repairs / conversions), spaced repetition on the event ledger, practice exercises, Electron.
 
 ---
 
