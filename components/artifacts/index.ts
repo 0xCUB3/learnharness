@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { ArtifactPartProps } from "@/src/core/contracts";
+import { JobCard } from "@/components/artifacts/job-card";
 
 /**
  * Artifact renderer registry — the extension point for tool-part UI.
@@ -14,6 +15,6 @@ import type { ArtifactPartProps } from "@/src/core/contracts";
  * artifact itself from part.output.
  */
 export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>> = {
-	// W2: "research" → job activity card
+	research: JobCard,
 	// W6: "demo" → sandboxed iframe card, "visual" → svg card
 };

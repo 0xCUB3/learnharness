@@ -1,6 +1,7 @@
 import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts";
 import { createTeacherTools } from "../agent/tools.ts";
+import { spawnPendingJobs } from "../agent/subagents/runner.ts";
 import { getChat, saveMessages } from "../store/chats.ts";
 
 /**
@@ -37,6 +38,14 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 				saveMessages(chatId, messages as UIMessage[]);
 			} catch (err) {
 				console.error(`[chat ${chatId}] persist failed:`, err, { isAborted });
+			}
+			// Async sub-agent protocol (contracts.ts): scan the last assistant
+			// message for pending job tool parts and fire the background runners —
+			// fire-and-forget, never awaited; the HTTP response is already gone.
+			try {
+				spawnPendingJobs(chatId, messages as UIMessage[]);
+			} catch (err) {
+				console.error(`[chat ${chatId}] job spawn failed:`, err);
 			}
 		},
 	});
