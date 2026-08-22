@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { UIMessage } from "ai";
 import { PATHS } from "../../config.ts";
+import type { PlanTree } from "../core/contracts.ts";
 
 /**
  * Chat store — one JSON file per chat in data/chats/.
@@ -19,6 +20,8 @@ export interface ChatRecord {
 	createdAt: string;
 	updatedAt: string;
 	messages: UIMessage[];
+	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
+	tree?: PlanTree;
 }
 
 export interface ChatSummary {
@@ -77,6 +80,16 @@ export function saveMessages(id: string, messages: UIMessage[]): void {
 	if (!record) throw new Error(`Chat not found: ${id}`);
 	record.messages = messages;
 	record.updatedAt = new Date().toISOString();
+	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+}
+
+/** Persist the session plan tree (plan tools call this in execute). */
+export function saveTree(id: string, tree: PlanTree): void {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	record.tree = tree;
+	// Deliberately does NOT bump updatedAt: tree mutations piggyback on the
+	// turn's saveMessages, and sidebar ordering shouldn't churn on tree edits.
 	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
 }
 

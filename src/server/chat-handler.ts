@@ -1,5 +1,6 @@
 import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts";
+import { createTeacherTools } from "../agent/tools.ts";
 import { getChat, saveMessages } from "../store/chats.ts";
 
 /**
@@ -27,7 +28,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 	}
 
 	return createAgentUIStreamResponse({
-		agent: agent ?? createTeacherAgent(),
+		agent: agent ?? createTeacherAgent(undefined, createTeacherTools({ chatId })),
 		uiMessages: body.messages as UIMessage[],
 		onFinish: ({ messages, isAborted }) => {
 			// Persist even when aborted: the partial transcript (including any

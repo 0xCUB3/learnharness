@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { useStickToBottomContext } from "use-stick-to-bottom";
@@ -15,15 +15,29 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Separator } from "@/components/ui/separator";
 import { AnsweredCard } from "@/components/answered-card";
+import { artifactRenderers } from "@/components/artifacts";
 import { Composer } from "@/components/composer";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import type { TeacherUIMessage } from "@/src/agent/ui-message";
+import type { ArtifactPartProps } from "@/src/core/contracts";
 import type { QuestionAnswerData } from "@/src/core/question-core";
 import { findPendingToolCall } from "@/src/core/pending";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
+
+/**
+ * Server-sync channel for artifact renderers (job cards): when a background
+ * job flips its tool part to output-available server-side, the card polls
+ * /api/jobs, then calls syncFromServer() — fresh messages replace local state
+ * and the sendAutomaticallyWhen continuation resumes the teacher.
+ * (contracts.ts "THE ASYNC PROTOCOL" §4.)
+ */
+export const ChatActionsContext = createContext<{
+	chatId: string;
+	syncFromServer: () => Promise<void>;
+} | null>(null);
 
 /** useLayoutEffect that is silent during SSR (client components still render on the server in Next). */
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
@@ -48,7 +62,7 @@ export function Chat({
 	initialMessages: TeacherUIMessage[];
 	initialPrompt?: string;
 }) {
-	const { messages, sendMessage, addToolOutput, status, error, stop } =
+	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop } =
 		useChat<TeacherUIMessage>({
 			id: chatId,
 			messages: initialMessages,
@@ -80,6 +94,13 @@ export function Chat({
 	const [text, setText] = useState("");
 	const canSend = text.trim().length > 0 && !pending;
 
+	const syncFromServer = useCallback(async () => {
+		const res = await fetch(`/api/chats/${chatId}`);
+		if (!res.ok) return;
+		const record = (await res.json()) as { messages?: TeacherUIMessage[] };
+		if (Array.isArray(record.messages)) setMessages(record.messages);
+	}, [chatId, setMessages]);
+
 	const onSend = () => {
 		const t = text.trim();
 		if (!t || busy || pending) return;
@@ -88,6 +109,7 @@ export function Chat({
 	};
 
 	return (
+		<ChatActionsContext.Provider value={{ chatId, syncFromServer }}>
 		<div className="flex h-dvh flex-col">
 			<header className="flex items-center gap-3 px-3 py-2">
 				<SidebarToggle />
@@ -138,8 +160,16 @@ export function Chat({
 														}
 														return null;
 													}
-													default:
+													default: {
+														// Artifact extension point (contracts.ts): job
+														// parts and future artifacts render via the
+														// registry — add renderers there, not here.
+														if (part.type.startsWith("tool-")) {
+															const Renderer = artifactRenderers[part.type.slice("tool-".length)];
+															if (Renderer) return <Renderer key={pi} part={part as ArtifactPartProps["part"]} />;
+														}
 														return null;
+													}
 												}
 											})
 										)}
@@ -182,6 +212,7 @@ export function Chat({
 				</Conversation>
 			</div>
 		</div>
+		</ChatActionsContext.Provider>
 	);
 }
 

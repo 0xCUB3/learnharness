@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
-import { ToolLoopAgent, stepCountIs, type LanguageModel } from "ai";
+import * as path from "node:path";
+import { ToolLoopAgent, stepCountIs, type LanguageModel, type ToolSet } from "ai";
 import { openrouter } from "@openrouter/ai-sdk-provider";
 import { PATHS } from "../../config.ts";
-import { teacherTools } from "./tools.ts";
+import { createTeacherTools } from "./tools.ts";
 
 /**
  * The teacher agent. Everything pi used to provide (agent loop, tool calling,
@@ -10,13 +11,32 @@ import { teacherTools } from "./tools.ts";
  *
  * The model is injectable so tests can pass a MockLanguageModelV4 and drive
  * deterministic scripted lessons (see tests/chat-flow.test.ts).
+ *
+ * The system prompt is COMPOSED: system-prompt.md is the base, then every
+ * src/agent/prompts/*.md fragment in sorted filename order (workers add
+ * fragments — nobody edits shared sections of the base prompt). Prefix
+ * fragments with a numeric order key: 10-plan-tree.md, 20-jobs.md, …
  */
 
 const DEFAULT_MODEL = process.env.LH_MODEL ?? "anthropic/claude-sonnet-4.5";
 
-const instructions = fs.readFileSync(PATHS.teacherPrompt, "utf-8");
+const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
 
-export function createTeacherAgent(model?: LanguageModel) {
+function composeInstructions(): string {
+	const base = fs.readFileSync(PATHS.teacherPrompt, "utf-8");
+	if (!fs.existsSync(PROMPTS_DIR)) return base;
+	const fragments = fs
+		.readdirSync(PROMPTS_DIR)
+		.filter((f) => f.endsWith(".md"))
+		.sort()
+		.map((f) => fs.readFileSync(path.join(PROMPTS_DIR, f), "utf-8").trim())
+		.filter(Boolean);
+	return [base.trim(), ...fragments].join("\n\n---\n\n");
+}
+
+const instructions = composeInstructions();
+
+export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet) {
 	return new ToolLoopAgent({
 		model:
 			model ??
@@ -26,9 +46,12 @@ export function createTeacherAgent(model?: LanguageModel) {
 				reasoning: { enabled: true, effort: "medium" },
 			}),
 		instructions,
-		tools: teacherTools,
-		// Both tools are client-side (no execute) — a tool call ends the server
-		// turn automatically. stepCountIs is just the safety net.
+		// Tools are per-request (plan tools close over chatId); chat-handler
+		// passes createTeacherTools({ chatId }). Tests pass a mock model and get
+		// the default question-only set.
+		tools: tools ?? createTeacherTools({ chatId: "" }),
+		// Question and job tools are client-side — a call ends the server turn
+		// automatically. stepCountIs is just the safety net.
 		stopWhen: stepCountIs(20),
 	});
 }

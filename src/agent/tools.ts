@@ -1,16 +1,21 @@
-import { tool } from "ai";
+import { tool, type ToolSet } from "ai";
 import { z } from "zod";
+import { jobTools } from "./tools/jobs.ts";
+import { planTools } from "./tools/plan.ts";
 
 /**
- * The teacher's interaction tools — CLIENT-SIDE tools (no `execute`).
+ * The teacher's tools, composed per request by createTeacherTools.
  *
- * The model's tool call is not executed on the server; it streams to the
- * browser as a typed tool part in `input-available` state. The learner
- * answers in the rendered card; the client grades (quiz) via
- * src/core/question-core.ts and sends the verdict back with addToolOutput.
+ * - questionTools (quiz / ask_user_question): CLIENT-SIDE tools (no `execute`).
+ *   The tool call streams to the browser in `input-available` state; the
+ *   learner answers in the dock; the client grades via question-core and
+ *   sends the verdict with addToolOutput.
+ * - planTools (src/agent/tools/plan.ts): SERVER-SIDE, mutate the chat's plan
+ *   tree (needs the chatId closure — hence the per-request factory).
+ * - jobTools (src/agent/tools/jobs.ts): CLIENT-SIDE semantics, server-side
+ *   fulfillment by background sub-agents (see src/core/contracts.ts).
  *
- * Parameter names mirror src/agent/system-prompt.md exactly — the prompt
- * documents these fields to the model. Keep them in sync.
+ * Parameter names mirror the prompt docs exactly — keep them in sync.
  */
 
 const optionSchema = z.object({
@@ -41,6 +46,13 @@ export const quizInputSchema = z.object({
 		.describe("Explanation revealed AFTER the learner answers. Always say why the correct answer is correct."),
 	multiSelect: z.boolean().optional().describe("Set true only when more than one option is correct"),
 	details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
+	nodeId: z
+		.string()
+		.optional()
+		.describe(
+			"Optional plan-tree node id this question assesses. Set whenever the question targets a tree node — " +
+				"the outcome feeds the learner's knowledge graph. Omit for ad-hoc probes.",
+		),
 });
 
 export const askInputSchema = z.object({
@@ -76,10 +88,26 @@ export const askUserQuestionTool = tool({
 	inputSchema: askInputSchema,
 });
 
-export const teacherTools = {
+export const questionTools = {
 	quiz: quizTool,
 	ask_user_question: askUserQuestionTool,
 };
+
+export interface TeacherToolContext {
+	chatId: string;
+}
+
+/**
+ * Per-request tool registry. Plan tools close over chatId for persistence;
+ * question and job tools are context-free.
+ */
+export function createTeacherTools(ctx: TeacherToolContext): ToolSet {
+	return {
+		...questionTools,
+		...planTools(ctx),
+		...jobTools(ctx),
+	};
+}
 
 export type QuizToolInput = z.infer<typeof quizInputSchema>;
 export type AskToolInput = z.infer<typeof askInputSchema>;
