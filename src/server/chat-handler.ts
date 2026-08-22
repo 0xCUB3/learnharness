@@ -2,6 +2,7 @@ import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts";
 import { createTeacherTools } from "../agent/tools.ts";
 import { spawnPendingJobs } from "../agent/subagents/runner.ts";
+import { emitChat } from "../core/graph.ts";
 import { getChat, saveMessages } from "../store/chats.ts";
 
 /**
@@ -46,6 +47,14 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 				spawnPendingJobs(chatId, messages as UIMessage[]);
 			} catch (err) {
 				console.error(`[chat ${chatId}] job spawn failed:`, err);
+			}
+			// W4: fold this chat into the knowledge-graph ledgers (tree nodes /
+			// edges, quiz outcomes, taught events) — synchronous but tiny
+			// (append-only JSONL), and errors never touch the response.
+			try {
+				emitChat(chatId);
+			} catch (err) {
+				console.error(`[chat ${chatId}] graph emission failed:`, err);
 			}
 		},
 	});

@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CornerDownLeftIcon, WaypointsIcon } from "lucide-react";
+import { CornerDownLeftIcon } from "lucide-react";
+import { GraphView } from "@/components/graph-view";
 import { SidebarToggle } from "@/components/sidebar";
 
 /**
@@ -38,16 +39,9 @@ export function Home() {
 				<SidebarToggle />
 			</header>
 
-			{/* Graph — the main view. Placeholder until the knowledge graph lands. */}
-			<main className="flex flex-1 items-center justify-center px-4">
-				<div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
-					<WaypointsIcon className="size-10 opacity-40" strokeWidth={1.25} />
-					<div className="text-lg font-medium text-foreground">Knowledge graph</div>
-					<p className="max-w-sm text-sm">
-						Every session you complete will map what you know — and where the edge of your
-						understanding is — right here.
-					</p>
-				</div>
+			{/* Graph — the main view (W4: sigma.js render of the derived graph). */}
+			<main className="min-h-0 flex-1 px-4 py-2">
+				<GraphView />
 			</main>
 
 			{/* New session — same floating blob as the chat composer. */}
