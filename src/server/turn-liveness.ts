@@ -5,14 +5,31 @@
  * can tell "the teacher is mid-turn — don't resurrect, don't start anything"
  * apart from "the record IS current".
  *
- * In-memory BY DESIGN: a process restart clears it, so there are no stale
- * flags to clean up — a crashed turn recovers via the write-ahead record +
- * mount continuation on the next visit. The TTL is a leak guard for the
- * pathological case where onFinish never fires (it runs even on aborts);
+ * Lives on globalThis, NOT a module-level Map: Next dev compiles each route
+ * as its own entry, so a module-level singleton is a DIFFERENT instance in
+ * the page render, GET /api/chats/[id], and POST /api/chat — the page would
+ * read an empty registry while the chat route holds the live turn (the bug:
+ * returning mid-turn showed the 409 banner instead of the busy state).
+ * globalThis spans module instances within the process; it is the standard
+ * Next.js singleton channel (same reason Prisma clients live there).
+ *
+ * Still ephemeral BY DESIGN: a process restart clears it, so there are no
+ * stale flags to clean up — a crashed turn recovers via the write-ahead
+ * record + mount continuation on the next visit. The TTL is a leak guard for
+ * the pathological case where onFinish never fires (it runs even on aborts);
  * chat turns are minutes at most, so 30 minutes is far on the safe side.
  */
 
-const inFlight = new Map<string, number>(); // chatId → startedAt (epoch ms)
+interface LhGlobal {
+	__lhTurnRegistry?: Map<string, number>;
+}
+
+function registry(): Map<string, number> {
+	const g = globalThis as typeof globalThis & LhGlobal;
+	return (g.__lhTurnRegistry ??= new Map<string, number>());
+}
+
+const inFlight = registry();
 const MAX_TURN_MS = 30 * 60_000;
 
 /**
