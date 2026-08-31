@@ -21,10 +21,6 @@ npm test             # all tests (node:test via tsx; deterministic, no LLM)
 npm run typecheck    # tsc --noEmit
 
 npx tsx scripts/bench-graph.ts   # force-layout benchmark (synthetic graphs)
-
-# ── legacy v0 pipeline (dormant, see "Legacy scaffold" below) ──────────
-npm run ingest -- <session.jsonl>   # normalize a pi session JSONL
-npm run graph                       # ledger stats
 ```
 
 ## Environment (`.env.local`)
@@ -147,10 +143,6 @@ data/                           chats/ · graph/ · jobs/ — runtime state, git
 **The async sub-agent protocol.** `research` / `demo` / `visual` are also client-side tools: the server turn ends at the call, `onFinish` spawns a background runner (fire-and-forget), the job store tracks a live activity line, the client polls `/api/jobs` while parts are pending, and on completion the runner rewrites the tool part in the chat record to `output-available` — the client re-syncs, the continuation fires, the teacher receives the result as a normal tool output. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable `LH_VISUAL_MODEL`).
 
 **The live graph.** Every completed turn folds the chat into append-only JSONL ledgers (`emitChat`: tree nodes/edges, quiz outcome events, taught events — idempotent, checkpointed, so partial sessions still deposit value). The home view derives node states from the ledgers and lays them out with forceAtlas2 (run-then-freeze — no idle simulation). At session start the derived graph is rendered into a compact markdown block appended to the teacher's instructions (`buildGraphContext`) — whole graph while small, hotspots + 1-hop neighborhood past 150 nodes.
-
-## Legacy scaffold (dormant)
-
-The pre-pivot v0 pipeline — `src/ledger.ts`, `src/cli.ts` (`npm run ingest` / `graph`), `src/extract/` (normalize ✅, extract/merge stubs), `src/schema.ts`, `src/derive.ts`, `src/queries/` — is kept compiling as reference for a future **retroactive bootstrap** over the old pi session JSONLs (`data/sessions/`, bootstrap input only). It writes to `data/legacy-graph/` and shares nothing with the live store (`data/graph/`, owned by `src/store/graph.ts` per the `contracts.ts` shapes). See `docs/architecture.md` for its design.
 
 ## Testing
 

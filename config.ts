@@ -11,8 +11,6 @@ export const PATHS = {
 	data: path.join(ROOT, "data"),
 	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
 	chats: path.join(ROOT, "data", "chats"),
-	/** Old pi session JSONLs — retroactive bootstrap input only. */
-	sessions: path.join(ROOT, "data", "sessions"),
 	graph: path.join(ROOT, "data", "graph"),
 } as const;
 
@@ -26,18 +24,4 @@ export const LEDGER_FILES = {
 	events: path.join(PATHS.graph, "events.jsonl"),
 	mappings: path.join(PATHS.graph, "mappings.jsonl"),
 	sessions: path.join(PATHS.graph, "sessions.jsonl"),
-} as const;
-
-/**
- * The legacy V0 scaffold (src/ledger.ts, src/cli.ts, src/extract/) writes
- * HERE instead — dormant pre-pivot reference code with its own line shapes
- * (src/schema.ts). Kept compiling for the future retroactive bootstrap,
- * which will target the contracts.ts shapes, not these.
- */
-export const LEGACY_LEDGER_FILES = {
-	nodes: path.join(PATHS.data, "legacy-graph", "nodes.jsonl"),
-	edges: path.join(PATHS.data, "legacy-graph", "edges.jsonl"),
-	events: path.join(PATHS.data, "legacy-graph", "events.jsonl"),
-	mappings: path.join(PATHS.data, "legacy-graph", "mappings.jsonl"),
-	sessions: path.join(PATHS.data, "legacy-graph", "sessions.jsonl"),
 } as const;
