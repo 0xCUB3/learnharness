@@ -6,7 +6,7 @@ Not a chat app with a graph bolted on: sessions are probe→teach lessons, the p
 
 - Living design doc (all decisions): [`docs/vision.md`](docs/vision.md)
 - Build plan + wave/gate results: [`docs/plan.md`](docs/plan.md)
-- [`docs/architecture.md`](docs/architecture.md) is the **pre-pivot v0 scaffold** (pi-based, Fastify/Vite) — kept as history only; everything current is below.
+- [`docs/architecture.md`](docs/architecture.md) is the **canonical architecture spec** — layers, ports, the import law, the single-writer rule, the two graph channels.
 
 ## Commands
 

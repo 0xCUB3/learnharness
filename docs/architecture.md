@@ -1,96 +1,119 @@
 # Learning Harness — Architecture
 
-Status: v0 scaffold. Teacher runtime ✅ · data model + ledgers ✅ · normalizer ✅ · extractor / merger / derived views — specified, not yet implemented.
+Status: **the canonical target-architecture spec** — describes the as-built system (post-pivot, refactor stages 1–5 complete). The pre-pivot v0 scaffold doc (pi-based, Fastify/Vite) lives in git history; product reasoning lives in [`docs/vision.md`](vision.md); file-by-file layout lives in the README.
 
-## What this is
+**What this is.** A standalone Next.js learning app: the learner's knowledge accumulates into one persistent, cross-session knowledge graph, built from tutoring sessions in which a teacher agent authors a formal, visible dependency tree (the plan tree) and verifies understanding with structured questions. The graph is the home page; the session is the classroom; everything else serves those two.
 
-A standalone learning harness built **on top of** pi (`@earendil-works/pi-coding-agent`) as a library dependency — the same relationship as building an app on Express. It is **not** the user's global pi: hermetic isolation, own pinned version, own sessions, own system prompt.
+**Design principles, in priority order:**
 
-Built up from the Obsidian-based POC (`~/Desktop/Obsidian/vault/π/learn`) — the teaching behavior is identical (same teach methodology, same quiz tool, same probe → plan → teach flow), but the interface and data pipeline are the harness's own. Full design reasoning lives in the POC's `knowledge graph design.md`; this doc covers what's implemented here.
+1. **Maximum control.** Every dependency edge is explicit and machine-checked. Nothing reaches sideways for convenience.
+2. **Easy editability.** A worker can trace any behavior to one file. Layers are named by responsibility, not by framework accident.
+3. **Zero technical debt.** The shape you see is the shape that runs. Deprecated paths are deleted, not parked.
+4. **Crystal-clear architecture.** One contracts file, one composition root, one writer per store, one trigger seam. When a rule can be a lint rule, it is.
 
-## Architecture
+---
 
-```mermaid
-graph TB
-    subgraph TEACH["Teaching Runtime (pi SDK, in-process)"]
-        TP["Teacher Agent<br/>system prompt = teach methodology<br/>+ quiz/ask guidelines folded in"]
-        Q["quiz.ts"]
-        AUQ["ask-user-question.ts"]
-        TP --> Q & AUQ
-    end
+## 1. The layers
 
-    subgraph STORE["Data (append-only, plain files)"]
-        SJ["session JSONLs<br/>data/sessions/"]
-        L["Ledgers: sessions / nodes / edges /<br/>events / mappings<br/>data/graph/*.jsonl"]
-    end
+Dependency arrows point **down only**. Each layer may import the core barrel; nothing may skip a boundary for convenience.
 
-    subgraph PIPE["Extraction Pipeline (after a session)"]
-        N["Stage 1 — Normalizer<br/>JSONL → canonical doc<br/>(deterministic, ✅ done)"]
-        E["Stage 2 — Extractor LLM<br/>nodes/edges/events/knowing<br/>(anchored rubric)"]
-        A["Audit LLM<br/>faithfulness check"]
-        M["Stage 3 — Merger<br/>embeddings + LLM adjudication<br/>+ reversible mappings"]
-    end
-
-    subgraph DERIVED["Derived (pure code, recomputed)"]
-        G["Knowledge graph"]
-        W["what-next:<br/>territory / repairs / conversions"]
-    end
-
-    TP -- writes --> SJ
-    SJ --> N --> E --> A --> M
-    M -- appends --> L
-    L --> G --> W
-
-    W -. "future: React/Next UI (Electron-able),<br/>force-directed WebGL graph view" .- TEACH
+```
+┌──────────────────────────────────────────────────────────────┐
+│ SHELL      app/            Next.js route handlers (transport) │
+│            components/     session + home UI (render only)    │
+├──────────────────────────────────────────────────────────────┤
+│ SERVER     src/server      thin composition, zero business    │
+│            logic: chat-handler (turn composition root),       │
+│            turn-service (the turn seams), stores.ts           │
+│            (THE composition root), route entry points         │
+├──────────────────────────────────────────────────────────────┤
+│ AGENT      src/agent       the teacher + sub-agents: LLM      │
+│            loops, tool surfaces, prompts. Deps arrive via     │
+│            factories/closures — never imported from below     │
+├──────────────────────────────────────────────────────────────┤
+│ CORE       src/core        pure domain: contracts.ts (THE     │
+│            schema), ports.ts, plan-tree, question-core,       │
+│            graph merger + derivation, graph-context,          │
+│            phases, pending, math delims. No IO, ever          │
+├──────────────────────────────────────────────────────────────┤
+│ STORE      src/store       fs adapters: chats · graph        │
+│            ledgers · jobs. The ONLY modules that touch       │
+│            data/. They implement core ports; nothing          │
+│            implements them                                   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**Core invariant:** LLMs only ever touch the top pipeline (semantic judgment). Everything below the ledgers is deterministic code. The teacher stays a pure teacher; the graph is never asserted by an LLM — only by logged, reversible evidence.
+**The import law** (`eslint.config.mjs`, four machine-enforced zones — a violation fails lint, and each zone was verified to fire):
 
-## Teacher runtime
+| Zone | May import | Rationale |
+|---|---|---|
+| `components/**` | `@/src/core` only (the barrel) | The UI renders domain data; it never runs domain logic or touches IO |
+| `app/**` | `@/src/core` + `@/src/server` (the barrels) | Route handlers are transport; they delegate to server entry points |
+| `src/core/**` | nothing below itself (never `agent`/`server`/`store`) | The core is pure; adapters implement its ports, never the reverse |
+| `src/agent/**` | never `server`/`store` | The agent layer receives its dependencies (storage ports, wiring) via factories/closures from the server |
 
-`src/teacher/create-session.ts` boots pi via the SDK with total isolation:
+Two rules are documentation-only by design: `src/server/stores.ts` is the only server module allowed to import adapters (the ESLint plugin's `except` can't express "all but one" cleanly), and `src/core/graph.ts` + `graph-context.ts` stay out of the core barrel so the barrel remains browser-safe (their types are barrelled via `ports.ts`/`contracts.ts`).
 
-| Concern | Value |
-|---|---|
-| System prompt | `teacher/system-prompt.md` — the teach methodology (from the POC's teach skill) with the quiz + ask_user_question usage guidelines folded in (custom prompts drop extension guidelines — verified in pi's `buildSystemPrompt`) |
-| Tools | `noTools: "builtin"` → no read/bash/edit/write; only `quiz` + `ask_user_question` |
-| Extensions | explicitly via `additionalExtensionPaths`; imports of old `@mariozechner/*` names resolve through pi's loader aliases |
-| agentDir | `data/agent/` — hermetic. `auth.json` and `models-store.json` are **symlinks** to `~/.pi/agent/` (credential + catalog sharing only) |
-| Sessions | `data/sessions/` via `SessionManager.create(cwd, sessionDir)` |
-| Model | from `data/agent/settings.json` (currently openrouter/z-ai/glm-5.3-flash, thinking medium) |
-| Research tool | deliberately absent in v0 — the system prompt's accuracy rule is adapted accordingly (flag uncertainty, never bluff) |
+---
 
-Run: `npm run teach` → full pi TUI, quiz popups, session persisted in `data/sessions/`.
+## 2. Ports, adapters, and the composition roots
 
-`npm run doctor` → non-interactive smoke test (verifies extensions, tools, model, prompt; no leaks).
+Storage is **per-entity semantic ports**, never one generic interface: `ChatStore`, `GraphStore`, `JobStore` (`src/core/ports.ts` — types only). The fs adapters (`src/store/{chats,graph,jobs}.ts`) implement them and contain persistence and nothing else.
 
-## Data model
+- **`src/server/stores.ts` is THE composition root for storage**: it instantiates the adapters and hands the port objects to everything else (server modules, the job runner, the extraction pipeline, agent tools). It is the single place a storage decision (JSON vs SQLite, local vs remote) gets re-made.
+- **`src/server/chat-handler.ts` is THE composition root for a turn**: it wires the stores, the job runner, the teacher tools, and the turn services into the SDK stream response. All logic lives behind the seams it calls.
+- The agent layer is dependency-inverted throughout: `createJobRunner({ chatStore, jobStore })`, `createExtractionPipeline({ chatStore, graphStore, extractor?, auditor? })`, `createTeacherTools({ chatId, chatStore })`, `createTeacherAgent(model?, tools?, graphContext?)`. Tests inject the same ports production wires.
 
-`src/schema.ts`. Key decisions:
+---
 
-- **Nodes** are propositions at ~one-reasoning-step grain; `kind: truth | misconception`; `state: known | not-held | candidate`.
-- **Edges** carry NO scalars — only `type: requires | supports` and provenance. "Load-bearing" is derived, never stored.
-- **Events** are the append-only source of truth: `(node, kind, session, entryId, evidence)`. Every event carries `entryId` → **jump-to-point**: the exact place in the session where it happened. A node's "which sessions is it from" derives from its events (merges union them automatically).
-- **Mappings** are merge decisions, logged and reversible.
-- **Knowing** is assessed on an anchored ordinal rubric (misconception / absent / shakily-known / known / fluent) — never freehand scalars, never per-session normalized.
-- **known ≠ understood**: known is evidence (ledger); understood is structure (derived: known + requires-subtree held). The extractor does zero inference about knowledge.
+## 3. The knowledge graph — two channels, one writer
 
-## Extraction pipeline
+**The extraction pipeline is the sole graph writer.** Nothing else appends to `data/graph/*.jsonl` — not the teacher, not the server, not a migration script.
 
-1. **Normalize** (`src/extract/normalize.ts`, ✅) — deterministic. Quiz toolResults in the JSONL carry full structured details (question, options, correct/dontKnow, note), so quiz events are read as data, not parsed from prose. Verified against a real POC session.
-2. **Extract** (`extract.ts`, stub) — one LLM pass: nodes, edges (primarily from the plan's mermaid DAG, already asserted by the teacher), attributed events, knowing on the rubric. Zero inference beyond evidence.
-3. **Audit** (stub) — second LLM call checking extraction faithfulness only.
-4. **Merge** (`merge.ts`, stub) — embedding kNN + one adjudication call per session: `same` (alias) / `related` (new node + cross-session edge — the only place cross-domain edges are born) / `unrelated`. Conservative: prefer duplicates over wrong merges. Fully automatic; mappings make every decision reversible.
+```
+chat record ──▶ EXTRACTOR (LLM) ──▶ AUDITOR (LLM) ──▶ MERGER (core, deterministic) ──▶ ledgers
+                 proposes            verifies            applies
+```
 
-## Derived views (stubbed)
+**Division of trust** (the pipeline's core rule): the LLM stages supply only judgment — *what was learned* (propositions, incl. misconceptions and prose-only `supports` edges), *what depends on what*, and *which proposition an untagged probe tested*. Everything the model could silently mis-copy — event kinds, timestamps, idempotency refs, notes, question texts — is rebuilt deterministically by the merger from the transcript's tool parts. The extractor files verbatim evidence quotes; the auditor (the faithfulness net) drops anything unbacked and logs every drop. Conservative throughout: duplicates over wrong merges, drop over invent.
 
-`src/derive.ts` + `src/queries/what-next.ts` — pure code over the ledgers: known-set now; understanding aggregation **parked** (weakest-link vs mean vs two-level mean/max — confounded with edge typing, to be decided on real extracted data). What-next returns territory / repairs / conversions; unlock-value runs over lazily expanded frontier, discounted by depth in generated territory.
+**Merger invariants** (`src/core/graph.ts`, `mergeFindings`): idempotent and incremental — statement/alias exact-match identity resolution (fuzzy/embedding adjudication deferred), one mapping line per (chat, graph node) as the merge audit trail, edge dedupe by `(from, to, type)` with per-chat provenance, event dedupe by chat-scoped ref, and a sessions.jsonl checkpoint (`foldedAt`) marking which turns are processed. Failure anywhere before the merger checkpoints nothing; the next trigger re-runs.
 
-## Build order (from here)
+**Probe attribution** (vision open question, resolved structurally): tagged events (quiz `nodeId`, `plan_mark_done`'s tree node) resolve deterministically through the proposition mapping. The extractor's judgment is consulted only for **untagged probe quizzes** — retroactively, against the whole transcript, so a pre-tree probe maps to a proposition the tree only articulates later. Attribution can also rescue a tagged-but-unknown id; genuinely unattributable probes land `nodeId: null` with the question text, exactly as they always have.
 
-1. ~~repo scaffold, teacher runtime, data model, ledgers, normalizer~~ ✅
-2. Extractor + audit (LLM pass, structured output)
-3. Merger (embeddings + adjudication)
-4. Derive + what-next queries (CLI)
-5. Retroactive bootstrap over the POC session JSONLs in `~/.pi/agent/sessions/--Users-amos-Desktop-Obsidian-vault-π-learn--/`
-6. *(parked)* React/Next interface, graph rendering (force-directed WebGL, Obsidian-graph feel), spaced repetition, research tool for the teacher
+**The trigger is a v1 placeholder, isolated in ONE seam.** `src/server/turn-service.ts` (`triggerExtraction`) counts answered quizzes not yet in the ledger (`pendingQuizAnswers`, core) and fires the pipeline async once a chat crosses `EXTRACTION.everyNQuizAnswers` (`LH_EXTRACT_N`, default 3) — single-flight per chat. The pipeline is trigger-agnostic: when a better mechanism lands (session end, idle, explicit flush), only this seam changes.
+
+**The read channel is pure derivation.** `GET /api/graph` reads the ledgers (`graphSnapshot`: merged edges, derived node states, session provenance) — the home view never triggers a write. At session start, `buildGraphContext` renders the derived graph into a compact markdown block appended to the teacher's instructions (whole graph while small; diagnostic hotspots + 1-hop neighborhood past 150 nodes) — this is what makes probing precise and personalization compound. `store events, derive state`: node states are always recomputed from the ledger, never stored.
+
+---
+
+## 4. The session (one chat turn)
+
+`handleChatRequest` is framework-free (plain `Request`/`Response`) so tests drive it with a scripted mock model. The turn composes:
+
+1. **`buildTeacherContext`** — the graph read channel (self-updating, failure-contained: a read error never takes the lesson down).
+2. **`persistTurn`** — the canonical state write: client + agent messages persist on every finish, including aborts (the partial transcript is what makes resume-mid-question free).
+3. **`spawnTurnJobs`** — the async sub-agent protocol: pending `research`/`demo`/`visual` tool parts get background runners (fire-and-forget; on completion the runner rewrites the tool part to `output-available`, the client re-syncs, the SDK continuation hands the result to the teacher as a normal tool output).
+4. **`triggerExtraction`** — the graph write channel (§3).
+
+Each service is a named, error-contained seam taking explicit deps; failures log one `[chat <id>]` line and never touch the response. Swapping any of them (e.g. the trigger) touches nothing else.
+
+**The formal plan tree**: the teacher authors the session's dependency map with schema-validated tools (`plan_init` … `plan_mark_done`); the tree persists in the chat record and the tree panel renders from the latest plan tool output — one object, two faces. **Client-side question tools** (`quiz`, `ask_user_question`) have no server execute: the call streams to the browser, the learner answers in the dock, the client grades via `question-core` and returns the verdict with `addToolOutput`, which fires the continuation.
+
+---
+
+## 5. Observability (minimal, by decision)
+
+Structured-logging frameworks are deferred; the baseline is one log line per event at the seams, correlation-tagged: `[chat <id>]` on turn services, `[extraction <id>]` on the pipeline (merge stats, audit drops), `[job <id>]` on runners, `[graph]` on server graph reads. When structured logging (pino-style JSON with `{chatId, jobId, toolCallId}`) lands, it goes behind these seams — no call sites change.
+
+---
+
+## 6. Testing
+
+All deterministic, no network: models are injected (`MockLanguageModelV4`), storage is the same fs adapters production wires (tests own backup-and-clear of the ledgers they touch), and pure logic gets in-memory port implementations. Four strata: pure core units; server flows driven through `handleChatRequest` with scripted models; sub-agent loops (researcher, demo-builder, visual-maker, and the extraction pipeline end-to-end — audit drops, failure-checkpoints-nothing, single-flight); and render tests via React server-side rendering. Gates on every change: `tsc` clean, all tests, `eslint` clean, `next build` clean.
+
+---
+
+## 7. Deliberately deferred (links)
+
+Fuzzy/embedding merge adjudication, calibration rubric, retroactive bootstrap of the POC sessions (vision §1 consolidation); dictation, not-a-chat presentation overhaul, gated progression, spaced repetition (vision §2/§4 roadmap). SQLite or other storage swaps are drop-in behind the ports (§2). The trigger mechanism beyond the v1 quiz threshold (§3). When any of these land, this doc changes with the commit that lands them — it describes the system, not an intention.
