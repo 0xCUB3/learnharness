@@ -1,4 +1,4 @@
-import { createAgentUIStreamResponse, type UIMessage } from "ai";
+import { createAgentUIStreamResponse, InvalidToolInputError, NoSuchToolError, type UIMessage } from "ai";
 import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
@@ -45,6 +45,17 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 				buildTeacherContext(stores.graphStore, chatId),
 			),
 		uiMessages: body.messages as UIMessage[],
+		// Tool-call validation failures are messages OUR schemas authored (the
+		// quiz authoring contract, unknown tools) — safe and useful in the
+		// transcript: they are exactly what the teacher saw and retried on. The
+		// tool loop delivers them as plain strings (what the model received) or
+		// as the original error object; expose both, and keep everything else
+		// (provider/transport internals) masked, as the SDK defaults.
+		onError: (error) => {
+			if (typeof error === "string") return error;
+			if (InvalidToolInputError.isInstance(error) || NoSuchToolError.isInstance(error)) return error.message;
+			return "An error occurred.";
+		},
 		onFinish: ({ messages, isAborted }) => {
 			persistTurn(stores.chatStore, chatId, messages as UIMessage[], isAborted);
 			spawnTurnJobs(jobRunner, chatId, messages as UIMessage[]);

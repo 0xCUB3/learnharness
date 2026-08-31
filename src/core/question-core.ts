@@ -39,52 +39,141 @@ const optionSchema = z.object({
 	description: z.string().optional().describe("Optional extra detail shown below the option"),
 });
 
-export const quizInputSchema = z.object({
-	question: z.string().describe("The single quiz question to ask"),
-	options: z
-		.array(optionSchema)
-		.min(2)
-		.describe(
-			"The answer options (2 or more). Options only — no free-text mode. Never add your own 'I don't know' option.",
-		),
-	correctAnswer: z
-		.union([z.string(), z.array(z.string())])
-		.describe(
-			"The correct answer as the option value(s) — the `value` field of the option you intend. " +
-				"Single-select: one string. Multi-select: an array; the learner is only correct if their selection matches this set exactly.",
-		),
-	explanation: z
-		.string()
-		.describe("Explanation revealed AFTER the learner answers. Always say why the correct answer is correct."),
-	multiSelect: z.boolean().optional().describe("Set true only when more than one option is correct"),
-	details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
-	nodeId: z
-		.string()
-		.optional()
-		.describe(
-			"Optional plan-tree node id this question assesses. Set whenever the question targets a tree node — " +
-				"the outcome feeds the learner's knowledge graph. Omit for ad-hoc probes.",
-		),
-});
+// ─── cross-field authoring validation (tool-schema refinements) ──────────
+// Enforced at the tool-call boundary (see the superRefines below): an invalid
+// question NEVER reaches the learner — the SDK returns the validation error
+// to the teacher as a tool result and the teacher retries. The rules mirror
+// the grading path exactly (normalizeOptions / coerceCorrectAnswer /
+// resolveCorrect), so schema-valid ⇔ gradeable.
 
-export const askInputSchema = z.object({
-	question: z.string().describe("The single question to ask"),
-	mode: z
-		.enum(["single-select", "multi-select", "text"])
-		.optional()
-		.describe(
-			"Answer mode. Omit for single-select when options are given, or text when they are not.",
-		),
-	options: z
-		.array(optionSchema)
-		.min(2)
-		.optional()
-		.describe(
-			"Optional multiple-choice options. Omit for free-form text input. The learner can always choose 'Other' and type a custom answer.",
-		),
-	multiSelect: z.boolean().optional().describe("Set true to allow multiple answers to be selected"),
-	details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
-});
+/** Option sanity shared by quiz + ask: labels non-empty, resolved values
+ *  (trimmed `value`, falling back to the trimmed label — exactly how
+ *  normalizeOptions keys them) distinct. Returns the problems plus the
+ *  resolved keys for the correctAnswer check. */
+function optionProblems(
+	options: Array<{ label: string; value?: string }>,
+): { problems: string[]; keys: string[] } {
+	const problems: string[] = [];
+	const keys: string[] = [];
+	options.forEach((option, i) => {
+		const label = option.label.trim();
+		if (label.length === 0) {
+			problems.push(`options[${i}].label is empty — every option needs a label.`);
+			return;
+		}
+		const key = option.value?.trim() || label;
+		if (keys.includes(key)) {
+			problems.push(`Two options resolve to the same value "${key}" — options must be distinct.`);
+		}
+		keys.push(key);
+	});
+	return { problems, keys };
+}
+
+/** ask options: the shared sanity, nothing more (ask is not graded). */
+export function askOptionProblems(options: Array<{ label: string; value?: string }>): string[] {
+	return optionProblems(options).problems;
+}
+
+/** The full quiz authoring contract: option sanity + correctAnswer must be
+ *  gradeable. Empty result = a quiz the dock can arm and grade faithfully. */
+export function quizInputProblems(input: {
+	options: Array<{ label: string; value?: string }>;
+	correctAnswer: string | string[];
+	multiSelect?: boolean;
+}): string[] {
+	const { problems, keys } = optionProblems(input.options);
+
+	const entries = coerceCorrectAnswer(input.correctAnswer).map((v) => v.trim());
+	const unique = [...new Set(entries)];
+	if (unique.length === 0 || unique.some((v) => v.length === 0)) {
+		problems.push("correctAnswer is required — provide the value (or label) of the correct option(s).");
+		return problems;
+	}
+	for (const v of unique) {
+		if (!keys.includes(v)) {
+			problems.push(
+				`correctAnswer "${v}" does not match any option value. Valid values: ${keys.map((k) => `"${k}"`).join(", ")}. ` +
+					"Copy the exact value (or label) of the intended option — never a paraphrase or slug.",
+			);
+		}
+	}
+	if (unique.length > 1 && input.multiSelect !== true) {
+		problems.push(
+				`correctAnswer lists ${unique.length} values but multiSelect is not true — a single-select question with several ` +
+					"correct answers can never be answered correctly. Set multiSelect: true, or make exactly one option correct.",
+		);
+	}
+	return problems;
+}
+
+export const quizInputSchema = z
+	.object({
+		question: z.string().describe("The single quiz question to ask"),
+		options: z
+			.array(optionSchema)
+			.min(2)
+			.describe(
+				"The answer options (2 or more). Options only — no free-text mode. Never add your own 'I don't know' option.",
+			),
+		correctAnswer: z
+			.union([z.string(), z.array(z.string())])
+			.describe(
+				"The correct answer as the option value(s): copy the EXACT `value` — or `label` when `value` is omitted — " +
+					"of the intended option(s), never a paraphrase or slug; a mismatch fails validation. " +
+					"Single-select: one string. Multi-select: an array; the learner is only correct if their selection matches this set exactly.",
+			),
+		explanation: z
+			.string()
+			.describe("Explanation revealed AFTER the learner answers. Always say why the correct answer is correct."),
+		multiSelect: z.boolean().optional().describe("Set true only when more than one option is correct"),
+		details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
+		nodeId: z
+			.string()
+			.optional()
+			.describe(
+				"Optional plan-tree node id this question assesses. Set whenever the question targets a tree node — " +
+					"the outcome feeds the learner's knowledge graph. Omit for ad-hoc probes.",
+			),
+	})
+	// The cross-field authoring contract (the Gate-3 hardening): a quiz whose
+	// correctAnswer can't be graded NEVER reaches the learner. The SDK validates
+	// client-side tool inputs against this schema at the call boundary and, on
+	// failure, returns the validation error to the teacher as a tool result —
+	// the teacher retries with a fixed quiz in the same turn. Schema-valid ⇔
+	// gradeable: the rules are exactly what the grading path accepts.
+	.superRefine((input, ctx) => {
+		for (const problem of quizInputProblems(input)) {
+			ctx.addIssue({ code: "custom", message: problem });
+		}
+	});
+
+export const askInputSchema = z
+	.object({
+		question: z.string().describe("The single question to ask"),
+		mode: z
+			.enum(["single-select", "multi-select", "text"])
+			.optional()
+			.describe(
+				"Answer mode. Omit for single-select when options are given, or text when they are not.",
+			),
+		options: z
+			.array(optionSchema)
+			.min(2)
+			.optional()
+			.describe(
+				"Optional multiple-choice options. Omit for free-form text input. The learner can always choose 'Other' and type a custom answer.",
+			),
+		multiSelect: z.boolean().optional().describe("Set true to allow multiple answers to be selected"),
+		details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
+	})
+	// Same option sanity as the quiz (labels non-empty, values distinct — ask
+	// is not graded, but duplicate values break the dock's value keying).
+	.superRefine((input, ctx) => {
+		for (const problem of askOptionProblems(input.options ?? [])) {
+			ctx.addIssue({ code: "custom", message: problem });
+		}
+	});
 
 export type QuizToolInput = z.infer<typeof quizInputSchema>;
 export type AskToolInput = z.infer<typeof askInputSchema>;

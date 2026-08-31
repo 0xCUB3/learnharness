@@ -229,6 +229,91 @@ describe("teacher chat flow (scripted model)", () => {
 		const saved = chatStore.getChat(chat.id)!;
 		assert.ok(saved.messages.length >= 1, "partial transcript persisted");
 	});
+
+	it("an ungradeable quiz is rejected at the call boundary, the error reaches the model, and the model retries", async () => {
+		// The authoring contract (question-core superRefine): a quiz whose
+		// correctAnswer matches no option value must NEVER reach the dock —
+		// the SDK validates client-side tool inputs against the schema, marks
+		// the call invalid, and returns the validation error to the teacher as
+		// a tool result. The loop re-prompts the model, which retries in the
+		// same turn. This pins that whole mechanism (the live Nietzsche bug).
+		const BAD_QUIZ_INPUT = {
+			question: "What is Nietzsche's genealogical claim about religion?",
+			options: [{ label: "A cultural diagnosis" }, { label: "Atheism as a conclusion" }],
+			correctAnswer: "cultural-diagnosis", // the exact live failure shape: a slug, no match
+			explanation: "Genealogy diagnoses, it does not convert.",
+		};
+
+		const calls: string[][] = [];
+		let step = 0;
+		const retryModel = new MockLanguageModelV4({
+			doStream: async (options) => {
+				calls.push(options.prompt.map((m) => JSON.stringify(m.content)));
+				step++;
+				const chunks: LanguageModelV4StreamPart[] =
+					step === 1
+						? [
+								{ type: "stream-start", warnings: [] },
+								{ type: "tool-input-start", id: "call-bad", toolName: "quiz" },
+								{ type: "tool-input-delta", id: "call-bad", delta: JSON.stringify(BAD_QUIZ_INPUT) },
+								{ type: "tool-input-end", id: "call-bad" },
+								{
+										type: "tool-call",
+										toolCallId: "call-bad",
+										toolName: "quiz",
+										input: JSON.stringify(BAD_QUIZ_INPUT),
+									},
+								{ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: usage() },
+							]
+						: [
+								{ type: "stream-start", warnings: [] },
+								{ type: "tool-input-start", id: "call-good", toolName: "quiz" },
+								{ type: "tool-input-delta", id: "call-good", delta: JSON.stringify(QUIZ_INPUT) },
+								{ type: "tool-input-end", id: "call-good" },
+								{
+										type: "tool-call",
+										toolCallId: "call-good",
+										toolName: "quiz",
+										input: JSON.stringify(QUIZ_INPUT),
+									},
+								{ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: usage() },
+							];
+				return { stream: simulateReadableStream({ chunks, initialDelayInMs: 0, chunkDelayInMs: 0 }) };
+			},
+		});
+
+		const agent = createTeacherAgent(retryModel);
+		const chat = chatStore.createChat("Test: bad quiz retry");
+		createdChats.push(chat.id);
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
+		await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+
+		// The model was re-prompted (the error did not end the turn)…
+		assert.equal(calls.length, 2, "the invalid call triggered a second model prompt");
+		// …and the second prompt carried the validation error back as a tool result.
+		assert.match(
+			calls[1]!.join(" "),
+			/does not match any option value/,
+			"the validation error reached the model",
+		);
+
+		// The transcript: the failed call persisted as an error part (renders
+		// nothing client-side), the retry as the pending quiz.
+		const saved = chatStore.getChat(chat.id)!;
+		const assistantMsg = saved.messages[1]!;
+		const quizParts = assistantMsg.parts.filter((p) => p.type === "tool-quiz");
+		const failed = quizParts.find(
+				(p) => p.type === "tool-quiz" && (p as { state?: string }).state === "output-error",
+			);
+		assert.ok(failed, "the invalid call persisted as an error-state part");
+		assert.match(
+			String((failed as { errorText?: string }).errorText),
+			/does not match any option value/,
+		);
+		const pending = findPendingToolCall(saved.messages);
+		assert.equal(pending?.toolCallId, "call-good", "the RETRIED quiz is the pending one");
+		assert.deepEqual(pending?.input, QUIZ_INPUT);
+	});
 });
 
 describe("chat store", () => {

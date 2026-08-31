@@ -5,6 +5,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+	askInputSchema,
+	askOptionProblems,
 	buildAnswer,
 	coerceCorrectAnswer,
 	findPendingQuestion,
@@ -14,11 +16,123 @@ import {
 	normalizeOptions,
 	QUESTION_ANSWERED_ENTRY,
 	QUESTION_ENTRY,
+	quizInputProblems,
+	quizInputSchema,
 	resolveCorrect,
 	shuffleOptions,
 	type QuestionData,
 	toClientQuestion,
 } from "../src/core/question-core.ts";
+
+// ─── the authoring contract (tool-schema refinements) ───────────────────
+// Schema-valid ⇔ gradeable: a quiz whose correctAnswer can't be resolved
+// dies at the tool-call boundary, and the SDK returns the error to the
+// teacher to retry — it must never reach the learner's dock.
+
+describe("quizInputSchema / quizInputProblems (the authoring contract)", () => {
+	const valid = {
+		question: "Which planet is closest to the Sun?",
+		options: [{ label: "Venus" }, { label: "Mercury" }, { label: "Mars" }],
+		correctAnswer: "Mercury",
+		explanation: "Mercury is the innermost planet.",
+	};
+
+	it("accepts a valid single-select quiz (label as correctAnswer)", () => {
+		const parsed = quizInputSchema.safeParse(valid);
+		assert.equal(parsed.success, true);
+		assert.deepEqual(quizInputProblems(valid), []);
+	});
+
+	it("accepts explicit values and multi-select arrays (incl. JSON-stringified)", () => {
+		const multi = {
+			...valid,
+			options: [
+				{ label: "A", value: "a" },
+				{ label: "B", value: "b" },
+				{ label: "C", value: "c" },
+			],
+			correctAnswer: ["a", "b"],
+			multiSelect: true,
+		};
+		assert.equal(quizInputSchema.safeParse(multi).success, true);
+		// The union lists String first, so providers sometimes stringify arrays.
+		const stringified = { ...multi, correctAnswer: JSON.stringify(multi.correctAnswer) };
+		assert.equal(quizInputSchema.safeParse(stringified).success, true);
+		assert.deepEqual(quizInputProblems(stringified), []);
+	});
+
+	it("rejects the observed failure: a correctAnswer slug matching no option value, listing the valid values", () => {
+		// The exact class GLM produced live (Gate 3 + live verification).
+		const bad = {
+			question: "What is Nietzsche's genealogical claim about religion?",
+			options: [
+				{ label: "A cultural diagnosis" },
+			{ label: "Atheism as a conclusion" },
+			{ label: "A call to convert people" },
+		],
+			correctAnswer: "cultural-diagnosis",
+			explanation: "...",
+		};
+		const parsed = quizInputSchema.safeParse(bad);
+		assert.equal(parsed.success, false);
+		const problems = quizInputProblems(bad);
+		assert.equal(problems.length, 1);
+		assert.match(problems[0]!, /does not match any option value/);
+		assert.match(problems[0]!, /"A cultural diagnosis"/); // the valid values are listed for the retry
+		// The schema's error message carries the problems (the SDK returns them to the teacher).
+		const msg = JSON.stringify(parsed.error?.issues);
+		assert.match(msg, /does not match any option value/);
+	});
+
+	it("rejects multiple correct answers without multiSelect (ungradeable single-select)", () => {
+		const bad = { ...valid, correctAnswer: ["Venus", "Mercury"] };
+		assert.equal(quizInputSchema.safeParse(bad).success, false);
+		assert.match(quizInputProblems(bad).join(" "), /multiSelect/);
+	});
+
+	it("rejects duplicate option values", () => {
+		const bad = {
+			...valid,
+			options: [
+				{ label: "Mercury", value: "same" },
+				{ label: "Venus", value: "same" },
+			],
+		};
+		assert.equal(quizInputSchema.safeParse(bad).success, false);
+		assert.match(quizInputProblems(bad).join(" "), /same value/);
+	});
+
+	it("rejects an empty option label", () => {
+		const bad = { ...valid, options: [{ label: "  " }, { label: "Mercury" }, { label: "Mars" }] };
+		assert.equal(quizInputSchema.safeParse(bad).success, false);
+		assert.match(quizInputProblems(bad).join(" "), /label is empty/);
+	});
+
+	it("requires a resolvable correctAnswer", () => {
+		assert.equal(quizInputSchema.safeParse({ ...valid, correctAnswer: "" }).success, false);
+		assert.equal(quizInputSchema.safeParse({ ...valid, correctAnswer: "[]" }).success, false);
+		assert.match(quizInputProblems({ ...valid, correctAnswer: "" }).join(" "), /required/);
+	});
+});
+
+describe("askInputSchema / askOptionProblems", () => {
+	it("accepts a valid ask", () => {
+		const parsed = askInputSchema.safeParse({
+			question: "Which topic first?",
+			options: [{ label: "Limits" }, { label: "Chain rule" }],
+		});
+		assert.equal(parsed.success, true);
+	});
+
+	it("rejects duplicate option values and empty labels (they break the dock's keying)", () => {
+		const bad = { question: "?", options: [{ label: "A", value: "x" }, { label: "B", value: "x" }] };
+		assert.equal(askInputSchema.safeParse(bad).success, false);
+		assert.match(askOptionProblems(bad.options).join(" "), /same value/);
+		const emptyLabel = { question: "?", options: [{ label: "" }, { label: "B" }] };
+		assert.equal(askInputSchema.safeParse(emptyLabel).success, false);
+		assert.match(askOptionProblems(emptyLabel.options).join(" "), /label is empty/);
+	});
+});
 
 // ─── normalizeOptions ───────────────────────────────────────────────────────
 
