@@ -4,6 +4,7 @@ import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { createTeacherTools } from "../agent/tools.ts";
 import { stores } from "./stores.ts";
+import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { buildTeacherContext, persistTurn, spawnTurnJobs, triggerExtraction } from "./turn-service.ts";
 
 /**
@@ -36,7 +37,29 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		return Response.json({ error: "messages must be an array" }, { status: 400 });
 	}
 
-	return createAgentUIStreamResponse({
+	// One turn per chat, ever. A second request while a turn runs means a
+	// stale/remounted client raced a live one — its message list is outdated,
+	// and letting it through would double-run the teacher and clobber the
+	// first turn's persist (saveMessages is last-writer-wins).
+	if (!beginTurn(chatId)) {
+		console.info(`[chat ${chatId}] turn already in flight — request rejected`);
+		return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
+	}
+
+	// Write-ahead persistence: the request body IS the client's canonical
+	// state, so it goes on disk BEFORE the stream starts. The learner's answer
+	// is durable the instant the request arrives — any remount, second tab, or
+	// server crash sees truth instead of the pre-answer record. (A client that
+	// returns mid-turn reads turnInFlight from the registry and re-attaches by
+	// polling instead of resurrecting the stale transcript.)
+	try {
+		stores.chatStore.saveMessages(chatId, body.messages as UIMessage[]);
+	} catch (err) {
+		console.error(`[chat ${chatId}] write-ahead persist failed:`, err);
+	}
+
+	try {
+		return await createAgentUIStreamResponse({
 		agent:
 			agent ??
 			createTeacherAgent(
@@ -56,10 +79,20 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 			if (InvalidToolInputError.isInstance(error) || NoSuchToolError.isInstance(error)) return error.message;
 			return "An error occurred.";
 		},
-		onFinish: ({ messages, isAborted }) => {
-			persistTurn(stores.chatStore, chatId, messages as UIMessage[], isAborted);
-			spawnTurnJobs(jobRunner, chatId, messages as UIMessage[]);
-			triggerExtraction(stores, extraction, chatId);
-		},
-	});
+			onFinish: ({ messages, isAborted }) => {
+				persistTurn(stores.chatStore, chatId, messages as UIMessage[], isAborted);
+				spawnTurnJobs(jobRunner, chatId, messages as UIMessage[]);
+				triggerExtraction(stores, extraction, chatId);
+				// LAST: a poller that sees not-in-flight must read an already-persisted
+				// record — endTurn only after persistTurn has done its job.
+				endTurn(chatId);
+			},
+		});
+	} catch (err) {
+		// The stream never started, so no onFinish will fire — clear the registry
+		// or a malformed request would lock the chat until the TTL eviction.
+		endTurn(chatId);
+		console.error(`[chat ${chatId}] turn failed to start:`, err);
+		return Response.json({ error: "Failed to start the turn" }, { status: 500 });
+	}
 }

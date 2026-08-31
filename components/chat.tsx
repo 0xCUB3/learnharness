@@ -57,11 +57,15 @@ export function Chat({
 	title,
 	initialMessages,
 	initialPrompt,
+	initiallyInFlight,
 }: {
 	chatId: string;
 	title: string;
 	initialMessages: TeacherUIMessage[];
 	initialPrompt?: string;
+	/** A teacher turn is running server-side but attached to no client
+	 * (navigated away mid-turn, returned while in flight). */
+	initiallyInFlight?: boolean;
 }) {
 	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop } =
 		useChat<TeacherUIMessage>({
@@ -82,27 +86,37 @@ export function Chat({
 		}
 	}, [initialPrompt, initialMessages.length, sendMessage]);
 
+	// A turn running server-side but attached to no client of ours (navigated
+	// away mid-turn, returned while in flight): the record is write-ahead
+	// persisted (answer included), but the teacher's reaction only lands when
+	// the orphaned turn finishes — poll for that, don't resurrect.
+	const [turnInFlight, setTurnInFlight] = useState(initiallyInFlight ?? false);
+
 	// Mount continuation: if the stored transcript ends with a fulfilled tool
 	// (a job result landed while no client was open), resume the lesson — the
 	// SDK's sendAutomaticallyWhen only fires inside addToolOutput, so reloads
 	// need this nudge. Once per mount; the turn that follows ends in text (or
-	// a pending question), so no loop.
+	// a pending question), so no loop. NEVER while a turn is already running
+	// server-side — that would double-run the teacher (the server would 409
+	// it; the poll below resumes instead).
 	const mountContinuation = useRef(false);
 	useEffect(() => {
 		if (mountContinuation.current) return;
 		mountContinuation.current = true;
 		if (
+			!turnInFlight &&
 			status === "ready" &&
 			messages.length > 0 &&
 			lastAssistantMessageIsCompleteWithToolCalls({ messages })
 		) {
 			void sendMessage();
 		}
-		// mount-only by design
+		// mount-only by design (turnInFlight read at initial value)
 	}, []);
 
 	const pending = findPendingToolCall(messages);
-	const busy = status === "submitted" || status === "streaming";
+	const localStream = status === "submitted" || status === "streaming";
+	const busy = localStream || turnInFlight;
 
 	// Teach-phase check (W5, vision §2 "two phases"): a pending question that
 	// lands after plan_init starts collapsed behind a "Check your
@@ -124,7 +138,7 @@ export function Chat({
 	// break provider conversion — contracts.ts "THE ASYNC PROTOCOL" §5), but
 	// they don't dock: the running job's activity card sits in the transcript.
 	const pendingJob = findPendingJobCall(messages);
-	const canSend = text.trim().length > 0 && !pending && !pendingJob;
+	const canSend = text.trim().length > 0 && !pending && !pendingJob && !turnInFlight;
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
@@ -134,8 +148,8 @@ export function Chat({
 		setMessages(record.messages);
 		// setMessages does NOT fire sendAutomaticallyWhen (the SDK only checks
 		// it inside addToolOutput) — without this the teacher would stay silent
-		// after a job result lands. sendMessage() with no args re-requests with
-		// the current list: the continuation. (contracts.ts protocol §4.)
+			// after a job result lands. sendMessage() with no args re-requests with
+			// the current list: the continuation. (contracts.ts protocol §4.)
 		if (
 			status === "ready" &&
 			lastAssistantMessageIsCompleteWithToolCalls({ messages: record.messages })
@@ -143,6 +157,36 @@ export function Chat({
 			void sendMessage();
 		}
 	}, [chatId, setMessages, sendMessage, status]);
+
+	// Re-attach after mid-turn navigation (the key fix): poll the record until
+	// the orphaned turn finishes (turnInFlight flips false server-side in
+	// onFinish, AFTER persist), then adopt the completed transcript — the
+	// syncFromServer above already runs the job-continuation check. Until then
+	// the session reads as busy: thinking shimmer, composer gated.
+	useEffect(() => {
+		if (!turnInFlight) return;
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const poll = async () => {
+			if (cancelled) return;
+			try {
+				const res = await fetch(`/api/chats/${chatId}`);
+				if (res.ok && !((await res.json()) as { turnInFlight?: boolean }).turnInFlight) {
+					setTurnInFlight(false);
+					void syncFromServer();
+					return;
+				}
+			} catch {
+				/* transient network hiccup — keep polling */
+			}
+			if (!cancelled) timer = setTimeout(poll, 1500);
+		};
+		timer = setTimeout(poll, 1000);
+		return () => {
+			cancelled = true;
+			if (timer) clearTimeout(timer);
+		};
+	}, [turnInFlight, chatId, syncFromServer]);
 
 	const onSend = () => {
 		const t = text.trim();
@@ -223,7 +267,7 @@ export function Chat({
 								</Message>
 							))}
 
-							{status === "submitted" && <Shimmer className="text-sm">Thinking…</Shimmer>}
+							{(status === "submitted" || turnInFlight) && <Shimmer className="text-sm">Thinking…</Shimmer>}
 							{questionStreaming && <Shimmer className="text-sm">Writing a question…</Shimmer>}
 							{error && (
 								<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
@@ -237,7 +281,9 @@ export function Chat({
 							requiresReveal={requiresReveal}
 							composer={
 								<Composer
-									busy={busy}
+									// Stop applies only to a LOCAL stream: a server-side turn has no
+									// client request to abort (stop() would be a no-op lie).
+									busy={localStream}
 									value={text}
 									onChange={setText}
 									onSend={onSend}

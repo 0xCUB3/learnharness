@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { Chat } from "@/components/chat";
 import type { TeacherUIMessage } from "@/src/core";
-import { getChat } from "@/src/server";
+import { getChat, isTurnRunning } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +22,9 @@ export default async function ChatPage({
 			title={chat.title}
 			initialMessages={chat.messages as TeacherUIMessage[]}
 			initialPrompt={prompt}
+			// A teacher turn that outlived its client: the remounted view must
+			// attach (busy shimmer + poll), never resurrect the stale record.
+			initiallyInFlight={isTurnRunning(chat.id)}
 		/>
 	);
 }

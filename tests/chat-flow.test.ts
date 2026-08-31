@@ -19,6 +19,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
+import { isTurnRunning } from "../src/server/turn-liveness.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 import { findPendingToolCall } from "../src/core/pending.ts";
@@ -324,5 +325,99 @@ describe("chat store", () => {
 		const loaded = chatStore.getChat(chat.id)!;
 		assert.equal(loaded.messages.length, 1);
 		assert.equal(loaded.title, "Store test");
+	});
+});
+
+describe("mid-turn navigation (turn liveness + write-ahead)", () => {
+	it("one turn per chat: a concurrent request is 409'd; the next one after finish is accepted", async () => {
+		const calls: string[][] = [];
+		const agent = createTeacherAgent(scriptedModel(calls));
+		const chat = chatStore.createChat("Test: turn guard");
+		createdChats.push(chat.id);
+
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
+		const res1 = await handleChatRequest(post(chat.id, [firstUser]), agent); // NOT drained → in flight
+		assert.equal(isTurnRunning(chat.id), true, "turn registered as in flight");
+
+		// A stale client (remount racing a live turn) tries to start a second turn.
+		const res2 = await handleChatRequest(post(chat.id, [firstUser]), agent);
+		assert.equal(res2.status, 409, "concurrent turn rejected — last-writer-wins persist would clobber it");
+
+		await drain(res1); // finish → onFinish → endTurn
+		assert.equal(isTurnRunning(chat.id), false, "registry cleared at finish");
+
+		const res3 = await handleChatRequest(post(chat.id, [firstUser]), agent);
+		assert.equal(res3.status, 200, "the next turn is accepted after the previous finished");
+		await drain(res3);
+	});
+
+	it("write-ahead: the learner's answer is durable BEFORE the turn finishes", async () => {
+		const calls: string[][] = [];
+		const agent = createTeacherAgent(scriptedModel(calls));
+		const chat = chatStore.createChat("Test: write-ahead");
+		createdChats.push(chat.id);
+
+		// Turn 1: the teacher asks the quiz (pending part in the record).
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
+		await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+		const saved1 = chatStore.getChat(chat.id)!;
+		const assistantMsg = saved1.messages[1]!;
+
+		// The learner answers; the client posts the graded transcript back.
+		const options = normalizeOptions(QUIZ_INPUT.options);
+		const qd: QuestionData = {
+			id: "call-1",
+			kind: "quiz",
+			question: QUIZ_INPUT.question,
+			mode: "single-select",
+			options,
+			correctIndices: resolveCorrect(coerceCorrectAnswer(QUIZ_INPUT.correctAnswer), options).indices,
+			explanation: QUIZ_INPUT.explanation,
+			createdAt: new Date().toISOString(),
+		};
+		const answer = buildAnswer(qd, { values: ["Mercury"] });
+		const messages2 = saved1.messages.map((m) =>
+			m.id === assistantMsg.id
+				? {
+						...m,
+						parts: m.parts.map((p) =>
+							p.type === "tool-quiz" ? { ...p, state: "output-available" as const, output: answer } : p,
+						),
+					}
+					: m,
+		);
+
+		// NOT drained: the teacher turn is streaming, but the answer is already
+		// on disk — a remount (or crash) mid-turn sees the answered quiz, never
+		// the stale pre-answer question.
+		const res = await handleChatRequest(post(chat.id, messages2), agent);
+		const midTurn = chatStore.getChat(chat.id)!;
+		const midQuiz = midTurn.messages[1]!.parts.find((p) => p.type === "tool-quiz");
+		assert.ok(midQuiz && midQuiz.type === "tool-quiz");
+		assert.equal(midQuiz.state, "output-available", "write-ahead persisted the answer before finish");
+
+		await drain(res); // finish → persist the full turn → endTurn
+		const saved2 = chatStore.getChat(chat.id)!;
+		assert.equal(saved2.messages.length, 2, "full turn persisted as usual at finish");
+		assert.equal(isTurnRunning(chat.id), false, "registry cleared at finish");
+	});
+
+	it("a turn that fails to start (malformed messages) clears the registry — no lockout", async () => {
+		const chat = chatStore.createChat("Test: turn failed to start");
+		createdChats.push(chat.id);
+		// A text part with no text: fails UIMessage validation before the stream
+		// exists — the path where no onFinish will ever run.
+		const bad = [{ id: "m1", role: "user", parts: [{ type: "text" }] }];
+		const res = await handleChatRequest(post(chat.id, bad), createTeacherAgent(scriptedModel([])));
+		assert.equal(res.status, 500, "turn-start failure is a 500, not a hang");
+		assert.equal(isTurnRunning(chat.id), false, "registry cleared when the stream never started");
+
+		// And the chat is NOT locked: the next (valid) turn is accepted.
+		const ok = await handleChatRequest(
+			post(chat.id, [{ id: "m1", role: "user", parts: [{ type: "text", text: "teach me" }] }]),
+			createTeacherAgent(scriptedModel([])),
+		);
+		assert.equal(ok.status, 200);
+		await drain(ok);
 	});
 });
