@@ -29,7 +29,8 @@ npx tsx scripts/bench-graph.ts   # force-layout benchmark (synthetic graphs)
 |---|---|
 | `OPENROUTER_API_KEY` | required — all LLM calls go through OpenRouter |
 | `LH_MODEL` | teacher model (default `anthropic/claude-sonnet-4.5`) |
-| `LH_RESEARCH_MODEL`, `LH_DEMO_MODEL` | per-sub-agent overrides (fall back to `LH_MODEL`) |
+| `LH_RESEARCH_MODEL`, `LH_DEMO_MODEL`, `LH_EXTRACT_MODEL` | per-sub-agent overrides (fall back to `LH_MODEL`) |
+| `LH_EXTRACT_N` | answered quizzes per chat before the extraction pipeline fires (default `3`) |
 | `LH_VISUAL_MODEL` | visual-maker model — must be **vision-capable** (it looks at rendered SVGs) |
 | `GOOGLE_SEARCH_API_KEY` + `GOOGLE_CSE_ID` | researcher's `web_search` (Google Custom Search) |
 | `CHROME_PATH` | optional explicit Chrome path for headless verification (puppeteer-core uses system Chrome; nothing is downloaded) |
@@ -58,7 +59,7 @@ graph TB
     end
 
     subgraph TEACHER["Teacher agent (src/agent)"]
-        CH["chat-handler.ts — turn composition root<br/>(services: context · persist · spawn · fold)"]
+        CH["chat-handler.ts — turn composition root<br/>(services: context · persist · spawn · extract)"]
         TA["ToolLoopAgent<br/>system-prompt.md + prompts/*.md fragments<br/>+ graph-context block"]
         QT["quiz · ask_user_question<br/>(client-side tools, no execute)"]
         PT["plan_* tools (server-side,<br/>mutate the chat's tree)"]
@@ -69,6 +70,7 @@ graph TB
         RES["researcher<br/>web_search + web_fetch"]
         DEMO["demo-builder<br/>write → headless-run → fix"]
         VIS["visual-maker<br/>write → render → look"]
+        EXT["extraction pipeline<br/>extractor → auditor → merger<br/>(the sole graph writer)"]
     end
 
     subgraph STORE["File stores (src/store adapters → data/, never in git)"]
@@ -77,10 +79,10 @@ graph TB
         LEDG[("data/graph/*.jsonl<br/>nodes/edges/events/mappings/sessions")]
     end
 
-    subgraph PIPE["Graph pipeline (src/core)"]
-        EMIT["graph.ts emitChat<br/>naive-union, idempotent,<br/>exact/alias match"]
+    subgraph PIPE["Graph core (src/core) — merger + derivation"]
+        MERGE["graph.ts mergeFindings<br/>deterministic apply: identity,<br/>event rebuild, dedupe, checkpoint"]
         GCTX["graph-context.ts<br/>hotspots + 1-hop when large"]
-        SNAP["graphSnapshot · foldStaleChats"]
+        SNAP["graphSnapshot (pure read)"]
     end
 
     TR & COMP & DOCK --> RCHAT
@@ -95,17 +97,18 @@ graph TB
     PT --> CHATS
     CH -->|"onFinish: saveMessages"| CHATS
     CH -->|"onFinish: spawnPendingJobs"| RES & DEMO & VIS
-    CH -->|"onFinish: emitChat"| EMIT
+    CH -->|"onFinish: every N quiz answers<br/>(turn-service seam)"| EXT
 
     RES & DEMO & VIS --> JOBS
     RES & DEMO & VIS -->|"rewrite tool part<br/>→ output-available"| CHATS
 
-    EMIT --> LEDG
+    EXT -->|"audit-passed findings"| MERGE
+    MERGE --> LEDG
     LEDG --> GCTX -->|"appended to instructions"| TA
     LEDG --> SNAP --> RGRAPH
 ```
 
-**Core invariant, carried over from the original design:** the graph is never asserted by an LLM post-hoc guesswork — v1 emission is deterministic code over structured tool data. The teacher stays a teacher; everything below the ledgers is derived.
+**Core invariant:** the extraction pipeline (extractor → auditor → merger) is the sole graph writer. The LLM stages propose and verify (propositions, edges, probe attribution — each with verbatim evidence); the deterministic merger owns every ledger append and rebuilds anything the model could silently mis-copy (event kinds, timestamps, idempotency refs) from the transcript. The teacher stays a teacher; everything below the ledgers is derived.
 
 ## Layout
 
@@ -124,16 +127,18 @@ src/
     tools/web.ts                web_search (Google CSE) + web_fetch (Readability)
     tools/jobs.ts               research / demo / visual tool surfaces
     subagents/                  researcher · demo-builder · visual-maker,
+                                extraction pipeline (extractor/auditor + prompts),
                                 runner (async protocol), headless Chrome helper
   server/chat-handler.ts       one chat turn: compose agent + services, stream
   server/turn-service.ts       turn services: teacher context · persist ·
-                                spawn jobs · fold-into-graph (error-contained)
+                                spawn jobs · extraction trigger (the v1
+                                quiz-answer threshold — one swappable seam)
   server/stores.ts              THE composition root — the one place adapters wire in
   core/contracts.ts             THE contracts file — types + protocol docs
   core/ports.ts                 storage ports — ChatStore · GraphStore · JobStore
                                 (core code depends on these types only)
   core/                         question-core, plan-tree, phases, pending,
-                                graph (emission/derivation), graph-context, math delims
+                                graph (merger/derivation), graph-context, math delims
                                 — all pure: storage arrives as parameters
   store/                        fs adapters implementing the ports: chats ·
                                 graph ledgers · jobs (plain fs, no framework)
@@ -149,15 +154,15 @@ data/                           chats/ · graph/ · jobs/ — runtime state, git
 
 **The async sub-agent protocol.** `research` / `demo` / `visual` are also client-side tools: the server turn ends at the call, `onFinish` spawns a background runner (fire-and-forget), the job store tracks a live activity line, the client polls `/api/jobs` while parts are pending, and on completion the runner rewrites the tool part in the chat record to `output-available` — the client re-syncs, the continuation fires, the teacher receives the result as a normal tool output. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable `LH_VISUAL_MODEL`).
 
-**The live graph.** Every completed turn folds the chat into append-only JSONL ledgers (`emitChat`: tree nodes/edges, quiz outcome events, taught events — idempotent, checkpointed, so partial sessions still deposit value). The home view derives node states from the ledgers and lays them out with forceAtlas2 (run-then-freeze — no idle simulation). At session start the derived graph is rendered into a compact markdown block appended to the teacher's instructions (`buildGraphContext`) — whole graph while small, hotspots + 1-hop neighborhood past 150 nodes.
+**The knowledge graph (the two channels).** The write channel: the extraction pipeline — extractor (LLM: propositions, edges, probe attribution, each with verbatim evidence) → auditor (LLM: drops anything unbacked) → merger (`mergeFindings`, deterministic: exact/alias identity resolution, event rebuild from the transcript's tool parts, dedupe, checkpoint). Triggered once a chat accumulates `EXTRACTION.everyNQuizAnswers` (default 3, `LH_EXTRACT_N`) new answered quizzes — a v1 placeholder trigger isolated in one seam (`turn-service.ts`), swappable without touching the pipeline. Failure checkpoints nothing; the next trigger re-runs. The read channel: the home view derives node states from the ledgers (`GET /api/graph` is a pure read — forceAtlas2 run-then-freeze, no idle simulation), and at session start the derived graph is rendered into a compact markdown block appended to the teacher's instructions (`buildGraphContext`) — whole graph while small, hotspots + 1-hop neighborhood past 150 nodes.
 
 ## Testing
 
 All deterministic, no LLM (models are injected as `MockLanguageModelV4` where an agent loop is under test):
 
-1. **Pure core units** — plan-tree ops, question grading, phases, graph emission, graph-context selection, math delimiters.
+1. **Pure core units** — plan-tree ops, question grading, phases, graph merger + trigger helper, graph-context selection, math delimiters.
 2. **Server flows** — `chat-handler` driven directly with a scripted mock model: persistence, job spawning, part rewriting, continuation.
-3. **Sub-agent loops** — researcher/demo-builder/visual-maker with mock models + fake headless API.
+3. **Sub-agent loops** — researcher/demo-builder/visual-maker with mock models + fake headless API; the extraction pipeline end-to-end with mock models (extractor → auditor → in-memory ledgers).
 4. **Render tests** — transcript, cards, dock, composer, tree panel via React server-side rendering.
 
 ## Lineage

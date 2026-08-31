@@ -5,10 +5,11 @@
  *   buildGraphContext   — per-request entry point (derived-graph → block)
  *   injection plumbing  — chat-flow style: the teacher's instructions carry
  *                         the block (MockLanguageModelV4 captures the prompt)
- *   exact-match merge   — emitChat dedupes case/whitespace-identical titles
- *                         onto existing nodes (no fuzzy matching)
+ *   exact-match merge   — the merger (mergeFindings) dedupes
+ *                         case/whitespace-identical statements onto existing
+ *                         nodes (no fuzzy matching)
  *
- * Ledger isolation: NONE needed for the merge tests — emitChat's ledger is
+ * Ledger isolation: NONE needed for the merge tests — the merger's ledger is
  * injectable (in-memory), so the live data/graph files are only ever READ
  * here (tests/graph.test.ts owns the backup-and-clear dance; both suites run
  * concurrently as separate processes). Chat fixtures are real ChatRecords,
@@ -21,9 +22,9 @@ import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
-import type { GraphEdge, GraphNode, LedgerEvent } from "../src/core/contracts.ts";
+import type { GraphEdge, GraphNode, LedgerEvent, SessionFindings } from "../src/core/contracts.ts";
 import type { NodeStateClass } from "../src/core/contracts.ts";
-import { emitChat, getGraph } from "../src/core/graph.ts";
+import { getGraph, mergeFindings } from "../src/core/graph.ts";
 import type { GraphStore } from "../src/core/ports.ts";
 import {
 	buildGraphContext,
@@ -295,7 +296,7 @@ describe("graph-context injection (chat-flow style)", () => {
 	});
 });
 
-// ─── exact-match merge (emitChat dedup) ─────────────────────────────────────
+// ─── exact-match merge (merger identity resolution) ──────────────────────────
 
 /** An in-memory stand-in for the five ledgers (the GraphStore port, core/ports.ts). */
 function memoryLedgers() {
@@ -320,7 +321,31 @@ function memoryLedgers() {
 	} satisfies GraphStore & { counts: { nodes: number; mappings: number } };
 }
 
-/** A real chat record with a stored tree (emitChat reads the real chat store). */
+/** Findings as the extractor would file them for a plan tree: one
+ *  proposition per node (statement = title, treeNodeId set), one `requires`
+ *  edge per tree edge — the merge tests drive the merger with these. */
+function treeFindings(tree: ReturnType<typeof createTree>): SessionFindings {
+	const idByNodeId = new Map(tree.nodes.map((n, i) => [n.id, `p${i + 1}`]));
+	return {
+		propositions: tree.nodes.map((n, i) => ({
+			id: `p${i + 1}`,
+			statement: n.title,
+			aliases: [],
+			kind: "truth" as const,
+			treeNodeId: n.id,
+			evidence: ["fixture evidence"],
+		})),
+		edges: tree.edges.map((e) => ({
+			from: idByNodeId.get(e.from)!,
+			to: idByNodeId.get(e.to)!,
+			type: "requires" as const,
+			evidence: ["fixture evidence"],
+		})),
+		attribution: { quiz: {} },
+	};
+}
+
+/** A real chat record with a stored tree (the merger reads the real chat store). */
 function fixtureChat(title: string, tree: ReturnType<typeof createTree>) {
 	const chat = chatStore.createChat(title);
 	createdChats.push(chat.id);
@@ -329,24 +354,26 @@ function fixtureChat(title: string, tree: ReturnType<typeof createTree>) {
 	return chatStore.getChat(chat.id)!;
 }
 
-describe("exact-match merge (emitChat)", () => {
+describe("exact-match merge (merger identity resolution)", () => {
 	it("maps a case/whitespace-identical title onto the existing node instead of duplicating", () => {
 		const ledgers = memoryLedgers();
-		const chat1 = fixtureChat("Merge A", createTree([{ id: "cr", title: "Chain rule intuition" }], []));
-		let stats = emitChat(chat1.id, { chatStore, graphStore: ledgers });
+		const tree1 = createTree([{ id: "cr", title: "Chain rule intuition" }], []);
+		const chat1 = fixtureChat("Merge A", tree1);
+		let stats = mergeFindings(chat1.id, treeFindings(tree1), { chatStore, graphStore: ledgers });
 		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 0 });
 		const firstId = ledgers.readNodes()[0]!.id;
 
 		// Second session, same proposition: different casing + padding.
-		const chat2 = fixtureChat("Merge B", createTree([{ id: "cr2", title: "  chain Rule INTUITION " }], []));
-		stats = emitChat(chat2.id, { chatStore, graphStore: ledgers });
+		const tree2 = createTree([{ id: "cr2", title: "  chain Rule INTUITION " }], []);
+		const chat2 = fixtureChat("Merge B", tree2);
+		stats = mergeFindings(chat2.id, treeFindings(tree2), { chatStore, graphStore: ledgers });
 		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 }, "no duplicate node appended");
 
 		assert.equal(ledgers.counts.nodes, 1, "still exactly one graph node");
 		assert.equal(ledgers.readNodes()[0]!.id, firstId);
-		// Provenance stays honest: one mapping line per (chat, treeNodeId).
+		// Provenance stays honest: one mapping line per (chat, graph node).
 		assert.equal(ledgers.counts.mappings, 2);
-		assert.deepEqual(ledgers.readMappings()[1], { chatId: chat2.id, treeNodeId: "cr2", graphNodeId: firstId });
+		assert.deepEqual(ledgers.readMappings()[1], { chatId: chat2.id, sourceId: "cr2", graphNodeId: firstId });
 	});
 
 	it("matches aliases too (exact, case-insensitive)", () => {
@@ -358,52 +385,49 @@ describe("exact-match merge (emitChat)", () => {
 			kind: "truth",
 			createdAt: "2026-08-22T00:00:00.000Z",
 		});
-		const chat = fixtureChat("Merge alias", createTree([{ id: "d", title: "The Derivative" }], []));
-		const stats = emitChat(chat.id, { chatStore, graphStore: ledgers });
+		const tree = createTree([{ id: "d", title: "The Derivative" }], []);
+		const chat = fixtureChat("Merge alias", tree);
+		const stats = mergeFindings(chat.id, treeFindings(tree), { chatStore, graphStore: ledgers });
 		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 }, "alias match → no new node");
-		assert.deepEqual(ledgers.readMappings(), [{ chatId: chat.id, treeNodeId: "d", graphNodeId: "n_alias" }]);
+		assert.deepEqual(ledgers.readMappings(), [{ chatId: chat.id, sourceId: "d", graphNodeId: "n_alias" }]);
 	});
 
 	it("does NOT fuzzy-match near-identical titles (that stays deferred)", () => {
 		const ledgers = memoryLedgers();
-		const chat1 = fixtureChat("Fuzzy A", createTree([{ id: "cr", title: "Chain rule intuition" }], []));
-		emitChat(chat1.id, { chatStore, graphStore: ledgers });
-		const chat2 = fixtureChat(
-			"Fuzzy B",
-			createTree([{ id: "cr2", title: "Chain rules intuition" }], []),
-		);
-		const stats = emitChat(chat2.id, { chatStore, graphStore: ledgers });
-		assert.equal(stats.nodes, 1, "near-miss titles stay separate nodes");
+		const tree1 = createTree([{ id: "cr", title: "Chain rule intuition" }], []);
+		const chat1 = fixtureChat("Fuzzy A", tree1);
+		mergeFindings(chat1.id, treeFindings(tree1), { chatStore, graphStore: ledgers });
+		const tree2 = createTree([{ id: "cr2", title: "Chain rules intuition" }], []);
+		const chat2 = fixtureChat("Fuzzy B", tree2);
+		const stats = mergeFindings(chat2.id, treeFindings(tree2), { chatStore, graphStore: ledgers });
+		assert.equal(stats.nodes, 1, "near-miss statements stay separate nodes");
 		assert.equal(ledgers.counts.nodes, 2);
 	});
 
 	it("merged nodes unify the second chat's edges onto the existing graph node", () => {
 		const ledgers = memoryLedgers();
-		const chat1 = fixtureChat(
-			"Edge A",
-			createTree(
-				[
-					{ id: "base", title: "Derivative as a limit" },
-					{ id: "chain", title: "Chain rule intuition" },
-				],
-				[{ from: "base", to: "chain" }],
-			),
+		const tree1 = createTree(
+			[
+				{ id: "base", title: "Derivative as a limit" },
+				{ id: "chain", title: "Chain rule intuition" },
+			],
+			[{ from: "base", to: "chain" }],
 		);
-		emitChat(chat1.id, { chatStore, graphStore: ledgers });
+		const chat1 = fixtureChat("Edge A", tree1);
+		mergeFindings(chat1.id, treeFindings(tree1), { chatStore, graphStore: ledgers });
 
-		// Second session re-teaches the same two propositions (exact titles)
-		// and asserts the same edge — it must dedupe onto the existing nodes.
-		const chat2 = fixtureChat(
-			"Edge B",
-			createTree(
-				[
-					{ id: "base", title: "derivative as a limit" },
-					{ id: "chain", title: "chain rule intuition" },
-				],
-				[{ from: "base", to: "chain" }],
-			),
+		// Second session re-teaches the same two propositions (exact statements
+		// modulo case) and asserts the same edge — it must dedupe onto the
+		// existing nodes.
+		const tree2 = createTree(
+			[
+				{ id: "base", title: "derivative as a limit" },
+				{ id: "chain", title: "chain rule intuition" },
+			],
+			[{ from: "base", to: "chain" }],
 		);
-		const stats = emitChat(chat2.id, { chatStore, graphStore: ledgers });
+		const chat2 = fixtureChat("Edge B", tree2);
+		const stats = mergeFindings(chat2.id, treeFindings(tree2), { chatStore, graphStore: ledgers });
 		// A new ASSERTION line is appended (provenance is honest) — reads merge
 		// by (from,to,type), so the derived graph still has one edge with both
 		// sessions in its provenance.

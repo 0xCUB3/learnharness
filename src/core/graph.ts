@@ -1,24 +1,29 @@
 /**
- * Knowledge-graph emission + derivation (W4; vision §1 "One substrate",
- * contracts.ts "v1 emission").
+ * The knowledge graph: merger (the deterministic final stage of the
+ * extraction pipeline — vision §1 construction) + derivation (reads).
  *
- * emitChat(chatId) folds ONE chat into the global graph — naive union,
- * deterministic, no LLM:
- *   plan-tree nodes   → GraphNodes (statement = title, aliases empty;
- *                       W8: a title exactly matching an existing statement
- *                       or alias — case-insensitive, trimmed — maps onto the
- *                       existing node instead of appending a duplicate)
- *   plan-tree edges   → `requires` GraphEdges (from = prerequisite)
- *   answered quizzes  → ledger events (probe-* before the first plan_init
- *                       output, check / dont-know after; ref = toolCallId)
- *   plan_mark_done    → "taught" events (ref = taught:<treeNodeId>)
+ * The extraction pipeline is the SOLE graph writer:
  *
- * Idempotent + incremental: mappings dedupe nodes, (from,to,type) dedupes
- * edge assertions, chat-scoped refs dedupe events, and sessions.jsonl
- * checkpoints which chats have been folded. Re-emitting a chat appends
- * nothing. Every function takes the storage ports (core/ports.ts) as
- * explicit parameters — pure core, no adapter imports; the composition
- * root (src/server/stores.ts) wires the fs adapters in.
+ *   extractor (LLM)  → SessionFindings: propositions, edges, and event
+ *                      attribution, each with verbatim evidence
+ *   auditor (LLM)    → the verified subset (unbacked candidates dropped)
+ *   merger (HERE)    → mergeFindings(): deterministic ledger appends
+ *
+ * The merger is deliberately the ONLY stage that touches the ledgers, and it
+ * is pure code: the LLM supplies exactly the judgment calls (what was
+ * taught, what depends on what, which proposition a quiz tested), while
+ * event kinds/timestamps/refs — anything the model could silently
+ * mis-copy — are rebuilt deterministically from the transcript's tool
+ * parts. Idempotent + incremental: statement/alias matching dedupes nodes,
+ * (from,to,type) dedupes edge assertions, chat-scoped refs dedupe events,
+ * one mapping line per (chat, graph node), and sessions.jsonl checkpoints
+ * which chats have been extracted (never the same turns twice).
+ *
+ * Derivation below (getGraph / deriveNodeStates / graphSnapshot) is reads
+ * only — everything is recomputed from the ledgers. Every function takes
+ * the storage ports (core/ports.ts) as explicit parameters — pure core, no
+ * adapter imports; the composition root (src/server/stores.ts) wires the fs
+ * adapters in.
  */
 
 import { randomBytes } from "node:crypto";
@@ -30,8 +35,8 @@ import type {
 	LedgerEvent,
 	LedgerEventKind,
 	NodeStateClass,
-	PlanTree,
 	PlanToolResult,
+	SessionFindings,
 } from "./contracts.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
@@ -47,7 +52,7 @@ function newGraphNodeId(): string {
 	return `n_${randomBytes(6).toString("hex")}`;
 }
 
-// ─── transcript scanning ─────────────────────────────────────────────────────
+// ─── transcript scanning (shared by the merger + trigger) ─────────────────────
 
 /** A flattened, order-preserving view of every tool part in a transcript. */
 interface ToolPartView {
@@ -84,23 +89,7 @@ function planResult(part: ToolPartView): PlanToolResult | null {
 	return out as PlanToolResult;
 }
 
-/**
- * The FINAL live tree, replayed from plan tool outputs in message order.
- * Fallback for records whose stored `tree` is missing (it is the same state
- * saveTree persists, so the two normally agree); also proves the probe/check
- * boundary scan below sees the same transcript the teacher wrote.
- */
-function replayFinalTree(messages: UIMessage[]): PlanTree {
-	let tree: PlanTree = { nodes: [], edges: [], currentNodeId: null, doneNodeIds: [], version: 0 };
-	for (const part of toolParts(messages)) {
-		if (!part.name.startsWith("plan_")) continue;
-		const result = planResult(part);
-		if (result && result.ok && result.tree) tree = result.tree;
-	}
-	return tree;
-}
-
-// ─── emission ────────────────────────────────────────────────────────────────
+// ─── the merger (extraction pipeline stage 3 — deterministic) ────────────────
 
 export interface EmissionStats {
 	/** New graph nodes appended (and mappings with them). */
@@ -112,79 +101,86 @@ export interface EmissionStats {
 }
 
 /**
- * Fold one chat into the graph ledgers. Idempotent — safe to call after every
- * turn (chat-handler onFinish) and again on catch-up (GET /api/graph). Sync
- * and fast: a handful of small-file reads plus one append per new record.
+ * Merge one chat's audited findings into the graph ledgers — the pipeline's
+ * apply stage. Deterministic + idempotent: re-merging the same findings (or
+ * a later re-extraction of the same chat) appends nothing but the new.
  *
- * The storage ports are explicit (tests pass in-memory ledgers; production
- * passes the fs adapters from src/server/stores.ts).
+ * Identity resolution (v1: conservative): a proposition whose statement or
+ * alias EXACTLY matches (case-insensitive, trimmed) an existing node's
+ * statement or alias merges onto it; everything else is a new node. One
+ * mapping line per (chat, graph node) — the merge audit trail. Fuzzy /
+ * embedding adjudication stays deferred (vision §1 consolidation).
+ *
+ * Events are rebuilt deterministically from the transcript's quiz and
+ * plan_mark_done parts (kinds, timestamps, notes, refs). TAGGED events
+ * (quiz nodeId, mark_done tree node) resolve through the proposition
+ * mapping — deterministic; the findings' attribution is consulted ONLY for
+ * untagged probe quizzes: the retroactive probe-attribution resolution (a
+ * pre-tree probe maps to a proposition the tree only articulates later).
+ * Unattributed quizzes land with nodeId null + the question text, exactly
+ * like the unattributable ones always have.
  */
-export function emitChat(chatId: string, deps: GraphDeps): EmissionStats {
-	const { graphStore: ledgers } = deps;
-	const record = deps.chatStore.getChat(chatId);
+export function mergeFindings(chatId: string, findings: SessionFindings, deps: GraphDeps): EmissionStats {
+	const { graphStore: ledgers, chatStore } = deps;
+	const record = chatStore.getChat(chatId);
 	if (!record) return { nodes: 0, edges: 0, events: 0 };
 	const stats: EmissionStats = { nodes: 0, edges: 0, events: 0 };
 
-	// 1. This chat's existing mappings — the identity map is per-chat (v1 is
-	// naive union: two sessions' tree nodes never merge into one graph node).
+	// 1. Identity resolution. mapping: proposition id (and tree node id)
+	//    → graph node id — from this chat's existing mapping lines, then
+	//    extended as findings resolve. chatNodeIds: graph nodes this chat has
+	//    already mapped onto — the (chat, graph node) mapping dedupe.
 	const mapping = new Map<string, string>();
+	const chatNodeIds = new Set<string>();
 	for (const m of ledgers.readMappings()) {
-		if (m.chatId === chatId) mapping.set(m.treeNodeId, m.graphNodeId);
+		if (m.chatId !== chatId || typeof m.sourceId !== "string") continue;
+		mapping.set(m.sourceId, m.graphNodeId);
+		chatNodeIds.add(m.graphNodeId);
 	}
 
-	// 2. The tree state to fold. record.tree is the truth (it is the exact
-	// state every plan tool persisted); the transcript replay covers records
-	// that predate tree persistence. Nodes REMOVED from the tree are simply
-	// absent here — if they were emitted by an earlier fold, their mappings
-	// and ledger lines stay (the ledgers are append-only evidence).
-	const tree =
-		record.tree && record.tree.nodes.length > 0 ? record.tree : replayFinalTree(record.messages);
-
-	// 3. Tree nodes without a mapping → GraphNode + mapping. W8 merge
-	// improvement: a title that EXACTLY matches (case-insensitive, trimmed) an
-	// existing node's statement or alias maps onto that node instead of
-	// appending a duplicate — the mapping line is still appended so provenance
-	// stays honest. Fuzzy/embedding matching stays deferred (vision §1
-	// consolidation pipeline).
+	// 2. Propositions → graph nodes. Exact statement/alias match against the
+	//    whole ledger first (cross-session reuse), then against propositions
+	//    created earlier in THIS merge (intra-findings dedupe).
 	const norm = (s: string): string => s.trim().toLowerCase();
 	const existingByTitle = new Map<string, string>();
 	for (const node of ledgers.readNodes()) {
-		const statementKey = norm(node.statement);
-		if (statementKey && !existingByTitle.has(statementKey)) existingByTitle.set(statementKey, node.id);
-		for (const alias of node.aliases) {
-			const aliasKey = norm(alias);
-			if (aliasKey && !existingByTitle.has(aliasKey)) existingByTitle.set(aliasKey, node.id);
+		for (const title of [node.statement, ...node.aliases]) {
+			const key = norm(title);
+			if (key && !existingByTitle.has(key)) existingByTitle.set(key, node.id);
 		}
 	}
 	const now = new Date().toISOString();
-	for (const node of tree.nodes) {
-		if (mapping.has(node.id)) continue;
-		const titleKey = norm(node.title);
-		const existingId = titleKey ? existingByTitle.get(titleKey) : undefined;
-		if (existingId !== undefined) {
-			// Exact match: reuse the node, record the mapping, append nothing.
-			ledgers.appendMapping({ chatId, treeNodeId: node.id, graphNodeId: existingId });
-			mapping.set(node.id, existingId);
-			continue;
+	for (const p of findings.propositions) {
+		if (mapping.has(p.id)) continue;
+		const keys = [p.statement, ...p.aliases].map(norm).filter((k) => k.length > 0);
+		const matchId = keys.map((k) => existingByTitle.get(k)).find((id) => id !== undefined);
+		let graphNodeId: string;
+		if (matchId !== undefined) {
+			graphNodeId = matchId; // reuse — conservative merge, duplicates over wrong merges
+		} else {
+			const graphNode: GraphNode = {
+				id: newGraphNodeId(),
+				statement: p.statement,
+				aliases: [...p.aliases],
+				kind: p.kind,
+				createdAt: now,
+			};
+			ledgers.appendNode(graphNode);
+			stats.nodes++;
+			graphNodeId = graphNode.id;
 		}
-		const graphNode: GraphNode = {
-			id: newGraphNodeId(),
-			// statement is the title; the summary stays out (contracts).
-			statement: node.title,
-			aliases: [],
-			kind: "truth",
-			createdAt: now,
-		};
-		ledgers.appendNode(graphNode);
-		ledgers.appendMapping({ chatId, treeNodeId: node.id, graphNodeId: graphNode.id });
-		existingByTitle.set(titleKey, graphNode.id);
-		mapping.set(node.id, graphNode.id);
-		stats.nodes++;
+		for (const key of keys) if (!existingByTitle.has(key)) existingByTitle.set(key, graphNodeId);
+		if (!chatNodeIds.has(graphNodeId)) {
+			ledgers.appendMapping({ chatId, sourceId: p.treeNodeId ?? p.id, graphNodeId });
+			chatNodeIds.add(graphNodeId);
+		}
+		mapping.set(p.id, graphNodeId);
+		if (p.treeNodeId !== undefined) mapping.set(p.treeNodeId, graphNodeId);
 	}
 
-	// 4. Tree edges → `requires` edges. Dedupe by (from,to,type) across the
-	// whole ledger: an existing assertion just gains this chatId as
-	// provenance (appended as a new line; reads merge).
+	// 3. Edges. Dedupe by (from,to,type) across the whole ledger: an existing
+	//    assertion just gains this chatId as provenance (appended as a new
+	//    line; reads merge).
 	const asserted = new Map<string, Set<string>>();
 	for (const line of ledgers.readEdges()) {
 		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
@@ -195,23 +191,25 @@ export function emitChat(chatId: string, deps: GraphDeps): EmissionStats {
 		}
 		for (const c of line.provenance) provenance.add(c);
 	}
-	for (const edge of tree.edges) {
+	for (const edge of findings.edges) {
 		const from = mapping.get(edge.from);
 		const to = mapping.get(edge.to);
 		if (!from || !to || from === to) continue; // unmapped endpoint — skip
-		const key = `${from}\u0000${to}\u0000requires`;
+		const key = `${from}\u0000${to}\u0000${edge.type}`;
 		const provenance = asserted.get(key);
 		if (provenance?.has(chatId)) continue; // already asserted by this chat
-		ledgers.appendEdge({ from, to, type: "requires", provenance: [chatId] });
+		ledgers.appendEdge({ from, to, type: edge.type, provenance: [chatId] });
 		if (provenance) provenance.add(chatId);
 		else asserted.set(key, new Set([chatId]));
 		stats.edges++;
 	}
 
-	// 5. Events, replayed in transcript order so the probe/check boundary is
-	// exact: quizzes BEFORE the first plan_init output are probes. Refs are
-	// chat-scoped (a quiz toolCallId or taught:<treeNodeId>) — a ref already
-	// in the ledger means this turn was folded before.
+	// 4. Events, rebuilt deterministically in transcript order so the
+	//    probe/check boundary is exact: quizzes BEFORE the first plan_init
+	//    output are probes. Refs are chat-scoped (a quiz toolCallId or
+	//    taught:<treeNodeId>) — a ref already in the ledger means this turn
+	//    was extracted before. The findings' attribution supplies the
+	//    nodeId, nothing else.
 	const seenRefs = new Set<string>();
 	for (const event of ledgers.readEvents()) {
 		if (event.chatId === chatId && event.ref) seenRefs.add(event.ref);
@@ -223,7 +221,7 @@ export function emitChat(chatId: string, deps: GraphDeps): EmissionStats {
 		if (part.name === "plan_init" && part.state === "output-available") planSeen = true;
 
 		if (part.name === "quiz" && part.state === "output-available") {
-			const event = quizEvent(part, chatId, mapping, planSeen, now);
+			const event = quizEvent(part, chatId, mapping, findings, planSeen, now);
 			if (event?.ref !== undefined && !seenRefs.has(event.ref)) {
 				ledgers.appendEvent(event);
 				seenRefs.add(event.ref);
@@ -237,6 +235,7 @@ export function emitChat(chatId: string, deps: GraphDeps): EmissionStats {
 			if (result?.ok && typeof input?.id === "string") {
 				const ref = `taught:${input.id}`;
 				if (!seenRefs.has(ref)) {
+					// mark_done is tagged with the tree node id — deterministic.
 					ledgers.appendEvent({
 						nodeId: mapping.get(input.id) ?? null,
 						kind: "taught",
@@ -251,16 +250,18 @@ export function emitChat(chatId: string, deps: GraphDeps): EmissionStats {
 		}
 	}
 
-	// 6. Checkpoint: this chat is folded through its current updatedAt.
+	// 5. Checkpoint: this chat is extracted through its current updatedAt.
 	ledgers.appendCheckpoint({ chatId, foldedAt: record.updatedAt });
 	return stats;
 }
 
-/** Build the ledger event for one answered quiz tool part (or null to skip). */
+/** Build the ledger event for one answered quiz tool part (or null to skip).
+ *  Deterministic in everything except the attribution-supplied nodeId. */
 function quizEvent(
 	part: ToolPartView,
 	chatId: string,
 	mapping: Map<string, string>,
+	findings: SessionFindings,
 	planSeen: boolean,
 	now: string,
 ): LedgerEvent | null {
@@ -275,9 +276,13 @@ function quizEvent(
 	else if (answer.correct === true) kind = planSeen ? "check-correct" : "probe-correct";
 	else kind = planSeen ? "check-incorrect" : "probe-miss";
 
+	// Tagged (input.nodeId) resolves deterministically through the mapping;
+	// attribution is the LLM judgment call for UNTAGGED probes only — the
+	// vision's open probe-attribution question, resolved retroactively.
 	const input = part.input as { nodeId?: unknown } | undefined;
-	const treeNodeId = typeof input?.nodeId === "string" ? input.nodeId : null;
-	const nodeId = treeNodeId !== null ? (mapping.get(treeNodeId) ?? null) : null;
+	const tagged = typeof input?.nodeId === "string" ? mapping.get(input.nodeId) : undefined;
+	const attributedId = findings.attribution.quiz[part.toolCallId];
+	const nodeId = tagged ?? (attributedId ? (mapping.get(attributedId) ?? null) : null);
 
 	const event: LedgerEvent = {
 		nodeId,
@@ -287,9 +292,37 @@ function quizEvent(
 		ref: part.toolCallId,
 	};
 	if (typeof answer.note === "string" && answer.note.length > 0) event.note = answer.note;
-	// The question text is the attribution input for untagged/unmapped probes.
+	// The question text is the attribution input for unattributed probes.
 	if (nodeId === null && typeof answer.questionText === "string") event.question = answer.questionText;
 	return event;
+}
+
+// ─── the trigger helper (v1: every N quiz answers — swappable seam) ──────────
+
+/**
+ * How many ANSWERED quiz parts in this chat are not yet in the ledger — i.e.
+ * new evidence since the last extraction. The v1 trigger (turn-service)
+ * fires the pipeline when this crosses EXTRACTION.everyNQuizAnswers. Every
+ * answered quiz always becomes an event (attribution only decides nodeId),
+ * so ref-not-in-ledger is a correct "not yet processed" marker.
+ */
+export function pendingQuizAnswers(chatId: string, deps: GraphDeps): number {
+	const record = deps.chatStore.getChat(chatId);
+	if (!record) return 0;
+	const seenRefs = new Set<string>();
+	for (const event of deps.graphStore.readEvents()) {
+		if (event.chatId === chatId && event.ref) seenRefs.add(event.ref);
+	}
+	let count = 0;
+	for (const part of toolParts(record.messages)) {
+		if (part.name !== "quiz" || part.state !== "output-available") continue;
+		const out = part.output;
+		if (typeof out !== "object" || out === null) continue;
+		const answer = out as Partial<QuestionAnswerData>;
+		if (answer.kind !== "quiz" || answer.dismissed === true) continue; // dismissed = not answered
+		if (!seenRefs.has(part.toolCallId)) count++;
+	}
+	return count;
 }
 
 // ─── derivation (reads only — everything below is recomputable) ─────────────
@@ -416,34 +449,4 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 	}
 
 	return { nodes, edges, nodeStates, sessions, nodeSessions };
-}
-
-// ─── catch-up ────────────────────────────────────────────────────────────────
-
-/**
- * Fold every chat whose updatedAt is newer than its checkpoint (partial
- * sessions deposit value — vision §1 "frequent updates"). Called at the top
- * of GET /api/graph; the chat-handler onFinish hook covers the live path.
- */
-export function foldStaleChats(deps: GraphDeps): number {
-	const checkpoints = new Map<string, string>();
-	for (const checkpoint of deps.graphStore.readCheckpoints()) {
-		const previous = checkpoints.get(checkpoint.chatId);
-		if (previous === undefined || checkpoint.foldedAt > previous) {
-			checkpoints.set(checkpoint.chatId, checkpoint.foldedAt);
-		}
-	}
-
-	let folded = 0;
-	for (const chat of deps.chatStore.listChats()) {
-		const foldedAt = checkpoints.get(chat.id);
-		if (foldedAt !== undefined && chat.updatedAt <= foldedAt) continue;
-		try {
-			emitChat(chat.id, deps);
-			folded++;
-		} catch (err) {
-			console.error(`[graph] fold failed for chat ${chat.id}:`, err);
-		}
-	}
-	return folded;
 }

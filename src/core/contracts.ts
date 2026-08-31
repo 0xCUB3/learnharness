@@ -83,12 +83,14 @@ export interface GraphEdge {
 	provenance: string[];
 }
 
-/** mappings.jsonl line — the naive-union identity map: a chat's tree node →
- * the graph node it folded into (the merge audit trail; v1 never merges two
- * sessions' tree nodes — W8 exact-title match aside). */
+/** mappings.jsonl line — the session→graph identity map: the extraction
+ *  pipeline's proposition (identified by its source id) → the graph node it
+ *  merged into. The merge audit trail: one line per (chat, graph node). */
 export interface NodeMapping {
 	chatId: string;
-	treeNodeId: string;
+	/** The writer's local id for the proposition — a plan-tree node id when
+	 *  tree-derived, else the extractor's proposition id ("p1", …). */
+	sourceId: string;
 	graphNodeId: string;
 }
 
@@ -125,17 +127,84 @@ export interface LedgerEvent {
 }
 
 /**
- * Store format (W4 implements src/store/graph.ts): JSONL ledgers at
- * config.LEDGER_FILES (nodes/edges/events/mappings/sessions). The derived
- * graph is rebuilt by reading the ledgers — store events, derive state.
- * sessions.jsonl tracks which chats have been folded into the graph
- * (emission checkpoint — never fold the same turn twice).
+ * Store format (src/store/graph.ts): JSONL ledgers at config.LEDGER_FILES
+ * (nodes/edges/events/mappings/sessions). The derived graph is rebuilt by
+ * reading the ledgers — store events, derive state. sessions.jsonl is the
+ * extraction checkpoint: which chats the extraction pipeline has processed,
+ * and through which updatedAt (never extract the same turns twice).
  *
- * v1 emission (naive union, deterministic, no LLM): a chat's plan tree folds
- * in — node title → statement (aliases empty), tree edges → requires edges,
- * mark_done → "taught" events; quiz parts with input.nodeId → probe / check
- * events (+ note); quiz parts without nodeId → events with nodeId null.
+ * The EXTRACTION PIPELINE is the sole graph writer (extractor → auditor →
+ * merger): the extractor proposes propositions/edges/attribution with
+ * verbatim evidence, the auditor drops anything unbacked, and the merger
+ * (core/graph.ts, deterministic) resolves identity against the existing
+ * ledgers and appends. See SessionFindings below.
  */
+
+// ─── Extraction findings (extractor output → audit → merger input) ───────────
+
+/** One proposed proposition — a node candidate. */
+export interface ExtractedProposition {
+	/** Extractor-local id ("p1", …) referenced by edges + attribution. */
+	id: string;
+	/** Canonical one-reasoning-step statement. */
+	statement: string;
+	/** Verbatim alternate phrasings from the session (merge aliases). */
+	aliases: string[];
+	kind: "truth" | "misconception";
+	/** The plan-tree node this came from, when it did (mapping provenance). */
+	treeNodeId?: string;
+	/** Verbatim transcript quotes backing the proposition. */
+	evidence: string[];
+}
+
+/** One proposed relation between two propositions. */
+export interface ExtractedEdge {
+	/** Proposition id that is the prerequisite / support. */
+	from: string;
+	/** Proposition id that depends on / is supported by `from`. */
+	to: string;
+	type: EdgeType;
+	/** Verbatim transcript quotes backing the relation. */
+	evidence: string[];
+}
+
+/** The extractor's event attribution — its ONLY say about events. The kinds,
+ * timestamps, idempotency refs, notes and question texts are all rebuilt
+ * deterministically by the merger from the transcript's quiz / mark_done
+ * tool parts; the LLM supplies exactly the judgment call: WHICH proposition
+ * each one is about (vision open question: probes attribute retroactively,
+ * against the whole transcript — a pre-tree probe can map to a proposition
+ * the tree only articulates later). */
+/** The extractor's event attribution — its ONLY say about events. Event
+ *  kinds, timestamps, idempotency refs, notes and question texts are all
+ *  rebuilt deterministically by the merger from the transcript's tool
+ *  parts, and TAGGED events (quiz nodeId, mark_done tree node) resolve
+ *  deterministically through the proposition mapping. The LLM supplies
+ *  exactly the one judgment call that needs it — the vision's open
+ *  probe-attribution question: WHICH proposition did an UNTAGGED probe
+ *  test? Answered retroactively against the whole transcript — a pre-tree
+ *  probe can map to a proposition the tree only articulates later. */
+export interface ExtractionAttribution {
+	/** UNTAGGED quiz toolCallId → proposition id; missing / null =
+	 *  unattributed (the event lands with nodeId null + the question text,
+	 *  exactly like unattributable probes always did). */
+	quiz: Record<string, string | null>;
+}
+
+/** The extractor's — and, filtered, the auditor's — output shape. */
+export interface SessionFindings {
+	propositions: ExtractedProposition[];
+	edges: ExtractedEdge[];
+	attribution: ExtractionAttribution;
+}
+
+/** The auditor's verdict: the verified subset, plus the drops (for the log —
+ *  the audit trail of what was rejected and why). */
+export interface AuditResult extends SessionFindings {
+	/** Dropped candidates: proposition id, edge "from→to", or attribution
+	 *  toolCallId — with the reason. */
+	dropped: { ref: string; reason: string }[];
+}
 
 /** Per-node state class for the home view (vision §1 "Home page") — derived,
  * never stored: taught if ANY taught event; else the LATEST quiz event decides

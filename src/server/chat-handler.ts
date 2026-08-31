@@ -1,9 +1,10 @@
 import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
+import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { createTeacherTools } from "../agent/tools.ts";
 import { stores } from "./stores.ts";
-import { buildTeacherContext, foldTurnIntoGraph, persistTurn, spawnTurnJobs } from "./turn-service.ts";
+import { buildTeacherContext, persistTurn, spawnTurnJobs, triggerExtraction } from "./turn-service.ts";
 
 /**
  * One chat turn: run the teacher agent over the client's message list and
@@ -18,6 +19,7 @@ import { buildTeacherContext, foldTurnIntoGraph, persistTurn, spawnTurnJobs } fr
  */
 
 const jobRunner = createJobRunner(stores);
+const extraction = createExtractionPipeline(stores);
 
 export async function handleChatRequest(req: Request, agent?: TeacherAgent): Promise<Response> {
 	let body: { chatId?: unknown; messages?: unknown };
@@ -46,7 +48,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		onFinish: ({ messages, isAborted }) => {
 			persistTurn(stores.chatStore, chatId, messages as UIMessage[], isAborted);
 			spawnTurnJobs(jobRunner, chatId, messages as UIMessage[]);
-			foldTurnIntoGraph(stores, chatId);
+			triggerExtraction(stores, extraction, chatId);
 		},
 	});
 }

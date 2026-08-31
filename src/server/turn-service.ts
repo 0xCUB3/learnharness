@@ -7,10 +7,11 @@
  *   buildTeacherContext — graph → instructions block (the W8 read channel)
  *   persistTurn        — the canonical state write (client + agent messages)
  *   spawnTurnJobs      — the async sub-agent protocol kick-off
- *   foldTurnIntoGraph  — session → graph consolidation (the write channel;
- *                        the extraction-pipeline stage swaps this body for
- *                        the extractor/auditor/merger trigger behind the
- *                        same seam)
+ *   triggerExtraction  — the graph write channel: fires the extraction
+ *                        pipeline (the sole graph writer) once a chat
+ *                        crosses the v1 quiz-answer threshold. The trigger
+ *                        mechanism is a v1 placeholder — this seam is the
+ *                        ONLY thing to swap when a better one lands.
  *
  * Logs are the minimal-observability baseline: one line per failure, tagged
  * [chat <id>] — structured logging lands behind these seams later.
@@ -18,9 +19,11 @@
 
 import type { UIMessage } from "ai";
 import { buildGraphContext } from "../core/graph-context.ts";
-import { emitChat, getGraph, type GraphDeps } from "../core/graph.ts";
+import { getGraph, pendingQuizAnswers } from "../core/graph.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
+import { EXTRACTION } from "../../config.ts";
 import type { JobRunner } from "../agent/subagents/runner.ts";
+import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
 
 /**
  * W8 (vision §1 "the graph as session context"): the learner's knowledge
@@ -66,16 +69,30 @@ export function spawnTurnJobs(jobRunner: JobRunner, chatId: string, messages: UI
 }
 
 /**
- * W4: fold this chat into the knowledge-graph ledgers (tree nodes / edges,
- * quiz outcomes, taught events) — synchronous but tiny (append-only JSONL),
- * and errors never touch the response. Skipped under tests: scripted chats
- * are fixtures, not knowledge.
+ * The graph write channel (vision §1 construction): the extraction pipeline
+ * (extractor → auditor → merger — the sole graph writer) runs ASYNC once a
+ * chat accumulates EXTRACTION.everyNQuizAnswers new answered quizzes since
+ * its last checkpoint. Fire-and-forget — never blocks the turn; failures
+ * are logged by the pipeline and leave the checkpoint untouched, so the
+ * next trigger re-runs the whole thing.
+ *
+ * v1 placeholder trigger, deliberately isolated in this one seam: swap
+ * here when a better mechanism lands — the pipeline is trigger-agnostic.
+ * Skipped under tests: scripted chats are fixtures, not knowledge (the
+ * pipeline itself is tested directly with mock models).
  */
-export function foldTurnIntoGraph(deps: GraphDeps, chatId: string): void {
+export function triggerExtraction(
+	deps: { chatStore: ChatStore; graphStore: GraphStore },
+	extraction: ExtractionPipeline,
+	chatId: string,
+): void {
 	if (process.env.NODE_ENV === "test") return;
 	try {
-		emitChat(chatId, deps);
+		if (pendingQuizAnswers(chatId, deps) < EXTRACTION.everyNQuizAnswers) return;
+		void extraction.runExtraction(chatId).catch((err) => {
+			console.error(`[chat ${chatId}] extraction pipeline failed:`, err);
+		});
 	} catch (err) {
-		console.error(`[chat ${chatId}] graph emission failed:`, err);
+		console.error(`[chat ${chatId}] extraction trigger failed:`, err);
 	}
 }

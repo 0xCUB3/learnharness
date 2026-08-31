@@ -1,15 +1,13 @@
 import type { GraphSnapshot } from "../core/contracts.ts";
-import { foldStaleChats, graphSnapshot } from "../core/graph.ts";
+import { graphSnapshot } from "../core/graph.ts";
 import { stores } from "./stores.ts";
 
 /**
- * Server-side graph entry for the home view (GET /api/graph): fold any chat
- * whose updatedAt outstrips its emission checkpoint first (partial sessions
- * deposit value), then return the snapshot. Today the fold is the naive-union
- * emission; the extraction-pipeline stage replaces the writer behind this
- * same read surface.
+ * Server-side graph entry for the home view (GET /api/graph). A PURE READ:
+ * the extraction pipeline (the sole graph writer) is triggered by quiz
+ * answers in sessions (turn-service), never from here — the home view
+ * reflects whatever the pipeline has merged so far.
  */
 export function graphView(): GraphSnapshot {
-	foldStaleChats(stores);
 	return graphSnapshot(stores);
 }

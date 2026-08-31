@@ -6,8 +6,8 @@
  *                                      session asserting the same (from,to,type)
  *                                      appends another line; reads merge)
  *   events.jsonl    LedgerEvent      — quiz outcomes + taught events
- *   mappings.jsonl  NodeMapping      — the naive-union identity map:
- *                                      (chatId, treeNodeId) → graphNodeId
+ *   mappings.jsonl  NodeMapping      — the session→graph identity map:
+ *                                      (chatId, sourceId) → graphNodeId
  *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
  *
  * Implements core/ports.ts GraphStore. data/graph/* is exclusively this
@@ -105,7 +105,7 @@ const isLedgerEvent = (v: unknown): v is LedgerEvent =>
 	isString(v.at);
 
 const isNodeMapping = (v: unknown): v is NodeMapping =>
-	isRecord(v) && isString(v.chatId) && isString(v.treeNodeId) && isString(v.graphNodeId);
+	isRecord(v) && isString(v.chatId) && isString(v.sourceId) && isString(v.graphNodeId);
 
 const isCheckpoint = (v: unknown): v is SessionCheckpoint =>
 	isRecord(v) && isString(v.chatId) && isString(v.foldedAt);

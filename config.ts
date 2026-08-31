@@ -15,7 +15,17 @@ export const PATHS = {
 } as const;
 
 /**
- * The LIVE graph store (src/store/graph.ts) — owned by the app's emission
+ * The extraction pipeline (vision §1 construction): the sole graph writer.
+ * Triggered per chat once this many NEW quiz answers have landed since the
+ * chat's last extraction checkpoint (LH_EXTRACT_N). The trigger mechanism is
+ * a v1 placeholder — deliberately isolated behind one seam
+ * (server/turn-service.ts) so it can be swapped without touching the
+ * pipeline.
+ */
+export const EXTRACTION = { everyNQuizAnswers: Number(process.env.LH_EXTRACT_N ?? 3) } as const;
+
+/**
+ * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction
  * pipeline. Line shapes: src/core/contracts.ts.
  */
 export const LEDGER_FILES = {
