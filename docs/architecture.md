@@ -57,7 +57,7 @@ graph TB
 | Extensions | explicitly via `additionalExtensionPaths`; imports of old `@mariozechner/*` names resolve through pi's loader aliases |
 | agentDir | `data/agent/` — hermetic. `auth.json` and `models-store.json` are **symlinks** to `~/.pi/agent/` (credential + catalog sharing only) |
 | Sessions | `data/sessions/` via `SessionManager.create(cwd, sessionDir)` |
-| Model | from `data/agent/settings.json` (currently openrouter/z-ai/glm-5.3, thinking high) |
+| Model | from `data/agent/settings.json` (currently openrouter/z-ai/glm-5.3-flash, thinking medium) |
 | Research tool | deliberately absent in v0 — the system prompt's accuracy rule is adapted accordingly (flag uncertainty, never bluff) |
 
 Run: `npm run teach` → full pi TUI, quiz popups, session persisted in `data/sessions/`.
