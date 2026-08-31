@@ -1,69 +1,170 @@
 # learning-harness
 
-A standalone learning harness built on the [pi](https://github.com/earendil-works/pi-mono) agent SDK: a teacher agent, durable session artifacts, and a derived knowledge graph of what the learner knows, what they only think they know, and what to learn next.
+A standalone learning harness: a **teacher agent** (Next.js + Vercel AI SDK, models via OpenRouter), graded quiz/ask interactions, a formal **session plan tree** the teacher authors and edits live, and a persistent cross-session **knowledge graph** of what the learner knows — the graph is the app's home page.
 
-Design + architecture: [`docs/architecture.md`](docs/architecture.md). Lineage: built up from the Obsidian-based POC (`~/Desktop/Obsidian/vault/π/learn`) — same teaching methodology, own interface and data pipeline.
+Not a chat app with a graph bolted on: sessions are probe→teach lessons, the plan tree is a structured, agent-editable object, quiz outcomes feed the graph as ledger events, and the graph feeds back as the teacher's context so probing compounds across sessions.
+
+- Living design doc (all decisions): [`docs/vision.md`](docs/vision.md)
+- Build plan + wave/gate results: [`docs/plan.md`](docs/plan.md)
+- [`docs/architecture.md`](docs/architecture.md) is the **pre-pivot v0 scaffold** (pi-based, Fastify/Vite) — kept as history only; everything current is below.
 
 ## Commands
 
 ```bash
-npm install        # once
+npm install          # once
 
-# ── interface ──────────────────────────────────────────────────────────
-npm run dev        # web UI: Fastify server (port 8787) + Vite dev server (5173)
-npm start          # build the web UI and serve it from the API server
-npm run teach      # terminal TUI teaching session (alternative interface)
+npm run dev          # http://localhost:3000
+npm run build        # production build
+npm start            # serve the production build
 
-# ── health ─────────────────────────────────────────────────────────────
-npm run doctor     # smoke test of the terminal (TUI) teacher wiring
-npm run doctor:web # smoke test of the web (dispatch-mode) teacher wiring
+npm test             # all tests (node:test via tsx; deterministic, no LLM)
+npm run typecheck    # tsc --noEmit
 
-# ── tests ──────────────────────────────────────────────────────────────
-npm test           # unit + scripted integration (deterministic, no LLM, fast)
-npm run test:unit  # just the pure-logic unit tests
-npm run e2e:live   # LIVE smoke test against a real LLM (server must be running;
-                   # costs tokens, has model variance — manual, never a gate)
+npx tsx scripts/bench-graph.ts   # force-layout benchmark (synthetic graphs)
 
-# ── pipeline (later phases) ────────────────────────────────────────────
-npm run ingest -- <session.jsonl>   # Stage 1: normalize a session into the canonical doc
-npm run graph                        # ledger stats
+# ── legacy v0 pipeline (dormant, see "Legacy scaffold" below) ──────────
+npm run ingest -- <session.jsonl>   # normalize a pi session JSONL
+npm run graph                       # ledger stats
 ```
 
-## Testing strategy
+## Environment (`.env.local`)
 
-Three layers, LLM only at the top:
+| Variable | Purpose |
+|---|---|
+| `OPENROUTER_API_KEY` | required — all LLM calls go through OpenRouter |
+| `LH_MODEL` | teacher model (default `anthropic/claude-sonnet-4.5`) |
+| `LH_RESEARCH_MODEL`, `LH_DEMO_MODEL` | per-sub-agent overrides (fall back to `LH_MODEL`) |
+| `LH_VISUAL_MODEL` | visual-maker model — must be **vision-capable** (it looks at rendered SVGs) |
+| `GOOGLE_SEARCH_API_KEY` + `GOOGLE_CSE_ID` | researcher's `web_search` (Google Custom Search) |
+| `CHROME_PATH` | optional explicit Chrome path for headless verification (puppeteer-core uses system Chrome; nothing is downloaded) |
 
-1. **Unit** (`tests/question-core.test.ts`, `tests/bridge.test.ts`) — pure logic: grading, exact-set matching, option shuffling/index resolution, answer formatting, pending-question re-arm, the bridge state machine. No pi, no network.
-2. **Scripted integration** (`tests/integration-quiz.test.ts`, `tests/server.test.ts`) — the full pi agent loop with real extensions and real session persistence, but the LLM replaced by a scripted fake model (`src/testing/scripted-model.ts`). Deterministically verifies the quiz dispatch contract: question persisted → tool returns immediately → agent ends turn → answer graded → `[Quiz answer]` user message → agent continues → resume re-arms pending questions.
-3. **Live smoke** (`scripts/e2e.ts`) — real model over real WebSocket. For verifying actual model *behavior* (does it follow the end-your-turn convention?) — which is a prompt-engineering question, verified by using the app, not by CI.
+## Architecture
+
+```mermaid
+graph TB
+    subgraph SESSION_UI["Browser · session page (app/chat/[id])"]
+        TR["Transcript — streamdown markdown,<br/>KaTeX \\(..\\)/\\[..\\], mermaid,<br/>probe→teach phase divider"]
+        DOCK["QuestionDock / AnsweredCard<br/>quiz graded client-side<br/>(question-core)"]
+        TREE["TreePanel — plan tree,<br/>topo order, done/current/upcoming"]
+        ART["Artifact cards — research brief,<br/>demo in sandboxed iframe, SVG"]
+        COMP["Composer — gated while a<br/>question or job is pending"]
+    end
+
+    subgraph HOME_UI["Browser · home page (app/)"]
+        GV["GraphView — sigma.js + forceAtlas2,<br/>run-then-freeze, node state colors"]
+    end
+
+    subgraph ROUTES["Next.js route handlers (app/api)"]
+        RCHAT["POST /api/chat"]
+        RCHATS["/api/chats · /api/chats/[id]"]
+        RGRAPH["GET /api/graph"]
+        RJOBS["GET /api/jobs?chatId"]
+    end
+
+    subgraph TEACHER["Teacher agent (src/agent)"]
+        CH["chat-handler.ts (framework-free)<br/>graph context · persist · spawn jobs · emit"]
+        TA["ToolLoopAgent<br/>system-prompt.md + prompts/*.md fragments<br/>+ graph-context block"]
+        QT["quiz · ask_user_question<br/>(client-side tools, no execute)"]
+        PT["plan_* tools (server-side,<br/>mutate the chat's tree)"]
+        JT["research · demo · visual<br/>(client-side tools, job protocol)"]
+    end
+
+    subgraph SUBS["Background sub-agents (src/agent/subagents)"]
+        RES["researcher<br/>web_search + web_fetch"]
+        DEMO["demo-builder<br/>write → headless-run → fix"]
+        VIS["visual-maker<br/>write → render → look"]
+    end
+
+    subgraph STORE["File stores (data/, never in git)"]
+        CHATS[("data/chats/*.json<br/>UIMessages + plan tree")]
+        JOBS[("data/jobs/*.json")]
+        LEDG[("data/graph/*.jsonl<br/>nodes/edges/events/mappings/sessions")]
+    end
+
+    subgraph PIPE["Graph pipeline (src/core)"]
+        EMIT["graph.ts emitChat<br/>naive-union, idempotent,<br/>exact/alias match"]
+        GCTX["graph-context.ts<br/>hotspots + 1-hop when large"]
+        SNAP["graphSnapshot · foldStaleChats"]
+    end
+
+    TR & COMP & DOCK --> RCHAT
+    GV --> RGRAPH
+    ART --> RJOBS
+    RCHATS --> CHATS
+    TREE -.reads plan tool outputs.- TR
+
+    RCHAT --> CH
+    CH --> TA
+    TA --> QT & PT & JT
+    PT --> CHATS
+    CH -->|"onFinish: saveMessages"| CHATS
+    CH -->|"onFinish: spawnPendingJobs"| RES & DEMO & VIS
+    CH -->|"onFinish: emitChat"| EMIT
+
+    RES & DEMO & VIS --> JOBS
+    RES & DEMO & VIS -->|"rewrite tool part<br/>→ output-available"| CHATS
+
+    EMIT --> LEDG
+    LEDG --> GCTX -->|"appended to instructions"| TA
+    LEDG --> SNAP --> RGRAPH
+```
+
+**Core invariant, carried over from the original design:** the graph is never asserted by an LLM post-hoc guesswork — v1 emission is deterministic code over structured tool data. The teacher stays a teacher; everything below the ledgers is derived.
 
 ## Layout
 
 ```
-teacher/system-prompt.md        the teacher's entire behavior (teach methodology + tool guidelines)
-extensions/
-  core/question-core.ts         pure quiz/ask logic (shared by terminal + web)
-  core/bridge.ts                in-process bridge: server ↔ extensions (answer/dismiss/re-arm)
-  quiz.ts, ask-user-question.ts terminal mode (blocking pi-tui components)
-  quiz-web.ts, ask-web.ts       web dispatch mode (non-blocking; answer arrives as user message)
+app/                            Next.js App Router (UI + API route handlers)
+components/                     session + home UI, question dock, tree panel,
+                                graph view, artifact renderers (registry: artifacts/)
 src/
-  teacher/create-session.ts     pi SDK bootstrap (hermetic agent; tui | web extension sets)
-  server/index.ts               Fastify + WebSocket server embedding the teacher agent
-  shared/protocol.ts            WS/REST protocol types (server ↔ browser)
-  testing/scripted-model.ts     deterministic fake LLM for integration tests
-  schema.ts                     knowledge-graph data model
-  ledger.ts                     append-only JSONL ledgers
-  extract/                      normalize (✅) · extract · merge (stubs, specified)
-  derive.ts                     derived state (known-set now; understanding parked)
-  queries/                      what-next (stub)
-web/                            Vite + React frontend (home view, session view, quiz cards)
-data/agent/                     hermetic pi agentDir (auth + model store are symlinks to ~/.pi/agent)
-data/sessions/                  session JSONLs (canonical source of truth)
-data/graph/                     ledgers + canonical documents
+  agent/
+    system-prompt.md            base teacher behavior (the teach methodology)
+    prompts/*.md                composed fragments (plan tree, jobs, phases,
+                                demos, graph context) — one per workstream
+    teacher-agent.ts            ToolLoopAgent bootstrap (model injectable for tests)
+    tools.ts                    per-request tool registry
+    tools/plan.ts               plan_init / add_node / … / set_current / mark_done
+    tools/web.ts                web_search (Google CSE) + web_fetch (Readability)
+    tools/jobs.ts               research / demo / visual tool surfaces
+    subagents/                  researcher · demo-builder · visual-maker,
+                                runner (async protocol), headless Chrome helper
+  server/chat-handler.ts       one chat turn: stream, persist, spawn, emit
+  core/contracts.ts             THE contracts file — types + protocol docs
+  core/                         question-core, plan-tree, phases, pending,
+                                graph (emission/derivation), graph-context, math delims
+  store/                        chats · graph ledgers · jobs (plain fs, no framework)
+scripts/bench-graph.ts          sigma/forceAtlas2 layout benchmark
+data/                           chats/ · graph/ · jobs/ — runtime state, git-ignored
 ```
 
-## The web dispatch shape (why sessions are resumable mid-quiz)
+## Key mechanisms
 
-In web mode, `quiz`/`ask_user_question` never block: the tool validates, shuffles, and grades-armed, persists an `lh_question` custom entry (excluded from LLM context, so the correct answer is safe there), and returns immediately with "end your turn". The learner's answer comes back through the server → bridge → extension, which grades it, persists `lh_question_answered` (gold-standard data for the future extractor), and sends the graded result into the session as a user message. Because nothing blocks, a session can be exited and resumed mid-question: pending state lives in the session file itself and is re-armed on resume.
+**Client-side question tools.** `quiz` and `ask_user_question` have no server `execute`: the tool call streams to the browser in `input-available` state, the learner answers in the dock, the client grades via `question-core` and returns the verdict with `addToolOutput` — which fires the SDK continuation so the teacher resumes mid-turn. A pending quiz part persisted in the chat record is exactly what makes **resume mid-question free**.
 
-Pi is a library dependency here (pinned in package.json) — this is a separate pi from any global install. Credentials and the model catalog are shared read-mostly via symlinks; everything else is the harness's own. Nothing under `data/` is ever tracked by git.
+**The formal plan tree.** The teacher authors the session's dependency tree with schema-validated tools (`plan_init`, `plan_add_node`, … `plan_set_current`, `plan_mark_done`). The tree persists in the chat record; the tree panel renders from the latest plan tool output in the transcript. Quiz calls can tag a `nodeId`, so outcomes feed the graph per-node.
+
+**The async sub-agent protocol.** `research` / `demo` / `visual` are also client-side tools: the server turn ends at the call, `onFinish` spawns a background runner (fire-and-forget), the job store tracks a live activity line, the client polls `/api/jobs` while parts are pending, and on completion the runner rewrites the tool part in the chat record to `output-available` — the client re-syncs, the continuation fires, the teacher receives the result as a normal tool output. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable `LH_VISUAL_MODEL`).
+
+**The live graph.** Every completed turn folds the chat into append-only JSONL ledgers (`emitChat`: tree nodes/edges, quiz outcome events, taught events — idempotent, checkpointed, so partial sessions still deposit value). The home view derives node states from the ledgers and lays them out with forceAtlas2 (run-then-freeze — no idle simulation). At session start the derived graph is rendered into a compact markdown block appended to the teacher's instructions (`buildGraphContext`) — whole graph while small, hotspots + 1-hop neighborhood past 150 nodes.
+
+## Legacy scaffold (dormant)
+
+The pre-pivot v0 pipeline — `src/ledger.ts`, `src/cli.ts` (`npm run ingest` / `graph`), `src/extract/` (normalize ✅, extract/merge stubs), `src/schema.ts`, `src/derive.ts`, `src/queries/` — is kept compiling as reference for a future **retroactive bootstrap** over the old pi session JSONLs (`data/sessions/`, bootstrap input only). It writes to `data/legacy-graph/` and shares nothing with the live store (`data/graph/`, owned by `src/store/graph.ts` per the `contracts.ts` shapes). See `docs/architecture.md` for its design.
+
+## Testing
+
+All deterministic, no LLM (models are injected as `MockLanguageModelV4` where an agent loop is under test):
+
+1. **Pure core units** — plan-tree ops, question grading, phases, graph emission, graph-context selection, math delimiters.
+2. **Server flows** — `chat-handler` driven directly with a scripted mock model: persistence, job spawning, part rewriting, continuation.
+3. **Sub-agent loops** — researcher/demo-builder/visual-maker with mock models + fake headless API.
+4. **Render tests** — transcript, cards, dock, composer, tree panel via React server-side rendering.
+
+## Lineage
+
+The teaching methodology comes from the Obsidian-based POC (`~/Desktop/Obsidian/vault/π/learn`; its `knowledge graph design.md` is still canonical for the epistemic model). The harness was originally built on the pi agent SDK, then pivoted to standalone Next.js + Vercel AI SDK (see the amendments table in `docs/vision.md`).
+
+## Data
+
+Nothing under `data/` is ever tracked by git. Chats, graph ledgers, and jobs are plain files (JSON/JSONL) — inspect them freely; they are the canonical records.
