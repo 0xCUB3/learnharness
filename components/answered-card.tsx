@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
-import type { QuestionAnswerData } from "@/src/core/question-core";
+import type { QuestionAnswerData } from "@/src/core";
 
 /**
  * Static rendering of an answered question (tool part in `output-available`).

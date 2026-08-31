@@ -3,12 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckIcon, ChevronsRightIcon, ListTreeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-	planNodeStatus,
-	type PlanNode,
-	type PlanNodeStatus,
-	type PlanTree,
-} from "@/src/core/contracts";
+import { planNodeStatus, type PlanNode, type PlanNodeStatus, type PlanTree } from "@/src/core";
 
 /**
 * The persistent plan-tree panel (vision §2 "Persistent tree view", W7).

@@ -2,7 +2,7 @@
 
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ChatActionsContext } from "@/components/chat";
-import type { ArtifactPartProps, DemoResult, JobRecord } from "@/src/core/contracts";
+import type { ArtifactPartProps, DemoResult, JobRecord } from "@/src/core";
 
 /**
  * Demo artifact card (W6): while the part is input-available, a job activity

@@ -20,9 +20,7 @@ import Link from "next/link";
 import { WaypointsIcon } from "lucide-react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
-import type { GraphNode } from "@/src/core/contracts";
-import type { GraphSnapshot, NodeStateClass } from "@/src/core/graph";
-import { seededRandom } from "@/src/core/question-core";
+import { seededRandom, type GraphNode, type GraphSnapshot, type NodeStateClass } from "@/src/core";
 
 /** Per-state visuals: color token + node size (WebGL wants hex, not oklch). */
 const STATE_TOKENS: Record<NodeStateClass, { cssVar: string; size: number }> = {

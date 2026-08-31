@@ -1,14 +1,11 @@
 /**
- * question-core — pure logic for quiz/ask questions. No framework imports,
- * no UI: everything here is deterministic and unit-testable.
+ * question-core — the question contract + pure grading logic. No framework
+ * imports, no UI: everything here is deterministic and unit-testable.
  *
- * Used by:
- *   - the TUI quiz extension (extensions/quiz.ts) — blocking terminal UI
- *   - the web app (AI SDK client-side tools) — the browser validates,
- *     shuffles, grades with these functions, then sends the verdict back
- *     as the tool output via addToolOutput
- *
- * The web shape (AI SDK):
+ * The zod schemas below are the tool INPUT contracts (agent/tools declares
+ * the tools against them); the browser validates, shuffles, and grades with
+ * these functions, then sends the verdict back as the tool output via
+ * addToolOutput:
  *   1. The teacher model calls the `quiz` tool (question + options +
  *      correctAnswer + explanation). No server execute → the call lands in
  *      the UI as a typed tool part in `input-available` state.
@@ -20,6 +17,8 @@
  * exited and resumed mid-question for free.
  */
 
+import { z } from "zod";
+
 // ─── shared types ───────────────────────────────────────────────────────────
 
 export interface QuizOption {
@@ -27,6 +26,69 @@ export interface QuizOption {
 	value: string;
 	description?: string;
 }
+
+// ─── tool input schemas (the question contract) ─────────────────────────────
+// Parameter names mirror the prompt docs exactly — keep them in sync.
+
+const optionSchema = z.object({
+	label: z.string().describe("Display label for the answer option"),
+	value: z
+		.string()
+		.optional()
+		.describe("Optional machine-readable value returned for the option. Defaults to the label."),
+	description: z.string().optional().describe("Optional extra detail shown below the option"),
+});
+
+export const quizInputSchema = z.object({
+	question: z.string().describe("The single quiz question to ask"),
+	options: z
+		.array(optionSchema)
+		.min(2)
+		.describe(
+			"The answer options (2 or more). Options only — no free-text mode. Never add your own 'I don't know' option.",
+		),
+	correctAnswer: z
+		.union([z.string(), z.array(z.string())])
+		.describe(
+			"The correct answer as the option value(s) — the `value` field of the option you intend. " +
+				"Single-select: one string. Multi-select: an array; the learner is only correct if their selection matches this set exactly.",
+		),
+	explanation: z
+		.string()
+		.describe("Explanation revealed AFTER the learner answers. Always say why the correct answer is correct."),
+	multiSelect: z.boolean().optional().describe("Set true only when more than one option is correct"),
+	details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
+	nodeId: z
+		.string()
+		.optional()
+		.describe(
+			"Optional plan-tree node id this question assesses. Set whenever the question targets a tree node — " +
+				"the outcome feeds the learner's knowledge graph. Omit for ad-hoc probes.",
+		),
+});
+
+export const askInputSchema = z.object({
+	question: z.string().describe("The single question to ask"),
+	mode: z
+		.enum(["single-select", "multi-select", "text"])
+		.optional()
+		.describe(
+			"Answer mode. Omit for single-select when options are given, or text when they are not.",
+		),
+	options: z
+		.array(optionSchema)
+		.min(2)
+		.optional()
+		.describe(
+			"Optional multiple-choice options. Omit for free-form text input. The learner can always choose 'Other' and type a custom answer.",
+		),
+	multiSelect: z.boolean().optional().describe("Set true to allow multiple answers to be selected"),
+	details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
+});
+
+export type QuizToolInput = z.infer<typeof quizInputSchema>;
+export type AskToolInput = z.infer<typeof askInputSchema>;
+
 
 /** A real selected answer, in the order the options were displayed. */
 export interface OptionAnswer {

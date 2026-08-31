@@ -36,7 +36,7 @@ import {
   type PluginConfig,
 } from "streamdown";
 import { MermaidError } from "@/components/mermaid-error.tsx";
-import { transformMathDelimiters } from "@/src/core/math-delims.ts";
+import { transformMathDelimiters } from "@/src/core";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];

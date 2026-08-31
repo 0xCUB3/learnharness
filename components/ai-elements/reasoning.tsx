@@ -21,7 +21,7 @@ import {
 } from "react";
 import { Streamdown } from "streamdown";
 
-import { transformMathDelimiters } from "@/src/core/math-delims";
+import { transformMathDelimiters } from "@/src/core";
 import { mermaidOptions, streamdownPlugins } from "./message";
 import { Shimmer } from "./shimmer";
 

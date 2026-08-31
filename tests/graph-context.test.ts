@@ -22,7 +22,7 @@ import { after, describe, it } from "node:test";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { GraphEdge, GraphNode, LedgerEvent } from "../src/core/contracts.ts";
-import type { NodeStateClass } from "../src/core/graph.ts";
+import type { NodeStateClass } from "../src/core/contracts.ts";
 import { emitChat, type GraphLedgers } from "../src/core/graph.ts";
 import {
 	buildGraphContext,

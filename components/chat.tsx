@@ -20,11 +20,8 @@ import { Composer } from "@/components/composer";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import { TreePanel } from "@/components/tree-panel";
-import type { TeacherUIMessage } from "@/src/agent/ui-message";
-import type { ArtifactPartProps } from "@/src/core/contracts";
-import type { QuestionAnswerData } from "@/src/core/question-core";
-import { findPendingJobCall, findPendingToolCall } from "@/src/core/pending";
-import { phaseAt } from "@/src/core/phases";
+import type { ArtifactPartProps, QuestionAnswerData, TeacherUIMessage } from "@/src/core";
+import { findPendingJobCall, findPendingToolCall, phaseAt } from "@/src/core";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
@@ -101,7 +98,7 @@ export function Chat({
 		) {
 			void sendMessage();
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only by design
+		// mount-only by design
 	}, []);
 
 	const pending = findPendingToolCall(messages);
@@ -318,7 +315,7 @@ function DockOverlay({
 			setExpanded(isAtBottom);
 			if (isAtBottom) void scrollToBottom();
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- fire only when a NEW question lands
+		// fire only when a NEW question lands
 	}, [pendingId]);
 
 	// ── Collapse state machine with hysteresis ──

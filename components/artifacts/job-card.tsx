@@ -3,7 +3,7 @@
 import { useContext, useEffect, useRef, useState } from "react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { ChatActionsContext } from "@/components/chat";
-import type { ArtifactPartProps, JobRecord, ResearchResult } from "@/src/core/contracts";
+import type { ArtifactPartProps, JobRecord, ResearchResult } from "@/src/core";
 
 /**
  * The research job card (contracts.ts "THE ASYNC PROTOCOL" §4).

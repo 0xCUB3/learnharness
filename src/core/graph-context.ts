@@ -22,7 +22,8 @@
  */
 
 import type { GraphEdge, GraphNode } from "./contracts.ts";
-import { deriveNodeStates, getGraph, type DerivedGraph, type NodeStateClass } from "./graph.ts";
+import { deriveNodeStates, getGraph, type DerivedGraph } from "./graph.ts";
+import type { NodeStateClass } from "./contracts.ts";
 
 /** The section header the teacher is taught to recognize (50-graph-context.md). */
 export const GRAPH_CONTEXT_HEADER = "LEARNER KNOWLEDGE GRAPH (auto-generated)";

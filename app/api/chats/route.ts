@@ -1,4 +1,4 @@
-import { createChat, listChats, titleFromPrompt } from "@/src/store/chats";
+import { createChat, listChats, titleFromPrompt } from "@/src/server";
 
 export async function GET() {
 	return Response.json({ chats: listChats() });

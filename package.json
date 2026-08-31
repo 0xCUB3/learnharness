@@ -9,6 +9,7 @@
 		"build": "next build",
 		"start": "next start",
 		"test": "NODE_ENV=test tsx --test tests/*.test.ts tests/*.test.tsx",
+		"lint": "eslint .",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
@@ -54,11 +55,16 @@
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
+		"@next/eslint-plugin-next": "^16.3.3",
 		"@tailwindcss/postcss": "^4.3.3",
 		"@types/node": "^24.0.0",
 		"@types/react": "^19.2.18",
 		"@types/react-dom": "^19.2.4",
 		"@types/turndown": "^5.0.6",
+		"@typescript-eslint/parser": "^8.68.0",
+		"eslint": "^9.39.5",
+		"eslint-import-resolver-typescript": "^4.4.5",
+		"eslint-plugin-import": "^2.32.0",
 		"tailwindcss": "^4.3.3",
 		"tsx": "^4.19.0",
 		"typescript": "^5.6.0"

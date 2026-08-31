@@ -2,35 +2,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { UIMessage } from "ai";
 import { PATHS } from "../../config.ts";
-import type { PlanTree } from "../core/contracts.ts";
+import type { ChatRecord, ChatSummary, PlanTree } from "../core/contracts.ts";
 
 /**
- * Chat store — one JSON file per chat in data/chats/.
- *
- * The stored messages are full AI SDK UIMessages (parts included). This is
- * the canonical session record: a pending quiz is a tool part in
- * `input-available` state, which is exactly what makes resume-mid-question
- * free. The extraction pipeline (src/extract) will read these later; old pi
- * sessions (data/sessions) remain bootstrap input only.
+ * Chat store — one JSON file per chat in data/chats/. The record shape lives
+ * in core/contracts (ChatRecord/ChatSummary); this module is the fs adapter's
+ * implementation (the storage port formalizes this in a later stage).
  */
-
-export interface ChatRecord {
-	id: string;
-	title: string;
-	createdAt: string;
-	updatedAt: string;
-	messages: UIMessage[];
-	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
-	tree?: PlanTree;
-}
-
-export interface ChatSummary {
-	id: string;
-	title: string;
-	createdAt: string;
-	updatedAt: string;
-	messageCount: number;
-}
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);

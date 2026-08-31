@@ -21,7 +21,16 @@
  */
 
 import { isToolUIPart, type UIMessage } from "ai";
-import type { GraphEdge, GraphNode, LedgerEvent, LedgerEventKind, PlanTree, PlanToolResult } from "./contracts.ts";
+import type {
+	GraphEdge,
+	GraphNode,
+	GraphSnapshot,
+	LedgerEvent,
+	LedgerEventKind,
+	NodeStateClass,
+	PlanTree,
+	PlanToolResult,
+} from "./contracts.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import { getChat, listChats } from "../store/chats.ts";
 import { graphLedgers, newGraphNodeId } from "../store/graph.ts";
@@ -308,9 +317,6 @@ export function getGraph(): DerivedGraph {
 	return { nodes, edges: merged, events: graphLedgers.readEvents() };
 }
 
-/** Per-node state classes for the home view (vision §1 "Home page"). */
-export type NodeStateClass = "taught" | "known" | "missed" | "dont-know" | "candidate";
-
 const QUIZ_EVENT_KINDS: ReadonlySet<string> = new Set([
 	"probe-correct",
 	"check-correct",
@@ -359,17 +365,7 @@ export function deriveNodeStates(nodes: GraphNode[], events: LedgerEvent[]): Rec
 
 // ─── the /api/graph payload ──────────────────────────────────────────────────
 
-export interface GraphSnapshot {
-	nodes: GraphNode[];
-	edges: GraphEdge[];
-	nodeStates: Record<string, NodeStateClass>;
-	/** chatId → title, for every chat that touched the graph. */
-	sessions: Record<string, string>;
-	/** nodeId → chatIds that touched the node (click-through provenance). */
-	nodeSessions: Record<string, string[]>;
-}
-
-/** Everything the home graph view needs, in one fetch. */
+/** Everything the home graph view needs, in one fetch (shape: contracts). */
 export function graphSnapshot(): GraphSnapshot {
 	const { nodes, edges, events } = getGraph();
 	const nodeStates = deriveNodeStates(nodes, events);

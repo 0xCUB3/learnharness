@@ -1,4 +1,4 @@
-import { listJobs } from "@/src/store/jobs";
+import { listJobs } from "@/src/server";
 
 /**
  * Job status polling endpoint (contracts.ts "THE ASYNC PROTOCOL" §4): the

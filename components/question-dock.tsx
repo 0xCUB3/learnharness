@@ -5,7 +5,6 @@ import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
-import type { AskToolInput, QuizToolInput } from "@/src/agent/tools";
 import {
 	buildAnswer,
 	coerceCorrectAnswer,
@@ -14,10 +13,12 @@ import {
 	seededRandom,
 	shuffleOptions,
 	type AnswerRequest,
+	type AskToolInput,
 	type QuestionAnswerData,
 	type QuestionData,
 	type QuestionMode,
-} from "@/src/core/question-core";
+	type QuizToolInput,
+} from "@/src/core";
 
 /**
  * The question dock — a pending quiz/ask REPLACES the chat composer: the

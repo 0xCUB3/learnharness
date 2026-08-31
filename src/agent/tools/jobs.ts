@@ -75,7 +75,6 @@ export const visualTool = tool({
  * everything from the chat record by toolCallId) — the ctx parameter keeps
  * the createTeacherTools factory shape stable.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function jobTools(ctx: TeacherToolContext): ToolSet {
 	return {
 		research: researchTool,

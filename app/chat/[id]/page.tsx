@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { Chat } from "@/components/chat";
-import { getChat } from "@/src/store/chats";
-import type { TeacherUIMessage } from "@/src/agent/ui-message";
+import type { TeacherUIMessage } from "@/src/core";
+import { getChat } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 

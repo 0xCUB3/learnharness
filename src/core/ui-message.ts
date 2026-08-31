@@ -1,6 +1,5 @@
 import type { UIMessage } from "ai";
-import type { AskToolInput, QuizToolInput } from "./tools.ts";
-import type { QuestionAnswerData } from "../core/question-core.ts";
+import type { AskToolInput, QuestionAnswerData, QuizToolInput } from "./question-core.ts";
 
 /**
  * The typed UI message for the teacher chat — gives the frontend typed tool

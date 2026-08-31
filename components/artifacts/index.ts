@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import type { ArtifactPartProps } from "@/src/core/contracts";
+import type { ArtifactPartProps } from "@/src/core";
 import { DemoCard } from "@/components/artifacts/demo-card";
 import { JobCard } from "@/components/artifacts/job-card";
 import { PlanDivider } from "@/components/artifacts/plan-divider";

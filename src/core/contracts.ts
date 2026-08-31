@@ -1,11 +1,10 @@
 /**
- * Shared contracts — the single source of truth every workstream codes against.
- * Pure types + protocol docs; no runtime code, no imports (safe everywhere:
- * server, client, tests). See docs/plan.md (waves) and docs/vision.md (§ refs).
- *
- * Owners: orchestrator wrote this file. Workers: do NOT edit it; if a contract
- * looks wrong or is missing something you need, ask the orchestrator.
+ * Shared contracts — the single source of truth every component codes against.
+ * Pure types + protocol docs; no runtime code, type-only imports (safe
+ * everywhere: server, client, tests). See docs/vision.md (§ refs).
  */
+
+import type { UIMessage } from "ai";
 
 // ─── Plan tree (vision §2 "formal plan tree") ────────────────────────────────
 // A session-scoped dependency tree authored by the teacher via plan tools.
@@ -120,6 +119,47 @@ export interface LedgerEvent {
  * mark_done → "taught" events; quiz parts with input.nodeId → probe / check
  * events (+ note); quiz parts without nodeId → events with nodeId null.
  */
+
+/** Per-node state class for the home view (vision §1 "Home page") — derived,
+ * never stored: taught if ANY taught event; else the LATEST quiz event decides
+ * (known / missed / dont-know); a node with no events is a candidate. */
+export type NodeStateClass = "taught" | "known" | "missed" | "dont-know" | "candidate";
+
+/** The GET /api/graph payload — everything the home view's PURE renderer needs. */
+export interface GraphSnapshot {
+	nodes: GraphNode[];
+	edges: GraphEdge[];
+	nodeStates: Record<string, NodeStateClass>;
+	/** chatId → title, for every chat that touched the graph. */
+	sessions: Record<string, string>;
+	/** nodeId → chatIds that touched the node (click-through provenance). */
+	nodeSessions: Record<string, string[]>;
+}
+
+// ─── Chat records (the session store's on-disk format) ───────────────────────
+
+/** One persisted session: data/chats/<id>.json. The stored messages are full
+ * AI SDK UIMessages (parts included) — the canonical session record: a
+ * pending quiz is a tool part in `input-available` state, which is exactly
+ * what makes resume-mid-question free. */
+export interface ChatRecord {
+	id: string;
+	title: string;
+	createdAt: string;
+	updatedAt: string;
+	messages: UIMessage[];
+	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
+	tree?: PlanTree;
+}
+
+/** The list view's shape (messageCount instead of full messages). */
+export interface ChatSummary {
+	id: string;
+	title: string;
+	createdAt: string;
+	updatedAt: string;
+	messageCount: number;
+}
 
 // ─── Async sub-agent jobs (vision §2.5; plan.md Wave 0 protocol) ────────────
 

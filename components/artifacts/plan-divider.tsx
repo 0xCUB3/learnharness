@@ -1,4 +1,4 @@
-import type { ArtifactPartProps, PlanToolResult } from "@/src/core/contracts";
+import type { ArtifactPartProps, PlanToolResult } from "@/src/core";
 
 /**
  * The probe→teach divider (vision §2 "Two phases, clearly separated").

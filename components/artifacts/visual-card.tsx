@@ -1,6 +1,6 @@
 "use client";
 
-import type { ArtifactPartProps, VisualResult } from "@/src/core/contracts";
+import type { ArtifactPartProps, VisualResult } from "@/src/core";
 import { JobActivityCard } from "@/components/artifacts/demo-card";
 
 /**

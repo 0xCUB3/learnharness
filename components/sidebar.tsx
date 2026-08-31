@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ChatSummary } from "@/src/store/chats";
+import type { ChatSummary } from "@/src/core";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
