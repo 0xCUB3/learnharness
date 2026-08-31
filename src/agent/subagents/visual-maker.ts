@@ -1,6 +1,6 @@
 import { generateText, tool, type LanguageModel, type ModelMessage, type ToolResultPart } from "ai";
-import { openrouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
+import { modelFor } from "../models.ts";
 import type { VisualResult } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
 
@@ -25,9 +25,6 @@ import { getHeadless, type HeadlessApi } from "./headless.ts";
  *
  * Failure semantics mirror the demo-builder: { svg: "", notes: "FAILED: …" }.
  */
-
-const DEFAULT_VISUAL_MODEL =
-	process.env.LH_VISUAL_MODEL ?? process.env.LH_MODEL ?? "anthropic/claude-sonnet-4.5";
 
 export interface VisualMakerInput {
 	brief: string;
@@ -127,7 +124,7 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 
 	try {
 		for (let iteration = 0; iteration < maxIterations; iteration++) {
-			const result = await generateText({ model: opts.model ?? openrouter(DEFAULT_VISUAL_MODEL), system: INSTRUCTIONS, messages, tools });
+			const result = await generateText({ model: opts.model ?? modelFor("visualMaker"), system: INSTRUCTIONS, messages, tools });
 			messages = [...messages, ...result.response.messages];
 
 			const toolCalls = result.toolCalls;

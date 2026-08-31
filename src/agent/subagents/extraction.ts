@@ -1,6 +1,6 @@
 import { ToolLoopAgent, stepCountIs, tool, type LanguageModel, type UIMessage } from "ai";
-import { openrouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
+import { modelFor } from "../models.ts";
 import type { AuditResult, ChatRecord, SessionFindings } from "../../core/contracts.ts";
 import { mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
 
@@ -26,9 +26,6 @@ import { mergeFindings, type EmissionStats, type GraphDeps } from "../../core/gr
  * whatever the in-flight run missed). On failure nothing is checkpointed —
  * the next trigger re-runs the whole thing.
  */
-
-const DEFAULT_EXTRACTION_MODEL =
-	process.env.LH_EXTRACT_MODEL ?? process.env.LH_MODEL ?? "anthropic/claude-sonnet-4.5";
 
 // ─── the transcript view (what the LLM sees) ────────────────────────────────
 
@@ -175,6 +172,12 @@ function createExtractor(model: LanguageModel) {
 			}),
 		},
 		stopWhen: stepCountIs(4),
+		// One line per step: a background worker's progress must be legible
+		// from the server log (§5 observability baseline).
+		onStepFinish: (step) =>
+			console.info(
+				`[extraction] extractor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
+			),
 	});
 }
 
@@ -224,6 +227,10 @@ function createAuditor(model: LanguageModel) {
 			}),
 		},
 		stopWhen: stepCountIs(4),
+		onStepFinish: (step) =>
+			console.info(
+				`[extraction] auditor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
+			),
 	});
 }
 
@@ -246,14 +253,15 @@ export interface ExtractionPipeline {
 
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
 	const { chatStore, graphStore } = deps;
-	const extractorAgent = createExtractor(deps.extractor ?? openrouter(DEFAULT_EXTRACTION_MODEL));
-	const auditorAgent = createAuditor(deps.auditor ?? openrouter(DEFAULT_EXTRACTION_MODEL));
+	const extractorAgent = createExtractor(deps.extractor ?? modelFor("extractor"));
+	const auditorAgent = createAuditor(deps.auditor ?? modelFor("auditor"));
 	const inFlight = new Set<string>();
 
 	async function extract(chatId: string): Promise<SessionFindings> {
 		const record = chatStore.getChat(chatId);
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
 		const view = transcriptView(record);
+		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} transcript lines)`);
 
 		const extraction = await extractorAgent.generate({ prompt: `Transcript:\n\n${view}` });
 		for (const part of extraction.content) {
@@ -268,6 +276,10 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		const record = chatStore.getChat(chatId);
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
 		const view = transcriptView(record);
+		console.info(
+			`[extraction ${chatId}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
+				`${Object.keys(findings.attribution.quiz).length} attributions)`,
+		);
 
 		const review = await auditorAgent.generate({
 			prompt: `Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}`,
@@ -286,6 +298,10 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			);
 		}
 		const { dropped: _dropped, ...verified } = auditResult;
+		console.info(
+			`[extraction ${chatId}] audit kept ${verified.propositions.length}/${findings.propositions.length} propositions, ` +
+				`${verified.edges.length}/${findings.edges.length} edges`,
+		);
 		return verified;
 	}
 
@@ -293,6 +309,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		if (inFlight.has(chatId)) return { nodes: 0, edges: 0, events: 0 };
 		inFlight.add(chatId);
 		try {
+			console.info(`[extraction ${chatId}] pipeline start`);
 			const findings = await extract(chatId);
 			const verified = await audit(chatId, findings);
 			// The merger re-reads the chat record itself — events are rebuilt

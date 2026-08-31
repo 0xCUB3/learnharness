@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ToolLoopAgent, stepCountIs, type LanguageModel, type ToolSet } from "ai";
-import { openrouter } from "@openrouter/ai-sdk-provider";
 import { PATHS } from "../../config.ts";
 import { createTeacherTools, jobTools, questionTools } from "./tools.ts";
+import { modelFor } from "./models.ts";
 
 /**
  * The teacher agent. Everything pi used to provide (agent loop, tool calling,
@@ -21,8 +21,6 @@ import { createTeacherTools, jobTools, questionTools } from "./tools.ts";
  * fragments — nobody edits shared sections of the base prompt). Prefix
  * fragments with a numeric order key: 10-plan-tree.md, 20-jobs.md, …
  */
-
-const DEFAULT_MODEL = process.env.LH_MODEL ?? "anthropic/claude-sonnet-4.5";
 
 const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
 
@@ -54,13 +52,9 @@ function withGraphContext(graphContext: string | null | undefined): string {
 
 export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet, graphContext?: string | null) {
 	return new ToolLoopAgent({
-		model:
-			model ??
-			openrouter(DEFAULT_MODEL, {
-				// Ask OpenRouter for reasoning tokens when the model supports them;
-				// they stream as reasoning parts into the UI's collapsible block.
-				reasoning: { enabled: true, effort: "medium" },
-			}),
+		// Model choice + thinking budget live in config.ts (MODELS.teacher).
+		// Reasoning tokens stream as reasoning parts into the UI's collapsible block.
+		model: model ?? modelFor("teacher"),
 		instructions: withGraphContext(graphContext),
 		// Tools are per-request (plan tools close over the injected ctx);
 		// chat-handler passes createTeacherTools({ chatId, chatStore }). The

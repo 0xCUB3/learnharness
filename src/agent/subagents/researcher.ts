@@ -1,6 +1,6 @@
 import { ToolLoopAgent, stepCountIs, type LanguageModel } from "ai";
-import { openrouter } from "@openrouter/ai-sdk-provider";
 import { webTools } from "../tools/web.ts";
+import { modelFor } from "../models.ts";
 
 /**
  * The researcher sub-agent (vision §2.5): a SEPARATE ToolLoopAgent instance
@@ -11,9 +11,6 @@ import { webTools } from "../tools/web.ts";
  * (~/.pi/agent/extensions/interactive-subagents/agents/researcher.md).
  * The model is injectable so tests run the loop with a MockLanguageModelV4.
  */
-
-const DEFAULT_RESEARCHER_MODEL =
-	process.env.LH_RESEARCH_MODEL ?? process.env.LH_MODEL ?? "anthropic/claude-sonnet-4.5";
 
 const INSTRUCTIONS = `You are a research specialist. You work for a teacher agent inside a learning
 application: given a research question, conduct thorough web research and produce a focused,
@@ -61,7 +58,7 @@ What couldn't be answered. Suggested next steps.`;
 
 export function createResearcherAgent(model?: LanguageModel) {
 	return new ToolLoopAgent({
-		model: model ?? openrouter(DEFAULT_RESEARCHER_MODEL),
+		model: model ?? modelFor("researcher"),
 		instructions: INSTRUCTIONS,
 		tools: webTools,
 		stopWhen: stepCountIs(12),

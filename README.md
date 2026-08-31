@@ -26,13 +26,11 @@ npx tsx scripts/bench-graph.ts   # force-layout benchmark (synthetic graphs)
 
 ## Environment (`.env.local`)
 
+Secrets and machine-specific paths only. Model choice and thinking budgets are product tuning, not environment — they live in **`config.ts` → `MODELS`** (teacher, researcher, demoBuilder, visualMaker, extractor, auditor; each with an OpenRouter model id + reasoning `effort`). The extraction trigger threshold is there too (`EXTRACTION.everyNQuizAnswers`).
+
 | Variable | Purpose |
 |---|---|
 | `OPENROUTER_API_KEY` | required — all LLM calls go through OpenRouter |
-| `LH_MODEL` | teacher model (default `anthropic/claude-sonnet-4.5`) |
-| `LH_RESEARCH_MODEL`, `LH_DEMO_MODEL`, `LH_EXTRACT_MODEL` | per-sub-agent overrides (fall back to `LH_MODEL`) |
-| `LH_EXTRACT_N` | answered quizzes per chat before the extraction pipeline fires (default `3`) |
-| `LH_VISUAL_MODEL` | visual-maker model — must be **vision-capable** (it looks at rendered SVGs) |
 | `GOOGLE_SEARCH_API_KEY` + `GOOGLE_CSE_ID` | researcher's `web_search` (Google Custom Search) |
 | `CHROME_PATH` | optional explicit Chrome path for headless verification (puppeteer-core uses system Chrome; nothing is downloaded) |
 
@@ -161,9 +159,9 @@ data/                           chats/ · graph/ · jobs/ — runtime state, git
 
 **The formal plan tree.** The teacher authors the session's dependency tree with schema-validated tools (`plan_init`, `plan_add_node`, … `plan_set_current`, `plan_mark_done`). The tree persists in the chat record; the tree panel renders from the latest plan tool output in the transcript. Quiz calls can tag a `nodeId`, so outcomes feed the graph per-node.
 
-**The async sub-agent protocol.** `research` / `demo` / `visual` are also client-side tools: the server turn ends at the call, `onFinish` spawns a background runner (fire-and-forget), the job store tracks a live activity line, the client polls `/api/jobs` while parts are pending, and on completion the runner rewrites the tool part in the chat record to `output-available` — the client re-syncs, the continuation fires, the teacher receives the result as a normal tool output. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable `LH_VISUAL_MODEL`).
+**The async sub-agent protocol.** `research` / `demo` / `visual` are also client-side tools: the server turn ends at the call, `onFinish` spawns a background runner (fire-and-forget), the job store tracks a live activity line, the client polls `/api/jobs` while parts are pending, and on completion the runner rewrites the tool part in the chat record to `output-available` — the client re-syncs, the continuation fires, the teacher receives the result as a normal tool output. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable model — `MODELS.visualMaker` in config.ts).
 
-**The knowledge graph (the two channels).** The write channel: the extraction pipeline — extractor (LLM: propositions, edges, probe attribution, each with verbatim evidence) → auditor (LLM: drops anything unbacked) → merger (`mergeFindings`, deterministic: exact/alias identity resolution, event rebuild from the transcript's tool parts, dedupe, checkpoint). Triggered once a chat accumulates `EXTRACTION.everyNQuizAnswers` (default 3, `LH_EXTRACT_N`) new answered quizzes — a v1 placeholder trigger isolated in one seam (`turn-service.ts`), swappable without touching the pipeline. Failure checkpoints nothing; the next trigger re-runs. The read channel: the home view derives node states from the ledgers (`GET /api/graph` is a pure read — forceAtlas2 run-then-freeze, no idle simulation), and at session start the derived graph is rendered into a compact markdown block appended to the teacher's instructions (`buildGraphContext`) — whole graph while small, hotspots + 1-hop neighborhood past 150 nodes.
+**The knowledge graph (the two channels).** The write channel: the extraction pipeline — extractor (LLM: propositions, edges, probe attribution, each with verbatim evidence) → auditor (LLM: drops anything unbacked) → merger (`mergeFindings`, deterministic: exact/alias identity resolution, event rebuild from the transcript's tool parts, dedupe, checkpoint). Triggered once a chat accumulates `EXTRACTION.everyNQuizAnswers` (default 3, config.ts) new answered quizzes — a v1 placeholder trigger isolated in one seam (`turn-service.ts`), swappable without touching the pipeline. Failure checkpoints nothing; the next trigger re-runs. The read channel: the home view derives node states from the ledgers (`GET /api/graph` is a pure read — forceAtlas2 run-then-freeze, no idle simulation), and at session start the derived graph is rendered into a compact markdown block appended to the teacher's instructions (`buildGraphContext`) — whole graph while small, hotspots + 1-hop neighborhood past 150 nodes.
 
 ## Testing
 

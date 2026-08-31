@@ -1,6 +1,6 @@
 import { ToolLoopAgent, stepCountIs, tool, type LanguageModel, type ToolSet } from "ai";
-import { openrouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
+import { modelFor } from "../models.ts";
 import type { DemoResult } from "../../core/contracts.ts";
 import { getHeadless, type DemoRunResult, type HeadlessApi } from "./headless.ts";
 
@@ -19,9 +19,6 @@ import { getHeadless, type DemoRunResult, type HeadlessApi } from "./headless.ts
  * notes: "FAILED: <reason>" } — the card renders the failure note, no iframe.
  * The job wrapper treats html === "" as failure and marks the job error.
  */
-
-const DEFAULT_DEMO_MODEL =
-	process.env.LH_DEMO_MODEL ?? process.env.LH_MODEL ?? "anthropic/claude-sonnet-4.5";
 
 export interface DemoBuilderInput {
 	title: string;
@@ -174,7 +171,7 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 
 	const state: BuilderState = { html: null, testedHtml: null, lastResult: null };
 	const agent = new ToolLoopAgent({
-		model: opts.model ?? openrouter(DEFAULT_DEMO_MODEL),
+		model: opts.model ?? modelFor("demoBuilder"),
 		instructions: INSTRUCTIONS,
 		tools: createDemoBuilderTools(state, headless, opts.onActivity),
 		stopWhen: stepCountIs(opts.maxSteps ?? 24),
