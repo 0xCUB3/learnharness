@@ -2,7 +2,7 @@
 
 A standalone learning harness: a **teacher agent** (Next.js + Vercel AI SDK, models via OpenRouter), graded quiz/ask interactions, a formal **session plan tree** the teacher authors and edits live, and a persistent cross-session **knowledge graph** of what the learner knows — the graph is the app's home page.
 
-Not a chat app with a graph bolted on: sessions are probe→teach lessons, the plan tree is a structured, agent-editable object, quiz outcomes feed the graph as ledger events, and the graph feeds back as the teacher's context so probing compounds across sessions.
+Not a chat app with a graph bolted on: sessions are probe→teach lessons, the plan tree is a structured, agent-editable object, quiz outcomes reach the graph through the extraction pipeline as ledger events, and the graph feeds back as the teacher's context so probing compounds across sessions.
 
 - Living design doc (all decisions): [`docs/vision.md`](docs/vision.md)
 - Build plan + wave/gate results: [`docs/plan.md`](docs/plan.md)
@@ -18,6 +18,7 @@ npm run build        # production build
 npm start            # serve the production build
 
 npm test             # all tests (node:test via tsx; deterministic, no LLM)
+npm run lint         # eslint — includes the import law (architecture §1)
 npm run typecheck    # tsc --noEmit
 
 npx tsx scripts/bench-graph.ts   # force-layout benchmark (synthetic graphs)
@@ -36,6 +37,8 @@ npx tsx scripts/bench-graph.ts   # force-layout benchmark (synthetic graphs)
 | `CHROME_PATH` | optional explicit Chrome path for headless verification (puppeteer-core uses system Chrome; nothing is downloaded) |
 
 ## Architecture
+
+Five layers, dependency arrows pointing down only, the import law machine-enforced as four ESLint zones (shell → barrels only; core and agent never import below themselves). The full spec: [`docs/architecture.md`](docs/architecture.md).
 
 ```mermaid
 graph TB
@@ -58,8 +61,11 @@ graph TB
         RJOBS["GET /api/jobs?chatId"]
     end
 
-    subgraph TEACHER["Teacher agent (src/agent)"]
+    subgraph TURN["Turn composition (src/server)"]
         CH["chat-handler.ts — turn composition root<br/>(services: context · persist · spawn · extract)"]
+    end
+
+    subgraph TEACHER["Teacher agent (src/agent)"]
         TA["ToolLoopAgent<br/>system-prompt.md + prompts/*.md fragments<br/>+ graph-context block"]
         QT["quiz · ask_user_question<br/>(client-side tools, no execute)"]
         PT["plan_* tools (server-side,<br/>mutate the chat's tree)"]
@@ -134,6 +140,9 @@ src/
                                 spawn jobs · extraction trigger (the v1
                                 quiz-answer threshold — one swappable seam)
   server/stores.ts              THE composition root — the one place adapters wire in
+  server/{chats,graph,jobs}.ts  route entry points: chat list, pure-read
+                                graph snapshot, job polling
+  server/index.ts              the server barrel (the only server import app/ may use)
   core/contracts.ts             THE contracts file — types + protocol docs
   core/ports.ts                 storage ports — ChatStore · GraphStore · JobStore
                                 (core code depends on these types only)
