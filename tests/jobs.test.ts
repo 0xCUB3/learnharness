@@ -24,8 +24,8 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { createChat, getChat } from "../src/store/chats.ts";
-import { createJob, findJobByToolCallId, getJob, listJobs, updateJob } from "../src/store/jobs.ts";
+import { chatStore } from "../src/store/chats.ts";
+import { jobStore } from "../src/store/jobs.ts";
 import { researchModelOverride, runResearchJob, spawnPendingJobs } from "../src/agent/subagents/runner.ts";
 import { createResearcherAgent } from "../src/agent/subagents/researcher.ts";
 import { PATHS } from "../config.ts";
@@ -86,32 +86,32 @@ function post(chatId: string, messages: unknown[]): Request {
 
 describe("job store", () => {
 	it("create → get → update → list round-trips", () => {
-		const job = createJob({ kind: "research", chatId: "chat_storetest", toolCallId: "call-store" });
+		const job = jobStore.createJob({ kind: "research", chatId: "chat_storetest", toolCallId: "call-store" });
 		trackJob(job.id);
 
 		assert.match(job.id, /^job_/);
 		assert.equal(job.status, "running");
 		assert.equal(job.activity, "starting");
 
-		const loaded = getJob(job.id)!;
+		const loaded = jobStore.getJob(job.id)!;
 		assert.equal(loaded.toolCallId, "call-store");
 		assert.equal(loaded.kind, "research");
 
-		const updated = updateJob(job.id, { activity: 'web_search: "test"', status: "done", result: { brief: "b" } })!;
+		const updated = jobStore.updateJob(job.id, { activity: 'web_search: "test"', status: "done", result: { brief: "b" } })!;
 		assert.equal(updated.activity, 'web_search: "test"');
 		assert.equal(updated.status, "done");
 		assert.ok(updated.updatedAt >= job.updatedAt);
 		// immutable identity fields survive a patch
 		assert.equal(updated.toolCallId, "call-store");
-		assert.equal(getJob(updated.id)!.toolCallId, "call-store");
+		assert.equal(jobStore.getJob(updated.id)!.toolCallId, "call-store");
 
-		const listed = listJobs("chat_storetest");
+		const listed = jobStore.listJobs("chat_storetest");
 		assert.ok(listed.some((j) => j.id === job.id));
-		assert.equal(listJobs("chat_other").some((j) => j.id === job.id), false, "jobs are scoped to their chat");
+		assert.equal(jobStore.listJobs("chat_other").some((j) => j.id === job.id), false, "jobs are scoped to their chat");
 
-		const byTool = findJobByToolCallId("chat_storetest", "call-store");
+		const byTool = jobStore.findJobByToolCallId("chat_storetest", "call-store");
 		assert.equal(byTool?.id, job.id);
-		assert.equal(findJobByToolCallId("chat_storetest", "call-missing"), null);
+		assert.equal(jobStore.findJobByToolCallId("chat_storetest", "call-missing"), null);
 	});
 });
 
@@ -155,7 +155,7 @@ function researchCallingTeacher(): MockLanguageModelV4 {
 
 describe("spawn hook (async protocol §2)", () => {
 	it("a pending research part in the final assistant message spawns exactly one job", async () => {
-		const chat = createChat("Test: research spawn");
+		const chat = chatStore.createChat("Test: research spawn");
 		trackChat(chat.id);
 
 		const agent = createTeacherAgent(researchCallingTeacher());
@@ -163,13 +163,13 @@ describe("spawn hook (async protocol §2)", () => {
 		await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
 
 		// The research part is pending (input-available) in the stored chat.
-		const saved = getChat(chat.id)!;
+		const saved = chatStore.getChat(chat.id)!;
 		const part = saved.messages[1]!.parts.find((p) => p.type === "tool-research");
 		assert.ok(part && part.type === "tool-research", "research tool part persisted");
 		assert.equal(part.state, "input-available", "job tool part stays pending until the runner fulfills it");
 
 		// A job record exists for it.
-		const job = findJobByToolCallId(chat.id, "call-r1");
+		const job = jobStore.findJobByToolCallId(chat.id, "call-r1");
 		assert.ok(job, "spawn hook created a job record");
 		assert.equal(job!.kind, "research");
 		assert.equal(job!.status, "running");
@@ -177,7 +177,7 @@ describe("spawn hook (async protocol §2)", () => {
 
 		// Re-running the spawn hook (idempotency) does not create a second job.
 		spawnPendingJobs(chat.id, saved.messages);
-		assert.equal(listJobs(chat.id).length, 1, "no duplicate job for the same tool part");
+		assert.equal(jobStore.listJobs(chat.id).length, 1, "no duplicate job for the same tool part");
 	});
 });
 
@@ -249,7 +249,7 @@ describe("research runner (async protocol §3)", () => {
 	it("fulfills the part with a ResearchResult and marks the job done with activity recorded", async () => {
 		const restoreFetch = stubFetch();
 		try {
-			const chat = createChat("Test: runner completion");
+			const chat = chatStore.createChat("Test: runner completion");
 			trackChat(chat.id);
 
 			// A pending research part, as the spawn hook would find it.
@@ -265,23 +265,22 @@ describe("research runner (async protocol §3)", () => {
 				},
 			] as never;
 			// saveMessages requires the chat to exist; use the store directly.
-			const { saveMessages } = await import("../src/store/chats.ts");
-			saveMessages(chat.id, messages);
+			chatStore.saveMessages(chat.id, messages);
 
-			const job = createJob({ kind: "research", chatId: chat.id, toolCallId: "call-run1" });
+			const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-run1" });
 			trackJob(job.id);
 
 			await runResearchJob(job.id, { model: researcherModel() });
 
 			// The job is done, with the activity line from the tool call.
-			const done = getJob(job.id)!;
+			const done = jobStore.getJob(job.id)!;
 			assert.equal(done.status, "done");
 			assert.equal(done.activity, 'web_search: "sigma.js latest version"', "activity line recorded");
 			assert.ok(done.result, "result stored on the job");
 
 			// The stored chat's part flipped to output-available with a
 			// ResearchResult-shaped output.
-			const saved = getChat(chat.id)!;
+			const saved = chatStore.getChat(chat.id)!;
 			const part = saved.messages[1]!.parts.find((p) => p.type === "tool-research");
 			assert.ok(part && part.type === "tool-research");
 			assert.equal(part.state, "output-available");
@@ -300,10 +299,9 @@ describe("research runner (async protocol §3)", () => {
 				throw new Error("model exploded");
 			},
 		});
-		const chat = createChat("Test: runner failure");
+		const chat = chatStore.createChat("Test: runner failure");
 		trackChat(chat.id);
-		const { saveMessages } = await import("../src/store/chats.ts");
-		saveMessages(chat.id, [
+		chatStore.saveMessages(chat.id, [
 			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
 			{
 				id: "a1",
@@ -312,16 +310,16 @@ describe("research runner (async protocol §3)", () => {
 			},
 		] as never);
 
-		const job = createJob({ kind: "research", chatId: chat.id, toolCallId: "call-err1" });
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-err1" });
 		trackJob(job.id);
 
 		await runResearchJob(job.id, { model: failing });
 
-		const errored = getJob(job.id)!;
+		const errored = jobStore.getJob(job.id)!;
 		assert.equal(errored.status, "error");
 		assert.match(errored.error ?? "", /model exploded/);
 
-		const saved = getChat(chat.id)!;
+		const saved = chatStore.getChat(chat.id)!;
 		const part = saved.messages[1]!.parts.find((p) => p.type === "tool-research");
 		assert.ok(part && part.type === "tool-research");
 		assert.equal(part.state, "output-available", "failure still fulfills the part");

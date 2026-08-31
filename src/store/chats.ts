@@ -1,21 +1,25 @@
+/**
+ * ChatStore — the fs JSON adapter (one file per chat in data/chats/).
+ *
+ * Implements core/ports.ts ChatStore; the record shapes live in
+ * core/contracts.ts (ChatRecord/ChatSummary). Idioms: sync fs, tiny
+ * records, id-guarded filenames, JSON with tab indentation. Wired in the
+ * composition root (src/server/stores.ts); nothing else constructs it.
+ */
+
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { UIMessage } from "ai";
 import { PATHS } from "../../config.ts";
+import type { ChatStore } from "../core/ports.ts";
 import type { ChatRecord, ChatSummary, PlanTree } from "../core/contracts.ts";
-
-/**
- * Chat store — one JSON file per chat in data/chats/. The record shape lives
- * in core/contracts (ChatRecord/ChatSummary); this module is the fs adapter's
- * implementation (the storage port formalizes this in a later stage).
- */
+import type { UIMessage } from "ai";
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
 	return path.join(PATHS.chats, `${id}.json`);
 }
 
-export function createChat(title: string): ChatRecord {
+function createChat(title: string): ChatRecord {
 	const now = new Date().toISOString();
 	const record: ChatRecord = {
 		id: `chat_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
@@ -29,7 +33,7 @@ export function createChat(title: string): ChatRecord {
 	return record;
 }
 
-export function getChat(id: string): ChatRecord | null {
+function getChat(id: string): ChatRecord | null {
 	try {
 		return JSON.parse(fs.readFileSync(chatFile(id), "utf-8")) as ChatRecord;
 	} catch {
@@ -37,7 +41,7 @@ export function getChat(id: string): ChatRecord | null {
 	}
 }
 
-export function listChats(): ChatSummary[] {
+function listChats(): ChatSummary[] {
 	try {
 		fs.mkdirSync(PATHS.chats, { recursive: true });
 		return fs
@@ -53,7 +57,7 @@ export function listChats(): ChatSummary[] {
 }
 
 /** Persist the full message list (client state + new response) after a turn. */
-export function saveMessages(id: string, messages: UIMessage[]): void {
+function saveMessages(id: string, messages: UIMessage[]): void {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
 	record.messages = messages;
@@ -62,7 +66,7 @@ export function saveMessages(id: string, messages: UIMessage[]): void {
 }
 
 /** Persist the session plan tree (plan tools call this in execute). */
-export function saveTree(id: string, tree: PlanTree): void {
+function saveTree(id: string, tree: PlanTree): void {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
 	record.tree = tree;
@@ -71,8 +75,10 @@ export function saveTree(id: string, tree: PlanTree): void {
 	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
 }
 
-/** Derive a short title from the first user message. */
-export function titleFromPrompt(prompt: string): string {
-	const oneLine = prompt.replace(/\s+/g, " ").trim();
-	return oneLine.length > 72 ? `${oneLine.slice(0, 72)}…` : oneLine;
-}
+export const chatStore: ChatStore = {
+	createChat,
+	getChat,
+	listChats,
+	saveMessages,
+	saveTree,
+};

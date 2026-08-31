@@ -43,8 +43,8 @@ import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
 import { demoModelOverride, runDemoJob, runVisualJob, spawnPendingJobs, visualModelOverride } from "../src/agent/subagents/runner.ts";
 import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
-import { createChat, getChat, saveMessages } from "../src/store/chats.ts";
-import { createJob, findJobByToolCallId, getJob, listJobs } from "../src/store/jobs.ts";
+import { chatStore } from "../src/store/chats.ts";
+import { jobStore } from "../src/store/jobs.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { artifactRenderers } from "../components/artifacts/index.ts";
@@ -447,9 +447,9 @@ async function drain(res: Response): Promise<string> {
 
 describe("demo/visual job runners", () => {
 	it("runDemoJob fulfills the part with a tested DemoResult and marks the job done", async () => {
-		const chat = createChat("Test: demo runner");
+		const chat = chatStore.createChat("Test: demo runner");
 		createdChats.push(chat.id);
-		saveMessages(chat.id, [
+		chatStore.saveMessages(chat.id, [
 			{ id: "u1", role: "user", parts: [{ type: "text", text: "show me compounding" }] },
 			{
 				id: "a1",
@@ -458,7 +458,7 @@ describe("demo/visual job runners", () => {
 			},
 		] as never);
 
-		const job = createJob({ kind: "demo", chatId: chat.id, toolCallId: "call-d1" });
+		const job = jobStore.createJob({ kind: "demo", chatId: chat.id, toolCallId: "call-d1" });
 		createdJobs.push(job.id);
 
 		// runDemoJob has no headless injection point — the module override is the seam.
@@ -475,14 +475,14 @@ describe("demo/visual job runners", () => {
 			headlessOverride.current = undefined;
 		}
 
-		const done = getJob(job.id)!;
+		const done = jobStore.getJob(job.id)!;
 		assert.equal(done.status, "done");
 		assert.equal(done.activity, "run_demo: clean", "final activity line recorded");
 		const result = done.result as { title: string; html: string; tested: boolean };
 		assert.equal(result.title, "Compound interest");
 		assert.equal(result.tested, true);
 
-		const saved = getChat(chat.id)!;
+		const saved = chatStore.getChat(chat.id)!;
 		const part = saved.messages[1]!.parts.find((p) => p.type === "tool-demo");
 		assert.ok(part && part.type === "tool-demo", "demo tool part persisted");
 		assert.equal(part.state, "output-available", "part fulfilled");
@@ -490,9 +490,9 @@ describe("demo/visual job runners", () => {
 	});
 
 	it("runVisualJob fulfills the part even on failure and marks the job error", async () => {
-		const chat = createChat("Test: visual runner failure");
+		const chat = chatStore.createChat("Test: visual runner failure");
 		createdChats.push(chat.id);
-		saveMessages(chat.id, [
+		chatStore.saveMessages(chat.id, [
 			{ id: "u1", role: "user", parts: [{ type: "text", text: "draw it" }] },
 			{
 				id: "a1",
@@ -501,16 +501,16 @@ describe("demo/visual job runners", () => {
 			},
 		] as never);
 
-		const job = createJob({ kind: "visual", chatId: chat.id, toolCallId: "call-v1" });
+		const job = jobStore.createJob({ kind: "visual", chatId: chat.id, toolCallId: "call-v1" });
 		createdJobs.push(job.id);
 
 		await runVisualJob(job.id, { model: scriptedModel([{ text: "cannot" }]) });
 
-		const errored = getJob(job.id)!;
+		const errored = jobStore.getJob(job.id)!;
 		assert.equal(errored.status, "error");
 		assert.match(errored.error ?? "", /never wrote an SVG/);
 
-		const saved = getChat(chat.id)!;
+		const saved = chatStore.getChat(chat.id)!;
 		const part = saved.messages[1]!.parts.find((p) => p.type === "tool-visual");
 		assert.ok(part && part.type === "tool-visual", "visual tool part persisted");
 		assert.equal(part.state, "output-available", "failure still fulfills the part");
@@ -520,7 +520,7 @@ describe("demo/visual job runners", () => {
 	});
 
 	it("the spawn hook dispatches a demo part to the demo runner (kind→runner map)", async () => {
-		const chat = createChat("Test: demo spawn dispatch");
+		const chat = chatStore.createChat("Test: demo spawn dispatch");
 		createdChats.push(chat.id);
 
 		// A teacher that calls demo on turn 1 (scripted stream, like jobs.test.ts).
@@ -571,25 +571,25 @@ describe("demo/visual job runners", () => {
 				),
 			);
 
-			const job = findJobByToolCallId(chat.id, "call-d2");
+			const job = jobStore.findJobByToolCallId(chat.id, "call-d2");
 			assert.ok(job, "spawn hook created a job for the demo part");
 			assert.equal(job!.kind, "demo");
 			createdJobs.push(job!.id);
 
 			// The background runner (fire-and-forget) completes with the overrides.
-			await waitFor(() => getJob(job!.id)!.status !== "running", 5000, "demo job completion");
-			const done = getJob(job!.id)!;
+			await waitFor(() => jobStore.getJob(job!.id)!.status !== "running", 5000, "demo job completion");
+			const done = jobStore.getJob(job!.id)!;
 			assert.equal(done.status, "done");
 			assert.equal(done.activity, "run_demo: clean");
 
-			const saved = getChat(chat.id)!;
+			const saved = chatStore.getChat(chat.id)!;
 			const part = saved.messages[1]!.parts.find((p) => p.type === "tool-demo");
 			assert.ok(part && part.type === "tool-demo", "demo tool part persisted");
 			assert.equal(part.state, "output-available", "demo part fulfilled by the background runner");
 
 			// Idempotency: re-running the spawn hook creates no second job.
 			spawnPendingJobs(chat.id, saved.messages);
-			assert.equal(listJobs(chat.id).length, 1, "no duplicate job for the same tool part");
+			assert.equal(jobStore.listJobs(chat.id).length, 1, "no duplicate job for the same tool part");
 		} finally {
 			demoModelOverride.current = undefined;
 			headlessOverride.current = undefined;

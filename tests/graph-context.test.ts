@@ -23,7 +23,8 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { GraphEdge, GraphNode, LedgerEvent } from "../src/core/contracts.ts";
 import type { NodeStateClass } from "../src/core/contracts.ts";
-import { emitChat, type GraphLedgers } from "../src/core/graph.ts";
+import { emitChat, getGraph } from "../src/core/graph.ts";
+import type { GraphStore } from "../src/core/ports.ts";
 import {
 	buildGraphContext,
 	GRAPH_CONTEXT_HEADER,
@@ -32,8 +33,9 @@ import {
 } from "../src/core/graph-context.ts";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { createChat, getChat, saveMessages, saveTree } from "../src/store/chats.ts";
-import { type NodeMapping, type SessionCheckpoint } from "../src/store/graph.ts";
+import { chatStore } from "../src/store/chats.ts";
+import type { NodeMapping, SessionCheckpoint } from "../src/core/contracts.ts";
+import { graphStore } from "../src/store/graph.ts";
 import { createTree } from "../src/core/plan-tree.ts";
 import { PATHS } from "../config.ts";
 
@@ -176,9 +178,9 @@ describe("buildGraphContext", () => {
 
 	it("reads the live ledgers without throwing (read-only integration)", () => {
 		// Other suites (graph.test.ts) mutate data/graph concurrently, so only
-		// assert the shape of the result, never its content. Read-only is
-		// structural: buildGraphContext only ever calls getGraph().
-		const out = buildGraphContext();
+		// assert the shape of the result, never its content. Structural note:
+		// the caller now hands in getGraph(graphStore) — the entry point is pure.
+		const out = buildGraphContext(getGraph(graphStore));
 		assert.ok(out === null || out.includes(GRAPH_CONTEXT_HEADER));
 	});
 });
@@ -248,10 +250,10 @@ describe("graph-context injection (chat-flow style)", () => {
 		assert.ok(context, "fixture graph renders a block");
 
 		// Exactly what chat-handler does per request when no agent is passed:
-		// createTeacherAgent(model, tools, buildGraphContext()).
+		// createTeacherAgent(model, tools, buildGraphContext(getGraph(graphStore))).
 		const prompts: string[] = [];
 		const agent = createTeacherAgent(capturingModel(prompts), undefined, context);
-		const chat = createChat("Test: graph context injection");
+		const chat = chatStore.createChat("Test: graph context injection");
 		createdChats.push(chat.id);
 
 		await drain(
@@ -279,7 +281,7 @@ describe("graph-context injection (chat-flow style)", () => {
 	it("no block is injected when the context is null (new learner)", async () => {
 		const prompts: string[] = [];
 		const agent = createTeacherAgent(capturingModel(prompts));
-		const chat = createChat("Test: no graph context");
+		const chat = chatStore.createChat("Test: no graph context");
 		createdChats.push(chat.id);
 		await drain(
 			await handleChatRequest(
@@ -295,7 +297,7 @@ describe("graph-context injection (chat-flow style)", () => {
 
 // ─── exact-match merge (emitChat dedup) ─────────────────────────────────────
 
-/** An in-memory stand-in for the five ledgers (see GraphLedgers in graph.ts). */
+/** An in-memory stand-in for the five ledgers (the GraphStore port, core/ports.ts). */
 function memoryLedgers() {
 	const nodes: GraphNode[] = [];
 	const edges: GraphEdge[] = [];
@@ -313,31 +315,31 @@ function memoryLedgers() {
 		readMappings: () => mappings.map((m) => ({ ...m })),
 		appendCheckpoint: (c: SessionCheckpoint) => void checkpoints.push(c),
 		readCheckpoints: () => checkpoints.map((c) => ({ ...c })),
-		// Test accessors (not part of the GraphLedgers surface).
+		// Test accessors (not part of the GraphStore surface).
 		counts: { get nodes() { return nodes.length; }, get mappings() { return mappings.length; } },
-	} satisfies GraphLedgers & { counts: { nodes: number; mappings: number } };
+	} satisfies GraphStore & { counts: { nodes: number; mappings: number } };
 }
 
 /** A real chat record with a stored tree (emitChat reads the real chat store). */
 function fixtureChat(title: string, tree: ReturnType<typeof createTree>) {
-	const chat = createChat(title);
+	const chat = chatStore.createChat(title);
 	createdChats.push(chat.id);
-	saveTree(chat.id, tree);
-	saveMessages(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "go" }] }]);
-	return getChat(chat.id)!;
+	chatStore.saveTree(chat.id, tree);
+	chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "go" }] }]);
+	return chatStore.getChat(chat.id)!;
 }
 
 describe("exact-match merge (emitChat)", () => {
 	it("maps a case/whitespace-identical title onto the existing node instead of duplicating", () => {
 		const ledgers = memoryLedgers();
 		const chat1 = fixtureChat("Merge A", createTree([{ id: "cr", title: "Chain rule intuition" }], []));
-		let stats = emitChat(chat1.id, ledgers);
+		let stats = emitChat(chat1.id, { chatStore, graphStore: ledgers });
 		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 0 });
 		const firstId = ledgers.readNodes()[0]!.id;
 
 		// Second session, same proposition: different casing + padding.
 		const chat2 = fixtureChat("Merge B", createTree([{ id: "cr2", title: "  chain Rule INTUITION " }], []));
-		stats = emitChat(chat2.id, ledgers);
+		stats = emitChat(chat2.id, { chatStore, graphStore: ledgers });
 		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 }, "no duplicate node appended");
 
 		assert.equal(ledgers.counts.nodes, 1, "still exactly one graph node");
@@ -357,7 +359,7 @@ describe("exact-match merge (emitChat)", () => {
 			createdAt: "2026-08-22T00:00:00.000Z",
 		});
 		const chat = fixtureChat("Merge alias", createTree([{ id: "d", title: "The Derivative" }], []));
-		const stats = emitChat(chat.id, ledgers);
+		const stats = emitChat(chat.id, { chatStore, graphStore: ledgers });
 		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 }, "alias match → no new node");
 		assert.deepEqual(ledgers.readMappings(), [{ chatId: chat.id, treeNodeId: "d", graphNodeId: "n_alias" }]);
 	});
@@ -365,12 +367,12 @@ describe("exact-match merge (emitChat)", () => {
 	it("does NOT fuzzy-match near-identical titles (that stays deferred)", () => {
 		const ledgers = memoryLedgers();
 		const chat1 = fixtureChat("Fuzzy A", createTree([{ id: "cr", title: "Chain rule intuition" }], []));
-		emitChat(chat1.id, ledgers);
+		emitChat(chat1.id, { chatStore, graphStore: ledgers });
 		const chat2 = fixtureChat(
 			"Fuzzy B",
 			createTree([{ id: "cr2", title: "Chain rules intuition" }], []),
 		);
-		const stats = emitChat(chat2.id, ledgers);
+		const stats = emitChat(chat2.id, { chatStore, graphStore: ledgers });
 		assert.equal(stats.nodes, 1, "near-miss titles stay separate nodes");
 		assert.equal(ledgers.counts.nodes, 2);
 	});
@@ -387,7 +389,7 @@ describe("exact-match merge (emitChat)", () => {
 				[{ from: "base", to: "chain" }],
 			),
 		);
-		emitChat(chat1.id, ledgers);
+		emitChat(chat1.id, { chatStore, graphStore: ledgers });
 
 		// Second session re-teaches the same two propositions (exact titles)
 		// and asserts the same edge — it must dedupe onto the existing nodes.
@@ -401,7 +403,7 @@ describe("exact-match merge (emitChat)", () => {
 				[{ from: "base", to: "chain" }],
 			),
 		);
-		const stats = emitChat(chat2.id, ledgers);
+		const stats = emitChat(chat2.id, { chatStore, graphStore: ledgers });
 		// A new ASSERTION line is appended (provenance is honest) — reads merge
 		// by (from,to,type), so the derived graph still has one edge with both
 		// sessions in its provenance.

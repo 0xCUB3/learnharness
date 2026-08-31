@@ -1,9 +1,8 @@
 /**
- * Graph ledger store (W4; vision §1, contracts.ts "v1 emission").
- *
- * Five append-only JSONL ledgers at config.LEDGER_FILES:
+ * GraphStore — the fs JSONL adapter: five append-only ledgers at
+ * config.LEDGER_FILES (contracts.ts "v1 emission").
  *   nodes.jsonl     GraphNode        — one line per graph node
- *   edges.jsonl     GraphEdge        — one line per edge ASSERTION (a second
+ *   edges.jsonl    GraphEdge        — one line per edge ASSERTION (a second
  *                                      session asserting the same (from,to,type)
  *                                      appends another line; reads merge)
  *   events.jsonl    LedgerEvent      — quiz outcomes + taught events
@@ -11,38 +10,25 @@
  *                                      (chatId, treeNodeId) → graphNodeId
  *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
  *
- * data/graph/* is exclusively this store's (the legacy V0 scaffold lives in
- * data/legacy-graph). Reads are strict against the contracts.ts shapes:
- * corrupt lines are skipped, never guessed at — the ledgers are the source of
- * truth and everything else is derived (src/core/graph.ts).
- *
- * Same idioms as src/store/chats.ts: sync fs, tiny records, no framework.
+ * Implements core/ports.ts GraphStore. data/graph/* is exclusively this
+ * adapter's. Reads are strict against the contracts.ts shapes: corrupt lines
+ * are skipped, never guessed at — the ledgers are the source of truth and
+ * everything else is derived (core/graph.ts, which takes this port as a
+ * parameter). Same idioms as src/store/chats.ts: sync fs, no framework.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomBytes } from "node:crypto";
 import { LEDGER_FILES } from "../../config.ts";
-import type { GraphEdge, GraphNode, LedgerEvent, LedgerEventKind } from "../core/contracts.ts";
-
-/** The naive-union identity map line: a chat's tree node → graph node. */
-export interface NodeMapping {
-	chatId: string;
-	treeNodeId: string;
-	graphNodeId: string;
-}
-
-/** sessions.jsonl line — the emission checkpoint for one chat. */
-export interface SessionCheckpoint {
-	chatId: string;
-	/** The chat record's `updatedAt` at the time of the fold. */
-	foldedAt: string;
-}
-
-/** "n_" + nanoid-like (contracts.ts GraphNode.id). */
-export function newGraphNodeId(): string {
-	return `n_${randomBytes(6).toString("hex")}`;
-}
+import type {
+	GraphEdge,
+	GraphNode,
+	LedgerEvent,
+	LedgerEventKind,
+	NodeMapping,
+	SessionCheckpoint,
+} from "../core/contracts.ts";
+import type { GraphStore } from "../core/ports.ts";
 
 // ─── JSONL primitives ────────────────────────────────────────────────────────
 
@@ -124,9 +110,9 @@ const isNodeMapping = (v: unknown): v is NodeMapping =>
 const isCheckpoint = (v: unknown): v is SessionCheckpoint =>
 	isRecord(v) && isString(v.chatId) && isString(v.foldedAt);
 
-// ─── typed ledger access ─────────────────────────────────────────────────────
+// ─── the port implementation ────────────────────────────────────────────────
 
-export const graphLedgers = {
+export const graphStore: GraphStore = {
 	appendNode(node: GraphNode): void {
 		appendLine(LEDGER_FILES.nodes, node);
 	},
@@ -136,8 +122,8 @@ export const graphLedgers = {
 	},
 
 	/** Append one edge ASSERTION; readers merge lines by (from,to,type). */
-	appendEdge(edge: GraphEdge): void {
-		appendLine(LEDGER_FILES.edges, edge);
+	appendEdge(assertion: GraphEdge): void {
+		appendLine(LEDGER_FILES.edges, assertion);
 	},
 	readEdges(): GraphEdge[] {
 		return readValid(LEDGER_FILES.edges, isGraphEdge);

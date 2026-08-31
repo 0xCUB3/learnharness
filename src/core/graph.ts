@@ -16,10 +16,12 @@
  * Idempotent + incremental: mappings dedupe nodes, (from,to,type) dedupes
  * edge assertions, chat-scoped refs dedupe events, and sessions.jsonl
  * checkpoints which chats have been folded. Re-emitting a chat appends
- * nothing. The store (src/store/graph.ts) holds the append-only ledgers;
- * everything here derives from them.
+ * nothing. Every function takes the storage ports (core/ports.ts) as
+ * explicit parameters — pure core, no adapter imports; the composition
+ * root (src/server/stores.ts) wires the fs adapters in.
  */
 
+import { randomBytes } from "node:crypto";
 import { isToolUIPart, type UIMessage } from "ai";
 import type {
 	GraphEdge,
@@ -32,13 +34,18 @@ import type {
 	PlanToolResult,
 } from "./contracts.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
-import { getChat, listChats } from "../store/chats.ts";
-import { graphLedgers, newGraphNodeId } from "../store/graph.ts";
+import type { ChatStore, GraphStore } from "./ports.ts";
 
-/** The ledger surface emitChat needs (the real one is src/store/graph.ts).
- *  Injectable so tests can fold fixtures into an in-memory ledger instead of
- *  the live data/graph files. */
-export type GraphLedgers = typeof graphLedgers;
+/** The storage ports every graph operation needs, passed explicitly. */
+export interface GraphDeps {
+	chatStore: ChatStore;
+	graphStore: GraphStore;
+}
+
+/** "n_" + 12 hex chars (contracts.ts GraphNode.id — store-assigned). */
+function newGraphNodeId(): string {
+	return `n_${randomBytes(6).toString("hex")}`;
+}
 
 // ─── transcript scanning ─────────────────────────────────────────────────────
 
@@ -109,11 +116,12 @@ export interface EmissionStats {
  * turn (chat-handler onFinish) and again on catch-up (GET /api/graph). Sync
  * and fast: a handful of small-file reads plus one append per new record.
  *
- * `ledgers` is injectable for tests (in-memory ledger); production always
- * uses the live store.
+ * The storage ports are explicit (tests pass in-memory ledgers; production
+ * passes the fs adapters from src/server/stores.ts).
  */
-export function emitChat(chatId: string, ledgers: GraphLedgers = graphLedgers): EmissionStats {
-	const record = getChat(chatId);
+export function emitChat(chatId: string, deps: GraphDeps): EmissionStats {
+	const { graphStore: ledgers } = deps;
+	const record = deps.chatStore.getChat(chatId);
 	if (!record) return { nodes: 0, edges: 0, events: 0 };
 	const stats: EmissionStats = { nodes: 0, edges: 0, events: 0 };
 
@@ -297,11 +305,11 @@ export interface DerivedGraph {
  * edges are merged by (from,to,type) with unioned provenance, first-seen
  * order. `store events, derive state` — this is the only reader that matters.
  */
-export function getGraph(): DerivedGraph {
-	const nodes = graphLedgers.readNodes();
+export function getGraph(graphStore: GraphStore): DerivedGraph {
+	const nodes = graphStore.readNodes();
 	const merged: GraphEdge[] = [];
 	const byKey = new Map<string, GraphEdge>();
-	for (const line of graphLedgers.readEdges()) {
+	for (const line of graphStore.readEdges()) {
 		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
 		const existing = byKey.get(key);
 		if (existing) {
@@ -314,7 +322,7 @@ export function getGraph(): DerivedGraph {
 			merged.push(edge);
 		}
 	}
-	return { nodes, edges: merged, events: graphLedgers.readEvents() };
+	return { nodes, edges: merged, events: graphStore.readEvents() };
 }
 
 const QUIZ_EVENT_KINDS: ReadonlySet<string> = new Set([
@@ -366,8 +374,8 @@ export function deriveNodeStates(nodes: GraphNode[], events: LedgerEvent[]): Rec
 // ─── the /api/graph payload ──────────────────────────────────────────────────
 
 /** Everything the home graph view needs, in one fetch (shape: contracts). */
-export function graphSnapshot(): GraphSnapshot {
-	const { nodes, edges, events } = getGraph();
+export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
+	const { nodes, edges, events } = getGraph(deps.graphStore);
 	const nodeStates = deriveNodeStates(nodes, events);
 
 	const nodeChats = new Map<string, Set<string>>();
@@ -379,7 +387,7 @@ export function graphSnapshot(): GraphSnapshot {
 		}
 		chats.add(chatId);
 	};
-	for (const m of graphLedgers.readMappings()) touch(m.graphNodeId, m.chatId);
+	for (const m of deps.graphStore.readMappings()) touch(m.graphNodeId, m.chatId);
 	for (const edge of edges) {
 		for (const chatId of edge.provenance) {
 			touch(edge.from, chatId);
@@ -397,7 +405,7 @@ export function graphSnapshot(): GraphSnapshot {
 	}
 	const sessions: Record<string, string> = {};
 	for (const id of chatIds) {
-		const chat = getChat(id);
+		const chat = deps.chatStore.getChat(id);
 		if (chat) sessions[id] = chat.title;
 	}
 
@@ -417,9 +425,9 @@ export function graphSnapshot(): GraphSnapshot {
  * sessions deposit value — vision §1 "frequent updates"). Called at the top
  * of GET /api/graph; the chat-handler onFinish hook covers the live path.
  */
-export function foldStaleChats(): number {
+export function foldStaleChats(deps: GraphDeps): number {
 	const checkpoints = new Map<string, string>();
-	for (const checkpoint of graphLedgers.readCheckpoints()) {
+	for (const checkpoint of deps.graphStore.readCheckpoints()) {
 		const previous = checkpoints.get(checkpoint.chatId);
 		if (previous === undefined || checkpoint.foldedAt > previous) {
 			checkpoints.set(checkpoint.chatId, checkpoint.foldedAt);
@@ -427,11 +435,11 @@ export function foldStaleChats(): number {
 	}
 
 	let folded = 0;
-	for (const chat of listChats()) {
+	for (const chat of deps.chatStore.listChats()) {
 		const foldedAt = checkpoints.get(chat.id);
 		if (foldedAt !== undefined && chat.updatedAt <= foldedAt) continue;
 		try {
-			emitChat(chat.id);
+			emitChat(chat.id, deps);
 			folded++;
 		} catch (err) {
 			console.error(`[graph] fold failed for chat ${chat.id}:`, err);

@@ -9,13 +9,16 @@
  *   components/**  →  "@/src/core"        (this barrel, ONLY)
  *   app/**         →  "@/src/core" + "@/src/server"
  *
- * IO-bound modules (core/graph.ts, core/graph-context.ts read the ledgers
- * via the store) stay internal to the server side until the storage-port
- * stage inverts their dependency; they are deliberately NOT re-exported
- * here.
+ * Server-only core modules (core/graph.ts emission/derivation,
+ * core/graph-context.ts) are pure but need storage ports passed in by a
+ * server caller, so they are deliberately NOT re-exported here — the
+ * server imports them directly. The storage PORT TYPES are types-only and
+ * browser-safe, hence re-exported.
  */
 
 export * from "./contracts.ts";
+export * from "./ports.ts";
+
 export * from "./question-core.ts";
 export * from "./plan-tree.ts";
 export * from "./phases.ts";

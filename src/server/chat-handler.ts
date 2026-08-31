@@ -2,9 +2,9 @@ import { createAgentUIStreamResponse, type UIMessage } from "ai";
 import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts";
 import { createTeacherTools } from "../agent/tools.ts";
 import { spawnPendingJobs } from "../agent/subagents/runner.ts";
-import { emitChat } from "../core/graph.ts";
+import { emitChat, getGraph } from "../core/graph.ts";
 import { buildGraphContext } from "../core/graph-context.ts";
-import { getChat, saveMessages } from "../store/chats.ts";
+import { stores } from "./stores.ts";
 
 /**
  * One chat turn: run the teacher agent over the client's message list and
@@ -23,7 +23,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
 	}
 	const chatId = typeof body.chatId === "string" ? body.chatId : "";
-	if (!chatId || !getChat(chatId)) {
+	if (!chatId || !stores.chatStore.getChat(chatId)) {
 		return Response.json({ error: "Unknown chat" }, { status: 404 });
 	}
 	if (!Array.isArray(body.messages)) {
@@ -37,7 +37,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 	// take the lesson down: the block is context, not a dependency.
 	let graphContext: string | null = null;
 	try {
-		graphContext = buildGraphContext();
+		graphContext = buildGraphContext(getGraph(stores.graphStore));
 	} catch (err) {
 		console.error(`[chat ${chatId}] graph context build failed:`, err);
 	}
@@ -49,7 +49,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 			// Persist even when aborted: the partial transcript (including any
 			// pending question part) is what makes resume work.
 			try {
-				saveMessages(chatId, messages as UIMessage[]);
+				stores.chatStore.saveMessages(chatId, messages as UIMessage[]);
 			} catch (err) {
 				console.error(`[chat ${chatId}] persist failed:`, err, { isAborted });
 			}
@@ -67,7 +67,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 			// Skipped under tests: scripted chats are fixtures, not knowledge.
 			if (process.env.NODE_ENV !== "test") {
 				try {
-					emitChat(chatId);
+					emitChat(chatId, stores);
 				} catch (err) {
 					console.error(`[chat ${chatId}] graph emission failed:`, err);
 				}

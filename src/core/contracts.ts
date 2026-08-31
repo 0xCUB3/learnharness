@@ -1,7 +1,7 @@
 /**
  * Shared contracts — the single source of truth every component codes against.
- * Pure types + protocol docs; no runtime code, type-only imports (safe
- * everywhere: server, client, tests). See docs/vision.md (§ refs).
+ * Pure types + protocol docs + tiny pure helpers; type-only imports of "ai"
+ * (safe everywhere: server, client, tests). See docs/vision.md (§ refs).
  */
 
 import type { UIMessage } from "ai";
@@ -83,6 +83,23 @@ export interface GraphEdge {
 	provenance: string[];
 }
 
+/** mappings.jsonl line — the naive-union identity map: a chat's tree node →
+ * the graph node it folded into (the merge audit trail; v1 never merges two
+ * sessions' tree nodes — W8 exact-title match aside). */
+export interface NodeMapping {
+	chatId: string;
+	treeNodeId: string;
+	graphNodeId: string;
+}
+
+/** sessions.jsonl line — the emission checkpoint for one chat (which chats
+ *  have been folded, and through which updatedAt — never fold twice). */
+export interface SessionCheckpoint {
+	chatId: string;
+	/** The chat record's `updatedAt` at the time of the fold. */
+	foldedAt: string;
+}
+
 export type LedgerEventKind =
 	| "probe-correct"
 	| "probe-miss"
@@ -134,6 +151,13 @@ export interface GraphSnapshot {
 	sessions: Record<string, string>;
 	/** nodeId → chatIds that touched the node (click-through provenance). */
 	nodeSessions: Record<string, string[]>;
+}
+
+/** Derive a short chat title from the learner's first message (pure).
+ *  Used on chat creation; deterministic so tests can pin it. */
+export function titleFromPrompt(prompt: string): string {
+	const oneLine = prompt.replace(/\s+/g, " ").trim();
+	return oneLine.length > 72 ? `${oneLine.slice(0, 72)}…` : oneLine;
 }
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────

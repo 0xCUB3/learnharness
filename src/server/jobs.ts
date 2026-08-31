@@ -1,4 +1,4 @@
-import { listJobs } from "../store/jobs.ts";
+import { stores } from "./stores.ts";
 
 /**
  * Server-side job-status entry (GET /api/jobs?chatId=…, contracts.ts
@@ -7,4 +7,4 @@ import { listJobs } from "../store/jobs.ts";
  * re-syncs the chat when the job flips to done/error.
  */
 
-export { listJobs };
+export const { listJobs } = stores.jobStore;

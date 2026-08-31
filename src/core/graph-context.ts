@@ -22,7 +22,7 @@
  */
 
 import type { GraphEdge, GraphNode } from "./contracts.ts";
-import { deriveNodeStates, getGraph, type DerivedGraph } from "./graph.ts";
+import { deriveNodeStates, type DerivedGraph } from "./graph.ts";
 import type { NodeStateClass } from "./contracts.ts";
 
 /** The section header the teacher is taught to recognize (50-graph-context.md). */
@@ -59,7 +59,7 @@ function isHotspot(node: GraphNode, state: NodeStateClass): boolean {
  * Render the context block, or null when there is nothing worth injecting
  * (no nodes; or a truncated graph whose selection came out empty).
  *
- * Pure: callers hand in exactly what getGraph() + deriveNodeStates() produce.
+ * Pure: callers hand in exactly what getGraph(graphStore) + deriveNodeStates() produce.
  */
 export function renderGraphContext(
 	nodes: GraphNode[],
@@ -162,11 +162,11 @@ function edgeChains(edges: GraphEdge[]): string[][] {
 // ─── the per-request entry point ─────────────────────────────────────────────
 
 /**
- * Build the graph context block for one request. Stateless — re-reads the
- * ledgers every call, so it self-updates as the graph grows mid-session.
- * Accepts an injected derived graph (tests); defaults to the live one.
+ * Build the graph context block for one request. Pure: the caller hands in
+ * the derived graph (production: getGraph(graphStore) per request in the
+ * chat-handler, so it self-updates as the graph grows mid-session).
  */
-export function buildGraphContext(graph: DerivedGraph = getGraph()): string | null {
+export function buildGraphContext(graph: DerivedGraph): string | null {
 	const states = deriveNodeStates(graph.nodes, graph.events);
 	return renderGraphContext(graph.nodes, graph.edges, states);
 }

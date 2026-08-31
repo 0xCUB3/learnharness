@@ -1,5 +1,6 @@
 import type { GraphSnapshot } from "../core/contracts.ts";
 import { foldStaleChats, graphSnapshot } from "../core/graph.ts";
+import { stores } from "./stores.ts";
 
 /**
  * Server-side graph entry for the home view (GET /api/graph): fold any chat
@@ -9,6 +10,6 @@ import { foldStaleChats, graphSnapshot } from "../core/graph.ts";
  * same read surface.
  */
 export function graphView(): GraphSnapshot {
-	foldStaleChats();
-	return graphSnapshot();
+	foldStaleChats(stores);
+	return graphSnapshot(stores);
 }

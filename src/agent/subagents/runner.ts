@@ -1,8 +1,8 @@
 import { isToolUIPart, type LanguageModel, type UIMessage } from "ai";
 import type { DemoResult, DemoToolInput, JobKind, ResearchResult, ResearchToolInput, VisualResult, VisualToolInput } from "../../core/contracts.ts";
 import { JOB_TOOLS } from "../../core/pending.ts";
-import { getChat, saveMessages } from "../../store/chats.ts";
-import { createJob, findJobByToolCallId, getJob, updateJob } from "../../store/jobs.ts";
+import { chatStore } from "../../store/chats.ts";
+import { jobStore } from "../../store/jobs.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { createResearcherAgent } from "./researcher.ts";
 import { runVisualMaker } from "./visual-maker.ts";
@@ -60,22 +60,22 @@ export function spawnPendingJobs(chatId: string, messages: UIMessage[]): void {
 		if (!(JOB_TOOLS as readonly string[]).includes(tool)) continue;
 		const runner = KIND_RUNNERS[tool as JobKind];
 		if (!runner) continue;
-		if (findJobByToolCallId(chatId, part.toolCallId)) continue; // already has a job
-		const job = createJob({ kind: tool as JobKind, chatId, toolCallId: part.toolCallId });
+		if (jobStore.findJobByToolCallId(chatId, part.toolCallId)) continue; // already has a job
+		const job = jobStore.createJob({ kind: tool as JobKind, chatId, toolCallId: part.toolCallId });
 		void runner(job.id).catch((err) => {
 			console.error(`[job ${job.id}] ${tool} runner crashed:`, err);
-			updateJob(job.id, { status: "error", error: String(err), activity: "failed" });
+			jobStore.updateJob(job.id, { status: "error", error: String(err), activity: "failed" });
 		});
 	}
 }
 
 export async function runResearchJob(jobId: string, opts: RunResearchJobOptions = {}): Promise<void> {
-	const job = getJob(jobId);
+	const job = jobStore.getJob(jobId);
 	if (!job || job.status !== "running") return;
 
-	const chat = getChat(job.chatId);
+	const chat = chatStore.getChat(job.chatId);
 	if (!chat) {
-		updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
+		jobStore.updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
 		return;
 	}
 	const input = findToolPart(chat.messages, job.toolCallId)?.input as ResearchToolInput | undefined;
@@ -94,7 +94,7 @@ export async function runResearchJob(jobId: string, opts: RunResearchJobOptions 
 	const agent = createResearcherAgent(opts.model);
 
 	try {
-		updateJob(jobId, { activity: "researching" });
+		jobStore.updateJob(jobId, { activity: "researching" });
 		const result = await agent.generate({
 			prompt,
 			onToolExecutionStart: ({ toolCall }) => {
@@ -102,7 +102,7 @@ export async function runResearchJob(jobId: string, opts: RunResearchJobOptions 
 				if (toolCall.toolName === "web_fetch" && typeof input?.url === "string") {
 					fetchedUrls.push(input.url);
 				}
-				updateJob(jobId, { activity: activityLine(toolCall.toolName, input) });
+				jobStore.updateJob(jobId, { activity: activityLine(toolCall.toolName, input) });
 			},
 		});
 
@@ -111,11 +111,11 @@ export async function runResearchJob(jobId: string, opts: RunResearchJobOptions 
 		const research: ResearchResult = { brief, sources: parseSources(brief, fetchedUrls) };
 
 		fulfillPart(job.chatId, job.toolCallId, research);
-		updateJob(jobId, { status: "done", result: research }); // activity line kept: the last tool call is the record
+		jobStore.updateJob(jobId, { status: "done", result: research }); // activity line kept: the last tool call is the record
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
 		fulfillPart(job.chatId, job.toolCallId, { brief: `Research failed: ${reason}`, sources: [] });
-		updateJob(jobId, { status: "error", activity: "failed", error: reason });
+		jobStore.updateJob(jobId, { status: "error", activity: "failed", error: reason });
 	}
 }
 
@@ -135,12 +135,12 @@ function isVisualFailure(result: VisualResult): boolean {
 }
 
 export async function runDemoJob(jobId: string, opts: RunDemoJobOptions = {}): Promise<void> {
-	const job = getJob(jobId);
+	const job = jobStore.getJob(jobId);
 	if (!job || job.status !== "running") return;
 
-	const chat = getChat(job.chatId);
+	const chat = chatStore.getChat(job.chatId);
 	if (!chat) {
-		updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
+		jobStore.updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
 		return;
 	}
 	const input = findToolPart(chat.messages, job.toolCallId)?.input as DemoToolInput | undefined;
@@ -148,25 +148,25 @@ export async function runDemoJob(jobId: string, opts: RunDemoJobOptions = {}): P
 	const brief = typeof input?.brief === "string" ? input.brief : "";
 
 	try {
-		updateJob(jobId, { activity: "building demo" });
+		jobStore.updateJob(jobId, { activity: "building demo" });
 		const result = await runDemoBuilder(
 			{ title, brief },
 			{
 				model: opts.model,
-				onActivity: (line) => updateJob(jobId, { activity: line }),
+				onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 			},
 		);
 		fulfillPart(job.chatId, job.toolCallId, result);
 		if (isDemoFailure(result)) {
-			updateJob(jobId, { status: "error", error: result.notes ?? "demo build failed", activity: "failed" });
+			jobStore.updateJob(jobId, { status: "error", error: result.notes ?? "demo build failed", activity: "failed" });
 		} else {
-			updateJob(jobId, { status: "done", result });
+			jobStore.updateJob(jobId, { status: "done", result });
 		}
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
 		const failure: DemoResult = { title, html: "", tested: true, notes: `FAILED: ${reason}` };
 		fulfillPart(job.chatId, job.toolCallId, failure);
-		updateJob(jobId, { status: "error", error: reason, activity: "failed" });
+		jobStore.updateJob(jobId, { status: "error", error: reason, activity: "failed" });
 	}
 }
 
@@ -175,37 +175,37 @@ export interface RunVisualJobOptions {
 }
 
 export async function runVisualJob(jobId: string, opts: RunVisualJobOptions = {}): Promise<void> {
-	const job = getJob(jobId);
+	const job = jobStore.getJob(jobId);
 	if (!job || job.status !== "running") return;
 
-	const chat = getChat(job.chatId);
+	const chat = chatStore.getChat(job.chatId);
 	if (!chat) {
-		updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
+		jobStore.updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
 		return;
 	}
 	const input = findToolPart(chat.messages, job.toolCallId)?.input as VisualToolInput | undefined;
 	const brief = typeof input?.brief === "string" ? input.brief : "";
 
 	try {
-		updateJob(jobId, { activity: "drawing figure" });
+		jobStore.updateJob(jobId, { activity: "drawing figure" });
 		const result = await runVisualMaker(
 			{ brief },
 			{
 				model: opts.model,
-				onActivity: (line) => updateJob(jobId, { activity: line }),
+				onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 			},
 		);
 		fulfillPart(job.chatId, job.toolCallId, result);
 		if (isVisualFailure(result)) {
-			updateJob(jobId, { status: "error", error: result.notes ?? "visual build failed", activity: "failed" });
+			jobStore.updateJob(jobId, { status: "error", error: result.notes ?? "visual build failed", activity: "failed" });
 		} else {
-			updateJob(jobId, { status: "done", result });
+			jobStore.updateJob(jobId, { status: "done", result });
 		}
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
 		const failure: VisualResult = { svg: "", notes: `FAILED: ${reason}` };
 		fulfillPart(job.chatId, job.toolCallId, failure);
-		updateJob(jobId, { status: "error", error: reason, activity: "failed" });
+		jobStore.updateJob(jobId, { status: "error", error: reason, activity: "failed" });
 	}
 }
 
@@ -241,7 +241,7 @@ function hostOf(url: string | undefined): string {
  * Synchronous read-modify-write (no awaits) — atomic within the event loop.
  */
 function fulfillPart(chatId: string, toolCallId: string, output: ResearchResult | DemoResult | VisualResult): void {
-	const chat = getChat(chatId);
+	const chat = chatStore.getChat(chatId);
 	if (!chat) return;
 	let found = false;
 	const messages = chat.messages.map((m) =>
@@ -260,7 +260,7 @@ function fulfillPart(chatId: string, toolCallId: string, output: ResearchResult 
 	);
 	if (!found) return;
 	try {
-		saveMessages(chatId, messages);
+		chatStore.saveMessages(chatId, messages);
 	} catch (err) {
 		console.error(`[chat ${chatId}] fulfilling job part ${toolCallId} failed:`, err);
 	}

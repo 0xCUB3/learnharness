@@ -26,7 +26,7 @@ import {
 	updateNode,
 } from "../src/core/plan-tree.ts";
 import { planTools } from "../src/agent/tools/plan.ts";
-import { createChat, getChat } from "../src/store/chats.ts";
+import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
 const N = (id: string, title = id, summary?: string) => ({ id, title, ...(summary ? { summary } : {}) });
@@ -228,7 +228,7 @@ async function exec(tools: ReturnType<typeof planTools>, name: string, input: un
 }
 
 function newChat(title: string): string {
-	const chat = createChat(title);
+	const chat = chatStore.createChat(title);
 	createdChats.push(chat.id);
 	return chat.id;
 }
@@ -251,7 +251,7 @@ describe("plan tools (execute against the real store)", () => {
 		assert.equal(res.tree.nodes.length, 2);
 		assert.deepEqual(res.tree.edges, [{ from: "truth", to: "goal" }]);
 
-		const saved = getChat(chatId)!.tree;
+		const saved = chatStore.getChat(chatId)!.tree;
 		assert.ok(saved, "tree persisted to the chat record");
 		assert.deepEqual(saved, res.tree);
 	});
@@ -268,7 +268,7 @@ describe("plan tools (execute against the real store)", () => {
 		assert.equal(res.error, "Tree already initialized — use the mutation tools");
 		assert.deepEqual(res.tree.nodes.map((n: { id: string }) => n.id), ["a"], "existing tree returned, not wiped");
 
-		const saved = getChat(chatId)!.tree!;
+		const saved = chatStore.getChat(chatId)!.tree!;
 		assert.deepEqual(saved.nodes.map((n) => n.id), ["a"]);
 	});
 
@@ -288,7 +288,7 @@ describe("plan tools (execute against the real store)", () => {
 		assert.equal(res.ok, false);
 		assert.match(res.error!, /cycle/);
 		assert.deepEqual(res.tree, emptyTree());
-		assert.equal(getChat(chatId)!.tree, undefined, "nothing persisted on failure");
+		assert.equal(chatStore.getChat(chatId)!.tree, undefined, "nothing persisted on failure");
 	});
 
 	it("mutation round-trip: add node with parents, set current, mark done — each persists", async () => {
@@ -315,17 +315,17 @@ describe("plan tools (execute against the real store)", () => {
 			["ratelimit→burst", "ratelimit→detour"],
 		);
 		assert.equal(added.tree.version, 2);
-		assert.deepEqual(getChat(chatId)!.tree!, added.tree, "add_node persisted");
+		assert.deepEqual(chatStore.getChat(chatId)!.tree!, added.tree, "add_node persisted");
 
 		const current = await exec(tools, "plan_set_current", { id: "detour" });
 		assert.equal(current.ok, true);
 		assert.equal(current.tree.currentNodeId, "detour");
-		assert.equal(getChat(chatId)!.tree!.currentNodeId, "detour", "set_current persisted");
+		assert.equal(chatStore.getChat(chatId)!.tree!.currentNodeId, "detour", "set_current persisted");
 
 		const done = await exec(tools, "plan_mark_done", { id: "ratelimit" });
 		assert.equal(done.ok, true);
 		assert.deepEqual(done.tree.doneNodeIds, ["ratelimit"]);
-		assert.deepEqual(getChat(chatId)!.tree!.doneNodeIds, ["ratelimit"], "mark_done persisted");
+		assert.deepEqual(chatStore.getChat(chatId)!.tree!.doneNodeIds, ["ratelimit"], "mark_done persisted");
 		assert.equal(done.tree.version, 4);
 	});
 
@@ -333,7 +333,7 @@ describe("plan tools (execute against the real store)", () => {
 		const chatId = newChat("Plan tools: invalid ops");
 		const tools = planTools({ chatId });
 		await exec(tools, "plan_init", { nodes: [{ id: "a", title: "A" }] });
-		const before = getChat(chatId)!.tree!;
+		const before = chatStore.getChat(chatId)!.tree!;
 
 		const dup = await exec(tools, "plan_add_node", { id: "a", title: "Impostor" });
 		assert.equal(dup.ok, false);
@@ -348,7 +348,7 @@ describe("plan tools (execute against the real store)", () => {
 		assert.equal(badEdge.ok, false);
 		assert.match(badEdge.error!, /self-loop/);
 
-		assert.deepEqual(getChat(chatId)!.tree!, before, "record untouched by failed ops");
+		assert.deepEqual(chatStore.getChat(chatId)!.tree!, before, "record untouched by failed ops");
 	});
 
 	it("mutation tools work on a fresh (uninitialized) chat: the tree seeds from empty", async () => {
@@ -357,7 +357,7 @@ describe("plan tools (execute against the real store)", () => {
 		const res = await exec(tools, "plan_add_node", { id: "a", title: "A" });
 		assert.equal(res.ok, true);
 		assert.equal(res.tree.nodes.length, 1);
-		assert.ok(getChat(chatId)!.tree, "tree seeded without plan_init");
+		assert.ok(chatStore.getChat(chatId)!.tree, "tree seeded without plan_init");
 	});
 
 	it("unknown chat returns ok:false with the empty tree", async () => {

@@ -13,7 +13,7 @@ import {
 	setCurrent,
 	updateNode,
 } from "../../core/plan-tree.ts";
-import { getChat, saveTree } from "../../store/chats.ts";
+import { chatStore } from "../../store/chats.ts";
 import type { TeacherToolContext } from "../tools.ts";
 
 /**
@@ -52,12 +52,12 @@ async function runPlanOp(
 	chatId: string,
 	op: (tree: PlanTree) => PlanTree,
 ): Promise<PlanToolResult> {
-	const record = getChat(chatId);
+	const record = chatStore.getChat(chatId);
 	if (!record) return { ok: false, error: `Chat not found: ${chatId}`, tree: emptyTree() };
 	const current = record.tree ?? emptyTree();
 	try {
 		const next = op(current);
-		saveTree(chatId, next);
+		chatStore.saveTree(chatId, next);
 		return { ok: true, tree: next };
 	} catch (err) {
 		if (err instanceof PlanTreeError) return { ok: false, error: err.message, tree: current };
@@ -81,7 +81,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 					.describe("Initial `requires` edges between the nodes. Edge direction: from = prerequisite, to = dependent."),
 			}),
 			execute: async ({ nodes, edges }): Promise<PlanToolResult> => {
-				const record = getChat(ctx.chatId);
+				const record = chatStore.getChat(ctx.chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}`, tree: emptyTree() };
 				const existing = record.tree;
 				if (existing && existing.nodes.length > 0) {

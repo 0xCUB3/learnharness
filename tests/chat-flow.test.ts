@@ -19,7 +19,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { createChat, getChat, saveMessages } from "../src/store/chats.ts";
+import { chatStore } from "../src/store/chats.ts";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 import { findPendingToolCall } from "../src/core/pending.ts";
 import { PATHS } from "../config.ts";
@@ -113,14 +113,14 @@ describe("teacher chat flow (scripted model)", () => {
 	it("quiz tool call persists as a pending part; the answer continues the lesson", async () => {
 		const calls: string[][] = [];
 		const agent = createTeacherAgent(scriptedModel(calls));
-		const chat = createChat("Test: solar system");
+		const chat = chatStore.createChat("Test: solar system");
 		createdChats.push(chat.id);
 
 		// ── Turn 1: learner opens with a topic; teacher probes with a quiz ──
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
 		await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
 
-		const saved1 = getChat(chat.id)!;
+		const saved1 = chatStore.getChat(chat.id)!;
 		assert.equal(saved1.messages.length, 2, "user message + assistant response persisted");
 		const assistantMsg = saved1.messages[1]!;
 		assert.equal(assistantMsg.role, "assistant");
@@ -170,7 +170,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// ── The teacher reacts — as a CONTINUATION of the same assistant message
 		// (the last client message is the assistant message carrying the tool
 		// output, so the new text appends to that message's parts). ──
-		const saved2 = getChat(chat.id)!;
+		const saved2 = chatStore.getChat(chat.id)!;
 		assert.equal(saved2.messages.length, 2, "the reaction continues the same assistant message");
 		const finalParts = saved2.messages[1]!.parts;
 		const textPart = finalParts.find((p) => p.type === "text");
@@ -200,7 +200,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// tool-input-start chunk. If a transport change ever stopped emitting
 		// it, the indicator would silently die — pin the protocol.
 		const agent = createTeacherAgent(scriptedModel([]));
-		const chat = createChat("Test: protocol pin");
+		const chat = chatStore.createChat("Test: protocol pin");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
 		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
@@ -214,7 +214,7 @@ describe("teacher chat flow (scripted model)", () => {
 	it("persists even when the stream is aborted (resume keeps partial state)", async () => {
 		const calls: string[][] = [];
 		const agent = createTeacherAgent(scriptedModel(calls));
-		const chat = createChat("Test: abort");
+		const chat = chatStore.createChat("Test: abort");
 		createdChats.push(chat.id);
 
 		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] }]);
@@ -226,17 +226,17 @@ describe("teacher chat flow (scripted model)", () => {
 		await reader.cancel();
 		// Give onFinish a tick to fire.
 		await new Promise((r) => setTimeout(r, 50));
-		const saved = getChat(chat.id)!;
+		const saved = chatStore.getChat(chat.id)!;
 		assert.ok(saved.messages.length >= 1, "partial transcript persisted");
 	});
 });
 
 describe("chat store", () => {
 	it("round-trips and lists chats", async () => {
-		const chat = createChat("Store test");
+		const chat = chatStore.createChat("Store test");
 		createdChats.push(chat.id);
-		saveMessages(chat.id, [{ id: "m1", role: "user", parts: [{ type: "text", text: "hi" }] }]);
-		const loaded = getChat(chat.id)!;
+		chatStore.saveMessages(chat.id, [{ id: "m1", role: "user", parts: [{ type: "text", text: "hi" }] }]);
+		const loaded = chatStore.getChat(chat.id)!;
 		assert.equal(loaded.messages.length, 1);
 		assert.equal(loaded.title, "Store test");
 	});

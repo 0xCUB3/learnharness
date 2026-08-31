@@ -71,7 +71,7 @@ graph TB
         VIS["visual-maker<br/>write → render → look"]
     end
 
-    subgraph STORE["File stores (data/, never in git)"]
+    subgraph STORE["File stores (src/store adapters → data/, never in git)"]
         CHATS[("data/chats/*.json<br/>UIMessages + plan tree")]
         JOBS[("data/jobs/*.json")]
         LEDG[("data/graph/*.jsonl<br/>nodes/edges/events/mappings/sessions")]
@@ -126,10 +126,15 @@ src/
     subagents/                  researcher · demo-builder · visual-maker,
                                 runner (async protocol), headless Chrome helper
   server/chat-handler.ts       one chat turn: stream, persist, spawn, emit
+  server/stores.ts              THE composition root — the one place adapters wire in
   core/contracts.ts             THE contracts file — types + protocol docs
+  core/ports.ts                 storage ports — ChatStore · GraphStore · JobStore
+                                (core code depends on these types only)
   core/                         question-core, plan-tree, phases, pending,
                                 graph (emission/derivation), graph-context, math delims
-  store/                        chats · graph ledgers · jobs (plain fs, no framework)
+                                — all pure: storage arrives as parameters
+  store/                        fs adapters implementing the ports: chats ·
+                                graph ledgers · jobs (plain fs, no framework)
 scripts/bench-graph.ts          sigma/forceAtlas2 layout benchmark
 data/                           chats/ · graph/ · jobs/ — runtime state, git-ignored
 ```

@@ -10,7 +10,8 @@ import importPlugin from "eslint-plugin-import";
  *
  *   components/**  →  "@/src/core"  (the pure core barrel) — ONLY
  *   app/**         →  "@/src/core" + "@/src/server" (the server barrel) — ONLY
- *   pure core      →  never imports src/agent, src/server, src/store
+ *   src/core/**    →  never imports src/agent, src/server, src/store (pure
+ *                    core: adapters implement core/ports.ts, never the reverse)
  *
  * tests/ and scripts/ are internal — unrestricted.
  */
@@ -49,10 +50,10 @@ export default defineConfig([
 								"app/ (transport + server components) imports ONLY the barrels: `@/src/core` and `@/src/server` (architecture: docs/architecture.md).",
 						},
 						{
-							target: "./src/core/{index,contracts,question-core,plan-tree,phases,pending,math-delims,ui-message}.ts",
+							target: "./src/core",
 							from: ["./src/agent", "./src/server", "./src/store"],
 							message:
-								"Pure core modules never import IO layers (agent/server/store). IO-bound core (graph.ts, graph-context.ts) is exempt until the storage-port stage inverts it.",
+								"Pure core never imports IO layers (agent/server/store): adapters implement core/ports.ts, and the composition root (src/server/stores.ts) passes them in (architecture: docs/architecture.md).",
 						},
 					],
 				},
