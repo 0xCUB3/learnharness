@@ -58,7 +58,7 @@ graph TB
     end
 
     subgraph TEACHER["Teacher agent (src/agent)"]
-        CH["chat-handler.ts (framework-free)<br/>graph context · persist · spawn jobs · emit"]
+        CH["chat-handler.ts — turn composition root<br/>(services: context · persist · spawn · fold)"]
         TA["ToolLoopAgent<br/>system-prompt.md + prompts/*.md fragments<br/>+ graph-context block"]
         QT["quiz · ask_user_question<br/>(client-side tools, no execute)"]
         PT["plan_* tools (server-side,<br/>mutate the chat's tree)"]
@@ -125,7 +125,9 @@ src/
     tools/jobs.ts               research / demo / visual tool surfaces
     subagents/                  researcher · demo-builder · visual-maker,
                                 runner (async protocol), headless Chrome helper
-  server/chat-handler.ts       one chat turn: stream, persist, spawn, emit
+  server/chat-handler.ts       one chat turn: compose agent + services, stream
+  server/turn-service.ts       turn services: teacher context · persist ·
+                                spawn jobs · fold-into-graph (error-contained)
   server/stores.ts              THE composition root — the one place adapters wire in
   core/contracts.ts             THE contracts file — types + protocol docs
   core/ports.ts                 storage ports — ChatStore · GraphStore · JobStore

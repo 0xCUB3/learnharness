@@ -41,10 +41,13 @@ import { sanitizeSvg, VisualCard } from "../components/artifacts/visual-card.tsx
 import { demoInputSchema, jobTools, visualInputSchema } from "../src/agent/tools/jobs.ts";
 import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
-import { demoModelOverride, runDemoJob, runVisualJob, spawnPendingJobs, visualModelOverride } from "../src/agent/subagents/runner.ts";
+import { createJobRunner, demoModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
 import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
+
+/** The runner with the same wired fs ports the chat-handler injects. */
+const jobRunner = createJobRunner({ chatStore, jobStore });
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { artifactRenderers } from "../components/artifacts/index.ts";
@@ -464,7 +467,7 @@ describe("demo/visual job runners", () => {
 		// runDemoJob has no headless injection point — the module override is the seam.
 		headlessOverride.current = fakeHeadless();
 		try {
-			await runDemoJob(job.id, {
+			await jobRunner.runDemoJob(job.id, {
 				model: scriptedModel([
 					{ toolCalls: [{ toolCallId: "w1", toolName: "write_demo", input: { html: GOOD_HTML } }] },
 					{ toolCalls: [{ toolCallId: "r1", toolName: "run_demo", input: {} }] },
@@ -504,7 +507,7 @@ describe("demo/visual job runners", () => {
 		const job = jobStore.createJob({ kind: "visual", chatId: chat.id, toolCallId: "call-v1" });
 		createdJobs.push(job.id);
 
-		await runVisualJob(job.id, { model: scriptedModel([{ text: "cannot" }]) });
+		await jobRunner.runVisualJob(job.id, { model: scriptedModel([{ text: "cannot" }]) });
 
 		const errored = jobStore.getJob(job.id)!;
 		assert.equal(errored.status, "error");
@@ -588,7 +591,7 @@ describe("demo/visual job runners", () => {
 			assert.equal(part.state, "output-available", "demo part fulfilled by the background runner");
 
 			// Idempotency: re-running the spawn hook creates no second job.
-			spawnPendingJobs(chat.id, saved.messages);
+			jobRunner.spawnPendingJobs(chat.id, saved.messages);
 			assert.equal(jobStore.listJobs(chat.id).length, 1, "no duplicate job for the same tool part");
 		} finally {
 			demoModelOverride.current = undefined;
@@ -601,7 +604,7 @@ describe("demo/visual job runners", () => {
 
 describe("tool + renderer registry wiring", () => {
 	it("demo and visual are CLIENT-SIDE tools with the contract schemas", () => {
-		const tools = jobTools({ chatId: "c" });
+		const tools = jobTools();
 		assert.deepEqual(Object.keys(tools).sort(), ["demo", "research", "visual"]);
 		for (const name of ["demo", "visual"] as const) {
 			assert.equal(typeof (tools[name] as { execute?: unknown }).execute, "undefined", `${name} has no execute — client-side like quiz/ask`);

@@ -12,6 +12,9 @@ import importPlugin from "eslint-plugin-import";
  *   app/**         →  "@/src/core" + "@/src/server" (the server barrel) — ONLY
  *   src/core/**    →  never imports src/agent, src/server, src/store (pure
  *                    core: adapters implement core/ports.ts, never the reverse)
+ *   src/agent/**   →  never imports src/server, src/store (dependencies —
+ *                    the storage ports, the composition — arrive via
+ *                    factories/closures from the chat-handler)
  *
  * tests/ and scripts/ are internal — unrestricted.
  */
@@ -54,6 +57,12 @@ export default defineConfig([
 							from: ["./src/agent", "./src/server", "./src/store"],
 							message:
 								"Pure core never imports IO layers (agent/server/store): adapters implement core/ports.ts, and the composition root (src/server/stores.ts) passes them in (architecture: docs/architecture.md).",
+						},
+						{
+							target: "./src/agent",
+							from: ["./src/server", "./src/store"],
+							message:
+								"The agent layer receives its dependencies (storage ports via factories/closures) — it never imports the server layer or store adapters (architecture: docs/architecture.md).",
 						},
 					],
 				},

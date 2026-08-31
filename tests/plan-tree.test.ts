@@ -236,7 +236,7 @@ function newChat(title: string): string {
 describe("plan tools (execute against the real store)", () => {
 	it("plan_init creates and persists the tree; result is ok with the full tree", async () => {
 		const chatId = newChat("Plan tools: init");
-		const tools = planTools({ chatId });
+		const tools = planTools({ chatId, chatStore });
 
 		const res = await exec(tools, "plan_init", {
 			nodes: [
@@ -258,7 +258,7 @@ describe("plan tools (execute against the real store)", () => {
 
 	it("plan_init refuses to re-init and never silently wipes the existing tree", async () => {
 		const chatId = newChat("Plan tools: re-init");
-		const tools = planTools({ chatId });
+		const tools = planTools({ chatId, chatStore });
 		await exec(tools, "plan_init", { nodes: [{ id: "a", title: "A" }] });
 
 		const res = await exec(tools, "plan_init", {
@@ -274,7 +274,7 @@ describe("plan tools (execute against the real store)", () => {
 
 	it("plan_init returns an error result on invalid input (cycle) without persisting", async () => {
 		const chatId = newChat("Plan tools: bad init");
-		const tools = planTools({ chatId });
+		const tools = planTools({ chatId, chatStore });
 		const res = await exec(tools, "plan_init", {
 			nodes: [
 				{ id: "a", title: "A" },
@@ -293,7 +293,7 @@ describe("plan tools (execute against the real store)", () => {
 
 	it("mutation round-trip: add node with parents, set current, mark done — each persists", async () => {
 		const chatId = newChat("Plan tools: round-trip");
-		const tools = planTools({ chatId });
+		const tools = planTools({ chatId, chatStore });
 
 		await exec(tools, "plan_init", {
 			nodes: [
@@ -331,7 +331,7 @@ describe("plan tools (execute against the real store)", () => {
 
 	it("invalid mutations return ok:false with the current tree and persist nothing", async () => {
 		const chatId = newChat("Plan tools: invalid ops");
-		const tools = planTools({ chatId });
+		const tools = planTools({ chatId, chatStore });
 		await exec(tools, "plan_init", { nodes: [{ id: "a", title: "A" }] });
 		const before = chatStore.getChat(chatId)!.tree!;
 
@@ -353,7 +353,7 @@ describe("plan tools (execute against the real store)", () => {
 
 	it("mutation tools work on a fresh (uninitialized) chat: the tree seeds from empty", async () => {
 		const chatId = newChat("Plan tools: no init");
-		const tools = planTools({ chatId });
+		const tools = planTools({ chatId, chatStore });
 		const res = await exec(tools, "plan_add_node", { id: "a", title: "A" });
 		assert.equal(res.ok, true);
 		assert.equal(res.tree.nodes.length, 1);
@@ -361,7 +361,7 @@ describe("plan tools (execute against the real store)", () => {
 	});
 
 	it("unknown chat returns ok:false with the empty tree", async () => {
-		const tools = planTools({ chatId: "chat_nonexistent" });
+		const tools = planTools({ chatId: "chat_nonexistent", chatStore });
 		const res = await exec(tools, "plan_mark_done", { id: "a" });
 		assert.equal(res.ok, false);
 		assert.match(res.error!, /Chat not found/);

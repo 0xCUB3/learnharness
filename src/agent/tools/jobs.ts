@@ -1,6 +1,5 @@
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
-import type { TeacherToolContext } from "../tools.ts";
 
 /**
  * Async sub-agent job tools (W2: research; W6 adds demo + visual).
@@ -72,10 +71,10 @@ export const visualTool = tool({
 
 /**
  * Per-request job tool registry. Context-free (the runner resolves
- * everything from the chat record by toolCallId) — the ctx parameter keeps
- * the createTeacherTools factory shape stable.
+ * everything from the chat record by toolCallId). Takes no dependencies —
+ * part of the dependency-free default registry in teacher-agent.ts.
  */
-export function jobTools(ctx: TeacherToolContext): ToolSet {
+export function jobTools(): ToolSet {
 	return {
 		research: researchTool,
 		demo: demoTool,

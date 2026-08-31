@@ -1,6 +1,9 @@
 import { tool, type ToolSet } from "ai";
 import { askInputSchema, quizInputSchema } from "../core/question-core.ts";
+import type { ChatStore } from "../core/ports.ts";
 import { jobTools } from "./tools/jobs.ts";
+
+export { jobTools };
 import { planTools } from "./tools/plan.ts";
 
 /**
@@ -43,16 +46,21 @@ export const questionTools = {
 
 export interface TeacherToolContext {
 	chatId: string;
+	/** The storage port plan tools persist through — the composition root
+	 *  (chat-handler) injects the wired adapter; the agent layer never
+	 *  imports one. */
+	chatStore: ChatStore;
 }
 
 /**
- * Per-request tool registry. Plan tools close over chatId for persistence;
- * question and job tools are context-free.
+ * Per-request tool registry. Plan tools close over the ctx (chatId + the
+ * injected ChatStore) for persistence; question and job tools are
+ * context-free.
  */
 export function createTeacherTools(ctx: TeacherToolContext): ToolSet {
 	return {
 		...questionTools,
 		...planTools(ctx),
-		...jobTools(ctx),
+		...jobTools(),
 	};
 }

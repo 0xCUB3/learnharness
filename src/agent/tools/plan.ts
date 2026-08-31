@@ -13,7 +13,6 @@ import {
 	setCurrent,
 	updateNode,
 } from "../../core/plan-tree.ts";
-import { chatStore } from "../../store/chats.ts";
 import type { TeacherToolContext } from "../tools.ts";
 
 /**
@@ -49,9 +48,10 @@ const edgeSchema = z.object({
  * empty) tree, so the model can see what it's working with and fix the call.
  */
 async function runPlanOp(
-	chatId: string,
+	ctx: TeacherToolContext,
 	op: (tree: PlanTree) => PlanTree,
 ): Promise<PlanToolResult> {
+	const { chatId, chatStore } = ctx;
 	const record = chatStore.getChat(chatId);
 	if (!record) return { ok: false, error: `Chat not found: ${chatId}`, tree: emptyTree() };
 	const current = record.tree ?? emptyTree();
@@ -81,7 +81,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 					.describe("Initial `requires` edges between the nodes. Edge direction: from = prerequisite, to = dependent."),
 			}),
 			execute: async ({ nodes, edges }): Promise<PlanToolResult> => {
-				const record = chatStore.getChat(ctx.chatId);
+				const record = ctx.chatStore.getChat(ctx.chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}`, tree: emptyTree() };
 				const existing = record.tree;
 				if (existing && existing.nodes.length > 0) {
@@ -91,7 +91,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 						tree: existing,
 					};
 				}
-				return runPlanOp(ctx.chatId, () => createTree(nodes, edges ?? []));
+				return runPlanOp(ctx, () => createTree(nodes, edges ?? []));
 			},
 		}),
 
@@ -109,7 +109,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 					.describe("Ids of prerequisite nodes — each gets a `requires` edge pointing to this node. All must already exist."),
 			}),
 			execute: async ({ id, title, summary, parents }): Promise<PlanToolResult> =>
-				runPlanOp(ctx.chatId, (tree) => addNode(tree, { id, title, ...(summary !== undefined ? { summary } : {}) }, parents)),
+				runPlanOp(ctx, (tree) => addNode(tree, { id, title, ...(summary !== undefined ? { summary } : {}) }, parents)),
 		}),
 
 		plan_update_node: tool({
@@ -125,7 +125,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 					message: "Pass at least one of `title` or `summary` — an update with neither changes nothing.",
 				}),
 			execute: async ({ id, title, summary }): Promise<PlanToolResult> =>
-				runPlanOp(ctx.chatId, (tree) => updateNode(tree, id, { ...(title !== undefined ? { title } : {}), ...(summary !== undefined ? { summary } : {}) })),
+				runPlanOp(ctx, (tree) => updateNode(tree, id, { ...(title !== undefined ? { title } : {}), ...(summary !== undefined ? { summary } : {}) })),
 		}),
 
 		plan_remove_node: tool({
@@ -133,7 +133,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 				"Remove a node from the plan tree — prune what proves unnecessary. Cascades: every edge touching the node (both directions), its current " +
 				"status, and its done status are removed with it.",
 			inputSchema: z.object({ id: nodeId }),
-			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx.chatId, (tree) => removeNode(tree, id)),
+			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => removeNode(tree, id)),
 		}),
 
 		plan_add_edge: tool({
@@ -144,7 +144,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 				from: nodeId.describe("Prerequisite node id (must be understood before `to`)."),
 				to: nodeId.describe("Dependent node id (requires `from`)."),
 			}),
-			execute: async ({ from, to }): Promise<PlanToolResult> => runPlanOp(ctx.chatId, (tree) => addEdge(tree, from, to)),
+			execute: async ({ from, to }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => addEdge(tree, from, to)),
 		}),
 
 		plan_remove_edge: tool({
@@ -154,7 +154,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 				from: nodeId.describe("Prerequisite end of the edge to remove."),
 				to: nodeId.describe("Dependent end of the edge to remove."),
 			}),
-			execute: async ({ from, to }): Promise<PlanToolResult> => runPlanOp(ctx.chatId, (tree) => removeEdge(tree, from, to)),
+			execute: async ({ from, to }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => removeEdge(tree, from, to)),
 		}),
 
 		plan_set_current: tool({
@@ -162,7 +162,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 				"Set the CURRENT node — where the lesson is right now. Call it the moment you START teaching a node, so the learner sees their position " +
 				"on the map. The node must exist. This marks position only; it does not mark anything done.",
 			inputSchema: z.object({ id: nodeId.describe("The node you are starting to teach now.") }),
-			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx.chatId, (tree) => setCurrent(tree, id)),
+			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => setCurrent(tree, id)),
 		}),
 
 		plan_mark_done: tool({
@@ -170,7 +170,7 @@ export function planTools(ctx: TeacherToolContext): ToolSet {
 				"Mark a node DONE — and only when the learner has DEMONSTRATED it (a correct check), not when you finished explaining it. " +
 				"The node must exist. Idempotent.",
 			inputSchema: z.object({ id: nodeId.describe("The node the learner just demonstrated.") }),
-			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx.chatId, (tree) => markDone(tree, id)),
+			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => markDone(tree, id)),
 		}),
 	};
 }

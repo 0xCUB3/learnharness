@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { ToolLoopAgent, stepCountIs, type LanguageModel, type ToolSet } from "ai";
 import { openrouter } from "@openrouter/ai-sdk-provider";
 import { PATHS } from "../../config.ts";
-import { createTeacherTools } from "./tools.ts";
+import { createTeacherTools, jobTools, questionTools } from "./tools.ts";
 
 /**
  * The teacher agent. Everything pi used to provide (agent loop, tool calling,
@@ -62,10 +62,11 @@ export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet, graph
 				reasoning: { enabled: true, effort: "medium" },
 			}),
 		instructions: withGraphContext(graphContext),
-		// Tools are per-request (plan tools close over chatId); chat-handler
-		// passes createTeacherTools({ chatId }). Tests pass a mock model and get
-		// the default question-only set.
-		tools: tools ?? createTeacherTools({ chatId: "" }),
+		// Tools are per-request (plan tools close over the injected ctx);
+		// chat-handler passes createTeacherTools({ chatId, chatStore }). The
+		// dependency-free default is the question-only set (client-side tools,
+		// no storage needed) — used when tests pass a bare mock model.
+		tools: tools ?? { ...questionTools, ...jobTools() },
 		// Question and job tools are client-side — a call ends the server turn
 		// automatically. stepCountIs is just the safety net.
 		stopWhen: stepCountIs(20),

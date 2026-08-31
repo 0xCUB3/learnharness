@@ -26,9 +26,12 @@ import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
-import { researchModelOverride, runResearchJob, spawnPendingJobs } from "../src/agent/subagents/runner.ts";
+import { createJobRunner, researchModelOverride } from "../src/agent/subagents/runner.ts";
 import { createResearcherAgent } from "../src/agent/subagents/researcher.ts";
 import { PATHS } from "../config.ts";
+
+/** The runner with the same wired fs ports the chat-handler injects. */
+const jobRunner = createJobRunner({ chatStore, jobStore });
 
 const JOBS_DIR = path.join(PATHS.data, "jobs");
 
@@ -176,7 +179,7 @@ describe("spawn hook (async protocol §2)", () => {
 		trackJob(job!.id);
 
 		// Re-running the spawn hook (idempotency) does not create a second job.
-		spawnPendingJobs(chat.id, saved.messages);
+		jobRunner.spawnPendingJobs(chat.id, saved.messages);
 		assert.equal(jobStore.listJobs(chat.id).length, 1, "no duplicate job for the same tool part");
 	});
 });
@@ -270,7 +273,7 @@ describe("research runner (async protocol §3)", () => {
 			const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-run1" });
 			trackJob(job.id);
 
-			await runResearchJob(job.id, { model: researcherModel() });
+			await jobRunner.runResearchJob(job.id, { model: researcherModel() });
 
 			// The job is done, with the activity line from the tool call.
 			const done = jobStore.getJob(job.id)!;
@@ -313,7 +316,7 @@ describe("research runner (async protocol §3)", () => {
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-err1" });
 		trackJob(job.id);
 
-		await runResearchJob(job.id, { model: failing });
+		await jobRunner.runResearchJob(job.id, { model: failing });
 
 		const errored = jobStore.getJob(job.id)!;
 		assert.equal(errored.status, "error");
