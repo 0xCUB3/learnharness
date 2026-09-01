@@ -5,20 +5,22 @@
  *
  * sigma.js v3 + graphology + forceAtlas2, run-then-freeze: ONE synchronous
  * forceAtlas2.assign (100 iterations, inferSettings) inside a useEffect
- * writes x/y. No layout animation ever starts; the ONLY animation loop
- * is the hover glow pulse, which runs strictly while a node is hovered
- * and stops on leave — idle CPU stays near zero. Physics is placement
- * only: pan/zoom, no dragging, no editing.
+ * writes x/y. No layout animation ever starts; the ONLY animation is the
+ * short hover fade (enter/leave transitions), strictly bounded in time
+ * and cancelled on unmount — idle CPU stays near zero. Physics is
+ * placement only: pan/zoom, no dragging, no editing.
  *
  * Labels render the node `name` (the short header, never the statement)
  * through custom canvas drawers that replace sigma's defaults:
  *   - defaultDrawNodeLabel: plain wrapped text, centered below the node,
  *     word-wrapped at a max line width — no truncation, no one-line sprawl.
  *   - defaultDrawNodeHover: NO background box (sigma's default is a
- *     hardcoded white one). Instead the hovered node pulses a soft glow
- *     halo in its own state color and its name brightens — the "this is
- *     clickable, click for the full fact" affordance. Hover always shows
- *     the name, even when labels are zoomed out.
+ *     hardcoded white one). Instead the hovered node gets a STATIC soft
+ *     glow halo in its own state color, flush with the disc edge, and
+ *     its name brightens — the "this is clickable, click for the full
+ *     fact" affordance. Entering/leaving hover cross-fades (glow and text
+ *     together) over a short transition; the glow itself never pulses.
+ *     Hover always shows the name, even when labels are zoomed out.
  * Labels are zoom-gated GLOBALLY with a fade: all names appear at once
  * when the camera is at fit zoom or closer (ratio <= 1), then fade out
  * together across a short zoom span before label rendering switches off —
@@ -71,14 +73,13 @@ const LABELS_CAMERA_RATIO = 1;
 /** Zoom span (camera-ratio units) over which labels fade out together. */
 const LABELS_FADE_SPAN = 0.5;
 
-// Hover glow: a soft halo ring (never over the node disc), pulsing in the
-// node's own color. The phase comes from performance.now() inside the
-// drawer, so the effect only has to keep scheduling renders while hovered.
-const GLOW_PAD_MIN = 4; // px beyond the node disc at the pulse's dimmest
-const GLOW_PAD_SWING = 6; // extra px at the pulse's peak
-const GLOW_ALPHA_MIN = 0.18;
-const GLOW_ALPHA_SWING = 0.3;
-const GLOW_PULSE_MS = 1600; // one full pulse cycle
+// Hover glow: a STATIC soft halo ring in the node's own color, starting
+// flush at the disc edge (no gap — a gap reads as a false outline/border
+// between node and glow). The hovered/unhovered transition cross-fades
+// glow + text over a short window; the glow never pulses.
+const GLOW_PAD = 9; // px the halo extends beyond the node disc
+const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
+const HOVER_FADE_MS = 180; // hover enter/leave transition length
 
 /** "#rrggbb" + alpha → "rgba(...)" (tokenHex only ever emits #rrggbb). */
 function rgbaFromHex(hex: string, alpha: number): string {
@@ -138,31 +139,62 @@ function drawName(
 	context.restore();
 }
 
-/** Make the pair of canvas label drawers bound to the theme's colors. */
-function makeLabelDrawers(labelColor: string, hoverTextColor: string) {
-	const drawLabel: NodeLabelDrawingFunction = (context, data, settings) => {
-		drawName(context, data, settings, labelColor);
-	};
-
-	const drawHover: NodeHoverDrawingFunction = (context, data, settings) => {
-		context.save();
-		// Pulsing glow halo in the node's own state color: a radial-gradient
-		// ring (the evenodd punch-out keeps the node disc itself untouched).
-		const pulse = 0.5 + 0.5 * Math.sin((performance.now() / GLOW_PULSE_MS) * Math.PI * 2);
-		const inner = data.size + 1;
-		const outer = data.size + GLOW_PAD_MIN + pulse * GLOW_PAD_SWING;
-		const alpha = GLOW_ALPHA_MIN + pulse * GLOW_ALPHA_SWING;
+/** The hovered-state paint at a given transition factor (0 = resting,
+ *  1 = fully hovered): a static glow halo in the node's own state color
+ *  starting flush at the disc edge (the evenodd punch-out keeps the disc
+ *  itself unpainted), plus the name at partial alpha — the muted label on
+ *  the layer beneath shows through, so the text cross-fades toward the
+ *  brighter hover color as the glow blooms. */
+function paintHover(
+	context: CanvasRenderingContext2D,
+	data: { label?: string | null; x: number; y: number; size: number; color: string },
+	settings: { labelSize: number; labelWeight: string; labelFont: string },
+	fade: number,
+	hoverTextColor: string,
+): void {
+	context.save();
+	if (fade > 0.02) {
+		const inner = data.size;
+		const outer = data.size + GLOW_PAD * fade;
 		const glow = context.createRadialGradient(data.x, data.y, inner, data.x, data.y, outer);
-		glow.addColorStop(0, rgbaFromHex(data.color, alpha));
+		glow.addColorStop(0, rgbaFromHex(data.color, GLOW_ALPHA * fade));
 		glow.addColorStop(1, rgbaFromHex(data.color, 0));
 		context.fillStyle = glow;
 		context.beginPath();
 		context.arc(data.x, data.y, outer, 0, Math.PI * 2);
 		context.arc(data.x, data.y, inner, 0, Math.PI * 2, true);
 		context.fill("evenodd");
-		// Brighter name, no background box — the clickable affordance.
-		drawName(context, data, settings, hoverTextColor);
-		context.restore();
+	}
+	context.globalAlpha = fade;
+	drawName(context, data, settings, hoverTextColor);
+	context.restore();
+}
+
+/** Mutable hover-transition state shared between the drawers and the
+ *  effect's enter/leave animation. */
+interface HoverState {
+	fade: number;
+	/** Set on every sigma-driven hover paint; the leave animation draws
+	 *  through it directly, since sigma stops calling drawHover once the
+	 *  mouse has left the node. */
+	repaint: ((fade: number) => void) | null;
+}
+
+/** Make the pair of canvas label drawers bound to the theme's colors. */
+function makeLabelDrawers(labelColor: string, hoverTextColor: string, hover: HoverState) {
+	const drawLabel: NodeLabelDrawingFunction = (context, data, settings) => {
+		drawName(context, data, settings, labelColor);
+	};
+
+	const drawHover: NodeHoverDrawingFunction = (context, data, settings) => {
+		hover.repaint = (fade) => {
+			context.save();
+			context.setTransform(1, 0, 0, 1, 0, 0);
+			context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+			context.restore();
+			if (fade > 0) paintHover(context, data, settings, fade, hoverTextColor);
+		};
+		paintHover(context, data, settings, hover.fade, hoverTextColor);
 	};
 
 	return { drawLabel, drawHover };
@@ -233,7 +265,9 @@ export function GraphView() {
 		for (const state of Object.keys(STATE_TOKENS) as NodeStateClass[]) {
 			stateColors.set(state, tokenHex(STATE_TOKENS[state].cssVar));
 		}
-		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, hoverTextColor);
+		// Mutable hover-transition state: 0 = resting, 1 = fully hovered.
+		const hover: HoverState = { fade: 0, repaint: null };
+		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, hoverTextColor, hover);
 
 		const graph = new Graph();
 		for (const node of snapshot.nodes) {
@@ -268,7 +302,7 @@ export function GraphView() {
 
 		let killed = false;
 		let renderer: import("sigma").default | null = null;
-		// rAF id of the hover glow pulse (the ONLY animation loop — see the
+		// rAF id of the hover fade transition — the ONLY animation (see the
 		// file header). Lives out here so the effect cleanup can cancel it.
 		let hoverAnimId: number | null = null;
 		void import("sigma").then(({ default: Sigma }) => {
@@ -324,26 +358,34 @@ export function GraphView() {
 				syncRenderLabels(state.ratio);
 				setSelected(null);
 			});
-			// The hover glow is a slow pulse driven by performance.now() inside
-			// drawHover; this loop just keeps scheduling renders while a node is
-			// hovered and stops on leave, so idle CPU returns to zero.
-			const startHoverPulse = () => {
-				if (hoverAnimId !== null) return;
-				const tick = () => {
-					renderer?.scheduleRefresh();
-					hoverAnimId = requestAnimationFrame(tick);
-				};
-				hoverAnimId = requestAnimationFrame(tick);
-			};
-			const stopHoverPulse = () => {
+			// The hover fade: entering schedules renders (sigma re-invokes
+			// drawHover with the new fade); leaving draws through the captured
+			// repainter, since sigma stops calling drawHover once unhovered.
+			// Both directions are bounded (~HOVER_FADE_MS) and cancel each
+			// other, so idle CPU returns to zero after every transition.
+			const animateHoverTo = (target: number) => {
 				if (hoverAnimId !== null) {
 					cancelAnimationFrame(hoverAnimId);
 					hoverAnimId = null;
 				}
+				const from = hover.fade;
+				if (from === target) {
+					if (target === 0) hover.repaint?.(0);
+					return;
+				}
+				const start = performance.now();
+				const tick = (now: number) => {
+					const t = Math.min((now - start) / HOVER_FADE_MS, 1);
+					hover.fade = from + (target - from) * t;
+					if (target === 0) hover.repaint?.(hover.fade);
+					else renderer?.scheduleRefresh();
+					hoverAnimId = t < 1 ? requestAnimationFrame(tick) : null;
+				};
+				hoverAnimId = requestAnimationFrame(tick);
 			};
-			renderer.on("enterNode", startHoverPulse);
-			renderer.on("leaveNode", stopHoverPulse);
-			renderer.on("leaveStage", stopHoverPulse);
+			renderer.on("enterNode", () => animateHoverTo(1));
+			renderer.on("leaveNode", () => animateHoverTo(0));
+			renderer.on("leaveStage", () => animateHoverTo(0));
 		});
 
 		return () => {
