@@ -3,9 +3,10 @@ import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { createTeacherTools } from "../agent/tools.ts";
+import { deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { stores } from "./stores.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
-import { buildTeacherContext, persistTurn, spawnTurnJobs, triggerExtraction } from "./turn-service.ts";
+import { buildTeacherContext, persistTurn, triggerExtraction } from "./turn-service.ts";
 
 /**
  * One chat turn: run the teacher agent over the client's message list and
@@ -14,13 +15,37 @@ import { buildTeacherContext, persistTurn, spawnTurnJobs, triggerExtraction } fr
  * handler in app/api/chat is a one-line wrapper.
  *
  * This module is the TURN COMPOSITION ROOT: it wires the storage ports, the
- * job runner, the teacher tools, and the turn services (turn-service.ts)
- * together — all actual work lives behind those seams. The background job
- * runner closes over the same port objects the services see.
+ * job runner + wake pipeline, the teacher tools, and the turn services
+ * (turn-service.ts) together — all actual work lives behind those seams.
+ * THE SAME COMPOSITION serves both entry points: client requests and the
+ * wake pipeline's server-side steers (src/server/jobs.ts) — one code path
+ * for write-ahead persistence, turn liveness, and the turn services.
  */
 
-const jobRunner = createJobRunner(stores);
+const jobRunner = createJobRunner({
+	chatStore: stores.chatStore,
+	jobStore: stores.jobStore,
+	deliver: deliverJobResult,
+});
 const extraction = createExtractionPipeline(stores);
+
+// Wake-pipeline wiring (contracts.ts "THE ASYNC PROTOCOL" §4): the pipeline
+// fires its server-side teacher turns through THIS composition root, and
+// crash recovery re-spawns orphaned sub-agent loops through THIS runner.
+setTurnRunner(async (chatId, messages) => {
+	const res = await handleChatRequest(
+		new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ chatId, messages }),
+		}),
+	);
+	// Drive the stream to completion server-side — nobody else will read it,
+	// and onFinish (persist, extraction, endTurn) only runs when it drains.
+	await res.arrayBuffer().catch(() => undefined);
+	return res.status;
+});
+setJobRespawn((jobId) => void jobRunner.runJob(jobId));
 
 export async function handleChatRequest(req: Request, agent?: TeacherAgent): Promise<Response> {
 	let body: { chatId?: unknown; messages?: unknown };
@@ -64,7 +89,12 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 			agent ??
 			createTeacherAgent(
 				undefined,
-				createTeacherTools({ chatId, chatStore: stores.chatStore }),
+				createTeacherTools({
+					chatId,
+					chatStore: stores.chatStore,
+					jobStore: stores.jobStore,
+					spawn: (job, input) => void jobRunner.runJob(job.id, input),
+				}),
 				buildTeacherContext(stores.graphStore, chatId),
 			),
 		uiMessages: body.messages as UIMessage[],
@@ -81,7 +111,6 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		},
 			onFinish: ({ messages, isAborted }) => {
 				persistTurn(stores.chatStore, chatId, messages as UIMessage[], isAborted);
-				spawnTurnJobs(jobRunner, chatId, messages as UIMessage[]);
 				triggerExtraction(stores, extraction, chatId);
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.

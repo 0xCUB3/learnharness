@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ToolLoopAgent, stepCountIs, type LanguageModel, type ToolSet } from "ai";
 import { PATHS } from "../../config.ts";
-import { createTeacherTools, jobTools, questionTools } from "./tools.ts";
 import { modelFor } from "./models.ts";
+import { questionTools } from "./tools.ts";
 
 /**
  * The teacher agent. Everything pi used to provide (agent loop, tool calling,
@@ -56,13 +56,15 @@ export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet, graph
 		// Reasoning tokens stream as reasoning parts into the UI's collapsible block.
 		model: model ?? modelFor("teacher"),
 		instructions: withGraphContext(graphContext),
-		// Tools are per-request (plan tools close over the injected ctx);
-		// chat-handler passes createTeacherTools({ chatId, chatStore }). The
+		// Tools are per-request (plan tools close over the injected ctx; job
+		// tools close over the job store + spawn seam) — chat-handler passes
+		// createTeacherTools({ chatId, chatStore, jobStore, spawn }). The
 		// dependency-free default is the question-only set (client-side tools,
 		// no storage needed) — used when tests pass a bare mock model.
-		tools: tools ?? { ...questionTools, ...jobTools() },
-		// Question and job tools are client-side — a call ends the server turn
-		// automatically. stepCountIs is just the safety net.
+		tools: tools ?? { ...questionTools },
+		// Question tools are client-side (a call ends the server turn);
+		// job tools resolve immediately (fire-and-forget ack). stepCountIs is
+		// just the safety net.
 		stopWhen: stepCountIs(20),
 	});
 }

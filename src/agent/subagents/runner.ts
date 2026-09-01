@@ -1,107 +1,168 @@
 import { isToolUIPart, type LanguageModel, type UIMessage } from "ai";
-import type { DemoResult, DemoToolInput, JobKind, ResearchResult, ResearchToolInput, VisualResult, VisualToolInput } from "../../core/contracts.ts";
-import { JOB_TOOLS } from "../../core/pending.ts";
+import {
+	buildSubagentSteer,
+	type DemoResult,
+	type DemoToolInput,
+	type JobKind,
+	type JobRecord,
+	type ResearchResult,
+	type ResearchToolInput,
+	type SubagentSteerMessage,
+	type VisualResult,
+	type VisualToolInput,
+} from "../../core/contracts.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { createResearcherAgent } from "./researcher.ts";
 import { runVisualMaker } from "./visual-maker.ts";
 
 /**
- * The background job runner (contracts.ts "THE ASYNC PROTOCOL"), created via
- * createJobRunner({ chatStore, jobStore }) — the composition root (chat-handler)
- * injects the storage ports; this module never imports an adapter.
+ * The background job runner (contracts.ts "THE ASYNC PROTOCOL" §2–3), created
+ * via createJobRunner({ chatStore, jobStore, deliver }) — the composition root
+ * (chat-handler) injects the storage ports and the WAKE SEAM (the server-side
+ * steer delivery, src/server/jobs.ts); this module never imports an adapter.
  *
- *   spawnPendingJobs  — called from the turn service AFTER persist: finds
- *     input-available JOB_TOOLS parts in the last assistant message with no
- *     existing job and fires the kind's runner WITHOUT awaiting (the HTTP
- *     response is long gone). Kind dispatch (research/demo/visual) is a
- *     self-contained map here, so no caller changes for new job kinds —
- *     anything listed in JOB_TOOLS routes automatically.
+ *   runJob(jobId) — runs the kind's sub-agent loop in the background
+ *     (the job tools' execute fires this via the spawn seam, fire-and-forget),
+ *     updating the job's activity line on every iteration. On completion the
+ *     runner builds the STEER MESSAGE (buildSubagentSteer) and hands it to
+ *     `deliver`; the wake pipeline fires the server-side teacher turn and
+ *     flips the job to done/error when the lesson has actually resumed.
  *
- *   runResearchJob / runDemoJob / runVisualJob — run the sub-agent loop in
- *     the background, updating the job's activity line on every iteration,
- *     then rewrite the tool part in the LATEST chat record to
- *     output-available (read-modify-write; no awaits between the read and
- *     the write). The part is fulfilled BEFORE the job status flips, so a
- *     client that polls the job and then re-syncs always sees the finished
- *     part.
- *
- * On failure the part is still fulfilled (DemoResult/VisualResult failure
- * shape: empty html/svg + "FAILED: …" notes; research: failure brief) — the
- * teacher must learn the outcome — and the job is marked error.
+ *   On failure the result is the failure shape (empty html/svg + "FAILED: …"
+ *   notes; research: failure brief) — and it STILL steers, because the
+ *   teacher must learn the outcome. If delivery itself fails, the job is
+ *     marked error (the learner's activity card shows it).
  */
 
 /**
- * Test seam: the spawn hook creates runners with no injection point, so
- * tests swap in a MockLanguageModelV4 here to keep job tests off the
- * network. Undefined in production.
+ * Test seam: the spawn wiring has no injection point at the tool layer, so
+ * tests swap in a MockLanguageModelV4 here to keep job tests off the network.
+ * Undefined in production. (The jobs spawn through the module-level KIND
+ * runners, which read these at call time.)
  */
 export const researchModelOverride: { current?: LanguageModel } = {};
 export const demoModelOverride: { current?: LanguageModel } = {};
 export const visualModelOverride: { current?: LanguageModel } = {};
 
+/** The dispatch-time tool input (from src/agent/tools/jobs.ts schemas). */
+type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput;
+
 export interface JobRunnerDeps {
 	chatStore: ChatStore;
 	jobStore: JobStore;
-}
-
-export interface RunResearchJobOptions {
-	model?: LanguageModel;
-}
-
-export interface RunDemoJobOptions {
-	model?: LanguageModel;
-}
-
-export interface RunVisualJobOptions {
-	model?: LanguageModel;
+	/**
+	 * Hand a finished job's steer to the wake pipeline — resolves when the
+	 * steer is delivered (the wake turn completed and the job status
+	 * flipped); rejects when delivery fails unrecoverably.
+	 */
+	deliver: (steer: SubagentSteerMessage) => Promise<void>;
 }
 
 export interface JobRunner {
-	spawnPendingJobs(chatId: string, messages: UIMessage[]): void;
-	runResearchJob(jobId: string, opts?: RunResearchJobOptions): Promise<void>;
-	runDemoJob(jobId: string, opts?: RunDemoJobOptions): Promise<void>;
-	runVisualJob(jobId: string, opts?: RunVisualJobOptions): Promise<void>;
+	/** Run one job's sub-agent loop to completion (background; never throws).
+	 *  The tool input rides along from dispatch (the spawn fires mid-stream,
+	 *  before the tool part is persisted — only crash-recovery re-spawns
+	 *  resolve the input from the transcript). */
+	runJob(jobId: string, input?: ResearchToolInput | DemoToolInput | VisualToolInput): Promise<void>;
 }
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
-	const { chatStore, jobStore } = deps;
+	const { chatStore, jobStore, deliver } = deps;
 
-	/** The kind→runner map: everything in JOB_TOOLS routes through here. */
-	const KIND_RUNNERS: Record<JobKind, (jobId: string) => Promise<void>> = {
-		research: (jobId) => runResearchJob(jobId, { model: researchModelOverride.current }),
-		demo: (jobId) => runDemoJob(jobId, { model: demoModelOverride.current }),
-		visual: (jobId) => runVisualJob(jobId, { model: visualModelOverride.current }),
+	/** The kind→runner map: one sub-agent loop per job kind. */
+	// Each kind's runner narrows the union input itself (dispatch-time inputs
+	// are kind-correct by construction; transcript fallbacks are cast after).
+	const KIND_RUNNERS: Record<JobKind, (jobId: string, input?: JobToolInput) => Promise<void>> = {
+		research: (jobId, input) => runResearchJob(jobId, researchModelOverride.current, input),
+		demo: (jobId, input) => runDemoJob(jobId, demoModelOverride.current, input),
+		visual: (jobId, input) => runVisualJob(jobId, visualModelOverride.current, input),
 	};
 
-	function spawnPendingJobs(chatId: string, messages: UIMessage[]): void {
-		const last = [...messages].reverse().find((m) => m.role === "assistant");
-		if (!last) return;
-		for (const part of last.parts) {
-			if (!isToolUIPart(part) || part.state !== "input-available") continue;
-			const tool = part.type.slice("tool-".length);
-			if (!(JOB_TOOLS as readonly string[]).includes(tool)) continue;
-			const runner = KIND_RUNNERS[tool as JobKind];
-			if (!runner) continue;
-			if (jobStore.findJobByToolCallId(chatId, part.toolCallId)) continue; // already has a job
-			const job = jobStore.createJob({ kind: tool as JobKind, chatId, toolCallId: part.toolCallId });
-			void runner(job.id).catch((err) => {
-				console.error(`[job ${job.id}] ${tool} runner crashed:`, err);
-				jobStore.updateJob(job.id, { status: "error", error: String(err), activity: "failed" });
-			});
+	async function runJob(jobId: string, input?: JobToolInput): Promise<void> {
+		const job = jobStore.getJob(jobId);
+		if (!job) {
+			console.error(`[job ${jobId}] not found — nothing to run`);
+			return;
+		}
+		if (job.status !== "running") return; // already finished / re-run after crash recovery
+		const run = KIND_RUNNERS[job.kind];
+		if (!run) {
+			console.error(`[job ${jobId}] unknown kind: ${job.kind}`);
+			jobStore.updateJob(jobId, { status: "error", error: `unknown kind ${job.kind}`, activity: "failed" });
+			return;
+		}
+		await run(jobId, input);
+	}
+
+	/** Resolve the job's tool input: dispatch passes it directly; only a
+	 *  crash-recovery re-spawn (no input) falls back to scanning the
+	 *  transcript (by then onFinish has long persisted the part). */
+	function resolveInput(
+		job: JobRecord,
+		input: JobToolInput | undefined,
+	): ResearchToolInput | DemoToolInput | VisualToolInput | undefined {
+		if (input) return input;
+		const chat = chatStore.getChat(job.chatId);
+		if (!chat) return undefined;
+		return (findToolPart(chat.messages, job.toolCallId)?.input ?? undefined) as
+			| ResearchToolInput
+			| DemoToolInput
+			| VisualToolInput
+			| undefined;
+	}
+
+	// ─── shared plumbing ────────────────────────────────────────────────────
+
+	function findToolPart(messages: UIMessage[], toolCallId: string) {
+		for (const m of messages) {
+			for (const part of m.parts) {
+				if (isToolUIPart(part) && part.toolCallId === toolCallId) return part;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The tail of every job: store the result, build the steer, hand it to
+	 * the wake pipeline. The pipeline flips the status when the lesson has
+	 * actually resumed — until then the job reads "running" so the client's
+	 * activity card keeps polling and re-syncs once, at the end.
+	 */
+	async function finishJob(jobId: string, result: ResearchResult | DemoResult | VisualResult): Promise<void> {
+		const job = jobStore.getJob(jobId);
+		if (!job) return;
+		jobStore.updateJob(jobId, { result, activity: "delivering result" });
+		const steer = buildSubagentSteer(job, result);
+		try {
+			await deliver(steer);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			console.error(`[job ${jobId}] steer delivery failed:`, err);
+			jobStore.updateJob(jobId, { status: "error", error: reason, activity: "delivery failed" });
 		}
 	}
 
-	async function runResearchJob(jobId: string, opts: RunResearchJobOptions = {}): Promise<void> {
+	/** Chat-record + input resolution shared by all three runners. */
+	function jobContext(jobId: string): { job: JobRecord; chatId: string } | null {
 		const job = jobStore.getJob(jobId);
-		if (!job || job.status !== "running") return;
-
+		if (!job || job.status !== "running") return null;
 		const chat = chatStore.getChat(job.chatId);
 		if (!chat) {
 			jobStore.updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
-			return;
+			return null;
 		}
-		const input = findToolPart(chat.messages, job.toolCallId)?.input as ResearchToolInput | undefined;
+		return { job, chatId: job.chatId };
+	}
+
+	// ─── research ───────────────────────────────────────────────────────────
+
+	async function runResearchJob(jobId: string, model?: LanguageModel, passedInput?: JobToolInput): Promise<void> {
+		const ctx = jobContext(jobId);
+		if (!ctx) return;
+		const { job } = ctx;
+
+		const input = (passedInput ?? resolveInput(job, passedInput)) as ResearchToolInput | undefined;
 		const question = typeof input?.question === "string" && input.question.trim() ? input.question : "(no question)";
 		const context = typeof input?.context === "string" && input.context.trim() ? input.context : undefined;
 
@@ -114,7 +175,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			.join("\n\n");
 
 		const fetchedUrls: string[] = [];
-		const agent = createResearcherAgent(opts.model);
+		const agent = createResearcherAgent(model);
 
 		try {
 			jobStore.updateJob(jobId, { activity: "researching" });
@@ -132,37 +193,22 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			const brief = result.text.trim();
 			if (!brief) throw new Error("the researcher produced no text");
 			const research: ResearchResult = { brief, sources: parseSources(brief, fetchedUrls) };
-
-			fulfillPart(job.chatId, job.toolCallId, research);
-			jobStore.updateJob(jobId, { status: "done", result: research }); // activity line kept: the last tool call is the record
+			await finishJob(jobId, research);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
-			fulfillPart(job.chatId, job.toolCallId, { brief: `Research failed: ${reason}`, sources: [] });
-			jobStore.updateJob(jobId, { status: "error", activity: "failed", error: reason });
+			jobStore.updateJob(jobId, { error: reason });
+			await finishJob(jobId, { brief: `Research failed: ${reason}`, sources: [] });
 		}
 	}
 
-	// ─── demo + visual job wrappers ───────────────────────────────────────────
+	// ─── demo + visual ──────────────────────────────────────────────────────
 
-	/** Failure shape (W6 brief): html === "" with "FAILED: …" notes. */
-	function isDemoFailure(result: DemoResult): boolean {
-		return typeof result.html !== "string" || result.html.length === 0;
-	}
+	async function runDemoJob(jobId: string, model?: LanguageModel, passedInput?: JobToolInput): Promise<void> {
+		const ctx = jobContext(jobId);
+		if (!ctx) return;
+		const { job } = ctx;
 
-	function isVisualFailure(result: VisualResult): boolean {
-		return typeof result.svg !== "string" || result.svg.length === 0;
-	}
-
-	async function runDemoJob(jobId: string, opts: RunDemoJobOptions = {}): Promise<void> {
-		const job = jobStore.getJob(jobId);
-		if (!job || job.status !== "running") return;
-
-		const chat = chatStore.getChat(job.chatId);
-		if (!chat) {
-			jobStore.updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
-			return;
-		}
-		const input = findToolPart(chat.messages, job.toolCallId)?.input as DemoToolInput | undefined;
+		const input = (passedInput ?? resolveInput(job, passedInput)) as DemoToolInput | undefined;
 		const title = typeof input?.title === "string" && input.title.trim() ? input.title : "Interactive demo";
 		const brief = typeof input?.brief === "string" ? input.brief : "";
 
@@ -171,34 +217,25 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			const result = await runDemoBuilder(
 				{ title, brief },
 				{
-					model: opts.model,
+					model,
 					onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 				},
 			);
-			fulfillPart(job.chatId, job.toolCallId, result);
-			if (isDemoFailure(result)) {
-				jobStore.updateJob(jobId, { status: "error", error: result.notes ?? "demo build failed", activity: "failed" });
-			} else {
-				jobStore.updateJob(jobId, { status: "done", result });
-			}
+			if (isDemoFailure(result)) jobStore.updateJob(jobId, { error: result.notes ?? "demo build failed" });
+			await finishJob(jobId, result);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
-			const failure: DemoResult = { title, html: "", tested: true, notes: `FAILED: ${reason}` };
-			fulfillPart(job.chatId, job.toolCallId, failure);
-			jobStore.updateJob(jobId, { status: "error", error: reason, activity: "failed" });
+			jobStore.updateJob(jobId, { error: reason });
+			await finishJob(jobId, { title, html: "", tested: true, notes: `FAILED: ${reason}` });
 		}
 	}
 
-	async function runVisualJob(jobId: string, opts: RunVisualJobOptions = {}): Promise<void> {
-		const job = jobStore.getJob(jobId);
-		if (!job || job.status !== "running") return;
+	async function runVisualJob(jobId: string, model?: LanguageModel, passedInput?: JobToolInput): Promise<void> {
+		const ctx = jobContext(jobId);
+		if (!ctx) return;
+		const { job } = ctx;
 
-		const chat = chatStore.getChat(job.chatId);
-		if (!chat) {
-			jobStore.updateJob(jobId, { status: "error", error: `Chat not found: ${job.chatId}`, activity: "failed" });
-			return;
-		}
-		const input = findToolPart(chat.messages, job.toolCallId)?.input as VisualToolInput | undefined;
+		const input = (passedInput ?? resolveInput(job, passedInput)) as VisualToolInput | undefined;
 		const brief = typeof input?.brief === "string" ? input.brief : "";
 
 		try {
@@ -206,69 +243,32 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			const result = await runVisualMaker(
 				{ brief },
 				{
-					model: opts.model,
+					model,
 					onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 				},
 			);
-			fulfillPart(job.chatId, job.toolCallId, result);
-			if (isVisualFailure(result)) {
-				jobStore.updateJob(jobId, { status: "error", error: result.notes ?? "visual build failed", activity: "failed" });
-			} else {
-				jobStore.updateJob(jobId, { status: "done", result });
-			}
+			if (isVisualFailure(result)) jobStore.updateJob(jobId, { error: result.notes ?? "visual build failed" });
+			await finishJob(jobId, result);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
-			const failure: VisualResult = { svg: "", notes: `FAILED: ${reason}` };
-			fulfillPart(job.chatId, job.toolCallId, failure);
-			jobStore.updateJob(jobId, { status: "error", error: reason, activity: "failed" });
+			jobStore.updateJob(jobId, { error: reason });
+			await finishJob(jobId, { svg: "", notes: `FAILED: ${reason}` });
 		}
 	}
 
-	// ─── helpers ─────────────────────────────────────────────────────────────
-
-	function findToolPart(messages: UIMessage[], toolCallId: string) {
-		for (const m of messages) {
-			for (const part of m.parts) {
-				if (isToolUIPart(part) && part.toolCallId === toolCallId) return part;
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Rewrite the tool part in the LATEST chat record to output-available.
-	 * Synchronous read-modify-write (no awaits) — atomic within the event loop.
-	 */
-	function fulfillPart(chatId: string, toolCallId: string, output: ResearchResult | DemoResult | VisualResult): void {
-		const chat = chatStore.getChat(chatId);
-		if (!chat) return;
-		let found = false;
-		const messages = chat.messages.map((m) =>
-			m.role !== "assistant"
-				? m
-				: {
-						...m,
-						parts: m.parts.map((part) => {
-							if (isToolUIPart(part) && part.toolCallId === toolCallId && part.state === "input-available") {
-								found = true;
-								return { ...part, state: "output-available" as const, output };
-							}
-							return part;
-						}),
-					},
-		);
-		if (!found) return;
-		try {
-			chatStore.saveMessages(chatId, messages);
-		} catch (err) {
-			console.error(`[chat ${chatId}] fulfilling job part ${toolCallId} failed:`, err);
-		}
-	}
-
-	return { spawnPendingJobs, runResearchJob, runDemoJob, runVisualJob };
+	return { runJob };
 }
 
 // ─── module-level pure helpers ──────────────────────────────────────────────
+
+/** Failure shape (W6 brief): html === "" with "FAILED: …" notes. */
+function isDemoFailure(result: DemoResult): boolean {
+	return typeof result.html !== "string" || result.html.length === 0;
+}
+
+function isVisualFailure(result: VisualResult): boolean {
+	return typeof result.svg !== "string" || result.svg.length === 0;
+}
 
 /** The activity line shown in the UI: `web_search: "query"` / `web_fetch: host`. */
 function activityLine(toolName: string, input: { query?: string; url?: string } | undefined): string {

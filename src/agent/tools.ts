@@ -1,10 +1,11 @@
 import { tool, type ToolSet } from "ai";
 import { askInputSchema, quizInputSchema } from "../core/question-core.ts";
-import type { ChatStore } from "../core/ports.ts";
-import { jobTools } from "./tools/jobs.ts";
+import type { JobRecord } from "../core/contracts.ts";
+import type { JobStore } from "../core/ports.ts";
+import { jobTools, type DemoInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
+import { planTools, type PlanToolContext } from "./tools/plan.ts";
 
 export { jobTools };
-import { planTools } from "./tools/plan.ts";
 
 /**
  * The teacher's tools, composed per request by createTeacherTools.
@@ -17,8 +18,10 @@ import { planTools } from "./tools/plan.ts";
  *   the prompt docs exactly; keep them in sync.
  * - planTools (src/agent/tools/plan.ts): SERVER-SIDE, mutate the chat's plan
  *   tree (needs the chatId closure — hence the per-request factory).
- * - jobTools (src/agent/tools/jobs.ts): CLIENT-SIDE semantics, server-side
- *   fulfillment by background sub-agents (see src/core/contracts.ts).
+ * - jobTools (src/agent/tools/jobs.ts): SERVER-EXECUTED dispatch — the call
+ *   resolves immediately with a fire-and-forget ack, the background runner
+ *   does the work, and the result arrives later as a steer message
+ *   (contracts.ts "THE ASYNC PROTOCOL").
  */
 
 export const quizTool = tool({
@@ -51,23 +54,25 @@ export const questionTools = {
 	ask_user_question: askUserQuestionTool,
 };
 
-export interface TeacherToolContext {
-	chatId: string;
-	/** The storage port plan tools persist through — the composition root
-	 *  (chat-handler) injects the wired adapter; the agent layer never
-	 *  imports one. */
-	chatStore: ChatStore;
+export interface TeacherToolContext extends PlanToolContext {
+	/** Job-tool wiring (sub-agent dispatch): the job store + the runner's
+	 *  spawn seam. The composition root injects both. */
+	jobStore: JobStore;
+	/** Fire the background runner for a freshly created job. The tool input
+	 *  rides along — the spawn fires mid-stream, before the tool part is
+	 *  persisted to the transcript (a transcript scan would race it). */
+	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput) => void;
 }
 
 /**
  * Per-request tool registry. Plan tools close over the ctx (chatId + the
- * injected ChatStore) for persistence; question and job tools are
- * context-free.
+ * injected ChatStore) for persistence; question tools are context-free;
+ * job tools close over the job store + spawn seam.
  */
 export function createTeacherTools(ctx: TeacherToolContext): ToolSet {
 	return {
 		...questionTools,
 		...planTools(ctx),
-		...jobTools(),
+		...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn }),
 	};
 }

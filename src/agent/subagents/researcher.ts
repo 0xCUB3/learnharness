@@ -51,7 +51,8 @@ Numbered findings with inline source citations:
 1. **Finding** — explanation. [Source](url)
 
 ## Sources
-- Source Title (url) — why it's relevant
+- Kept: Source Title (url) — why relevant
+- Dropped: Source Title — why excluded
 
 ## Gaps
 What couldn't be answered. Suggested next steps.`;

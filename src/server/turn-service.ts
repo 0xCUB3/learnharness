@@ -6,7 +6,6 @@
  *
  *   buildTeacherContext — graph → instructions block (the W8 read channel)
  *   persistTurn        — the canonical state write (client + agent messages)
- *   spawnTurnJobs      — the async sub-agent protocol kick-off
  *   triggerExtraction  — the graph write channel: fires the extraction
  *                        pipeline (the sole graph writer) once a chat
  *                        crosses the v1 quiz-answer threshold. The trigger
@@ -22,7 +21,6 @@ import { buildGraphContext } from "../core/graph-context.ts";
 import { getGraph, pendingQuizAnswers } from "../core/graph.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
 import { EXTRACTION } from "../../config.ts";
-import type { JobRunner } from "../agent/subagents/runner.ts";
 import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
 
 /**
@@ -52,19 +50,6 @@ export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMe
 		chatStore.saveMessages(chatId, messages);
 	} catch (err) {
 		console.error(`[chat ${chatId}] persist failed:`, err, { isAborted });
-	}
-}
-
-/**
- * The async sub-agent protocol (contracts.ts): scan the last assistant
- * message for pending job tool parts and fire the background runners —
- * fire-and-forget, never awaited; the HTTP response is already gone.
- */
-export function spawnTurnJobs(jobRunner: JobRunner, chatId: string, messages: UIMessage[]): void {
-	try {
-		jobRunner.spawnPendingJobs(chatId, messages);
-	} catch (err) {
-		console.error(`[chat ${chatId}] job spawn failed:`, err);
 	}
 }
 
