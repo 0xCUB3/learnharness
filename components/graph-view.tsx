@@ -15,12 +15,14 @@
  *   - defaultDrawNodeLabel: plain wrapped text, centered below the node,
  *     word-wrapped at a max line width — no truncation, no one-line sprawl.
  *   - defaultDrawNodeHover: NO background box (sigma's default is a
- *     hardcoded white one). Instead the hovered node gets a STATIC soft
- *     glow halo in its own state color, flush with the disc edge, and
- *     its name brightens — the "this is clickable, click for the full
- *     fact" affordance. Entering/leaving hover cross-fades (glow and text
- *     together) over a short transition; the glow itself never pulses.
- *     Hover always shows the name, even when labels are zoomed out.
+ *     hardcoded white one). Instead the hovered node gets a soft glow
+ *     halo in its own state color at a constant radius, flush with the
+ *     disc edge, and its name brightens instantly — the "this is
+ *     clickable, click for the full fact" affordance. Entering/leaving
+ *     hover fades the halo's OPACITY over a short transition (no
+ *     growth, no pulse; the text color is un-animated so rapid hover
+ *     toggles at a node's edge can't flicker it). Hover always shows
+ *     the name, even when labels are zoomed out.
  * Labels are zoom-gated GLOBALLY with a fade: all names appear at once
  * when the camera is at fit zoom or closer (ratio <= 1), then fade out
  * together across a short zoom span before label rendering switches off —
@@ -73,13 +75,13 @@ const LABELS_CAMERA_RATIO = 1;
 /** Zoom span (camera-ratio units) over which labels fade out together. */
 const LABELS_FADE_SPAN = 0.5;
 
-// Hover glow: a STATIC soft halo ring in the node's own color, starting
-// flush at the disc edge (no gap — a gap reads as a false outline/border
-// between node and glow). The hovered/unhovered transition cross-fades
-// glow + text over a short window; the glow never pulses.
-const GLOW_PAD = 9; // px the halo extends beyond the node disc
+// Hover glow: a soft halo ring in the node's own color at a CONSTANT
+// radius, starting flush at the disc edge (no gap — a gap reads as a
+// false outline/border between node and glow). Only the halo's OPACITY
+// animates (hover enter/leave); it never grows and never pulses.
+const GLOW_PAD = 9; // px the halo extends beyond the node disc (constant)
 const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
-const HOVER_FADE_MS = 180; // hover enter/leave transition length
+const HOVER_FADE_MS = 180; // hover halo opacity fade length
 
 /** "#rrggbb" + alpha → "rgba(...)" (tokenHex only ever emits #rrggbb). */
 function rgbaFromHex(hex: string, alpha: number): string {
@@ -140,11 +142,12 @@ function drawName(
 }
 
 /** The hovered-state paint at a given transition factor (0 = resting,
- *  1 = fully hovered): a static glow halo in the node's own state color
- *  starting flush at the disc edge (the evenodd punch-out keeps the disc
- *  itself unpainted), plus the name at partial alpha — the muted label on
- *  the layer beneath shows through, so the text cross-fades toward the
- *  brighter hover color as the glow blooms. */
+ *  1 = fully hovered): a glow halo in the node's own state color at a
+ * CONSTANT radius (opacity fades in/out; the halo never grows) starting
+ * flush at the disc edge (the evenodd punch-out keeps the disc itself
+ * unpainted). The name is drawn opaque in the bright hover color — no
+ * alpha animation: partial-alpha text over the resting label flickers
+ * when hover toggles rapidly at a node's edge. */
 function paintHover(
 	context: CanvasRenderingContext2D,
 	data: { label?: string | null; x: number; y: number; size: number; color: string },
@@ -155,7 +158,7 @@ function paintHover(
 	context.save();
 	if (fade > 0.02) {
 		const inner = data.size;
-		const outer = data.size + GLOW_PAD * fade;
+		const outer = data.size + GLOW_PAD;
 		const glow = context.createRadialGradient(data.x, data.y, inner, data.x, data.y, outer);
 		glow.addColorStop(0, rgbaFromHex(data.color, GLOW_ALPHA * fade));
 		glow.addColorStop(1, rgbaFromHex(data.color, 0));
@@ -165,7 +168,6 @@ function paintHover(
 		context.arc(data.x, data.y, inner, 0, Math.PI * 2, true);
 		context.fill("evenodd");
 	}
-	context.globalAlpha = fade;
 	drawName(context, data, settings, hoverTextColor);
 	context.restore();
 }
