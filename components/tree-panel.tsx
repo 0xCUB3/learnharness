@@ -495,11 +495,52 @@ const GRAPH_ZOOM_BTN =
 const ZOOM_MAX = 2;
 const ZOOM_FLOOR = 0.15;
 
+/** The graph's view transform: zoom + translation (viewport px). */
+export interface GraphView {
+	zoom: number;
+	x: number;
+	y: number;
+}
+
+/** The fit-centered view: the whole bw×bh graph centered in the w×h
+ *  viewport — fully zoomed out is EXACTLY this, nothing to pan. */
+export function fitGraphView(
+	box: { w: number; h: number },
+	viewport: { w: number; h: number },
+	zoom: number,
+): GraphView {
+	return { zoom, x: (viewport.w - box.w * zoom) / 2, y: (viewport.h - box.h * zoom) / 2 };
+}
+
+/**
+ * One zoom step toward `focus` (viewport px), clamped to [floor, ZOOM_MAX].
+ * At the floor the view SNAPS to the fit-centered position: fully zoomed
+ * out is THE fit view — centered, pan locked (the component enforces it).
+ */
+export function zoomedGraphView(
+	view: GraphView,
+	factor: number,
+	floor: number,
+	focus: { x: number; y: number },
+	box: { w: number; h: number },
+	viewport: { w: number; h: number },
+): GraphView {
+	const zoom = Math.min(Math.max(view.zoom * factor, floor), ZOOM_MAX);
+	if (zoom === view.zoom) return view;
+	if (zoom <= floor) return fitGraphView(box, viewport, floor);
+	const k = zoom / view.zoom;
+	return { zoom, x: focus.x - (focus.x - view.x) * k, y: focus.y - (focus.y - view.y) * k };
+}
+
 /**
  * The interactive diagram: drag to pan, wheel to zoom (to the cursor), the
- * fit button resets. Auto-fits on first measure and whenever the tree's
- * layout changes — unless the learner has panned/zoomed on their own
- * (their view is theirs). SSR-safe: all measurement lives in effects.
+ * fit button resets. The zoom floor is fit-to-panel — at it, the view is
+ * EXACTLY the centered fit and panning is locked (there is nothing to
+ * move). Auto-fits on first measure and on layout changes while the view
+ * sits at the floor; once the learner zooms in or pans, the view is theirs
+ * (until they return to the floor or press fit). SSR-safe: all measurement
+ * lives in effects. The zoom controls sit INSIDE the pan surface but
+ * never start a drag (pointer capture would swallow their clicks).
  */
 export function TreeGraph({ tree }: { tree: PlanTree }) {
 	const { order, depth } = useMemo(() => topoLayout(tree), [tree]);
@@ -520,8 +561,9 @@ export function TreeGraph({ tree }: { tree: PlanTree }) {
 	}, []);
 
 	// The zoom floor: fully zoomed out, the whole diagram fits the panel.
+	// Pad 16: the fit view IS the default — slim margins fit more graph.
 	const fitZoom = useMemo(() => {
-		const pad = 48;
+		const pad = 16;
 		if (!size.w || !size.h || layout.width === 0) return 1;
 		return Math.max(
 			ZOOM_FLOOR,
@@ -529,19 +571,24 @@ export function TreeGraph({ tree }: { tree: PlanTree }) {
 		);
 	}, [size, layout]);
 
-	const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
+	const [view, setView] = useState<GraphView>({ x: 0, y: 0, zoom: 1 });
 	const userAdjustedRef = useRef(false);
+	const box = useMemo(() => ({ w: layout.width, h: layout.height }), [layout]);
+	// Epsilon: zoom is float; "at the floor" needs a tolerance.
+	const atFloor = view.zoom <= fitZoom + 1e-9;
+
+	// Being AT the floor re-arms auto-fit: fully zoomed out is the default
+	// view, so later layout changes (tree edits) keep it fitting.
+	useEffect(() => {
+		if (atFloor) userAdjustedRef.current = false;
+	}, [atFloor]);
 
 	// Auto-fit (first measure, layout changes) — suppressed once the learner
-	// takes manual control, until they press fit again.
+	// takes manual control, until they return to the floor (or press fit).
 	useEffect(() => {
 		if (userAdjustedRef.current || !size.w || !size.h) return;
-		setView({
-			zoom: fitZoom,
-			x: (size.w - layout.width * fitZoom) / 2,
-			y: (size.h - layout.height * fitZoom) / 2,
-		});
-	}, [fitZoom, size, layout]);
+		setView(fitGraphView(box, size, fitZoom));
+	}, [fitZoom, size, box]);
 
 	// Wheel zoom to the cursor. Non-passive so the page never scrolls instead.
 	useEffect(() => {
@@ -551,39 +598,57 @@ export function TreeGraph({ tree }: { tree: PlanTree }) {
 			e.preventDefault();
 			const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY; // Firefox line mode
 			const factor = Math.exp(-dy * 0.0015);
-			setView((v) => {
-				const zoom = Math.min(Math.max(v.zoom * factor, fitZoom), ZOOM_MAX);
-				if (zoom === v.zoom) return v;
-				const rect = el.getBoundingClientRect();
-				const cx = e.clientX - rect.left;
-				const cy = e.clientY - rect.top;
-				const k = zoom / v.zoom;
-				return { zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
-			});
+			const rect = el.getBoundingClientRect();
+			setView((v) =>
+				zoomedGraphView(
+					v,
+					factor,
+					fitZoom,
+					{ x: e.clientX - rect.left, y: e.clientY - rect.top },
+					box,
+					size,
+				),
+			);
 			userAdjustedRef.current = true;
 		};
 		el.addEventListener("wheel", onWheel, { passive: false });
 		return () => el.removeEventListener("wheel", onWheel);
-	}, [fitZoom]);
+	}, [fitZoom, box, size]);
 
-	// Drag pan (pointer capture; a click on nothing never selects text —
-	// the viewport is select-none).
-	const dragRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+	// Drag pan. Guards: the zoom controls sit inside the pan surface — their
+	// pointerdown must NOT capture (capture redirects the click away from
+	// the button — the bug that made them feel dead). And at the fit floor
+	// there is nothing to pan: don't even begin (the cursor stays honest).
+	const dragRef = useRef<{
+		px: number;
+		py: number;
+		x: number;
+		y: number;
+		moved: boolean;
+	} | null>(null);
 	const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
 		if (e.button !== 0) return;
-		dragRef.current = { px: e.clientX, py: e.clientY, x: view.x, y: view.y };
+		if ((e.target as HTMLElement).closest("button")) return;
+		if (atFloor) return;
+		dragRef.current = { px: e.clientX, py: e.clientY, x: view.x, y: view.y, moved: false };
 		e.currentTarget.classList.add("cursor-grabbing");
 		e.currentTarget.setPointerCapture(e.pointerId);
 	};
 	const moveDrag = (e: React.PointerEvent<HTMLDivElement>) => {
 		const d = dragRef.current;
 		if (!d) return;
-		setView((v) => ({ ...v, x: d.x + (e.clientX - d.px), y: d.y + (e.clientY - d.py) }));
+		d.moved = true;
+		setView((v) =>
+			v.zoom <= fitZoom + 1e-9
+				? v
+				: { ...v, x: d.x + (e.clientX - d.px), y: d.y + (e.clientY - d.py) },
+		);
 	};
 	const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-		if (dragRef.current) {
+		const d = dragRef.current;
+		if (d) {
 			dragRef.current = null;
-			userAdjustedRef.current = true;
+			if (d.moved) userAdjustedRef.current = true;
 		}
 		e.currentTarget.classList.remove("cursor-grabbing");
 	};
@@ -591,29 +656,24 @@ export function TreeGraph({ tree }: { tree: PlanTree }) {
 	// Button zoom steps toward the viewport center (same math as wheel).
 	const stepZoom = (factor: number) => {
 		userAdjustedRef.current = true;
-		setView((v) => {
-			const zoom = Math.min(Math.max(v.zoom * factor, fitZoom), ZOOM_MAX);
-			const cx = size.w / 2;
-			const cy = size.h / 2;
-			const k = zoom / v.zoom;
-			return { zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
-		});
+		setView((v) =>
+			zoomedGraphView(v, factor, fitZoom, { x: size.w / 2, y: size.h / 2 }, box, size),
+		);
 	};
 	const fitView = () => {
 		userAdjustedRef.current = false;
 		if (!size.w || !size.h) return;
-		setView({
-			zoom: fitZoom,
-			x: (size.w - layout.width * fitZoom) / 2,
-			y: (size.h - layout.height * fitZoom) / 2,
-		});
+		setView(fitGraphView(box, size, fitZoom));
 	};
 
 	return (
 		<div
 			ref={viewportRef}
 			data-testid="plan-graph"
-			className="relative min-h-0 flex-1 cursor-grab touch-none overflow-hidden select-none"
+			className={cn(
+				"relative min-h-0 flex-1 touch-none overflow-hidden select-none",
+				atFloor ? "cursor-default" : "cursor-grab",
+			)}
 			onPointerDown={startDrag}
 			onPointerMove={moveDrag}
 			onPointerUp={endDrag}

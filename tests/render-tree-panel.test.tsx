@@ -410,3 +410,52 @@ describe("TreeGraph rendering", () => {
 		assert.ok(html.includes("Foundation — Where it all starts."));
 	});
 });
+
+// ─── graph view math (pan lock at fit, zoom-to-cursor) ────────────────────────
+
+import {
+	fitGraphView,
+	zoomedGraphView,
+	type GraphView,
+} from "../components/tree-panel.tsx";
+
+describe("fitGraphView / zoomedGraphView", () => {
+	const box = { w: 1000, h: 800 };
+	const viewport = { w: 300, h: 400 };
+
+	it("fit centers the whole graph in the viewport at the given zoom", () => {
+		const v = fitGraphView(box, viewport, 0.3);
+		assert.equal(v.zoom, 0.3);
+		assert.equal(v.x, (300 - 1000 * 0.3) / 2);
+		assert.equal(v.y, (400 - 800 * 0.3) / 2);
+	});
+
+	it("zooming in moves the point under the cursor to stay put (zoom-to-cursor)", () => {
+		const v: GraphView = { zoom: 0.5, x: -100, y: -50 };
+		// world point at cursor (50, 60) pre-zoom: (50 - (-100))/0.5 = 300
+		const next = zoomedGraphView(v, 2, 0.1, { x: 50, y: 60 }, box, viewport);
+		assert.equal(next.zoom, 1);
+		// the same world point maps back to the cursor: (50 - next.x)/1 = 300
+		assert.equal(50 - next.x, 300);
+		assert.equal(60 - next.y, 220);
+	});
+
+	it("zooming out past the floor SNAPS to the centered fit (fully zoomed out = the fit)", () => {
+		const v: GraphView = { zoom: 1.8, x: -900, y: -400 };
+		const next = zoomedGraphView(v, 1 / 8, 0.3, { x: 100, y: 100 }, box, viewport);
+		assert.equal(next.zoom, 0.3, "clamped at the floor");
+		assert.deepEqual(next, fitGraphView(box, viewport, 0.3), "and re-centered: nothing to pan");
+	});
+
+	it("a no-op zoom returns the same view (no drift)", () => {
+		const v: GraphView = { zoom: 2, x: 10, y: 10 };
+		// factor 1 → same zoom; at MAX already → clamped to same → same view
+		assert.equal(zoomedGraphView(v, 1, 0.3, { x: 0, y: 0 }, box, viewport), v);
+	});
+
+	it("zoom-in clamps at the ceiling (2×)", () => {
+		const v: GraphView = { zoom: 1.9, x: 0, y: 0 };
+		const next = zoomedGraphView(v, 3, 0.3, { x: 10, y: 10 }, box, viewport);
+		assert.equal(next.zoom, 2);
+	});
+});

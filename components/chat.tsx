@@ -203,17 +203,20 @@ export function Chat({
 
 	return (
 		<ChatActionsContext.Provider value={{ chatId, syncFromServer, sendText: (t: string) => void sendMessage({ text: t }) }}>
-		<div className="flex h-dvh flex-col">
-			<header className="flex items-center gap-3 px-3 py-2">
-				<SidebarToggle />
-				<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
-				<PhaseChip phase={phases.at(-1) ?? "probe"} />
-			</header>
+		{/* The session surface: the transcript column (header + scroller) and
+		    the plan-tree panel as full-height SIBLINGS — the panel spans top to
+		    bottom exactly like the left sidebar, and the header (name + phase
+		    chip) spans from the left sidebar's edge to the panel's edge. The
+		    dock stays sticky inside the scroller, untouched. */}
+		<div className="flex h-dvh">
+			<div className="flex min-w-0 flex-1 flex-col">
+				<header className="flex items-center gap-3 px-3 py-2">
+					<SidebarToggle />
+					<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
+					<PhaseChip phase={phases.at(-1) ?? "probe"} />
+				</header>
 
-			{/* The session row: transcript scroller + the persistent plan-tree panel
-			    (W7, vision §2). The panel is a flex SIBLING of the scroller — the dock
-			    stays sticky inside the scroller, untouched. */}
-			<div className="relative flex min-h-0 flex-1">
+				<div className="relative flex min-h-0 flex-1">
 				<Conversation className="h-full min-w-0 flex-1" initial="instant">
 					<ConversationContent className="min-h-full gap-0 p-0">
 						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
@@ -315,9 +318,10 @@ export function Chat({
 					</ConversationContent>
 					<ConversationScrollButton />
 				</Conversation>
+					</div>
+				</div>
 				<TreePanel messages={messages} />
 			</div>
-		</div>
 		</ChatActionsContext.Provider>
 	);
 }
