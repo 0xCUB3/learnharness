@@ -14,9 +14,11 @@
  *     word-wrapped at a max line width — no truncation, no one-line sprawl.
  *   - defaultDrawNodeHover: the same wrapped name on a dark pill (the app's
  *     popover tokens) instead of sigma's hardcoded white box. Hover always
- *     shows the name, even below the zoom threshold.
- * Labels are zoom-gated via labelRenderedSizeThreshold (lowered to 6 since
- * names are short; the Obsidian text-fade feel, one stop earlier).
+ *     shows the name, even when labels are zoomed out.
+ * Labels are zoom-gated GLOBALLY: all names appear at once when the camera
+ * is at fit zoom or closer (ratio <= 1) and all disappear at once when
+ * zoomed further out — no per-node size gating, so labels never pop in one
+ * by one. (The Obsidian text-fade feel, applied to the whole graph.)
  *
  * Clicking a node opens the detail card anchored just below the node's
  * viewport position (flipping above near the bottom edge); any camera move
@@ -60,6 +62,8 @@ const LABEL_GAP = 6; // px between node edge and first label line
 const LABEL_LINE_HEIGHT = 1.3;
 const PILL_PAD_X = 8;
 const PILL_PAD_Y = 5;
+/** Camera ratio at/below which ALL labels appear at once (1 = fit zoom). */
+const LABELS_CAMERA_RATIO = 1;
 
 /** Word-wrap for canvas text. Never truncates: overlong single words are
  *  hard-broken by character so no line ever exceeds maxWidth. */
@@ -276,8 +280,9 @@ export function GraphView() {
 			if (killed) return;
 			renderer = new Sigma(graph, container, {
 				defaultEdgeType: "arrow",
-				// Names are short now — show them one zoom-stop earlier.
-				labelRenderedSizeThreshold: 6,
+				// All labels appear/disappear together: no per-node size gating
+				// (threshold 0) — a single camera-ratio switch toggles them below.
+				labelRenderedSizeThreshold: 0,
 				// Match the app typography (Geist via the body's stack).
 				labelFont: getComputedStyle(document.body).fontFamily,
 				labelWeight: "500",
@@ -301,8 +306,17 @@ export function GraphView() {
 			});
 			// Clicking the empty stage closes the node card.
 			renderer.on("clickStage", () => setSelected(null));
-			// Any pan/zoom detaches the card from its node — close instead.
-			renderer.getCamera().on("updated", () => setSelected(null));
+			// One global label gate: names show at fit zoom or closer and all
+			// vanish together when zoomed further out. Any pan/zoom also
+			// detaches the card from its node — close it.
+			const syncRenderLabels = (ratio: number) => {
+				renderer?.setSetting("renderLabels", ratio <= LABELS_CAMERA_RATIO);
+			};
+			syncRenderLabels(renderer.getCamera().getState().ratio);
+			renderer.getCamera().on("updated", (state) => {
+				syncRenderLabels(state.ratio);
+				setSelected(null);
+			});
 		});
 
 		return () => {
