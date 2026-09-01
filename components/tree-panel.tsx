@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { CheckIcon, ChevronsRightIcon, ListTreeIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	CheckIcon,
+	ChevronsRightIcon,
+	ListTreeIcon,
+	MaximizeIcon,
+	MinusIcon,
+	NetworkIcon,
+	PlusIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { planNodeStatus, type PlanNode, type PlanNodeStatus, type PlanTree } from "@/src/core";
 
@@ -21,14 +29,23 @@ import { planNodeStatus, type PlanNode, type PlanNodeStatus, type PlanTree } fro
 * (PhaseDivider, message-level) marks the transition; THIS panel is the
 * surface for every plan_* part (they render nothing inline, by design).
 *
-* Quiet register (matches the phase dividers): hairline border, muted
-* text, one highlighted row for the current position. Collapses to a thin
-* rail; the preference persists in localStorage. Hidden below `xl`
-* (CSS-only).
+* Three modes, one persisted preference: the LIST (nested — the default,
+* and the always-visible "collapsed" view), the GRAPH (expanded: a
+* hand-built mermaid-style diagram — full styling control, no mermaid
+* renderer — with drag-pan + wheel-zoom whose FLOOR is fit-to-panel), and
+* the RAIL (thin strip). Quiet register throughout (matches the phase
+* dividers): hairline borders, muted text, one highlighted node for the
+* current position. Hidden below `xl` (CSS-only).
 */
 
-/** localStorage key for the collapse preference (matches lh:sidebar-open). */
-const STORAGE_KEY = "lh:tree-panel-collapsed";
+/** localStorage: the mode persists as "lh:tree-panel-mode"
+ *  ("rail" | "list" | "graph"); the pre-graph key
+ *  ("lh:tree-panel-collapsed": "1" rail / "0" list) is the fallback. */
+const MODE_KEY = "lh:tree-panel-mode";
+const LEGACY_KEY = "lh:tree-panel-collapsed";
+
+/** The three panel modes: rail (fully collapsed) | list (default) | graph. */
+type PanelMode = "rail" | "list" | "graph";
 
 /**
 * Minimal structural slice of a UI message — anything with typed parts.
@@ -148,25 +165,30 @@ export function TreePanel({
 }) {
 	const tree = useMemo(() => latestTree(messages), [messages]);
 
-	// Start expanded so server and client first-render agree (no hydration
-	// mismatch); the stored preference is applied after mount. Same pattern
-	// as the sidebar.
-	const [collapsed, setCollapsed] = useState(false);
+	// Start in the list so server and client first-render agree (no
+	// hydration mismatch); the stored preference is applied after mount.
+	// Same pattern as the sidebar.
+	const [mode, setMode] = useState<PanelMode>("list");
 
 	useEffect(() => {
 		try {
-			const stored = window.localStorage.getItem(STORAGE_KEY);
-			if (stored !== null) setCollapsed(stored === "1");
+			const stored = window.localStorage.getItem(MODE_KEY);
+			if (stored === "rail" || stored === "list" || stored === "graph") {
+				setMode(stored);
+			} else {
+				// legacy key (pre-graph): "1" = the collapsed rail
+				const legacy = window.localStorage.getItem(LEGACY_KEY);
+				if (legacy === "1") setMode("rail");
+			}
 		} catch {
 			// private mode / storage disabled — the preference is simply not persisted
 		}
 	}, []);
 
-	const toggle = () => {
-		const next = !collapsed;
-		setCollapsed(next);
+	const go = (next: PanelMode) => {
+		setMode(next);
 		try {
-			window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
+			window.localStorage.setItem(MODE_KEY, next);
 		} catch {
 			// see above
 		}
@@ -176,15 +198,19 @@ export function TreePanel({
 	// the moment plan_init's output lands and updates live from there.
 	if (!tree || tree.nodes.length === 0) return null;
 
-	return collapsed ? (
-		<TreePanelRail
-			doneCount={tree.doneNodeIds.length}
-			totalCount={tree.nodes.length}
-			onExpand={toggle}
-		/>
-	) : (
-		<TreePanelBody tree={tree} onCollapse={toggle} />
-	);
+	if (mode === "rail") {
+		return (
+			<TreePanelRail
+				doneCount={tree.doneNodeIds.length}
+				totalCount={tree.nodes.length}
+				onExpand={() => go("list")}
+			/>
+		);
+	}
+	if (mode === "graph") {
+		return <TreeGraphPanel tree={tree} onShowList={() => go("list")} onCollapse={() => go("rail")} />;
+	}
+	return <TreePanelBody tree={tree} onShowGraph={() => go("graph")} onCollapse={() => go("rail")} />;
 }
 
 /** The collapsed panel: a thin strip with the map icon + quiet progress. */
@@ -221,12 +247,15 @@ export function TreePanelRail({
 	);
 }
 
-/** The expanded panel: header + the node list in topological order. */
+/** The expanded panel (list mode): header + the node list in topological order. */
 export function TreePanelBody({
 	tree,
+	onShowGraph,
 	onCollapse,
 }: {
 	tree: PlanTree;
+	/** Expand into the mermaid-style graph view. */
+	onShowGraph: () => void;
 	onCollapse: () => void;
 }) {
 	const { order, depth } = useMemo(() => topoLayout(tree), [tree]);
@@ -250,6 +279,15 @@ export function TreePanelBody({
 				>
 					{doneCount}/{totalCount}
 				</span>
+				<button
+					type="button"
+					onClick={onShowGraph}
+					title="Show plan graph"
+					aria-label="Show plan graph"
+					className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+				>
+					<NetworkIcon className="size-3.5" />
+				</button>
 				<button
 					type="button"
 					onClick={onCollapse}
@@ -351,4 +389,367 @@ function StatusMark({
 				/>
 			);
 	}
+}
+
+// ─── the graph (expanded view) ────────────────────────────────────────────────
+//
+// A hand-built mermaid-style diagram — NOT mermaid's renderer: the styling
+// stays in this app's design language (phase colors, quiet strokes) and the
+// status coloring maps 1:1 onto the list's marks. Boxes top-down (vertical
+// space is the cheap axis here), layered by topoLayout depth, authoring
+// order within a layer, edges as vertical bezier curves.
+
+/** Graph geometry (px): node boxes and the gaps that carry the arrows. */
+export const NODE_W = 176;
+export const NODE_H = 48;
+export const GAP_X = 28;
+export const GAP_Y = 64;
+
+/** Top-left position per node + the diagram's extent. */
+export interface GraphLayout {
+	x: Map<string, number>;
+	y: Map<string, number>;
+	width: number;
+	height: number;
+}
+
+/**
+ * Layered positions: depth = row (top-down), authoring order within the
+ * row, each row centered on the widest one. No crossing-reduction pass —
+ * the teacher authors nodes in dependency order as a rule, and v1 keeps
+ * the layout deterministic and readable over prettier.
+ */
+export function graphLayout(order: readonly PlanNode[], depth: ReadonlyMap<string, number>): GraphLayout {
+	const layers: PlanNode[][] = [];
+	for (const n of order) {
+		const d = depth.get(n.id) ?? 0;
+		if (!layers[d]) layers[d] = [];
+		layers[d].push(n);
+	}
+	const rowWidth = (l: PlanNode[]) => l.length * NODE_W + (l.length - 1) * GAP_X;
+	let maxWidth = 0;
+	for (const l of layers) maxWidth = Math.max(maxWidth, rowWidth(l));
+	const x = new Map<string, number>();
+	const y = new Map<string, number>();
+	layers.forEach((l, d) => {
+		const start = (maxWidth - rowWidth(l)) / 2;
+		l.forEach((n, i) => {
+			x.set(n.id, start + i * (NODE_W + GAP_X));
+			y.set(n.id, d * (NODE_H + GAP_Y));
+		});
+	});
+	const height = layers.length * NODE_H + (layers.length - 1) * GAP_Y;
+	return { x, y, width: maxWidth, height: Math.max(height, 0) };
+}
+
+/**
+ * Wrap a node title to at most `maxLines` lines of at most `maxChars`
+ * (greedy word wrap); overflow ends in an ellipsis, a single oversized
+ * word is hard-clamped. Pure — unit-tested.
+ */
+export function wrapTitle(title: string, maxChars = 22, maxLines = 2): string[] {
+	const words = title.trim().split(/\s+/).filter(Boolean);
+	if (words.length === 0) return [""];
+	const lines: string[] = [];
+	for (const w of words) {
+		const last = lines[lines.length - 1];
+		const fits = last !== undefined && last.length + 1 + w.length <= maxChars;
+		if (fits) {
+			lines[lines.length - 1] = `${last} ${w}`;
+		} else if (lines.length < maxLines) {
+			lines.push(w.length > maxChars ? `${w.slice(0, maxChars - 1)}…` : w);
+		} else {
+			// out of lines: mark the last one as truncated (once)
+			const lastLine = lines[lines.length - 1];
+			if (lastLine !== undefined && !lastLine.endsWith("…")) {
+				lines[lines.length - 1] = lastLine.length >= maxChars
+					? `${lastLine.slice(0, maxChars - 1)}…`
+					: `${lastLine}…`;
+			}
+		}
+	}
+	return lines;
+}
+
+/** Box + label styling per status — the graph's face of the list's marks:
+ *  done = colored in (the teach-phase green), current = the position,
+ *  next = the unlocked ring, upcoming = quiet. */
+const GRAPH_BOX: Record<PlanNodeStatus, string> = {
+	done: "fill-phase-teach/10 stroke-phase-teach/50",
+	current: "fill-primary/10 stroke-primary",
+	upcoming: "fill-card stroke-border",
+};
+const GRAPH_TEXT: Record<PlanNodeStatus, string> = {
+	done: "fill-muted-foreground text-xs",
+	current: "fill-foreground text-xs font-medium",
+	upcoming: "fill-muted-foreground/80 text-xs",
+};
+
+const GRAPH_HEADER_BTN =
+	"flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground";
+const GRAPH_ZOOM_BTN =
+	"pointer-events-auto flex size-7 items-center justify-center rounded-md border border-border/70 bg-card/80 text-muted-foreground backdrop-blur transition-colors hover:bg-accent hover:text-foreground";
+
+/** Zoom bounds: never below fit-to-panel (the graph can't disappear into
+ *  nothing — fully zoomed out IS the fit), never above 2×. */
+const ZOOM_MAX = 2;
+const ZOOM_FLOOR = 0.15;
+
+/**
+ * The interactive diagram: drag to pan, wheel to zoom (to the cursor), the
+ * fit button resets. Auto-fits on first measure and whenever the tree's
+ * layout changes — unless the learner has panned/zoomed on their own
+ * (their view is theirs). SSR-safe: all measurement lives in effects.
+ */
+export function TreeGraph({ tree }: { tree: PlanTree }) {
+	const { order, depth } = useMemo(() => topoLayout(tree), [tree]);
+	const nextId = useMemo(() => nextNodeId(tree, order), [tree, order]);
+	const layout = useMemo(() => graphLayout(order, depth), [order, depth]);
+
+	const viewportRef = useRef<HTMLDivElement>(null);
+	const [size, setSize] = useState({ w: 0, h: 0 });
+
+	useEffect(() => {
+		const el = viewportRef.current;
+		if (!el || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => {
+			setSize({ w: el.clientWidth, h: el.clientHeight });
+		});
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+
+	// The zoom floor: fully zoomed out, the whole diagram fits the panel.
+	const fitZoom = useMemo(() => {
+		const pad = 48;
+		if (!size.w || !size.h || layout.width === 0) return 1;
+		return Math.max(
+			ZOOM_FLOOR,
+			Math.min((size.w - pad) / layout.width, (size.h - pad) / layout.height, 1),
+		);
+	}, [size, layout]);
+
+	const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
+	const userAdjustedRef = useRef(false);
+
+	// Auto-fit (first measure, layout changes) — suppressed once the learner
+	// takes manual control, until they press fit again.
+	useEffect(() => {
+		if (userAdjustedRef.current || !size.w || !size.h) return;
+		setView({
+			zoom: fitZoom,
+			x: (size.w - layout.width * fitZoom) / 2,
+			y: (size.h - layout.height * fitZoom) / 2,
+		});
+	}, [fitZoom, size, layout]);
+
+	// Wheel zoom to the cursor. Non-passive so the page never scrolls instead.
+	useEffect(() => {
+		const el = viewportRef.current;
+		if (!el) return;
+		const onWheel = (e: WheelEvent) => {
+			e.preventDefault();
+			const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY; // Firefox line mode
+			const factor = Math.exp(-dy * 0.0015);
+			setView((v) => {
+				const zoom = Math.min(Math.max(v.zoom * factor, fitZoom), ZOOM_MAX);
+				if (zoom === v.zoom) return v;
+				const rect = el.getBoundingClientRect();
+				const cx = e.clientX - rect.left;
+				const cy = e.clientY - rect.top;
+				const k = zoom / v.zoom;
+				return { zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
+			});
+			userAdjustedRef.current = true;
+		};
+		el.addEventListener("wheel", onWheel, { passive: false });
+		return () => el.removeEventListener("wheel", onWheel);
+	}, [fitZoom]);
+
+	// Drag pan (pointer capture; a click on nothing never selects text —
+	// the viewport is select-none).
+	const dragRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+	const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (e.button !== 0) return;
+		dragRef.current = { px: e.clientX, py: e.clientY, x: view.x, y: view.y };
+		e.currentTarget.classList.add("cursor-grabbing");
+		e.currentTarget.setPointerCapture(e.pointerId);
+	};
+	const moveDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+		const d = dragRef.current;
+		if (!d) return;
+		setView((v) => ({ ...v, x: d.x + (e.clientX - d.px), y: d.y + (e.clientY - d.py) }));
+	};
+	const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (dragRef.current) {
+			dragRef.current = null;
+			userAdjustedRef.current = true;
+		}
+		e.currentTarget.classList.remove("cursor-grabbing");
+	};
+
+	// Button zoom steps toward the viewport center (same math as wheel).
+	const stepZoom = (factor: number) => {
+		userAdjustedRef.current = true;
+		setView((v) => {
+			const zoom = Math.min(Math.max(v.zoom * factor, fitZoom), ZOOM_MAX);
+			const cx = size.w / 2;
+			const cy = size.h / 2;
+			const k = zoom / v.zoom;
+			return { zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
+		});
+	};
+	const fitView = () => {
+		userAdjustedRef.current = false;
+		if (!size.w || !size.h) return;
+		setView({
+			zoom: fitZoom,
+			x: (size.w - layout.width * fitZoom) / 2,
+			y: (size.h - layout.height * fitZoom) / 2,
+		});
+	};
+
+	return (
+		<div
+			ref={viewportRef}
+			data-testid="plan-graph"
+			className="relative min-h-0 flex-1 cursor-grab touch-none overflow-hidden select-none"
+			onPointerDown={startDrag}
+			onPointerMove={moveDrag}
+			onPointerUp={endDrag}
+			onPointerCancel={endDrag}
+		>
+			<div
+				className="absolute top-0 left-0 origin-top-left"
+				style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
+			>
+				<svg width={layout.width} height={layout.height} role="img" aria-label="Plan tree graph">
+					<defs>
+						<marker
+							id="lh-plan-arrow"
+							viewBox="0 0 8 8"
+							refX="7"
+							refY="4"
+							markerWidth="6"
+							markerHeight="6"
+							orient="auto-start-reverse"
+						>
+							<path d="M0,1 L7,4 L0,7 z" className="fill-muted-foreground/50" />
+						</marker>
+					</defs>
+					{tree.edges.map((e) => {
+						const x1 = (layout.x.get(e.from) ?? 0) + NODE_W / 2;
+						const y1 = (layout.y.get(e.from) ?? 0) + NODE_H;
+						const x2 = (layout.x.get(e.to) ?? 0) + NODE_W / 2;
+						const y2 = layout.y.get(e.to) ?? 0;
+						const mid = (y1 + y2) / 2;
+						return (
+							<path
+								key={`${e.from}->${e.to}`}
+								d={`M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`}
+								className="fill-none stroke-muted-foreground/40"
+								strokeWidth={1.5}
+								markerEnd="url(#lh-plan-arrow)"
+							/>
+						);
+					})}
+					{order.map((n) => {
+						const status: PlanNodeStatus = planNodeStatus(tree, n.id);
+						const lines = wrapTitle(n.title);
+						return (
+							<g
+								key={n.id}
+								transform={`translate(${layout.x.get(n.id) ?? 0}, ${layout.y.get(n.id) ?? 0})`}
+								data-testid={`graph-node-${n.id}`}
+								data-status={status}
+								data-next={n.id === nextId ? "true" : undefined}
+							>
+								<title>{n.summary ? `${n.title} — ${n.summary}` : n.title}</title>
+								<rect width={NODE_W} height={NODE_H} rx={10} className={GRAPH_BOX[status]} strokeWidth={1.5} />
+								{status === "current" && (
+									<circle cx={NODE_W - 12} cy={12} r={3} className="fill-primary" aria-hidden />
+								)}
+								{lines.map((line, i) => (
+									<text
+										key={i}
+										x={12}
+										y={lines.length === 1 ? 29 : 19 + i * 14}
+										className={GRAPH_TEXT[status]}
+									>
+										{line}
+									</text>
+								))}
+							</g>
+						);
+					})}
+				</svg>
+			</div>
+
+			{/* Quiet affordances: the hint and the zoom controls. */}
+			<div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-2">
+				<span className="text-[10px] text-muted-foreground/60">Drag to pan · scroll to zoom</span>
+				<div className="flex gap-1">
+					<button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => stepZoom(1 / 1.25)} className={GRAPH_ZOOM_BTN}>
+						<MinusIcon className="size-3.5" />
+					</button>
+					<button type="button" title="Fit plan to panel" aria-label="Fit plan to panel" onClick={fitView} data-testid="graph-fit" className={GRAPH_ZOOM_BTN}>
+						<MaximizeIcon className="size-3.5" />
+					</button>
+					<button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => stepZoom(1.25)} className={GRAPH_ZOOM_BTN}>
+						<PlusIcon className="size-3.5" />
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+/** The expanded panel (graph mode): wider, the diagram, and the mode toggles. */
+export function TreeGraphPanel({
+	tree,
+	onShowList,
+	onCollapse,
+}: {
+	tree: PlanTree;
+	onShowList: () => void;
+	onCollapse: () => void;
+}) {
+	const doneCount = tree.doneNodeIds.length;
+	const totalCount = tree.nodes.length;
+	return (
+		<aside
+			data-testid="tree-graph-panel"
+			className="hidden w-96 shrink-0 flex-col border-l border-border/60 bg-card/30 xl:flex"
+		>
+			<header className="flex items-center gap-2 px-3 py-2.5">
+				<NetworkIcon className="size-3.5 text-muted-foreground" />
+				<span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Plan</span>
+				<span
+					className="ml-auto text-[11px] tabular-nums text-muted-foreground"
+					title={`${doneCount} of ${totalCount} nodes done`}
+				>
+					{doneCount}/{totalCount}
+				</span>
+				<button
+					type="button"
+					onClick={onShowList}
+					title="Show as list"
+					aria-label="Show as list"
+					className={GRAPH_HEADER_BTN}
+				>
+					<ListTreeIcon className="size-3.5" />
+				</button>
+				<button
+					type="button"
+					onClick={onCollapse}
+					title="Hide plan"
+					aria-label="Hide plan"
+					className={GRAPH_HEADER_BTN}
+				>
+					<ChevronsRightIcon className="size-3.5" />
+				</button>
+			</header>
+			<TreeGraph tree={tree} />
+		</aside>
+	);
 }
