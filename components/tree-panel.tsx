@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
 	CheckIcon,
 	ChevronsRightIcon,
@@ -166,16 +166,25 @@ export function nextNodeId(
 
 // ─── panel ───────────────────────────────────────────────────────────────────
 
-export function TreePanel({
-	messages,
-}: {
-	messages: readonly TreePanelMessage[];
-}) {
-	const tree = useMemo(() => latestTree(messages), [messages]);
+/**
+ * The panel mode lives in the ROOT layout, not in TreePanel. TreePanel is
+ * per-page (chat sessions remount it on every navigation), so a local copy
+ * would paint its default first and then "correct" to the stored mode —
+ * with the animated frame, opening a session visibly opened-then-closed
+ * the panel. In the root layout the mode survives navigations untouched,
+ * exactly like the left sidebar's open state (SidebarProvider).
+ */
+const TreePanelModeContext = createContext<{ mode: PanelMode; go: (next: PanelMode) => void }>({
+	mode: "list",
+	go: () => {},
+});
 
-	// Start in the list so server and client first-render agree (no
-	// hydration mismatch); the stored preference is applied after mount.
-	// Same pattern as the sidebar.
+/** Root-layout persistence of the panel mode (rail | list | graph). */
+export function TreePanelModeProvider({ children }: { children: React.ReactNode }) {
+	// SSR default: "list" — server and client first-render agree (no
+	// hydration mismatch). The stored preference applies on mount, and
+	// the provider itself never remounts, so after that first correction
+	// the mode is simply THERE on every session you open.
 	const [mode, setMode] = useState<PanelMode>("list");
 
 	useEffect(() => {
@@ -193,14 +202,25 @@ export function TreePanel({
 		}
 	}, []);
 
-	const go = (next: PanelMode) => {
+	const go = useCallback((next: PanelMode) => {
 		setMode(next);
 		try {
 			window.localStorage.setItem(MODE_KEY, next);
 		} catch {
 			// see above
 		}
-	};
+	}, []);
+
+	return <TreePanelModeContext.Provider value={{ mode, go }}>{children}</TreePanelModeContext.Provider>;
+}
+
+export function TreePanel({
+	messages,
+}: {
+	messages: readonly TreePanelMessage[];
+}) {
+	const tree = useMemo(() => latestTree(messages), [messages]);
+	const { mode, go } = useContext(TreePanelModeContext);
 
 	// Empty state: no tree yet → the panel does not render at all. It appears
 	// the moment plan_init's output lands and updates live from there.
