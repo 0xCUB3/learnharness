@@ -17,12 +17,13 @@
  *   - defaultDrawNodeHover: NO background box (sigma's default is a
  *     hardcoded white one). Instead the hovered node gets a soft glow
  *     halo in its own state color at a constant radius, flush with the
- *     disc edge, and its name brightens instantly — the "this is
- *     clickable, click for the full fact" affordance. Entering/leaving
- *     hover fades the halo's OPACITY over a short transition (no
- *     growth, no pulse; the text color is un-animated so rapid hover
- *     toggles at a node's edge can't flicker it). Hover always shows
- *     the name, even when labels are zoomed out.
+ *     disc edge, and its name brightens — the "this is clickable,
+ *     click for the full fact" affordance. Entering/leaving hover fades
+ *     ONE transition factor shared by halo and text alike, so the
+ *     halo's opacity and the text's muted→bright cross-fade stay in
+ *     sync (no growth, no pulse; interpolating from the current value
+ *     means rapid hover toggles glide instead of snapping). Hover
+ *     always shows the name, even when labels are zoomed out.
  * Labels are zoom-gated GLOBALLY with a fade: all names appear at once
  * when the camera is at fit zoom or closer (ratio <= 1), then fade out
  * together across a short zoom span before label rendering switches off —
@@ -145,9 +146,9 @@ function drawName(
  *  1 = fully hovered): a glow halo in the node's own state color at a
  * CONSTANT radius (opacity fades in/out; the halo never grows) starting
  * flush at the disc edge (the evenodd punch-out keeps the disc itself
- * unpainted). The name is drawn opaque in the bright hover color — no
- * alpha animation: partial-alpha text over the resting label flickers
- * when hover toggles rapidly at a node's edge. */
+ * unpainted). The name is drawn at partial alpha in the bright hover
+ * color — the muted resting label on the layer beneath shows through,
+ * so text and halo cross-fade on the SAME factor and stay in sync. */
 function paintHover(
 	context: CanvasRenderingContext2D,
 	data: { label?: string | null; x: number; y: number; size: number; color: string },
@@ -168,6 +169,10 @@ function paintHover(
 		context.arc(data.x, data.y, inner, 0, Math.PI * 2, true);
 		context.fill("evenodd");
 	}
+	// Same fade factor as the halo: text and glow rise together. The
+	// bright name at partial alpha over the muted resting label beneath is
+	// a smooth muted→bright cross-fade rather than an instant color swap.
+	context.globalAlpha = fade;
 	drawName(context, data, settings, hoverTextColor);
 	context.restore();
 }
