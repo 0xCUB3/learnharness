@@ -329,24 +329,35 @@ describe("steer card rendering (the delivered artifact)", () => {
 		assert.ok(!html.includes("<iframe"), "no iframe for a failed build");
 	});
 
-	it("renders the verified svg inline (sanitized) with notes", () => {
+	it("renders the verified svg inline (sanitized); the maker's notes are glue and stay hidden", () => {
 		const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><circle cx="50" cy="50" r="20"/></svg>';
-		const steer = buildSubagentSteer({ id: "jv", kind: "visual", toolCallId: "cv" }, { svg, notes: "The unit circle." });
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
-		assert.match(html, /The unit circle\./);
-		assert.ok(html.includes("circle"), "svg content rendered inline");
-		assert.match(html, /Figure/);
-	});
-
-	it("renders the research brief with source links", () => {
 		const steer = buildSubagentSteer(
-			{ id: "jr", kind: "research", toolCallId: "cr" },
-			{ brief: "Plato (c. 428–348 BCE) founded the Academy.", sources: [{ title: "Britannica", url: "https://britannica.com/plato" }] },
+			{ id: "jv", kind: "visual", toolCallId: "cv" },
+			{ svg, notes: "Looking at the render, the diagram is clean and accurate." },
 		);
 		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
-		assert.match(html, /Research brief/);
-		assert.match(html, /britannica\.com\/plato/);
-		assert.match(html, /founded the Academy/);
+		assert.ok(html.includes("circle"), "svg content rendered inline");
+		assert.match(html, /Figure/);
+		assert.ok(!html.includes("Looking at the render"), "model-facing notes never render");
+	});
+
+	it("renders a quiet Research-complete badge — the full brief stays out of the transcript (but persisted)", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jr", kind: "research", toolCallId: "cr" },
+			{
+				brief: "Plato (c. 428–348 BCE) founded the Academy, a very long brief that would clutter the transcript.",
+				sources: [
+					{ title: "Britannica", url: "https://britannica.com/plato" },
+					{ title: "IEP", url: "https://iep.utm.edu/plato/" },
+				],
+			},
+		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		assert.match(html, /Research/);
+		assert.match(html, /complete/);
+		assert.match(html, /2 sources/);
+		assert.ok(!html.includes("founded the Academy"), "the long brief never renders inline");
+		assert.ok(!html.includes("britannica"), "source links stay out too — the wake turn cites them");
 	});
 
 	it("renders the visual failure note with no svg when the build FAILED", () => {

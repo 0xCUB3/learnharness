@@ -287,21 +287,22 @@ export function Chat({
 								/>
 							)}
 
-							{messages.map((m, mi) => (
+							{messages.map((m, mi) =>
+								m.role === "user" && isSubagentSteer(m) ? (
+									// Sub-agent delivery (wake-pipeline steer): NO message bubble — the
+									// artifact card sits in the transcript column directly, full width
+									// and centered like the teacher's artifacts (contracts.ts "THE ASYNC
+									// PROTOCOL" §4).
+									<SubagentSteerCard key={m.id} message={m} />
+								) : (
 								<Message key={m.id} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
 									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
 										{m.role === "user" ? (
-											isSubagentSteer(m) ? (
-												// Sub-agent delivery (wake-pipeline steer): render the
-												// artifact, never a learner bubble (contracts.ts §4).
-												<SubagentSteerCard message={m} />
-											) : (
-												// User text renders plain: the model's LaTeX pipeline is not
-												// applied to learner-authored text ($ stays $, no surprises).
-												<div className="whitespace-pre-wrap">
-													{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
-												</div>
-											)
+											// User text renders plain: the model's LaTeX pipeline is not
+											// applied to learner-authored text ($ stays $, no surprises).
+											<div className="whitespace-pre-wrap">
+												{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
+											</div>
 										) : (
 											m.parts.map((part, pi) => {
 												const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;

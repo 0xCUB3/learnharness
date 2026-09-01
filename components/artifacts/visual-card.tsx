@@ -61,7 +61,6 @@ export function VisualOutputCard({ output }: { output: unknown }) {
 				dangerouslySetInnerHTML={{ __html: sanitizeSvg(result.svg) }}
 				data-testid="visual-svg"
 			/>
-			{result.notes && <p className="mt-2 text-sm text-muted-foreground">{result.notes}</p>}
 		</div>
 	);
 }

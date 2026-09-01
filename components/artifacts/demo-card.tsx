@@ -99,10 +99,10 @@ export function DemoOutputCard({ output }: { output: unknown }) {
 			</div>
 		);
 	}
-	return <DemoFrame title={result.title} html={result.html} notes={result.notes} />;
+	return <DemoFrame title={result.title} html={result.html} />;
 }
 
-function DemoFrame({ title, html, notes }: { title: string; html: string; notes?: string }) {
+function DemoFrame({ title, html }: { title: string; html: string }) {
 	const actions = useContext(ChatActionsContext);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 	const [state, setState] = useState<DemoBridgeState>(INITIAL_DEMO_BRIDGE_STATE);
@@ -145,7 +145,6 @@ function DemoFrame({ title, html, notes }: { title: string; html: string; notes?
 				style={{ height: state.height ?? 360 }}
 				data-testid="demo-iframe"
 			/>
-			{notes && <p className="mt-2 text-sm text-muted-foreground">{notes}</p>}
 		</div>
 	);
 }
