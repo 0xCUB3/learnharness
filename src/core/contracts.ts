@@ -5,6 +5,7 @@
  */
 
 import type { UIMessage } from "ai";
+import type { Phase3 } from "./phases.ts";
 
 // ─── Plan tree (vision §2 "formal plan tree") ────────────────────────────────
 // A session-scoped dependency tree authored by the teacher via plan tools.
@@ -257,13 +258,35 @@ export interface ChatRecord {
 	tree?: PlanTree;
 }
 
-/** The list view's shape (messageCount instead of full messages). */
+/** The list view's shape (messageCount instead of full messages) + the
+ *  per-session status the picker renders. `phase` and `pendingQuestion`
+ *  derive from the stored record (tree + messages); the store computes
+ *  them in listChats. Liveness (`busy`) is NOT record-derived — the API
+ *  route merges it in (see ChatListItem).
+ *
+ *  Phase semantics (three phases, data-only): probe = no plan yet, plan =
+ *  tree exists but no node occupied, teach = a node is occupied
+ *  (core/phases.ts phaseOfTree).
+ */
 export interface ChatSummary {
 	id: string;
 	title: string;
 	createdAt: string;
 	updatedAt: string;
 	messageCount: number;
+	/** The session's current phase, derived from the stored plan tree. */
+	phase: Phase3;
+	/** An unanswered quiz/ask question is waiting for the learner. */
+	pendingQuestion: boolean;
+}
+
+/** The sidebar's session row: a summary + live liveness. The chats list
+ *  route attaches `busy` from the turn-liveness registry and the job store
+ *  (a running turn OR a background job = the session is working). The store
+ *  itself can't see liveness (import law: store never imports server),
+ *  hence the split at exactly the record/liveness seam. */
+export interface ChatListItem extends ChatSummary {
+	busy: boolean;
 }
 
 // ─── Async sub-agent jobs (vision §2.5; plan.md Wave 0 protocol) ────────────
