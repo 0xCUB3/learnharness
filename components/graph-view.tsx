@@ -15,10 +15,11 @@
  *   - defaultDrawNodeHover: the same wrapped name on a dark pill (the app's
  *     popover tokens) instead of sigma's hardcoded white box. Hover always
  *     shows the name, even when labels are zoomed out.
- * Labels are zoom-gated GLOBALLY: all names appear at once when the camera
- * is at fit zoom or closer (ratio <= 1) and all disappear at once when
- * zoomed further out — no per-node size gating, so labels never pop in one
- * by one. (The Obsidian text-fade feel, applied to the whole graph.)
+ * Labels are zoom-gated GLOBALLY with a fade: all names appear at once
+ * when the camera is at fit zoom or closer (ratio <= 1), then fade out
+ * together across a short zoom span before label rendering switches off —
+ * no per-node size gating, so labels never pop in one by one. (The Obsidian
+ * text-fade feel, applied to the whole graph.)
  *
  * Clicking a node opens the detail card anchored just below the node's
  * viewport position (flipping above near the bottom edge); any camera move
@@ -64,6 +65,8 @@ const PILL_PAD_X = 8;
 const PILL_PAD_Y = 5;
 /** Camera ratio at/below which ALL labels appear at once (1 = fit zoom). */
 const LABELS_CAMERA_RATIO = 1;
+/** Zoom span (camera-ratio units) over which labels fade out together. */
+const LABELS_FADE_SPAN = 0.5;
 
 /** Word-wrap for canvas text. Never truncates: overlong single words are
  *  hard-broken by character so no line ever exceeds maxWidth. */
@@ -104,7 +107,7 @@ function roundedRect(
 	const r = Math.min(radius, width / 2, height / 2);
 	context.beginPath();
 	context.moveTo(x + r, y);
-	context.arcTo(x + width, y, y + width, y + height, r);
+	context.arcTo(x + width, y, x + width, y + height, r);
 	context.arcTo(x + width, y + height, x, y + height, r);
 	context.arcTo(x, y + height, x, y, r);
 	context.arcTo(x, y, x + width, y, r);
@@ -306,11 +309,23 @@ export function GraphView() {
 			});
 			// Clicking the empty stage closes the node card.
 			renderer.on("clickStage", () => setSelected(null));
-			// One global label gate: names show at fit zoom or closer and all
-			// vanish together when zoomed further out. Any pan/zoom also
-			// detaches the card from its node — close it.
+			// One global label gate with a fade: names are fully visible at fit
+			// zoom or closer, then fade out together across LABELS_FADE_SPAN of
+			// zoom (the labels canvas layer's opacity), and only once fully
+			// faded does label rendering switch off. Any pan/zoom also detaches
+			// the card from its node — close it.
+			const labelsCanvas = renderer.getCanvases().labels;
+			let labelsRendering: boolean | null = null;
 			const syncRenderLabels = (ratio: number) => {
-				renderer?.setSetting("renderLabels", ratio <= LABELS_CAMERA_RATIO);
+				// 0 at fit zoom → 1 at the end of the fade span
+				const fade = (ratio - LABELS_CAMERA_RATIO) / LABELS_FADE_SPAN;
+				const alpha = Math.min(Math.max(1 - fade, 0), 1);
+				const shouldRender = alpha > 0;
+				if (shouldRender !== labelsRendering) {
+					labelsRendering = shouldRender;
+					renderer?.setSetting("renderLabels", shouldRender);
+				}
+				if (labelsCanvas) labelsCanvas.style.opacity = alpha.toFixed(3);
 			};
 			syncRenderLabels(renderer.getCamera().getState().ratio);
 			renderer.getCamera().on("updated", (state) => {
