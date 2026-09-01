@@ -17,13 +17,14 @@ import { planNodeStatus, type PlanNode, type PlanNodeStatus, type PlanTree } fro
 * set_current / mark_done outputs flip the panel mid-session.
 *
 * The panel and the agent's tools share one object with two faces (agent
-* edits it, UI renders it) — the divider in the transcript (plan-divider)
-* marks the seam; THIS panel is the surface for every other plan_* part
-* (they render nothing inline, by design).
+* edits it, UI renders it) — the phase seam in the transcript
+* (PhaseDivider, message-level) marks the transition; THIS panel is the
+* surface for every plan_* part (they render nothing inline, by design).
 *
-* Quiet register (matches plan-divider): hairline border, muted text, one
-* highlighted row for the current position. Collapses to a thin rail; the
-* preference persists in localStorage. Hidden below `xl` (CSS-only).
+* Quiet register (matches the phase dividers): hairline border, muted
+* text, one highlighted row for the current position. Collapses to a thin
+* rail; the preference persists in localStorage. Hidden below `xl`
+* (CSS-only).
 */
 
 /** localStorage key for the collapse preference (matches lh:sidebar-open). */

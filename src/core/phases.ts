@@ -127,3 +127,28 @@ export function phaseAt3(messages: readonly Phase3Message[], upToIndex?: number)
 	}
 	return phase;
 }
+
+/**
+ * The phase at EVERY message index, in one forward fold — the transcript
+ * dividers render one per boundary, so phaseAt3(m, i) per index would
+ * rescan 0..i each time (quadratic); this is the same derivation, linear.
+ * out[i] === phaseAt3(messages, i) for every index.
+ */
+export function phaseTimeline(messages: readonly Phase3Message[]): Phase3[] {
+	const out: Phase3[] = [];
+	let phase: Phase3 = "probe";
+	for (let i = 0; i < messages.length; i++) {
+		const parts = messages[i]?.parts;
+		if (parts) {
+			for (const part of parts) {
+				if (!part.type.startsWith("tool-plan_") || part.state !== "output-available") continue;
+				const tree = (part.output as PlanOutput | undefined)?.tree as PhaseTree | undefined;
+				if (!tree || !Array.isArray(tree.nodes)) continue;
+				const candidate = phaseOfTree(tree);
+				if (PHASE3_RANK[candidate] > PHASE3_RANK[phase]) phase = candidate;
+			}
+		}
+		out.push(phase);
+	}
+	return out;
+}

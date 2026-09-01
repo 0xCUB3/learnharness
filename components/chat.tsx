@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { useStickToBottomContext } from "use-stick-to-bottom";
@@ -21,7 +21,8 @@ import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import { TreePanel } from "@/components/tree-panel";
 import type { ArtifactPartProps, QuestionAnswerData, TeacherUIMessage } from "@/src/core";
-import { findPendingJobCall, findPendingToolCall, phaseAt } from "@/src/core";
+import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
+import { findPendingJobCall, findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
@@ -118,13 +119,18 @@ export function Chat({
 	const localStream = status === "submitted" || status === "streaming";
 	const busy = localStream || turnInFlight;
 
-	// Teach-phase check (W5, vision §2 "two phases"): a pending question that
-	// lands after plan_init starts collapsed behind a "Check your
-	// understanding" reveal button; probe-phase questions auto-open as today.
-	// A pending question can never precede plan_init in the transcript (the
-	// teacher's turn ends at the question call), so the session's current
-	// phase IS the question's phase. Pre-plan sessions: all probe — unchanged.
-	const requiresReveal = pending !== null && phaseAt(messages) === "teach";
+	// Teach-phase check (W5, vision §2): a pending question that lands once a
+	// plan node is OCCUPIED (phaseAt3 "teach") starts collapsed behind a
+	// "Check your understanding" reveal button; probe- and plan-phase
+	// questions auto-open as today. A pending question can never precede its
+	// phase's seam in the transcript (the teacher's turn ends at the question
+	// call), so the session's current phase IS the question's phase.
+	const requiresReveal = pending !== null && phaseAt3(messages) === "teach";
+
+	// The phase at every message (one linear fold): the transcript draws a
+	// color-coded dotted divider at each boundary; the header chip reads the
+	// session's current phase.
+	const phases = useMemo(() => phaseTimeline(messages), [messages]);
 
 	// A tool call still streaming its input: the teacher is writing a question.
 	// Shown as a transcript shimmer, exactly like the thinking indicator.
@@ -201,6 +207,7 @@ export function Chat({
 			<header className="flex items-center gap-3 px-3 py-2">
 				<SidebarToggle />
 				<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
+				<PhaseChip phase={phases.at(-1) ?? "probe"} />
 			</header>
 
 			{/* The session row: transcript scroller + the persistent plan-tree panel
@@ -218,7 +225,11 @@ export function Chat({
 							)}
 
 							{messages.map((m, mi) => (
-								<Message key={m.id} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
+								<Fragment key={m.id}>
+									{mi > 0 && phases[mi] !== phases[mi - 1] && (
+										<PhaseDivider phase={phases[mi]!} nodeCount={planNodeCount(m)} />
+									)}
+									<Message from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
 									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
 										{m.role === "user" ? (
 											// User text renders plain: the model's LaTeX pipeline is not
@@ -264,7 +275,8 @@ export function Chat({
 											})
 										)}
 									</MessageContent>
-								</Message>
+									</Message>
+								</Fragment>
 							))}
 
 							{(status === "submitted" || turnInFlight) && <Shimmer className="text-sm">Thinking…</Shimmer>}

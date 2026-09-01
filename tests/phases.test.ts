@@ -12,6 +12,7 @@ import {
 	phaseAt,
 	phaseAt3,
 	phaseOfTree,
+	phaseTimeline,
 	type Phase3Message,
 	type PhaseMessage,
 } from "../src/core/phases.ts";
@@ -192,5 +193,28 @@ describe("phaseAt3", () => {
 		const messages: Phase3Message[] = [planMsg({ tool: "plan_init", ok: true, tree: tree(["a"], null) })];
 		assert.equal(phaseAt3(messages, 99), "plan");
 		assert.equal(phaseAt3(messages, -1), "probe", "empty scan range → probe");
+	});
+});
+
+describe("phaseTimeline", () => {
+	it("equals phaseAt3 at every index (the linear fold is the same derivation)", () => {
+		const messages: Phase3Message[] = [
+			msg("text"),
+			planMsg({ tool: "plan_init", ok: false, tree: tree([], null) }),
+			planMsg({ tool: "plan_init", ok: true, tree: tree(["a", "b"], null) }),
+			msg("text"),
+			planMsg({ tool: "plan_set_current", ok: true, tree: tree(["a", "b"], "a") }),
+			msg("text"),
+		];
+		const timeline = phaseTimeline(messages);
+		assert.equal(timeline.length, messages.length);
+		for (let i = 0; i < messages.length; i++) {
+			assert.equal(timeline[i], phaseAt3(messages, i), `index ${i}`);
+		}
+		assert.deepEqual(timeline, ["probe", "probe", "plan", "plan", "teach", "teach"]);
+	});
+
+	it("empty transcript → empty timeline", () => {
+		assert.deepEqual(phaseTimeline([]), []);
 	});
 });
