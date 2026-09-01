@@ -69,13 +69,24 @@ function readValid<T>(file: string, isValid: (v: unknown) => v is T): T[] {
 	return readRawLines(file).filter(isValid);
 }
 
-const isGraphNode = (v: unknown): v is GraphNode =>
+/** Pre-name ledger line (the first extraction runs) — read tolerantly. */
+type StoredGraphNode = Omit<GraphNode, "name"> & { name?: string };
+
+const isStoredGraphNode = (v: unknown): v is StoredGraphNode =>
 	isRecord(v) &&
 	isString(v.id) &&
 	isString(v.statement) &&
 	Array.isArray(v.aliases) &&
 	(v.kind === "truth" || v.kind === "misconception") &&
-	isString(v.createdAt);
+	isString(v.createdAt) &&
+	(v.name === undefined || isString(v.name));
+
+/** Derived header for legacy node lines written before `name` existed:
+ *  the first clause of the statement, capped — good enough to render. */
+function nameFromStatement(statement: string): string {
+	const clause = statement.split(/[.;:—]/)[0]!.trim();
+	return clause.length > 60 ? `${clause.slice(0, 57)}…` : clause || statement;
+}
 
 const EDGE_TYPES = ["requires", "supports"] as const;
 
@@ -116,9 +127,13 @@ export const graphStore: GraphStore = {
 	appendNode(node: GraphNode): void {
 		appendLine(LEDGER_FILES.nodes, node);
 	},
-	/** Raw node lines in append order (ids are unique — no merging needed). */
+	/** Raw node lines in append order (ids are unique — no merging needed).
+	 *  Legacy lines without a `name` get one derived from the statement. */
 	readNodes(): GraphNode[] {
-		return readValid(LEDGER_FILES.nodes, isGraphNode);
+		return readValid(LEDGER_FILES.nodes, isStoredGraphNode).map((n) => ({
+			...n,
+			name: n.name ?? nameFromStatement(n.statement),
+		}));
 	},
 
 	/** Append one edge ASSERTION; readers merge lines by (from,to,type). */

@@ -135,6 +135,7 @@ const FINDINGS: SessionFindings = {
 	propositions: [
 		{
 			id: "p1",
+			name: "Chain rule",
 			statement: "Chain rule intuition",
 			aliases: [],
 			kind: "truth",
@@ -143,6 +144,7 @@ const FINDINGS: SessionFindings = {
 		},
 		{
 			id: "p2",
+			name: "Applying chain rule",
 			statement: "Applying the chain rule",
 			aliases: [],
 			kind: "truth",

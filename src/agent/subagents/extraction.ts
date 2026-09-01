@@ -99,7 +99,18 @@ const findingsSchema = z.object({
 		.array(
 			z.object({
 				id: z.string().describe("Local id: \"p1\", \"p2\", … — referenced by edges and attribution."),
-				statement: z.string().describe("The proposition as one reasoning step — a node statement."),
+				name: z.string().describe(
+					"A short 2-6 word name for the fact — its header, used for rendering. Not a sentence.",
+				),
+				statement: z
+					.string()
+					.describe(
+						"The proposition as one reasoning step — an OBJECTIVE, world-facing fact. " +
+							"Never reference the learner, the teacher, or the session: not \"the learner " +
+							'understands X\" but \"X\"; not \"the learner thinks Y\" but the wrong idea itself, ' +
+							'stated as a claim (\"Reading: Nietzsche endorsed might-makes-right social Darwinism\"), ' +
+							"with kind \"misconception\" carrying that it is wrong.",
+					),
 				aliases: z.array(z.string()).describe("Verbatim alternate phrasings from this session, if any."),
 				kind: z.enum(["truth", "misconception"]).describe("misconception = a wrong idea the learner holds or was warned about."),
 				treeNodeId: z.string().optional().describe("The plan-tree node id this came from, when it did."),
@@ -134,7 +145,17 @@ verbatim (LEARNER / TEACHER), and structured events (QUIZ lines with the learner
 
 Report, with verbatim evidence quotes for everything:
 
+NODE THEORY — the graph is a set of objective facts, full stop. A node is what is true (or falsely
+believed) about the world, never anything about the learner or the session. The learner's
+relationship to a fact — whether they know it, missed it, or hold it as a misconception — is
+expressed ENTIRELY by the quiz-outcome events you attribute; it never leaks into the node itself.
+So no "the learner understands X", no "discussed in this session": the node is just X. A
+misconception node states the wrong idea itself as a claim, with kind "misconception" marking it
+wrong — never "the learner believes Y".
+
 1. PROPOSITIONS — every distinct reasoning-step-sized proposition the session touched:
+   - Each carries a "name": a short 2-6 word header (the rendering handle), and a "statement": the
+     full fact as one objective reasoning step.
    - Plan-tree nodes become propositions (pass their treeNodeId) — statement from the node title, enriched to a
      complete proposition if the prose elaborates it.
    - Propositions that appeared only in prose (teacher explanations, learner questions) get fresh ids.
@@ -201,7 +222,9 @@ verified subset.
 
 Verify:
 - PROPOSITIONS: every evidence quote must appear (near-)verbatim in the transcript view, and the statement must
-  be a faithful reading of it. Drop invented or bloated statements. Conservative: when two proposed propositions
+  be a faithful reading of it. The node theory applies: a statement must be an OBJECTIVE, world-facing fact —
+  reword learner- or session-relative statements ("the learner understands X" → "X") or drop them when the
+  objective fact is not actually backed. Drop invented or bloated statements. Conservative: when two proposed propositions
   are really one, keep the better-stated one and drop the other.
 - EDGES: the evidence must actually articulate the relation, in the direction claimed (from = prerequisite).
   Drop direction-swapped or speculative edges.

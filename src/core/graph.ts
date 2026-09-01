@@ -160,6 +160,7 @@ export function mergeFindings(chatId: string, findings: SessionFindings, deps: G
 		} else {
 			const graphNode: GraphNode = {
 				id: newGraphNodeId(),
+				name: p.name,
 				statement: p.statement,
 				aliases: [...p.aliases],
 				kind: p.kind,

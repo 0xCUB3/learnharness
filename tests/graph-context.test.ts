@@ -43,7 +43,7 @@ import { PATHS } from "../config.ts";
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
 function node(id: string, statement: string, over: Partial<GraphNode> = {}): GraphNode {
-	return { id, statement, aliases: [], kind: "truth", createdAt: "2026-08-22T00:00:00.000Z", ...over };
+	return { id, name: statement.split(";")[0]!, statement, aliases: [], kind: "truth", createdAt: "2026-08-22T00:00:00.000Z", ...over };
 }
 
 function edge(from: string, to: string): GraphEdge {
@@ -329,6 +329,7 @@ function treeFindings(tree: ReturnType<typeof createTree>): SessionFindings {
 	return {
 		propositions: tree.nodes.map((n, i) => ({
 			id: `p${i + 1}`,
+			name: n.title,
 			statement: n.title,
 			aliases: [],
 			kind: "truth" as const,
@@ -380,6 +381,7 @@ describe("exact-match merge (merger identity resolution)", () => {
 		const ledgers = memoryLedgers();
 		ledgers.appendNode({
 			id: "n_alias",
+			name: "Differentiation",
 			statement: "Differentiation basics",
 			aliases: ["the derivative"],
 			kind: "truth",

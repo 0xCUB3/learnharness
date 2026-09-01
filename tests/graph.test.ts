@@ -136,6 +136,7 @@ function treeFindings(tree: PlanTree): SessionFindings {
 	return {
 		propositions: tree.nodes.map((n, i) => ({
 			id: `p${i + 1}`,
+			name: n.title,
 			statement: n.title,
 			aliases: [],
 			kind: "truth" as const,
@@ -428,7 +429,7 @@ describe("the trigger helper (pendingQuizAnswers)", () => {
 
 describe("graph ledger store", () => {
 	it("round-trips lines and skips corrupt / foreign-shaped lines (strict reads)", () => {
-		const node = { id: "n_storetest", statement: "Store test", aliases: [], kind: "truth" as const, createdAt: "2026-08-22T00:00:00.000Z" };
+		const node = { id: "n_storetest", name: "Store test", statement: "Store test", aliases: [], kind: "truth" as const, createdAt: "2026-08-22T00:00:00.000Z" };
 		graphStore.appendNode(node);
 		// A torn append and a legacy V0-shaped node (different schema) — both skipped.
 		fs.appendFileSync(
@@ -439,5 +440,18 @@ describe("graph ledger store", () => {
 		const nodes = graphStore.readNodes().filter((n) => n.id === "n_storetest" || n.id === "legacy");
 		assert.equal(nodes.length, 1);
 		assert.equal(nodes[0]!.statement, "Store test");
+		assert.equal(nodes[0]!.name, "Store test");
+	});
+
+	it("derives a name for pre-name ledger lines (legacy reads)", () => {
+		// A full, valid node line written before `name` existed.
+		fs.appendFileSync(
+			LEDGER_FILES.nodes,
+			`${JSON.stringify({ id: "n_prename", statement: "Derivatives measure instantaneous change; they are limits.", aliases: [], kind: "truth", createdAt: "2026-08-22T00:00:00.000Z" })}\n`,
+			"utf-8",
+		);
+		const node = graphStore.readNodes().find((n) => n.id === "n_prename");
+		assert.ok(node);
+		assert.equal(node.name, "Derivatives measure instantaneous change");
 	});
 });

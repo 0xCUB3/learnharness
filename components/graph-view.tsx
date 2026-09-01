@@ -104,7 +104,7 @@ export function GraphView() {
 			// frozen layout stable for a given node set across remounts.
 			const rand = seededRandom(node.id);
 			graph.addNode(node.id, {
-				label: node.statement,
+				label: node.name,
 				size: STATE_TOKENS[state].size,
 				color: stateColors.get(state) ?? edgeColor,
 				x: (rand() - 0.5) * 100,
@@ -190,7 +190,8 @@ export function GraphView() {
 						className="absolute left-1/2 top-6 w-80 max-w-[90%] -translate-x-1/2 rounded-xl border bg-card p-4 text-left shadow-lg"
 						onClick={(e) => e.stopPropagation()}
 					>
-						<div className="text-sm font-medium leading-snug">{selected.node.statement}</div>
+						<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
+						<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
 						<div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
 							{STATE_LABELS[selected.state]}
 						</div>

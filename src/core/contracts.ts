@@ -66,7 +66,15 @@ export type EdgeType = "requires" | "supports";
 export interface GraphNode {
 	/** Opaque stable id, store-assigned: "n_" + nanoid-like. */
 	id: string;
-	/** Canonical proposition statement. */
+	/** Short name / header for the fact (2-6 words) — the rendering handle.
+	 *  NODE THEORY: a node is an OBJECTIVE fact, never learner- or
+	 *  session-relative. No "the learner understands…", no "this session
+	 *  covered…" — just the fact, world-facing. The learner's relationship
+	 *  to the fact lives ENTIRELY in the event ledger: state labels are
+	 *  derived from quiz outcomes, never written into the node. */
+	name: string;
+	/** Canonical proposition statement — the full fact, one reasoning step,
+	 *  also objective (no learner / teacher / session references). */
 	statement: string;
 	/** Verbatim alternate statements from sessions (merge target audit trail). */
 	aliases: string[];
@@ -146,7 +154,11 @@ export interface LedgerEvent {
 export interface ExtractedProposition {
 	/** Extractor-local id ("p1", …) referenced by edges + attribution. */
 	id: string;
-	/** Canonical one-reasoning-step statement. */
+	/** Short name / header for the fact (2-6 words) — the rendering handle. */
+	name: string;
+	/** Canonical one-reasoning-step statement — an objective, world-facing
+	 *  fact (no learner / teacher / session references; the learner's
+	 *  relationship to it is carried only by the event attribution). */
 	statement: string;
 	/** Verbatim alternate phrasings from the session (merge aliases). */
 	aliases: string[];
