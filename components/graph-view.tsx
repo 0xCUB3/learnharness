@@ -24,12 +24,6 @@
  *     sync (no growth, no pulse; interpolating from the current value
  *     means rapid hover toggles glide instead of snapping). Hover
  *     always shows the name, even when labels are zoomed out.
- * Hit-testing is also custom: sigma's built-in picking reads a
- * HALF-RESOLUTION framebuffer, giving small nodes ragged, quantized hit
- * edges — cursor jitter at a boundary flipped hover on/off constantly
- * (the hover flicker). patchNodePicking() replaces it with a smooth
- * distance test padded by HIT_PAD_PX, and a short leave-debounce
- * (hold the paint, then fade) makes any residual bounce invisible.
  * Labels are zoom-gated GLOBALLY with a fade: all names appear at once
  * when the camera is at fit zoom or closer (ratio <= 1), then fade out
  * together across a short zoom span before label rendering switches off —
@@ -89,15 +83,6 @@ const LABELS_FADE_SPAN = 0.5;
 const GLOW_PAD = 9; // px the halo extends beyond the node disc (constant)
 const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
 const HOVER_FADE_MS = 180; // hover halo opacity fade length
-/** Padding (px) around each node disc for hover/click hit-testing —
- *  small (candidate) nodes are ~5px across; a padded, smooth test makes
- *  them comfortable to hover and removes the ragged half-resolution hit
- *  edges of sigma's built-in picking. */
-const HIT_PAD_PX = 6;
-/** Grace period after the cursor leaves a node before the hover fades: a
- *  quick bounce back within the window cancels the fade, so boundary
- *  oscillation never visibly dims anything. */
-const HOVER_LEAVE_DELAY_MS = 90;
 
 /** "#rrggbb" + alpha → "rgba(...)" (tokenHex only ever emits #rrggbb). */
 function rgbaFromHex(hex: string, alpha: number): string {
@@ -222,52 +207,6 @@ function makeLabelDrawers(labelColor: string, hoverTextColor: string, hover: Hov
 	return { drawLabel, drawHover };
 }
 
-// ---- Padded, smooth node hit-testing ---------------------------------------
-//
-// sigma's getNodeAtPosition reads the picking framebuffer, which is rendered
-// at HALF the device resolution (pickingDownSizingRatio = 2 * pixelRatio).
-// For small nodes the hit circle is a couple of device pixels across in that
-// buffer, with ragged quantized edges — near a node's boundary, tiny cursor
-// movements flip the hover state on and off repeatedly (the hover flicker).
-// There is no setting for hit padding in sigma v3, so we replace the method
-// with a smooth distance test (node's rendered radius + HIT_PAD_PX) using
-// only public renderer APIs. Patches the prototype once per session.
-
-/** Structural view of the public sigma methods the hit-test needs. */
-interface PickingSurface {
-	getGraph(): { nodes(): Iterable<string> };
-	getNodeDisplayData(key: string): { x: number; y: number; size: number; hidden?: boolean } | undefined;
-	framedGraphToViewport(data: { x: number; y: number }): { x: number; y: number };
-	scaleSize(size: number): number;
-}
-
-let nodePickingPatched = false;
-
-/** Patch Sigma.prototype.getNodeAtPosition with a padded distance test. */
-function patchNodePicking(SigmaClass: { prototype: object }): void {
-	if (nodePickingPatched) return;
-	nodePickingPatched = true;
-	const proto = SigmaClass.prototype as unknown as {
-		getNodeAtPosition: (this: PickingSurface, event: { x: number; y: number }) => string | null;
-	};
-	proto.getNodeAtPosition = function (event) {
-		// Closest node by surface depth: how far the cursor sits inside the
-		// node's padded hit circle (negative = over the disc itself).
-		let best: { id: string; depth: number } | null = null;
-		for (const id of this.getGraph().nodes()) {
-			const data = this.getNodeDisplayData(id);
-			if (!data || data.hidden) continue;
-			const { x, y } = this.framedGraphToViewport(data);
-			const size = this.scaleSize(data.size);
-			const depth = Math.hypot(x - event.x, y - event.y) - size;
-			if (depth <= HIT_PAD_PX && (best === null || depth < best.depth)) {
-				best = { id, depth };
-		}
-		}
-		return best ? best.id : null;
-	};
-}
-
 // ---- Color helpers (WebGL/canvas want hex, not oklch) --------------------
 
 /** Resolve a CSS variable (oklch in this app) to #rrggbb via the canvas. */
@@ -373,13 +312,8 @@ export function GraphView() {
 		// rAF id of the hover fade transition — the ONLY animation (see the
 		// file header). Lives out here so the effect cleanup can cancel it.
 		let hoverAnimId: number | null = null;
-		// Leave-debounce timer (see HOVER_LEAVE_DELAY_MS): holds the hover
-		// paint briefly before fading, so boundary bounces never dim it.
-		let hoverLeaveTimer: ReturnType<typeof setTimeout> | null = null;
 		void import("sigma").then(({ default: Sigma }) => {
 			if (killed) return;
-			// Bigger, smoother hitboxes before the instance starts listening.
-			patchNodePicking(Sigma);
 			renderer = new Sigma(graph, container, {
 				defaultEdgeType: "arrow",
 				// All labels appear/disappear together: no per-node size gating
@@ -431,23 +365,16 @@ export function GraphView() {
 				syncRenderLabels(state.ratio);
 				setSelected(null);
 			});
-			// Hover fade + leave-debounce. Entering schedules renders (sigma
-			// re-invokes drawHover at the new fade). Leaving does NOT fade
-				// immediately: sigma clears the hover layer the moment its
-				// hoveredNode flips to null, so we (1) keep repainting the
-				// captured paint at the current fade (holdHoverPaint) through a
-				// short grace period, and only (2) fade out if the cursor hasn't
-				// bounced back. A re-enter within the window cancels the fade —
-				// boundary oscillation stays invisible. Every loop is bounded
-				// and stops on completion, so idle CPU returns to zero.
-			const stopHoverLoop = () => {
+			// The hover fade: entering schedules renders (sigma re-invokes
+			// drawHover with the new fade); leaving draws through the captured
+			// repainter, since sigma stops calling drawHover once unhovered.
+			// Both directions are bounded (~HOVER_FADE_MS) and cancel each
+			// other, so idle CPU returns to zero after every transition.
+			const animateHoverTo = (target: number) => {
 				if (hoverAnimId !== null) {
 					cancelAnimationFrame(hoverAnimId);
 					hoverAnimId = null;
 				}
-			};
-			const animateHoverTo = (target: number) => {
-				stopHoverLoop();
 				const from = hover.fade;
 				if (from === target) {
 					if (target === 0) hover.repaint?.(0);
@@ -463,45 +390,14 @@ export function GraphView() {
 				};
 				hoverAnimId = requestAnimationFrame(tick);
 			};
-			const holdHoverPaint = () => {
-				stopHoverLoop();
-				const tick = () => {
-					hover.repaint?.(hover.fade);
-					hoverAnimId = requestAnimationFrame(tick);
-				};
-				hoverAnimId = requestAnimationFrame(tick);
-			};
-			const cancelLeave = () => {
-				if (hoverLeaveTimer !== null) {
-					clearTimeout(hoverLeaveTimer);
-					hoverLeaveTimer = null;
-				}
-			};
-			const onEnterNode = () => {
-				cancelLeave();
-				animateHoverTo(1);
-			};
-			const onLeaveHover = () => {
-				if (hoverLeaveTimer !== null) return; // already in the grace window
-				if (hover.fade <= 0) {
-					hover.repaint?.(0);
-					return;
-				}
-				holdHoverPaint();
-				hoverLeaveTimer = setTimeout(() => {
-					hoverLeaveTimer = null;
-					animateHoverTo(0);
-				}, HOVER_LEAVE_DELAY_MS);
-			};
-			renderer.on("enterNode", onEnterNode);
-			renderer.on("leaveNode", onLeaveHover);
-			renderer.on("leaveStage", onLeaveHover);
+			renderer.on("enterNode", () => animateHoverTo(1));
+			renderer.on("leaveNode", () => animateHoverTo(0));
+			renderer.on("leaveStage", () => animateHoverTo(0));
 		});
 
 		return () => {
 			killed = true;
 			if (hoverAnimId !== null) cancelAnimationFrame(hoverAnimId);
-			if (hoverLeaveTimer !== null) clearTimeout(hoverLeaveTimer);
 			renderer?.kill();
 		};
 	}, [snapshot]);
