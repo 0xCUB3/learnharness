@@ -6,3 +6,4 @@ data/
 *.tsbuildinfo
 .env.local
 .memory/
+SCOPE.md
