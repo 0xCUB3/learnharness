@@ -22,13 +22,19 @@ import { planTools } from "./tools/plan.ts";
  */
 
 export const quizTool = tool({
+	// Description ported from the pi original (the learning system this app
+	// grew out of) — that one never produced invalid correctAnswer values.
 	description:
 		"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
-		"Use it to (1) assess what the learner already understands before teaching, and (2) run tight practice/retrieval loops after explaining. " +
-		"Options-only: single-select or multi-select, plus an automatic 'I don't know' choice so the learner can signal a genuine gap instead of guessing. " +
-		"correctAnswer must be the EXACT value (or label) of one of the listed options — a correctAnswer that matches no option fails validation and the call is returned to you to fix. " +
-		"No free-text answers — for non-graded questions use ask_user_question instead. " +
-		"Ask exactly one question per tool call; after calling, end your turn and wait for the graded result.",
+		"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
+		"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
+		"can show an explanation. Use it to (1) assess what the learner already understands before teaching, and " +
+		"(2) run tight practice/retrieval loops after explaining, or probe understanding whenever you're unsure " +
+		"they've got it. Options-only: single-select or multi-select, plus an automatic 'I don't know' choice so the " +
+		"learner can signal a genuine gap instead of guessing. An always-present optional note field lets the learner " +
+		"attach a free-text note to ANY answer; it reaches you only when non-empty. No free-text answers — for " +
+		"non-graded questions use ask_user_question instead. Ask exactly one question per tool call; after calling, " +
+		"end your turn and wait for the graded result.",
 	inputSchema: quizInputSchema,
 });
 

@@ -109,25 +109,35 @@ export function quizInputProblems(input: {
 
 export const quizInputSchema = z
 	.object({
-		question: z.string().describe("The single quiz question to ask"),
+		question: z.string().describe("The single quiz question to ask. Ask exactly one question per tool call."),
 		options: z
 			.array(optionSchema)
 			.min(2)
 			.describe(
-				"The answer options (2 or more). Options only — no free-text mode. Never add your own 'I don't know' option.",
+				"The answer options (2 or more). Options only — there is no free-text mode. " +
+					"Give each option a stable `value`; you reference the correct one by that value in correctAnswer. " +
+					"Never add your own 'I don't know' option — that choice is added for you.",
 			),
+		multiSelect: z
+			.boolean()
+			.optional()
+			.describe("Set to true when more than one option is correct and the learner must select all of them."),
 		correctAnswer: z
 			.union([z.string(), z.array(z.string())])
 			.describe(
-				"The correct answer as the option value(s): copy the EXACT `value` — or `label` when `value` is omitted — " +
-					"of the intended option(s), never a paraphrase or slug; a mismatch fails validation. " +
-					"Single-select: one string. Multi-select: an array; the learner is only correct if their selection matches this set exactly.",
+				"REQUIRED. The correct answer as the option value(s) — the `value` field of the option you intend. " +
+					'Single-select: a single string (e.g. "mercury"). Multi-select: an array of strings (e.g. ["belize", "niue"]); ' +
+					"the learner is only correct if their selection matches this set exactly. " +
+					"Always pass the value, not a position number — this is self-checking and prevents miscounting. " +
+					"A value that matches no option fails validation and the call is returned to you to fix.",
 			),
 		explanation: z
 			.string()
-			.describe("Explanation revealed AFTER the learner answers. Always say why the correct answer is correct."),
-		multiSelect: z.boolean().optional().describe("Set true only when more than one option is correct"),
-		details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
+			.describe(
+				"REQUIRED. Explanation revealed AFTER the learner answers (shown whether they got it right or wrong). " +
+					"Use it to reinforce why the correct answer is correct.",
+			),
+		details: z.string().optional().describe("Optional extra context or instructions shown under the question."),
 		nodeId: z
 			.string()
 			.optional()
@@ -150,22 +160,20 @@ export const quizInputSchema = z
 
 export const askInputSchema = z
 	.object({
-		question: z.string().describe("The single question to ask"),
-		mode: z
-			.enum(["single-select", "multi-select", "text"])
-			.optional()
-			.describe(
-				"Answer mode. Omit for single-select when options are given, or text when they are not.",
-			),
+		// No `mode` param — the pi original has none: the mode is inferred from
+		// whether options are present (the dock does exactly this). One less
+		// knob for the model to misuse.
+		question: z.string().describe("The single question to ask the learner. Ask exactly one question per tool call."),
+		details: z.string().optional().describe("Optional extra context or instructions shown under the question."),
 		options: z
 			.array(optionSchema)
 			.min(2)
 			.optional()
 			.describe(
-				"Optional multiple-choice options. Omit for free-form text input. The learner can always choose 'Other' and type a custom answer.",
+				"Optional multiple-choice options. Omit for free-form text input. " +
+					"The learner can always choose 'Other' and type a custom answer when options are provided.",
 			),
-		multiSelect: z.boolean().optional().describe("Set true to allow multiple answers to be selected"),
-		details: z.string().optional().describe("Optional extra context or instructions shown under the question"),
+		multiSelect: z.boolean().optional().describe("Set to true to allow multiple answers to the same question."),
 	})
 	// Same option sanity as the quiz (labels non-empty, values distinct — ask
 	// is not graded, but duplicate values break the dock's value keying).

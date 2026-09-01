@@ -156,7 +156,11 @@ function QuestionDockForm({ toolName, toolCallId, input, onSubmit }: Omit<Questi
 				? multi
 					? "multi-select"
 					: "single-select"
-				: (askInput?.mode ?? (askInput?.options?.length ? (multi ? "multi-select" : "single-select") : "text"));
+				: askInput?.options?.length
+					? multi
+						? "multi-select"
+						: "single-select"
+						: "text";
 		const options = normalizeOptions(
 			(quizInput?.options ?? askInput?.options ?? []) as { label: string; value?: string }[],
 		);
