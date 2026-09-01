@@ -65,49 +65,91 @@ export function SidebarToggle() {
 	);
 }
 
-/** The left-edge phase strip color — one system with the header chip and
- *  the transcript dividers (globals.css --phase-*). */
-const PHASE_STRIP: Record<Phase3, string> = {
+/** Phase colors for the session dot — one system with the header chip
+ *  and the transcript dividers (globals.css --phase-*). Static class
+ *  strings per phase: Tailwind can't compile dynamic class names. */
+const PHASE_FILL: Record<Phase3, string> = {
 	probe: "bg-phase-probe",
 	plan: "bg-phase-plan",
 	teach: "bg-phase-teach",
 };
+const PHASE_RING: Record<Phase3, string> = {
+	probe: "border-phase-probe",
+	plan: "border-phase-plan",
+	teach: "border-phase-teach",
+};
 
 /**
- * The session-status dot, left of the title. One visual family: a pulsing
- * attention ring when an answer is owed (your move — the session is blocked
- * on the learner), a quietly breathing dot while the teacher works (a turn
- * running or a background job in flight), and NOTHING when it's simply the
- * learner's turn to type — quiet is the correct default. A pending answer
- * outranks "working": there is nothing else for the learner to do first.
+ * The session dot, left of the title. TWO channels, one dot: COLOR is the
+ * phase (probe/plan/teach — sky/violet/emerald), FILL+MOTION is what's
+ * owed. Pulsing = the teacher is working (rare, time-sensitive — the only
+ * state that deserves motion). Solid = a question awaits the learner's
+ * answer (the DOMINANT resting state of real sessions — calm by design,
+ * no animation). Hollow = nothing owed, idle. A pending answer outranks
+ * "working": if a question is owed, that's the blocking fact.
  */
-function SessionStatusDot({ pending, busy }: { pending: boolean; busy: boolean }) {
-	const label = pending ? "Waiting for your answer" : busy ? "Teacher is working" : null;
+function SessionDot({ phase, pending, busy }: { phase: Phase3; pending: boolean; busy: boolean }) {
+	if (pending) {
+		return (
+			<span
+				data-testid="session-dot-awaiting"
+				title="Waiting for your answer"
+				className={cn("size-2 shrink-0 rounded-full", PHASE_FILL[phase])}
+			>
+				<span className="sr-only">Waiting for your answer</span>
+			</span>
+		);
+	}
+	if (busy) {
+		return (
+			<span
+				data-testid="session-dot-working"
+				title="Teacher is working"
+				className={cn("size-2 shrink-0 rounded-full", PHASE_FILL[phase], "lh-dot-breathe")}
+			>
+				<span className="sr-only">Teacher is working</span>
+			</span>
+		);
+	}
 	return (
-		<span className="flex w-3 shrink-0 items-center justify-center" title={label ?? undefined}>
-			{pending ? (
-				<span
-					data-testid="session-dot-attention"
-					className="size-2 rounded-full bg-attention lh-dot-attention"
-				/>
-			) : busy ? (
-				<span
-					data-testid="session-dot-working"
-					className="size-2 rounded-full bg-muted-foreground lh-dot-breathe"
-				/>
-			) : (
-				/* empty slot: keeps every title on the same baseline */
-				<span className="size-2" />
+		<span
+			data-testid="session-dot-idle"
+			aria-hidden
+			className={cn(
+				"size-2 shrink-0 rounded-full border-2 bg-transparent",
+				PHASE_RING[phase],
 			)}
-			{label && <span className="sr-only">{label}</span>}
-		</span>
+		/>
 	);
 }
 
+/** Compact "how long ago": "just now", "5m ago", "3h ago", "2d ago",
+ *  then a plain date. How long a session has been WAITING matters more
+ *  than an absolute timestamp. Pure — exported for tests. */
+export function timeAgo(iso: string, now = new Date()): string {
+	const ms = now.getTime() - new Date(iso).getTime();
+	if (ms < 60_000) return "just now";
+	const min = Math.floor(ms / 60_000);
+	if (min < 60) return `${min}m ago`;
+	const h = Math.floor(min / 60);
+	if (h < 24) return `${h}h ago`;
+	const d = Math.floor(h / 24);
+	if (d < 7) return `${d}d ago`;
+	return new Date(iso).toLocaleDateString();
+}
+
+/** The row's second line: state replaces the message count when the state
+ *  is the more useful fact (most resting sessions are awaiting an answer —
+ *  that's what the learner scans for). */
+function sessionMeta(chat: ChatListItem): string {
+	if (chat.pendingQuestion) return `Waiting for your answer · ${timeAgo(chat.updatedAt)}`;
+	if (chat.busy) return "Teacher is working…";
+	return `${chat.messageCount} messages · ${new Date(chat.updatedAt).toLocaleDateString()}`;
+}
+
 /**
- * One session row: the leftmost phase strip (bookmark tick, one color system
- * with the header chip and transcript dividers), the status dot, then title
- * + meta. Exported for render tests — pure function of the list item.
+ * One session row: the status dot, then title + state-aware meta. Exported
+ * for render tests — pure function of the list item.
  */
 export function SessionRow({
 	chat,
@@ -127,20 +169,10 @@ export function SessionRow({
 				active && "bg-accent font-medium",
 			)}
 		>
-			<span
-				data-testid={`phase-strip-${chat.phase}`}
-				className={cn(
-					"absolute top-2 bottom-2 left-0.5 w-[3px] rounded-full",
-					PHASE_STRIP[chat.phase],
-				)}
-				aria-hidden
-			/>
-			<SessionStatusDot pending={chat.pendingQuestion} busy={chat.busy} />
+			<SessionDot phase={chat.phase} pending={chat.pendingQuestion} busy={chat.busy} />
 			<span className="min-w-0 flex-1">
 				<span className="block truncate">{chat.title}</span>
-				<span className="block text-xs text-muted-foreground">
-					{chat.messageCount} messages · {new Date(chat.updatedAt).toLocaleDateString()}
-				</span>
+				<span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>
 			</span>
 		</button>
 	);
