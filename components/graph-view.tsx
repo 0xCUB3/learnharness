@@ -5,16 +5,20 @@
  *
  * sigma.js v3 + graphology + forceAtlas2, run-then-freeze: ONE synchronous
  * forceAtlas2.assign (100 iterations, inferSettings) inside a useEffect
- * writes x/y, and no animation loop ever starts — near-zero idle CPU.
- * Physics is placement only: pan/zoom, no dragging, no editing.
+ * writes x/y. No layout animation ever starts; the ONLY animation loop
+ * is the hover glow pulse, which runs strictly while a node is hovered
+ * and stops on leave — idle CPU stays near zero. Physics is placement
+ * only: pan/zoom, no dragging, no editing.
  *
  * Labels render the node `name` (the short header, never the statement)
  * through custom canvas drawers that replace sigma's defaults:
  *   - defaultDrawNodeLabel: plain wrapped text, centered below the node,
  *     word-wrapped at a max line width — no truncation, no one-line sprawl.
- *   - defaultDrawNodeHover: the same wrapped name on a dark pill (the app's
- *     popover tokens) instead of sigma's hardcoded white box. Hover always
- *     shows the name, even when labels are zoomed out.
+ *   - defaultDrawNodeHover: NO background box (sigma's default is a
+ *     hardcoded white one). Instead the hovered node pulses a soft glow
+ *     halo in its own state color and its name brightens — the "this is
+ *     clickable, click for the full fact" affordance. Hover always shows
+ *     the name, even when labels are zoomed out.
  * Labels are zoom-gated GLOBALLY with a fade: all names appear at once
  * when the camera is at fit zoom or closer (ratio <= 1), then fade out
  * together across a short zoom span before label rendering switches off —
@@ -56,17 +60,33 @@ const STATE_LABELS: Record<NodeStateClass, string> = {
 //
 // sigma's defaults draw the label on ONE line to the right of the node with
 // a white box on hover. We replace both: names wrap under the node at a max
-// line width, plain when unhovered, dark pill when hovered.
+// line width, muted at rest; on hover the node pulses a soft glow in its
+// own state color and the name brightens (no background box).
 
 const LABEL_MAX_WIDTH = 170; // px — wraps long names instead of a wide strip
 const LABEL_GAP = 6; // px between node edge and first label line
 const LABEL_LINE_HEIGHT = 1.3;
-const PILL_PAD_X = 8;
-const PILL_PAD_Y = 5;
 /** Camera ratio at/below which ALL labels appear at once (1 = fit zoom). */
 const LABELS_CAMERA_RATIO = 1;
 /** Zoom span (camera-ratio units) over which labels fade out together. */
 const LABELS_FADE_SPAN = 0.5;
+
+// Hover glow: a soft halo ring (never over the node disc), pulsing in the
+// node's own color. The phase comes from performance.now() inside the
+// drawer, so the effect only has to keep scheduling renders while hovered.
+const GLOW_PAD_MIN = 4; // px beyond the node disc at the pulse's dimmest
+const GLOW_PAD_SWING = 6; // extra px at the pulse's peak
+const GLOW_ALPHA_MIN = 0.18;
+const GLOW_ALPHA_SWING = 0.3;
+const GLOW_PULSE_MS = 1600; // one full pulse cycle
+
+/** "#rrggbb" + alpha → "rgba(...)" (tokenHex only ever emits #rrggbb). */
+function rgbaFromHex(hex: string, alpha: number): string {
+	const r = Number.parseInt(hex.slice(1, 3), 16);
+	const g = Number.parseInt(hex.slice(3, 5), 16);
+	const b = Number.parseInt(hex.slice(5, 7), 16);
+	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 /** Word-wrap for canvas text. Never truncates: overlong single words are
  *  hard-broken by character so no line ever exceeds maxWidth. */
@@ -95,83 +115,53 @@ function wrapLabel(context: CanvasRenderingContext2D, text: string, maxWidth: nu
 	return lines;
 }
 
-/** Draw a rounded rectangle path (ctx.roundRect is not universal). */
-function roundedRect(
+/** The wrapped node name, centered below the node — used by both drawers
+ *  with identical geometry so hover only changes the color, nothing jumps. */
+function drawName(
 	context: CanvasRenderingContext2D,
-	x: number,
-	y: number,
-	width: number,
-	height: number,
-	radius: number,
+	data: { label?: string | null; x: number; y: number; size: number },
+	settings: { labelSize: number; labelWeight: string; labelFont: string },
+	color: string,
 ): void {
-	const r = Math.min(radius, width / 2, height / 2);
-	context.beginPath();
-	context.moveTo(x + r, y);
-	context.arcTo(x + width, y, x + width, y + height, r);
-	context.arcTo(x + width, y + height, x, y + height, r);
-	context.arcTo(x, y + height, x, y, r);
-	context.arcTo(x, y, x + width, y, r);
-	context.closePath();
+	if (!data.label) return;
+	const size = settings.labelSize;
+	context.save();
+	context.font = `${settings.labelWeight} ${size}px ${settings.labelFont}`;
+	const lines = wrapLabel(context, data.label, LABEL_MAX_WIDTH);
+	context.fillStyle = color;
+	context.textAlign = "center";
+	context.textBaseline = "top";
+	const firstTop = data.y + data.size + LABEL_GAP;
+	for (let i = 0; i < lines.length; i++) {
+		context.fillText(lines[i]!, data.x, firstTop + i * size * LABEL_LINE_HEIGHT);
+	}
+	context.restore();
 }
 
 /** Make the pair of canvas label drawers bound to the theme's colors. */
-function makeLabelDrawers(labelColor: string, pillColor: string, pillTextColor: string) {
+function makeLabelDrawers(labelColor: string, hoverTextColor: string) {
 	const drawLabel: NodeLabelDrawingFunction = (context, data, settings) => {
-		if (!data.label) return;
-		const size = settings.labelSize;
-		context.save();
-		context.font = `${settings.labelWeight} ${size}px ${settings.labelFont}`;
-		const lines = wrapLabel(context, data.label, LABEL_MAX_WIDTH);
-		context.fillStyle = labelColor;
-		context.textAlign = "center";
-		context.textBaseline = "top";
-		const firstTop = data.y + data.size + LABEL_GAP;
-		for (let i = 0; i < lines.length; i++) {
-			context.fillText(lines[i]!, data.x, firstTop + i * size * LABEL_LINE_HEIGHT);
-		}
-		context.restore();
+		drawName(context, data, settings, labelColor);
 	};
 
 	const drawHover: NodeHoverDrawingFunction = (context, data, settings) => {
-		const size = settings.labelSize;
 		context.save();
-		context.font = `${settings.labelWeight} ${size}px ${settings.labelFont}`;
-
-		if (!data.label) {
-			// No name to show: just a soft ring around the node itself.
-			context.fillStyle = pillColor;
-			context.beginPath();
-			context.arc(data.x, data.y, data.size + PILL_PAD_Y, 0, Math.PI * 2);
-			context.fill();
-			context.restore();
-			return;
-		}
-
-		const lines = wrapLabel(context, data.label, LABEL_MAX_WIDTH);
-		const lineH = size * LABEL_LINE_HEIGHT;
-		const boxWidth =
-			Math.max(...lines.map((line) => context.measureText(line).width)) + 2 * PILL_PAD_X;
-		const boxHeight = lines.length * lineH + 2 * PILL_PAD_Y;
-		const boxX = data.x - boxWidth / 2;
-		const boxY = data.y + data.size + LABEL_GAP - PILL_PAD_Y;
-
-		context.shadowOffsetX = 0;
-		context.shadowOffsetY = 2;
-		context.shadowBlur = 10;
-		context.shadowColor = "rgba(0, 0, 0, 0.35)";
-		context.fillStyle = pillColor;
-		roundedRect(context, boxX, boxY, boxWidth, boxHeight, 8);
-		context.fill();
-		context.shadowOffsetX = 0;
-		context.shadowOffsetY = 0;
-		context.shadowBlur = 0;
-
-		context.fillStyle = pillTextColor;
-		context.textAlign = "center";
-		context.textBaseline = "top";
-		for (let i = 0; i < lines.length; i++) {
-			context.fillText(lines[i]!, data.x, boxY + PILL_PAD_Y + i * lineH);
-		}
+		// Pulsing glow halo in the node's own state color: a radial-gradient
+		// ring (the evenodd punch-out keeps the node disc itself untouched).
+		const pulse = 0.5 + 0.5 * Math.sin((performance.now() / GLOW_PULSE_MS) * Math.PI * 2);
+		const inner = data.size + 1;
+		const outer = data.size + GLOW_PAD_MIN + pulse * GLOW_PAD_SWING;
+		const alpha = GLOW_ALPHA_MIN + pulse * GLOW_ALPHA_SWING;
+		const glow = context.createRadialGradient(data.x, data.y, inner, data.x, data.y, outer);
+		glow.addColorStop(0, rgbaFromHex(data.color, alpha));
+		glow.addColorStop(1, rgbaFromHex(data.color, 0));
+		context.fillStyle = glow;
+		context.beginPath();
+		context.arc(data.x, data.y, outer, 0, Math.PI * 2);
+		context.arc(data.x, data.y, inner, 0, Math.PI * 2, true);
+		context.fill("evenodd");
+		// Brighter name, no background box — the clickable affordance.
+		drawName(context, data, settings, hoverTextColor);
 		context.restore();
 	};
 
@@ -238,13 +228,12 @@ export function GraphView() {
 
 		const edgeColor = tokenHex("--ring");
 		const labelColor = tokenHex("--muted-foreground");
-		const pillColor = tokenHex("--popover");
-		const pillTextColor = tokenHex("--popover-foreground");
+		const hoverTextColor = tokenHex("--foreground");
 		const stateColors = new Map<NodeStateClass, string>();
 		for (const state of Object.keys(STATE_TOKENS) as NodeStateClass[]) {
 			stateColors.set(state, tokenHex(STATE_TOKENS[state].cssVar));
 		}
-		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, pillColor, pillTextColor);
+		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, hoverTextColor);
 
 		const graph = new Graph();
 		for (const node of snapshot.nodes) {
@@ -279,6 +268,9 @@ export function GraphView() {
 
 		let killed = false;
 		let renderer: import("sigma").default | null = null;
+		// rAF id of the hover glow pulse (the ONLY animation loop — see the
+		// file header). Lives out here so the effect cleanup can cancel it.
+		let hoverAnimId: number | null = null;
 		void import("sigma").then(({ default: Sigma }) => {
 			if (killed) return;
 			renderer = new Sigma(graph, container, {
@@ -332,10 +324,31 @@ export function GraphView() {
 				syncRenderLabels(state.ratio);
 				setSelected(null);
 			});
+			// The hover glow is a slow pulse driven by performance.now() inside
+			// drawHover; this loop just keeps scheduling renders while a node is
+			// hovered and stops on leave, so idle CPU returns to zero.
+			const startHoverPulse = () => {
+				if (hoverAnimId !== null) return;
+				const tick = () => {
+					renderer?.scheduleRefresh();
+					hoverAnimId = requestAnimationFrame(tick);
+				};
+				hoverAnimId = requestAnimationFrame(tick);
+			};
+			const stopHoverPulse = () => {
+				if (hoverAnimId !== null) {
+					cancelAnimationFrame(hoverAnimId);
+					hoverAnimId = null;
+				}
+			};
+			renderer.on("enterNode", startHoverPulse);
+			renderer.on("leaveNode", stopHoverPulse);
+			renderer.on("leaveStage", stopHoverPulse);
 		});
 
 		return () => {
 			killed = true;
+			if (hoverAnimId !== null) cancelAnimationFrame(hoverAnimId);
 			renderer?.kill();
 		};
 	}, [snapshot]);
