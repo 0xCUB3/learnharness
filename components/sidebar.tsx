@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ChatSummary } from "@/src/core";
+import type { ChatListItem, Phase3 } from "@/src/core";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -65,23 +65,115 @@ export function SidebarToggle() {
 	);
 }
 
+/** The left-edge phase strip color — one system with the header chip and
+ *  the transcript dividers (globals.css --phase-*). */
+const PHASE_STRIP: Record<Phase3, string> = {
+	probe: "bg-phase-probe",
+	plan: "bg-phase-plan",
+	teach: "bg-phase-teach",
+};
+
+/**
+ * The session-status dot, left of the title. One visual family: a pulsing
+ * attention ring when an answer is owed (your move — the session is blocked
+ * on the learner), a quietly breathing dot while the teacher works (a turn
+ * running or a background job in flight), and NOTHING when it's simply the
+ * learner's turn to type — quiet is the correct default. A pending answer
+ * outranks "working": there is nothing else for the learner to do first.
+ */
+function SessionStatusDot({ pending, busy }: { pending: boolean; busy: boolean }) {
+	const label = pending ? "Waiting for your answer" : busy ? "Teacher is working" : null;
+	return (
+		<span className="flex w-3 shrink-0 items-center justify-center" title={label ?? undefined}>
+			{pending ? (
+				<span
+					data-testid="session-dot-attention"
+					className="size-2 rounded-full bg-attention lh-dot-attention"
+				/>
+			) : busy ? (
+				<span
+					data-testid="session-dot-working"
+					className="size-2 rounded-full bg-muted-foreground lh-dot-breathe"
+				/>
+			) : (
+				/* empty slot: keeps every title on the same baseline */
+				<span className="size-2" />
+			)}
+			{label && <span className="sr-only">{label}</span>}
+		</span>
+	);
+}
+
+/**
+ * One session row: the leftmost phase strip (bookmark tick, one color system
+ * with the header chip and transcript dividers), the status dot, then title
+ * + meta. Exported for render tests — pure function of the list item.
+ */
+export function SessionRow({
+	chat,
+	active,
+	onOpen,
+}: {
+	chat: ChatListItem;
+	active: boolean;
+	onOpen: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onOpen}
+			className={cn(
+				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
+				active && "bg-accent font-medium",
+			)}
+		>
+			<span
+				data-testid={`phase-strip-${chat.phase}`}
+				className={cn(
+					"absolute top-2 bottom-2 left-0.5 w-[3px] rounded-full",
+					PHASE_STRIP[chat.phase],
+				)}
+				aria-hidden
+			/>
+			<SessionStatusDot pending={chat.pendingQuestion} busy={chat.busy} />
+			<span className="min-w-0 flex-1">
+				<span className="block truncate">{chat.title}</span>
+				<span className="block text-xs text-muted-foreground">
+					{chat.messageCount} messages · {new Date(chat.updatedAt).toLocaleDateString()}
+				</span>
+			</span>
+		</button>
+	);
+}
+
 function SessionsSidebar() {
 	const { open, toggle } = useSidebar();
-	const [chats, setChats] = useState<ChatSummary[] | null>(null);
+	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const pathname = usePathname();
 	const router = useRouter();
 
+	const refresh = useCallback(async () => {
+		try {
+			const res = await fetch("/api/chats", { cache: "no-store" });
+			const d = (await res.json()) as { chats: ChatListItem[] };
+			setChats(d.chats);
+		} catch {
+			// a transient failure on the periodic poll keeps the last snapshot
+			setChats((prev) => prev ?? []);
+		}
+	}, []);
+
 	useEffect(() => {
 		if (!open) return;
-		let cancelled = false;
-		fetch("/api/chats", { cache: "no-store" })
-			.then((r) => r.json())
-			.then((d: { chats: ChatSummary[] }) => !cancelled && setChats(d.chats))
-			.catch(() => !cancelled && setChats([]));
-		return () => {
-			cancelled = true;
-		};
-	}, [open, pathname]);
+		void refresh();
+		// Poll while open: the statuses are live (a question lands in another
+		// session, a turn finishes in the background) and the payload is tiny.
+		// Pause while the tab is hidden; navigation refetches via pathname.
+		const id = setInterval(() => {
+			if (!document.hidden) void refresh();
+		}, 2500);
+		return () => clearInterval(id);
+	}, [open, pathname, refresh]);
 
 	return (
 		<aside
@@ -104,25 +196,14 @@ function SessionsSidebar() {
 					) : chats.length === 0 ? (
 						<div className="px-2 py-4 text-sm text-muted-foreground">No sessions yet.</div>
 					) : (
-						chats.map((c) => {
-							const active = pathname === `/chat/${c.id}`;
-							return (
-								<button
-									key={c.id}
-									type="button"
-									onClick={() => router.push(`/chat/${c.id}`)}
-									className={cn(
-										"mb-0.5 w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
-										active && "bg-accent font-medium",
-									)}
-								>
-									<div className="truncate">{c.title}</div>
-									<div className="text-xs text-muted-foreground">
-										{c.messageCount} messages · {new Date(c.updatedAt).toLocaleDateString()}
-									</div>
-								</button>
-							);
-						})
+						chats.map((c) => (
+							<SessionRow
+								key={c.id}
+								chat={c}
+								active={pathname === `/chat/${c.id}`}
+								onOpen={() => router.push(`/chat/${c.id}`)}
+							/>
+						))
 					)}
 				</div>
 			</div>

@@ -157,3 +157,76 @@ body {
 	overflow-x: auto;
 	overflow-y: hidden;
 }
+
+/* ============================================================
+ * Session status — phase colors + status dots
+ * (picker strips, header chip, transcript dividers: one language)
+ * ============================================================ */
+
+/* Phase colors: blue = probing, violet = planning, green = teaching.
+   Tuned per theme (light needs darker, dark lighter). The attention color
+   (an answer the learner owes) is deliberately outside the phase system —
+   dots and strips are separate channels and must not read as one. */
+:root {
+	--phase-probe: oklch(0.55 0.17 253);
+	--phase-plan: oklch(0.54 0.19 300);
+	--phase-teach: oklch(0.55 0.14 160);
+	--attention: oklch(0.62 0.15 65);
+}
+
+.dark {
+	--phase-probe: oklch(0.72 0.13 250);
+	--phase-plan: oklch(0.72 0.14 300);
+	--phase-teach: oklch(0.74 0.12 160);
+	--attention: oklch(0.8 0.15 75);
+}
+
+@theme inline {
+	--color-phase-probe: var(--phase-probe);
+	--color-phase-plan: var(--phase-plan);
+	--color-phase-teach: var(--phase-teach);
+	--color-attention: var(--attention);
+}
+
+/* Status dots (session picker). Attention — a slow expanding ring, drawing
+   the eye to "your move". Working — a quiet breathing dot, opacity only,
+   never loud enough to compete with the attention ring. */
+@keyframes lh-dot-attention {
+	0% {
+		box-shadow: 0 0 0 0 color-mix(in oklab, var(--attention) 60%, transparent);
+	}
+
+	70%,
+	100% {
+		box-shadow: 0 0 0 5px transparent;
+	}
+}
+
+.lh-dot-attention {
+	animation: lh-dot-attention 1.6s ease-out infinite;
+}
+
+@keyframes lh-dot-breathe {
+	0%,
+	100% {
+		opacity: 0.35;
+		transform: scale(0.75);
+	}
+
+	50% {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+.lh-dot-breathe {
+	animation: lh-dot-breathe 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+	.lh-dot-attention,
+		.lh-dot-breathe {
+		animation: none;
+	}
+}
