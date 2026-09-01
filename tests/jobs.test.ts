@@ -42,6 +42,7 @@ import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
+import { persistTurn, withMessageIds } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { createJobRunner, researchModelOverride } from "../src/agent/subagents/runner.ts";
@@ -657,3 +658,32 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ─── persist id hygiene (the duplicate-empty-key bug) ────────────────────────
+
+describe("persistTurn id hygiene", () => {
+	it("withMessageIds fills EMPTY ids (server-only synthesized messages) and preserves existing ones", () => {
+		const filled = withMessageIds([
+			{ id: "", role: "assistant", parts: [{ type: "text", text: "wake turn" }] },
+			{ id: "client-id", role: "user", parts: [{ type: "text", text: "hi" }] },
+		]);
+		assert.notEqual(filled[0]!.id, "", "empty id replaced");
+		assert.match(filled[0]!.id, /^msg_/);
+		assert.equal(filled[1]!.id, "client-id", "client-authored id untouched");
+		assert.notEqual(filled[0]!.id, filled[1]!.id);
+	});
+
+	it("persistTurn saves every message with a unique non-empty id (wake turns never re-POSTed)", () => {
+		const chat = chatStore.createChat("Test: persist ids");
+		trackChat(chat.id);
+		persistTurn(chatStore, chat.id, [
+			{ id: "", role: "user", parts: [{ type: "text", text: "q" }] },
+			{ id: "", role: "assistant", parts: [{ type: "text", text: "a1" }] },
+			{ id: "", role: "assistant", parts: [{ type: "text", text: "a2" }] },
+		], false);
+		const record = chatStore.getChat(chat.id);
+		const ids = record!.messages.map((m) => m.id);
+		assert.ok(ids.every((id) => id && id.length > 0), "no empty ids survive persist");
+		assert.equal(new Set(ids).size, ids.length, "ids unique — React keys safe");
+	});
+});

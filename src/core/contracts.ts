@@ -303,7 +303,10 @@ export interface JobRecord {
  *     sub-agent loop — isolated context, modelFor(role), the
  *     verify-never-one-shot doctrine (headless-tested demos, looked-at SVGs,
  *     sourced briefs) — tracking a live activity line in the job record.
- *     The client polls GET /api/jobs?chatId=… and renders the activity card.
+ *     ONE central client poll of GET /api/jobs?chatId=… (in Chat) drives every
+ *     job surface: the transcript dispatch cards (live activity by
+ *     toolCallId, quiet one-liner after delivery), the sub-agents sidebar
+ *     panel, and the single re-sync when a job settles.
  *
  *  3. On completion the runner builds a STEER MESSAGE (buildSubagentSteer)
  *     and hands it to the wake pipeline (src/server/jobs.ts): a user-role

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { useStickToBottomContext } from "use-stick-to-bottom";
@@ -16,21 +16,24 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Separator } from "@/components/ui/separator";
 import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
+import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
+import { JobsContext } from "@/components/jobs-context";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
+import { SubAgentsPanel } from "@/components/sub-agents-panel";
 import { TreePanel } from "@/components/tree-panel";
-import type { ArtifactPartProps, QuestionAnswerData, TeacherUIMessage } from "@/src/core";
-import { findPendingJobCall, findPendingToolCall, phaseAt } from "@/src/core";
+import type { ArtifactPartProps, JobRecord, QuestionAnswerData, TeacherUIMessage } from "@/src/core";
+import { findPendingToolCall, phaseAt } from "@/src/core";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
 
 /**
- * Server-sync channel for artifact renderers (job cards): when a background
- * job flips its tool part to output-available server-side, the card polls
- * /api/jobs, then calls syncFromServer() — fresh messages replace local state
- * and the sendAutomaticallyWhen continuation resumes the teacher.
+ * Server-sync channel for artifact renderers: the CENTRAL jobs poll in Chat
+ * calls syncFromServer() when a background job settles — the wake turn's
+ * steer + response are already persisted by then, so fresh messages replace
+ * local state in one pull. sendText feeds the demo error-fix loop.
  * (contracts.ts "THE ASYNC PROTOCOL" §4.)
  */
 export const ChatActionsContext = createContext<{
@@ -42,6 +45,12 @@ export const ChatActionsContext = createContext<{
 
 /** useLayoutEffect that is silent during SSR (client components still render on the server in Next). */
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+/** A wake-pipeline steer message: user-role delivery whose metadata marks it
+ * as a sub-agent result — rendered as an artifact card, never a bubble. */
+function isSubagentSteer(m: TeacherUIMessage): boolean {
+	return (m.metadata as { subagentResult?: unknown } | undefined)?.subagentResult != null;
+}
 
 /**
  * The teaching session. All chat state lives in useChat; the server persists
@@ -134,11 +143,12 @@ export function Chat({
 		(messages.at(-1)?.parts.some((p) => isToolUIPart(p) && p.state === "input-streaming") ?? false);
 
 	const [text, setText] = useState("");
-	// Jobs gate sending too (an unanswered tool call in the outbound list would
-	// break provider conversion — contracts.ts "THE ASYNC PROTOCOL" §5), but
-	// they don't dock: the running job's activity card sits in the transcript.
-	const pendingJob = findPendingJobCall(messages);
-	const canSend = text.trim().length > 0 && !pending && !pendingJob && !turnInFlight;
+	// Jobs never gate the composer (contracts.ts "THE ASYNC PROTOCOL" §4): job
+	// tools resolve with an ack mid-turn, so the learner can interject while
+	// sub-agents run — a feature, not a race: the wake pipeline queues steers
+	// until the current turn ends. Only a QUESTION pending or a turn in
+	// flight (client or server-side wake turn) gates sending.
+	const canSend = text.trim().length > 0 && !pending && !turnInFlight;
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
@@ -157,6 +167,65 @@ export function Chat({
 			void sendMessage();
 		}
 	}, [chatId, setMessages, sendMessage, status]);
+
+	// ── Central job observability (contracts.ts "THE ASYNC PROTOCOL" §4) ──
+	// ONE poll of /api/jobs drives every job surface (transcript dispatch
+	// cards, the sub-agents panel) and re-syncs the transcript exactly once
+	// when a job settles: job status flips done/error only AFTER the wake
+	// turn's messages are persisted, so a completion means the record already
+	// holds the steer + the teacher's response — one syncFromServer adopts it
+	// all. Poll fast while jobs run, slow otherwise (new-dispatch discovery),
+	// and not at all when this session has never dispatched a job.
+	const [jobs, setJobs] = useState<JobRecord[]>([]);
+	const jobPartCount = useMemo(
+		() =>
+			messages.reduce(
+				(n, m) =>
+					n +
+					m.parts.filter(
+						(p) => p.type === "tool-research" || p.type === "tool-demo" || p.type === "tool-visual",
+					).length,
+				0,
+			),
+		[messages],
+	);
+	const anyRunning = jobs.some((j) => j.status === "running");
+	const pollMs = jobPartCount === 0 && jobs.length === 0 ? 0 : anyRunning ? 1000 : 4000;
+	const localStreamRef = useRef(false);
+	localStreamRef.current = localStream;
+	const jobStatusRef = useRef<Map<string, string>>(new Map());
+	useEffect(() => {
+		if (pollMs === 0) return;
+		let cancelled = false;
+		const poll = async () => {
+			if (cancelled) return;
+			try {
+				const res = await fetch(`/api/jobs?chatId=${encodeURIComponent(chatId)}`);
+				if (!res.ok) return;
+				const data = (await res.json()) as { jobs?: JobRecord[]; turnInFlight?: boolean };
+				if (cancelled) return;
+				const list = data.jobs ?? [];
+				for (const j of list) {
+					const prev = jobStatusRef.current.get(j.id);
+					if (prev === "running" && j.status !== "running") void syncFromServer();
+					jobStatusRef.current.set(j.id, j.status);
+				}
+				setJobs(list);
+				// Wake-turn adoption: a server-side teacher turn with no client request
+				// of ours (sub-agent delivery) — the same machinery as returning
+				// mid-turn: busy state + record poll to completion.
+				if (data.turnInFlight === true && !localStreamRef.current) setTurnInFlight(true);
+			} catch {
+				/* transient fetch failure — keep polling */
+			}
+		};
+		void poll();
+		const timer = setInterval(poll, pollMs);
+		return () => {
+			cancelled = true;
+			clearInterval(timer);
+		};
+	}, [pollMs, jobPartCount, chatId, syncFromServer]);
 
 	// Re-attach after mid-turn navigation (the key fix): poll the record until
 	// the orphaned turn finishes (turnInFlight flips false server-side in
@@ -190,13 +259,14 @@ export function Chat({
 
 	const onSend = () => {
 		const t = text.trim();
-		if (!t || busy || pending || pendingJob) return;
+		if (!t || busy || pending) return;
 		setText("");
 		void sendMessage({ text: t });
 	};
 
 	return (
 		<ChatActionsContext.Provider value={{ chatId, syncFromServer, sendText: (t: string) => void sendMessage({ text: t }) }}>
+		<JobsContext.Provider value={jobs}>
 		<div className="flex h-dvh flex-col">
 			<header className="flex items-center gap-3 px-3 py-2">
 				<SidebarToggle />
@@ -221,11 +291,17 @@ export function Chat({
 								<Message key={m.id} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
 									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
 										{m.role === "user" ? (
-											// User text renders plain: the model's LaTeX pipeline is not
-											// applied to learner-authored text ($ stays $, no surprises).
-											<div className="whitespace-pre-wrap">
-												{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
-											</div>
+											isSubagentSteer(m) ? (
+												// Sub-agent delivery (wake-pipeline steer): render the
+												// artifact, never a learner bubble (contracts.ts §4).
+												<SubagentSteerCard message={m} />
+											) : (
+												// User text renders plain: the model's LaTeX pipeline is not
+												// applied to learner-authored text ($ stays $, no surprises).
+												<div className="whitespace-pre-wrap">
+													{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
+												</div>
+											)
 										) : (
 											m.parts.map((part, pi) => {
 												const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
@@ -303,9 +379,14 @@ export function Chat({
 					</ConversationContent>
 					<ConversationScrollButton />
 				</Conversation>
-				<TreePanel messages={messages} />
+				{/* Right sidebar: live sub-agent fleet (when running) above the plan tree. */}
+				<div className="hidden shrink-0 flex-col xl:flex">
+					<SubAgentsPanel jobs={jobs} />
+					<TreePanel messages={messages} />
+				</div>
 			</div>
 		</div>
+		</JobsContext.Provider>
 		</ChatActionsContext.Provider>
 	);
 }

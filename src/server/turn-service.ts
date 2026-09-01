@@ -45,9 +45,24 @@ export function buildTeacherContext(graphStore: GraphStore, chatId: string): str
  * even when aborted — the partial transcript (including any pending
  * question part) is what makes resume work.
  */
+/**
+ * The SDK assigns assistant-message ids CLIENT-side (useChat); the server's
+ * onFinish synthesis leaves them EMPTY. A message persisted only server-side
+ * (the last turn's, or a wake turn's — nobody re-POSTs it with a client id)
+ * would otherwise land in the record with id "" — and two of those in one
+ * transcript break React keys (the chat map) and steer-dedup lookups. Fill any
+ * missing id here, at the single canonical write: client-authored ids are
+ * NEVER touched (the client's next POST still carries them verbatim).
+ */
+export function withMessageIds(messages: UIMessage[]): UIMessage[] {
+	return messages.map((m) =>
+		m.id ? m : { ...m, id: `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}` },
+	);
+}
+
 export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMessage[], isAborted: boolean): void {
 	try {
-		chatStore.saveMessages(chatId, messages);
+		chatStore.saveMessages(chatId, withMessageIds(messages));
 	} catch (err) {
 		console.error(`[chat ${chatId}] persist failed:`, err, { isAborted });
 	}

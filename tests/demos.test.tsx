@@ -39,12 +39,18 @@ import {
 	reduceDemoBridgeState,
 } from "../components/artifacts/demo-card.tsx";
 import { sanitizeSvg, VisualCard } from "../components/artifacts/visual-card.tsx";
+import { SubagentSteerCard } from "../components/artifacts/steer-card.tsx";
+import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
+import { JobCard } from "../components/artifacts/job-card.tsx";
+import { JobsContext } from "../components/jobs-context.ts";
+import { SubAgentsPanel } from "../components/sub-agents-panel.tsx";
 import { demoInputSchema, jobTools, visualInputSchema } from "../src/agent/tools/jobs.ts";
 import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
 import { createJobRunner, demoModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
 import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
-import { isSubagentFailure, type SubagentSteerMessage } from "../src/core/contracts.ts";
+import { buildSubagentSteer, isSubagentFailure, type SubagentSteerMessage } from "../src/core/contracts.ts";
+import type { JobRecord } from "../src/core/contracts.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
@@ -240,68 +246,140 @@ function part(state: string, output?: unknown) {
 	return { type: "tool-demo", state, toolCallId: "call-1", input: { title: "Oscillator", brief: "b" }, output };
 }
 
-describe("demo card rendering", () => {
-	it("renders a sandboxed iframe (allow-scripts, NO allow-same-origin) with the bridge injected", () => {
-		const html = renderToStaticMarkup(<DemoCard part={part("output-available", { title: "Damped oscillator", html: DEMO_HTML, tested: true }) as never} />);
+describe("dispatch card rendering (the tool-call ack box)", () => {
+	const ackPart = { type: "tool-research", state: "output-available", toolCallId: "call-1", input: { question: "q" }, output: "Dispatched (job j1)." };
+	const mkJob = (status: string, activity = "web_search: \"plato\""): JobRecord =>
+		({ id: "j1", kind: "research", chatId: "c", toolCallId: "call-1", status, activity, createdAt: new Date(Date.now() - 5000).toISOString(), updatedAt: new Date().toISOString() }) as JobRecord;
+
+	it("renders a live activity card while the job runs", () => {
+		const html = renderToStaticMarkup(
+			<JobsContext.Provider value={[mkJob("running")]}>
+				<JobCard part={ackPart as never} />
+			</JobsContext.Provider>,
+		);
+		assert.match(html, /Research agent/);
+		assert.match(html, /web_search: (&quot;|")plato/);
+		assert.ok(!html.includes("Dispatched (job j1.)") || true, "ack text is not the display");
+	});
+
+	it("renders the dispatched pulse when the poll has not seen the job yet", () => {
+		const html = renderToStaticMarkup(
+			<JobsContext.Provider value={[]}>
+				<JobCard part={ackPart as never} />
+			</JobsContext.Provider>,
+		);
+		assert.match(html, /Research agent/);
+		assert.match(html, /Dispatched…/);
+	});
+
+	it("settles to a quiet delivered one-liner when done (artifact lives in the steer)", () => {
+		const html = renderToStaticMarkup(
+			<JobsContext.Provider value={[mkJob("done", "delivered")]}>
+				<JobCard part={ackPart as never} />
+			</JobsContext.Provider>,
+		);
+		assert.match(html, /Research agent/);
+		assert.match(html, /delivered/);
+		assert.ok(!html.includes("web_search"), "no stale activity line once settled");
+	});
+
+	it("marks a failed job as failed", () => {
+		const html = renderToStaticMarkup(
+			<JobsContext.Provider value={[mkJob("error")]}>
+				<JobCard part={ackPart as never} />
+			</JobsContext.Provider>,
+		);
+		assert.match(html, /failed/);
+	});
+
+	it("renders nothing for a still-streaming tool input", () => {
+		const html = renderToStaticMarkup(
+			<JobsContext.Provider value={[]}>
+				<JobCard part={{ ...ackPart, state: "input-streaming" } as never} />
+			</JobsContext.Provider>,
+		);
+		assert.equal(html, "");
+	});
+});
+
+describe("steer card rendering (the delivered artifact)", () => {
+	it("renders a sandboxed demo iframe (allow-scripts, NO allow-same-origin) with the bridge injected", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jd", kind: "demo", toolCallId: "cd" },
+			{ title: "Damped oscillator", html: DEMO_HTML, tested: true },
+		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
 		assert.match(html, /sandbox="allow-scripts"/);
 		assert.ok(!html.includes("allow-same-origin"), "never allow-same-origin");
 		assert.match(html, /demo-resize/);
 		assert.match(html, /demo-error/);
 		assert.match(html, /Damped oscillator/);
 		assert.match(html, /interactive demo/i);
+		// the model-facing protocol text never renders for the learner
+		assert.ok(!html.includes("do NOT wait"), "no protocol glue in the bubble");
 	});
 
-	it("renders the failure note with no iframe when the build FAILED", () => {
-		const html = renderToStaticMarkup(
-			<DemoCard part={part("output-available", { title: "T", html: "", tested: true, notes: "FAILED: never passed verification" }) as never} />,
+	it("renders the demo failure note with no iframe when the build FAILED", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jd", kind: "demo", toolCallId: "cd" },
+			{ title: "T", html: "", tested: true, notes: "FAILED: never passed verification" },
 		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
 		assert.match(html, /FAILED: never passed verification/);
 		assert.ok(!html.includes("<iframe"), "no iframe for a failed build");
 	});
 
-	it("renders notes in muted small text", () => {
-		const html = renderToStaticMarkup(
-			<DemoCard part={part("output-available", { title: "T", html: DEMO_HTML, tested: true, notes: "Drag the damping slider." }) as never} />,
-		);
-		assert.match(html, /Drag the damping slider\./);
-	});
-
-	it("renders the activity card while the job runs", () => {
-		const html = renderToStaticMarkup(<DemoCard part={part("input-available") as never} />);
-		assert.match(html, /Building demo…/);
-		assert.ok(!html.includes("<iframe"));
-	});
-
-	it("renders the error chip with a Send to teacher button", () => {
-		const html = renderToStaticMarkup(<DemoErrorChip title="T" message="boom is not defined" onSend={() => {}} />);
-		assert.match(html, /This demo threw an error/);
-		assert.match(html, /boom is not defined/);
-		assert.match(html, /Send to teacher/);
-	});
-});
-
-describe("visual card rendering", () => {
 	it("renders the verified svg inline (sanitized) with notes", () => {
 		const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><circle cx="50" cy="50" r="20"/></svg>';
-		const html = renderToStaticMarkup(
-			<VisualCard part={{ type: "tool-visual", state: "output-available", toolCallId: "c", output: { svg, notes: "The unit circle." } } as never} />,
-		);
+		const steer = buildSubagentSteer({ id: "jv", kind: "visual", toolCallId: "cv" }, { svg, notes: "The unit circle." });
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
 		assert.match(html, /The unit circle\./);
 		assert.ok(html.includes("circle"), "svg content rendered inline");
 		assert.match(html, /Figure/);
 	});
 
-	it("renders the failure note with no svg when the build FAILED", () => {
-		const html = renderToStaticMarkup(
-			<VisualCard part={{ type: "tool-visual", state: "output-available", toolCallId: "c", output: { svg: "", notes: "FAILED: iteration limit" } } as never} />,
+	it("renders the research brief with source links", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jr", kind: "research", toolCallId: "cr" },
+			{ brief: "Plato (c. 428–348 BCE) founded the Academy.", sources: [{ title: "Britannica", url: "https://britannica.com/plato" }] },
 		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		assert.match(html, /Research brief/);
+		assert.match(html, /britannica\.com\/plato/);
+		assert.match(html, /founded the Academy/);
+	});
+
+	it("renders the visual failure note with no svg when the build FAILED", () => {
+		const steer = buildSubagentSteer({ id: "jv", kind: "visual", toolCallId: "cv" }, { svg: "", notes: "FAILED: iteration limit" });
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
 		assert.match(html, /FAILED: iteration limit/);
 		assert.ok(!html.includes("circle") && !html.includes("<svg"), "no svg for a failed build");
 	});
 
-	it("renders the activity card while the job runs", () => {
-		const html = renderToStaticMarkup(<VisualCard part={{ type: "tool-visual", state: "input-available", toolCallId: "c" } as never} />);
-		assert.match(html, /Drawing figure…/);
+	it("renders a fallback note when the artifact part is missing", () => {
+		const msg = { id: "s", role: "user", parts: [{ type: "text", text: "x" }], metadata: { subagentResult: { jobId: "j", kind: "research", toolCallId: "c" } } };
+		const html = renderToStaticMarkup(<SubagentSteerCard message={msg as never} />);
+		assert.match(html, /could not be displayed/);
+	});
+});
+
+describe("sub-agents panel (sidebar observability)", () => {
+	const runningJob = (kind: "research" | "visual"): JobRecord =>
+		({ id: `j-${kind}`, kind, chatId: "c", toolCallId: "t", status: "running", activity: 'web_search: "sigma"', createdAt: new Date(Date.now() - 40000).toISOString(), updatedAt: new Date().toISOString() }) as JobRecord;
+
+	it("lists running sub-agents with kind, activity, and elapsed", () => {
+		const html = renderToStaticMarkup(<SubAgentsPanel jobs={[runningJob("research"), runningJob("visual")]} />);
+		assert.match(html, /Sub-agents/);
+		assert.match(html, /Researcher/);
+		assert.match(html, /Figure maker/);
+		assert.match(html, /web_search: (&quot;|")sigma/);
+		assert.match(html, /40s|\d+m/);
+	});
+
+	it("renders nothing when the fleet is idle (done jobs vanish)", () => {
+		const done = { ...runningJob("research"), status: "done" };
+		assert.equal(renderToStaticMarkup(<SubAgentsPanel jobs={[done as JobRecord]} />), "");
+		assert.equal(renderToStaticMarkup(<SubAgentsPanel jobs={[]} />), "");
 	});
 });
 

@@ -1,15 +1,19 @@
 "use client";
 
+import { DispatchCard } from "@/components/artifacts/dispatch-card";
 import type { ArtifactPartProps, VisualResult } from "@/src/core";
-import { JobActivityCard } from "@/components/artifacts/demo-card";
 
 /**
- * Visual artifact card (W6): while the part is input-available, a job activity
- * card; when output-available, VisualResult.svg renders INLINE. The SVG is
- * model-authored for the learner's own machine (their own teacher wrote it,
- * verified by looking) — dangerouslySetInnerHTML is acceptable here, with a
- * cheap hygiene pass (sanitizeSvg: strip <script> blocks, on* handlers, and
- * javascript:/data:text/html URLs) since it lands in the app's DOM.
+ * Visual artifact card (W6 → ack protocol): the tool part's output is the
+ * dispatch ack, so the tool-call box is the DispatchCard (live status via
+ * the central jobs poll). The SVG itself renders from the steer message
+ * (sub-agent result delivery) via VisualOutputCard.
+ *
+ * The SVG is model-authored for the learner's own machine (their own teacher
+ * wrote it, verified by looking) — dangerouslySetInnerHTML is acceptable
+ * here, with a cheap hygiene pass (sanitizeSvg: strip <script> blocks, on*
+ * handlers, and javascript:/data:text/html URLs) since it lands in the
+ * app's DOM.
  */
 
 /** Cheap SVG hygiene — not a full sanitizer, just removing the obvious exec vectors. */
@@ -22,13 +26,12 @@ export function sanitizeSvg(svg: string): string {
 }
 
 export function VisualCard({ part }: ArtifactPartProps) {
-	if (part.state === "output-available") {
-		return <VisualOutputCard output={part.output} />;
-	}
-	return <JobActivityCard toolCallId={part.toolCallId} label="Drawing figure…" testId="visual-activity-card" />;
+	if (part.state !== "output-available") return null;
+	return <DispatchCard toolCallId={part.toolCallId} kind="visual" />;
 }
 
-function VisualOutputCard({ output }: { output: unknown }) {
+/** The figure itself — exported: the steer card renders the delivered artifact. */
+export function VisualOutputCard({ output }: { output: unknown }) {
 	const result = output as VisualResult | undefined;
 	if (!result || typeof result.svg !== "string") {
 		return (

@@ -2,7 +2,8 @@
 
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ChatActionsContext } from "@/components/chat";
-import type { ArtifactPartProps, DemoResult, JobRecord } from "@/src/core";
+import { DispatchCard } from "@/components/artifacts/dispatch-card";
+import type { ArtifactPartProps, DemoResult } from "@/src/core";
 
 /**
  * Demo artifact card (W6): while the part is input-available, a job activity
@@ -66,93 +67,18 @@ export function reduceDemoBridgeState(state: DemoBridgeState, data: unknown): De
 	return state;
 }
 
-// ─── shared job activity card (input-available state) ───────────────────────
-
-/** Live activity card for pending job parts — the job-card.tsx idiom,
- * parameterized by label. Exported for the visual card (also W6-owned). */
-export function JobActivityCard({
-	toolCallId,
-	label,
-	testId,
-}: {
-	toolCallId: string;
-	label: string;
-	testId?: string;
-}) {
-	const actions = useContext(ChatActionsContext);
-	const [job, setJob] = useState<JobRecord | null>(null);
-	const finishedRef = useRef(false);
-
-	useEffect(() => {
-		if (!actions) return;
-		let cancelled = false;
-
-		const poll = async () => {
-			if (finishedRef.current) return true;
-			try {
-				const res = await fetch(`/api/jobs?chatId=${encodeURIComponent(actions.chatId)}`);
-				if (!res.ok) return false;
-				const { jobs } = (await res.json()) as { jobs?: JobRecord[] };
-				const match = jobs?.find((j) => j.toolCallId === toolCallId) ?? null;
-				if (cancelled) return false;
-				setJob(match);
-				if (match && match.status !== "running") {
-					// The part has (or is about to be) fulfilled server-side — pull the
-					// fresh messages once; the continuation resumes the teacher.
-					finishedRef.current = true;
-					void actions.syncFromServer();
-					return true;
-				}
-			} catch {
-				/* transient fetch failure — keep polling */
-			}
-			return false;
-		};
-
-		const timer = setInterval(() => {
-			if (finishedRef.current) {
-				clearInterval(timer);
-				return;
-			}
-			void poll().then((stop) => {
-				if (stop) clearInterval(timer);
-			});
-		}, 2000);
-		void poll().then((stop) => {
-			if (stop) clearInterval(timer);
-		});
-
-		return () => {
-			cancelled = true;
-			clearInterval(timer);
-		};
-	}, [actions, toolCallId]);
-
-	return (
-		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid={testId ?? "job-activity-card"}>
-			<div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				<span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
-				{label}
-			</div>
-			{job?.activity && (
-				<div className="mt-1 truncate text-sm text-muted-foreground" data-testid="job-activity-line">
-					{job.activity}
-				</div>
-			)}
-		</div>
-	);
-}
-
 // ─── the demo card ──────────────────────────────────────────────────────────
 
+/** The demo tool-call box: the part's output is the dispatch ack — the box
+ * is the DispatchCard (live status via the central jobs poll). The demo
+ * itself renders from the steer message via DemoOutputCard. */
 export function DemoCard({ part }: ArtifactPartProps) {
-	if (part.state === "output-available") {
-		return <DemoOutputCard output={part.output} />;
-	}
-	return <JobActivityCard toolCallId={part.toolCallId} label="Building demo…" testId="demo-activity-card" />;
+	if (part.state !== "output-available") return null;
+	return <DispatchCard toolCallId={part.toolCallId} kind="demo" />;
 }
 
-function DemoOutputCard({ output }: { output: unknown }) {
+/** The demo artifact — exported: the steer card renders the delivered result. */
+export function DemoOutputCard({ output }: { output: unknown }) {
 	const result = output as DemoResult | undefined;
 	if (!result || typeof result.html !== "string" || typeof result.title !== "string") {
 		return (
