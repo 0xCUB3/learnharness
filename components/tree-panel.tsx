@@ -41,6 +41,14 @@ import { planNodeStatus, type PlanNode, type PlanNodeStatus, type PlanTree } fro
 /** localStorage: the mode persists as "lh:tree-panel-mode"
  *  ("rail" | "list" | "graph"); the pre-graph key
  *  ("lh:tree-panel-collapsed": "1" rail / "0" list) is the fallback. */
+/** The panel width per mode — the aside AND its fixed inner layer (see
+ *  TreePanel: the inner layer must not squish while the aside animates). */
+const PANEL_WIDTH: Record<PanelMode, string> = {
+	rail: "w-10",
+	list: "w-64",
+	graph: "w-96",
+};
+
 const MODE_KEY = "lh:tree-panel-mode";
 const LEGACY_KEY = "lh:tree-panel-collapsed";
 
@@ -198,19 +206,35 @@ export function TreePanel({
 	// the moment plan_init's output lands and updates live from there.
 	if (!tree || tree.nodes.length === 0) return null;
 
-	if (mode === "rail") {
-		return (
-			<TreePanelRail
-				doneCount={tree.doneNodeIds.length}
-				totalCount={tree.nodes.length}
-				onExpand={() => go("list")}
-			/>
-		);
-	}
-	if (mode === "graph") {
-		return <TreeGraphPanel tree={tree} onShowList={() => go("list")} onCollapse={() => go("rail")} />;
-	}
-	return <TreePanelBody tree={tree} onShowGraph={() => go("graph")} onCollapse={() => go("rail")} />;
+	// ONE animated container, exactly like the left sidebar: the aside
+	// animates its width (sidebar-motion transition cascades from the
+	// provider and is mount-gated there) while the inner layer keeps a
+	// FIXED width and is clipped by overflow-hidden — content never
+	// reflows mid-transition, so no scrollbar flash or overshoot. The
+	// mode's content just swaps instantly inside the steady frame.
+	return (
+		<aside
+			data-testid="tree-panel"
+			className={cn(
+				"sidebar-motion hidden shrink-0 overflow-hidden border-l border-border/60 bg-card/30 duration-200 xl:flex",
+				PANEL_WIDTH[mode],
+			)}
+		>
+			<div className={cn("flex h-full flex-col", PANEL_WIDTH[mode])}>
+				{mode === "rail" ? (
+					<TreePanelRail
+						doneCount={tree.doneNodeIds.length}
+						totalCount={tree.nodes.length}
+						onExpand={() => go("list")}
+					/>
+				) : mode === "graph" ? (
+					<TreeGraphPanel tree={tree} onShowList={() => go("list")} onCollapse={() => go("rail")} />
+				) : (
+					<TreePanelBody tree={tree} onShowGraph={() => go("graph")} onCollapse={() => go("rail")} />
+				)}
+			</div>
+		</aside>
+	);
 }
 
 /** The collapsed panel: a thin strip with the map icon + quiet progress. */
@@ -224,9 +248,9 @@ export function TreePanelRail({
 	onExpand: () => void;
 }) {
 	return (
-		<aside
+		<div
 			data-testid="tree-panel-rail"
-			className="hidden w-10 shrink-0 flex-col items-center gap-3 border-l border-border/60 py-3 xl:flex"
+			className="flex h-full flex-col items-center gap-3 py-3"
 		>
 			<button
 				type="button"
@@ -243,7 +267,7 @@ export function TreePanelRail({
 			>
 				{doneCount}/{totalCount}
 			</span>
-		</aside>
+		</div>
 	);
 }
 
@@ -264,10 +288,7 @@ export function TreePanelBody({
 	const totalCount = tree.nodes.length;
 
 	return (
-		<aside
-			data-testid="tree-panel"
-			className="hidden w-64 shrink-0 flex-col border-l border-border/60 bg-card/30 xl:flex"
-		>
+		<div className="flex h-full flex-col">
 			<header className="flex items-center gap-2 px-3 py-2.5">
 				<ListTreeIcon className="size-3.5 text-muted-foreground" />
 				<span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -354,7 +375,7 @@ export function TreePanelBody({
 					})}
 				</ol>
 			</nav>
-		</aside>
+		</div>
 	);
 }
 
@@ -777,10 +798,7 @@ export function TreeGraphPanel({
 	const doneCount = tree.doneNodeIds.length;
 	const totalCount = tree.nodes.length;
 	return (
-		<aside
-			data-testid="tree-graph-panel"
-			className="hidden w-96 shrink-0 flex-col border-l border-border/60 bg-card/30 xl:flex"
-		>
+		<div data-testid="tree-graph-panel" className="flex h-full flex-col">
 			<header className="flex items-center gap-2 px-3 py-2.5">
 				<NetworkIcon className="size-3.5 text-muted-foreground" />
 				<span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Plan</span>
@@ -810,6 +828,6 @@ export function TreeGraphPanel({
 				</button>
 			</header>
 			<TreeGraph tree={tree} />
-		</aside>
+		</div>
 	);
 }

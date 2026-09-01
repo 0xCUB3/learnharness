@@ -210,7 +210,10 @@ export function Chat({
 		    dock stays sticky inside the scroller, untouched. */}
 		<div className="flex h-dvh">
 			<div className="flex min-w-0 flex-1 flex-col">
-				<header className="flex items-center gap-3 px-3 py-2">
+				{/* h-10, not py-2: the toggle (a size-9 icon button) renders only
+				    while the sidebar is CLOSED — an auto-height row would collapse
+				    when it disappears and slide the title + chip up. */}
+				<header className="flex h-10 items-center gap-3 px-3">
 					<SidebarToggle />
 					<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
