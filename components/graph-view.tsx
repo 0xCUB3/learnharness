@@ -6,20 +6,30 @@
  * sigma.js v3 + graphology + forceAtlas2, run-then-freeze: ONE synchronous
  * forceAtlas2.assign (100 iterations, inferSettings) inside a useEffect
  * writes x/y, and no animation loop ever starts — near-zero idle CPU.
- * Physics is placement only: pan/zoom, no dragging, no editing. Labels are
- * zoom-gated via labelRenderedSizeThreshold (the Obsidian text-fade feel).
+ * Physics is placement only: pan/zoom, no dragging, no editing.
  *
- * sigma is imported dynamically inside the effect so SSR never touches
- * WebGL (its module references WebGL2RenderingContext at load time). Nodes
- * are colored by derived state class using the app's CSS variables; the
- * `requires` edges render as arrows pointing prerequisite → dependent.
+ * Labels render the node `name` (the short header, never the statement)
+ * through custom canvas drawers that replace sigma's defaults:
+ *   - defaultDrawNodeLabel: plain wrapped text, centered below the node,
+ *     word-wrapped at a max line width — no truncation, no one-line sprawl.
+ *   - defaultDrawNodeHover: the same wrapped name on a dark pill (the app's
+ *     popover tokens) instead of sigma's hardcoded white box. Hover always
+ *     shows the name, even below the zoom threshold.
+ * Labels are zoom-gated via labelRenderedSizeThreshold (lowered to 6 since
+ * names are short; the Obsidian text-fade feel, one stop earlier).
+ *
+ * Clicking a node opens the detail card anchored just below the node's
+ * viewport position (flipping above near the bottom edge); any camera move
+ * (pan/zoom) dismisses it. The `requires` edges render as arrows pointing
+ * prerequisite → dependent.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { WaypointsIcon } from "lucide-react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
+import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
 import { seededRandom, type GraphNode, type GraphSnapshot, type NodeStateClass } from "@/src/core";
 
 /** Per-state visuals: color token + node size (WebGL wants hex, not oklch). */
@@ -38,6 +48,130 @@ const STATE_LABELS: Record<NodeStateClass, string> = {
 	"dont-know": "don't know",
 	candidate: "candidate",
 };
+
+// ---- Label drawing (canvas) ---------------------------------------------
+//
+// sigma's defaults draw the label on ONE line to the right of the node with
+// a white box on hover. We replace both: names wrap under the node at a max
+// line width, plain when unhovered, dark pill when hovered.
+
+const LABEL_MAX_WIDTH = 170; // px — wraps long names instead of a wide strip
+const LABEL_GAP = 6; // px between node edge and first label line
+const LABEL_LINE_HEIGHT = 1.3;
+const PILL_PAD_X = 8;
+const PILL_PAD_Y = 5;
+
+/** Word-wrap for canvas text. Never truncates: overlong single words are
+ *  hard-broken by character so no line ever exceeds maxWidth. */
+function wrapLabel(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+	const lines: string[] = [];
+	for (const word of text.split(/\s+/).filter(Boolean)) {
+		const last = lines.length > 0 ? lines[lines.length - 1]! : null;
+		if (last !== null) {
+			const joined = `${last} ${word}`;
+			if (context.measureText(joined).width <= maxWidth) {
+				lines[lines.length - 1] = joined;
+				continue;
+			}
+		}
+		let chunk = "";
+		for (const char of word) {
+			if (chunk && context.measureText(`${chunk}${char}`).width > maxWidth) {
+				lines.push(chunk);
+				chunk = char;
+			} else {
+				chunk += char;
+			}
+		}
+		if (chunk) lines.push(chunk);
+	}
+	return lines;
+}
+
+/** Draw a rounded rectangle path (ctx.roundRect is not universal). */
+function roundedRect(
+	context: CanvasRenderingContext2D,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	radius: number,
+): void {
+	const r = Math.min(radius, width / 2, height / 2);
+	context.beginPath();
+	context.moveTo(x + r, y);
+	context.arcTo(x + width, y, y + width, y + height, r);
+	context.arcTo(x + width, y + height, x, y + height, r);
+	context.arcTo(x, y + height, x, y, r);
+	context.arcTo(x, y, x + width, y, r);
+	context.closePath();
+}
+
+/** Make the pair of canvas label drawers bound to the theme's colors. */
+function makeLabelDrawers(labelColor: string, pillColor: string, pillTextColor: string) {
+	const drawLabel: NodeLabelDrawingFunction = (context, data, settings) => {
+		if (!data.label) return;
+		const size = settings.labelSize;
+		context.save();
+		context.font = `${settings.labelWeight} ${size}px ${settings.labelFont}`;
+		const lines = wrapLabel(context, data.label, LABEL_MAX_WIDTH);
+		context.fillStyle = labelColor;
+		context.textAlign = "center";
+		context.textBaseline = "top";
+		const firstTop = data.y + data.size + LABEL_GAP;
+		for (let i = 0; i < lines.length; i++) {
+			context.fillText(lines[i]!, data.x, firstTop + i * size * LABEL_LINE_HEIGHT);
+		}
+		context.restore();
+	};
+
+	const drawHover: NodeHoverDrawingFunction = (context, data, settings) => {
+		const size = settings.labelSize;
+		context.save();
+		context.font = `${settings.labelWeight} ${size}px ${settings.labelFont}`;
+
+		if (!data.label) {
+			// No name to show: just a soft ring around the node itself.
+			context.fillStyle = pillColor;
+			context.beginPath();
+			context.arc(data.x, data.y, data.size + PILL_PAD_Y, 0, Math.PI * 2);
+			context.fill();
+			context.restore();
+			return;
+		}
+
+		const lines = wrapLabel(context, data.label, LABEL_MAX_WIDTH);
+		const lineH = size * LABEL_LINE_HEIGHT;
+		const boxWidth =
+			Math.max(...lines.map((line) => context.measureText(line).width)) + 2 * PILL_PAD_X;
+		const boxHeight = lines.length * lineH + 2 * PILL_PAD_Y;
+		const boxX = data.x - boxWidth / 2;
+		const boxY = data.y + data.size + LABEL_GAP - PILL_PAD_Y;
+
+		context.shadowOffsetX = 0;
+		context.shadowOffsetY = 2;
+		context.shadowBlur = 10;
+		context.shadowColor = "rgba(0, 0, 0, 0.35)";
+		context.fillStyle = pillColor;
+		roundedRect(context, boxX, boxY, boxWidth, boxHeight, 8);
+		context.fill();
+		context.shadowOffsetX = 0;
+		context.shadowOffsetY = 0;
+		context.shadowBlur = 0;
+
+		context.fillStyle = pillTextColor;
+		context.textAlign = "center";
+		context.textBaseline = "top";
+		for (let i = 0; i < lines.length; i++) {
+			context.fillText(lines[i]!, data.x, boxY + PILL_PAD_Y + i * lineH);
+		}
+		context.restore();
+	};
+
+	return { drawLabel, drawHover };
+}
+
+// ---- Color helpers (WebGL/canvas want hex, not oklch) --------------------
 
 /** Resolve a CSS variable (oklch in this app) to #rrggbb via the canvas. */
 function cssColorToHex(css: string): string {
@@ -59,14 +193,19 @@ function tokenHex(cssVar: string): string {
 	return value ? cssColorToHex(value) : "#888888";
 }
 
+// ---- Component ------------------------------------------------------------
+
 interface Selection {
 	node: GraphNode;
 	state: NodeStateClass;
 	chatIds: string[];
+	/** Node position in container pixels (from graphToViewport at click time). */
+	anchor: { x: number; y: number };
 }
 
 export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
+	const cardRef = useRef<HTMLDivElement | null>(null);
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
 
@@ -92,10 +231,13 @@ export function GraphView() {
 
 		const edgeColor = tokenHex("--ring");
 		const labelColor = tokenHex("--muted-foreground");
+		const pillColor = tokenHex("--popover");
+		const pillTextColor = tokenHex("--popover-foreground");
 		const stateColors = new Map<NodeStateClass, string>();
 		for (const state of Object.keys(STATE_TOKENS) as NodeStateClass[]) {
 			stateColors.set(state, tokenHex(STATE_TOKENS[state].cssVar));
 		}
+		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, pillColor, pillTextColor);
 
 		const graph = new Graph();
 		for (const node of snapshot.nodes) {
@@ -134,22 +276,33 @@ export function GraphView() {
 			if (killed) return;
 			renderer = new Sigma(graph, container, {
 				defaultEdgeType: "arrow",
-				labelRenderedSizeThreshold: 12,
-				labelColor: { color: labelColor },
+				// Names are short now — show them one zoom-stop earlier.
+				labelRenderedSizeThreshold: 6,
+				// Match the app typography (Geist via the body's stack).
+				labelFont: getComputedStyle(document.body).fontFamily,
+				labelWeight: "500",
 				labelSize: 12,
+				labelColor: { color: labelColor },
 				renderEdgeLabels: false,
+				defaultDrawNodeLabel: drawLabel,
+				defaultDrawNodeHover: drawHover,
 			});
 			renderer.on("clickNode", ({ node }) => {
 				const graphNode = snapshot.nodes.find((n) => n.id === node);
 				if (!graphNode) return;
+				const pos = graph.getNodeAttributes(node);
+				const anchor = renderer?.graphToViewport({ x: pos.x ?? 0, y: pos.y ?? 0 });
 				setSelected({
 					node: graphNode,
 					state: snapshot.nodeStates[node] ?? "candidate",
 					chatIds: snapshot.nodeSessions[node] ?? [],
+					anchor: anchor ?? { x: 0, y: 0 },
 				});
 			});
-			// Clicking the empty stage closes the node overlay.
+			// Clicking the empty stage closes the node card.
 			renderer.on("clickStage", () => setSelected(null));
+			// Any pan/zoom detaches the card from its node — close instead.
+			renderer.getCamera().on("updated", () => setSelected(null));
 		});
 
 		return () => {
@@ -157,6 +310,30 @@ export function GraphView() {
 			renderer?.kill();
 		};
 	}, [snapshot]);
+
+	// Position the detail card: below the clicked node, flipped above near
+	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
+	// before paint) because the flip needs the card's measured height.
+	useLayoutEffect(() => {
+		const card = cardRef.current;
+		const container = containerRef.current;
+		if (!selected || !card || !container) return;
+		const width = card.offsetWidth;
+		const height = card.offsetHeight;
+		const margin = 8;
+		const gap = 12;
+		const left = Math.min(
+			Math.max(selected.anchor.x - width / 2, margin),
+			Math.max(container.clientWidth - width - margin, margin),
+		);
+		let top = selected.anchor.y + gap;
+		if (top + height > container.clientHeight - margin) {
+			top = Math.max(selected.anchor.y - gap - height, margin);
+		}
+		card.style.left = `${left}px`;
+		card.style.top = `${top}px`;
+		card.style.visibility = "visible";
+	}, [selected]);
 
 	const isEmpty = snapshot === null || snapshot.nodes.length === 0;
 
@@ -178,41 +355,36 @@ export function GraphView() {
 				<div ref={containerRef} className="h-full w-full" />
 			)}
 
-			{selected && (
-				// Background click closes; the card swallows its own clicks.
-				<button
-					type="button"
-					aria-label="Close node details"
-					className="absolute inset-0 z-10 cursor-default bg-transparent"
-					onClick={() => setSelected(null)}
+			{selected && !isEmpty && (
+				<div
+					ref={cardRef}
+					// Positioned imperatively in the layout effect above; hidden
+					// until placed so the flip never flashes in the wrong spot.
+					style={{ visibility: "hidden", left: 0, top: 0 }}
+					className="absolute z-10 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
 				>
-					<div
-						className="absolute left-1/2 top-6 w-80 max-w-[90%] -translate-x-1/2 rounded-xl border bg-card p-4 text-left shadow-lg"
-						onClick={(e) => e.stopPropagation()}
-					>
-						<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
-						<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
-						<div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
-							{STATE_LABELS[selected.state]}
-						</div>
-						{selected.chatIds.length > 0 ? (
-							<div className="mt-3 flex flex-col gap-1">
-								<div className="text-xs text-muted-foreground">Sessions</div>
-								{selected.chatIds.map((chatId) => (
-									<Link
-										key={chatId}
-										href={`/chat/${chatId}`}
-										className="truncate rounded-md px-2 py-1 text-sm text-foreground transition-colors hover:bg-accent"
-									>
-										{snapshot?.sessions[chatId] ?? chatId}
-									</Link>
-								))}
-							</div>
-						) : (
-							<div className="mt-3 text-xs text-muted-foreground">No sessions recorded.</div>
-						)}
+					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
+					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
+					<div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
+						{STATE_LABELS[selected.state]}
 					</div>
-				</button>
+					{selected.chatIds.length > 0 ? (
+						<div className="mt-3 flex flex-col gap-1">
+							<div className="text-xs text-muted-foreground">Sessions</div>
+							{selected.chatIds.map((chatId) => (
+								<Link
+									key={chatId}
+									href={`/chat/${chatId}`}
+									className="truncate rounded-md px-2 py-1 text-sm text-foreground transition-colors hover:bg-accent"
+								>
+									{snapshot?.sessions[chatId] ?? chatId}
+								</Link>
+							))}
+						</div>
+					) : (
+						<div className="mt-3 text-xs text-muted-foreground">No sessions recorded.</div>
+					)}
+				</div>
 			)}
 		</div>
 	);
