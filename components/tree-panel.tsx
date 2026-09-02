@@ -236,7 +236,7 @@ export function TreePanel({
 		<aside
 			data-testid="tree-panel"
 			className={cn(
-				"sidebar-motion hidden shrink-0 overflow-hidden border-l border-border/60 bg-card/30 duration-200 xl:flex",
+				"sidebar-motion hidden min-h-0 flex-1 shrink-0 overflow-hidden border-l border-border/60 bg-card/30 duration-200 xl:flex",
 				PANEL_WIDTH[mode],
 			)}
 		>

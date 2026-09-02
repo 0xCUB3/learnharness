@@ -399,13 +399,14 @@ export function Chat({
 					</ConversationContent>
 					<ConversationScrollButton />
 				</Conversation>
-				{/* Right sidebar: the live sub-agent fleet (when running) above
-				    the plan tree — the fleet panel renders nothing while idle. */}
-				<div className="hidden shrink-0 flex-col xl:flex">
-					<SubAgentsPanel jobs={jobs} />
-					<TreePanel messages={messages} />
 				</div>
-				</div>
+			</div>
+			{/* Right sidebar, a full-height sibling of the middle column: the
+			    live sub-agent fleet (when running) above the plan tree — the
+			    fleet panel renders nothing while idle, so the column is all plan. */}
+			<div className="hidden shrink-0 flex-col xl:flex">
+				<SubAgentsPanel jobs={jobs} />
+				<TreePanel messages={messages} />
 			</div>
 		</div>
 		</JobsContext.Provider>
