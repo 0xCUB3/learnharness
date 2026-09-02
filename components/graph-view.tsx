@@ -24,6 +24,14 @@
  *     sync (no growth, no pulse; interpolating from the current value
  *     means rapid hover toggles glide instead of snapping). Hover
  *     always shows the name, even when labels are zoomed out.
+ * Node hit-testing is the disc PLUS a pad: sigma picks nodes from a
+ * half-resolution framebuffer (no v3 setting enlarges hitboxes), and the
+ * glow halo is bigger than the stock hitbox — touching the halo
+ * de-hovered the node, which oscillated (the hover flicker). A
+ * NodeCircleProgram subclass (PICKING_VERTEX_SHADER below) adds
+ * PICKING_PAD_PX of pickable radius under #ifdef PICKING_MODE only, per
+ * the maintainer-endorsed v3 pattern (#1493); the visible disc stays
+ * pixel-identical, and the whole halo becomes hoverable/clickable.
  * Labels are zoom-gated GLOBALLY with a fade: all names appear at once
  * when the camera is at fit zoom or closer (ratio <= 1), then fade out
  * together across a short zoom span before label rendering switches off —
@@ -83,6 +91,78 @@ const LABELS_FADE_SPAN = 0.5;
 const GLOW_PAD = 9; // px the halo extends beyond the node disc (constant)
 const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
 const HOVER_FADE_MS = 180; // hover halo opacity fade length
+
+// ---- Padded picking (WebGL) ----------------------------------------------
+//
+// sigma picks nodes by reading a single pixel from a picking framebuffer
+// rendered at HALF the CSS resolution: small nodes get tiny, ragged hit
+// edges, and our glow halo (GLOW_PAD beyond the disc) is NOT pickable, so
+// moving the cursor from the disc onto its own halo de-hovered it — an
+// oscillation loop (the hover flicker). sigma v3 has no setting for hit
+// padding; the maintainer-endorsed pattern (#1493, fixed officially in v4
+// as `nodePickingPadding`) is a node program whose vertex shader enlarges
+// the disc ONLY in the picking shader pass.
+
+/** Extra radius (px) added to each node's PICKABLE disc (picking layer
+ *  only — the visible disc is untouched). >= GLOW_PAD so the entire hover
+ *  halo is hit-testable. */
+const PICKING_PAD_PX = 10;
+
+/**
+ * The node-circle vertex shader, verbatim from sigma 3.0.3
+ * (dist/index-fad77a13.esm.js, SHADER_SOURCE$5) with ONE change: under
+ * `#ifdef PICKING_MODE` (sigma compiles this source twice — visible render
+ * vs picking readback — so the visible pass never takes this branch) the
+ * size gains PICKING_PAD_PX of radius, which is the same on-screen unit as
+ * `data.size` (the px radius the canvas drawers use for the halo).
+ */
+const PICKING_VERTEX_SHADER = /* glsl */ `
+attribute vec4 a_id;
+attribute vec4 a_color;
+attribute vec2 a_position;
+attribute float a_size;
+attribute float a_angle;
+
+uniform mat3 u_matrix;
+uniform float u_sizeRatio;
+uniform float u_correctionRatio;
+
+varying vec4 v_color;
+varying vec2 v_diffVector;
+varying float v_radius;
+varying float v_border;
+
+const float bias = 255.0 / 254.0;
+
+void main() {
+  float pickedSize = a_size;
+#ifdef PICKING_MODE
+  // Picking pass only: enlarge the hitbox by PICKING_PAD_PX of radius.
+  pickedSize += ${PICKING_PAD_PX.toFixed(1)};
+#endif
+  float size = pickedSize * u_correctionRatio / u_sizeRatio * 4.0;
+  vec2 diffVector = size * vec2(cos(a_angle), sin(a_angle));
+  vec2 position = a_position + diffVector;
+  gl_Position = vec4(
+    (u_matrix * vec3(position, 1)).xy,
+    0,
+    1
+  );
+
+  v_diffVector = diffVector;
+  v_radius = size / 2.0;
+
+#ifdef PICKING_MODE
+  // For picking mode, we use the ID as the color:
+  v_color = a_id;
+#else
+  // For normal mode, we use the color:
+  v_color = a_color;
+#endif
+
+  v_color.a *= bias;
+}
+`;
 
 /** "#rrggbb" + alpha → "rgba(...)" (tokenHex only ever emits #rrggbb). */
 function rgbaFromHex(hex: string, alpha: number): string {
@@ -312,88 +392,106 @@ export function GraphView() {
 		// rAF id of the hover fade transition — the ONLY animation (see the
 		// file header). Lives out here so the effect cleanup can cancel it.
 		let hoverAnimId: number | null = null;
-		void import("sigma").then(({ default: Sigma }) => {
-			if (killed) return;
-			renderer = new Sigma(graph, container, {
-				defaultEdgeType: "arrow",
-				// All labels appear/disappear together: no per-node size gating
-				// (threshold 0) — a single camera-ratio switch toggles them below.
-				labelRenderedSizeThreshold: 0,
-				// Match the app typography (Geist via the body's stack).
-				labelFont: getComputedStyle(document.body).fontFamily,
-				labelWeight: "500",
-				labelSize: 12,
-				labelColor: { color: labelColor },
-				renderEdgeLabels: false,
-				defaultDrawNodeLabel: drawLabel,
-				defaultDrawNodeHover: drawHover,
-			});
-			renderer.on("clickNode", ({ node }) => {
-				const graphNode = snapshot.nodes.find((n) => n.id === node);
-				if (!graphNode) return;
-				const pos = graph.getNodeAttributes(node);
-				const anchor = renderer?.graphToViewport({ x: pos.x ?? 0, y: pos.y ?? 0 });
-				setSelected({
-					node: graphNode,
-					state: snapshot.nodeStates[node] ?? "candidate",
-					chatIds: snapshot.nodeSessions[node] ?? [],
-					anchor: anchor ?? { x: 0, y: 0 },
-				});
-			});
-			// Clicking the empty stage closes the node card.
-			renderer.on("clickStage", () => setSelected(null));
-			// One global label gate with a fade: names are fully visible at fit
-			// zoom or closer, then fade out together across LABELS_FADE_SPAN of
-			// zoom (the labels canvas layer's opacity), and only once fully
-			// faded does label rendering switch off. Any pan/zoom also detaches
-			// the card from its node — close it.
-			const labelsCanvas = renderer.getCanvases().labels;
-			let labelsRendering: boolean | null = null;
-			const syncRenderLabels = (ratio: number) => {
-				// 0 at fit zoom → 1 at the end of the fade span
-				const fade = (ratio - LABELS_CAMERA_RATIO) / LABELS_FADE_SPAN;
-				const alpha = Math.min(Math.max(1 - fade, 0), 1);
-				const shouldRender = alpha > 0;
-				if (shouldRender !== labelsRendering) {
-					labelsRendering = shouldRender;
-					renderer?.setSetting("renderLabels", shouldRender);
-				}
-				if (labelsCanvas) labelsCanvas.style.opacity = alpha.toFixed(3);
-			};
-			syncRenderLabels(renderer.getCamera().getState().ratio);
-			renderer.getCamera().on("updated", (state) => {
-				syncRenderLabels(state.ratio);
-				setSelected(null);
-			});
-			// The hover fade: entering schedules renders (sigma re-invokes
-			// drawHover with the new fade); leaving draws through the captured
-			// repainter, since sigma stops calling drawHover once unhovered.
-			// Both directions are bounded (~HOVER_FADE_MS) and cancel each
-			// other, so idle CPU returns to zero after every transition.
-			const animateHoverTo = (target: number) => {
-				if (hoverAnimId !== null) {
-					cancelAnimationFrame(hoverAnimId);
-					hoverAnimId = null;
-				}
-				const from = hover.fade;
-				if (from === target) {
-					if (target === 0) hover.repaint?.(0);
-					return;
-				}
-				const start = performance.now();
-				const tick = (now: number) => {
-					const t = Math.min((now - start) / HOVER_FADE_MS, 1);
-					hover.fade = from + (target - from) * t;
-					if (target === 0) hover.repaint?.(hover.fade);
-					else renderer?.scheduleRefresh();
-					hoverAnimId = t < 1 ? requestAnimationFrame(tick) : null;
+		// Both sigma and its rendering package touch WebGL globals at module
+		// scope, so both load dynamically (SSR-safe; the effect is browser-only).
+		void Promise.all([import("sigma"), import("sigma/rendering")]).then(
+			([{ default: Sigma }, { NodeCircleProgram }]) => {
+				if (killed) return;
+				// Padded picking (see PICKING_VERTEX_SHADER): the visible disc is
+				// pixel-identical to the stock circle program; the PICKABLE disc
+				// gains PICKING_PAD_PX of radius, so the whole hover halo is
+				// hit-testable and small nodes are comfortable to hover/click.
+				// (Maintainer-endorsed pattern for sigma v3; v4 ships this as
+				// the `nodePickingPadding` setting.)
+				const PaddedNodeCircleProgram = class extends NodeCircleProgram {
+					getDefinition() {
+						return {
+							...super.getDefinition(),
+							VERTEX_SHADER_SOURCE: PICKING_VERTEX_SHADER,
+						};
+					}
 				};
-				hoverAnimId = requestAnimationFrame(tick);
-			};
-			renderer.on("enterNode", () => animateHoverTo(1));
-			renderer.on("leaveNode", () => animateHoverTo(0));
-			renderer.on("leaveStage", () => animateHoverTo(0));
-		});
+				renderer = new Sigma(graph, container, {
+					nodeProgramClasses: { circle: PaddedNodeCircleProgram },
+					defaultEdgeType: "arrow",
+					// All labels appear/disappear together: no per-node size gating
+					// (threshold 0) — a single camera-ratio switch toggles them below.
+					labelRenderedSizeThreshold: 0,
+					// Match the app typography (Geist via the body's stack).
+					labelFont: getComputedStyle(document.body).fontFamily,
+					labelWeight: "500",
+					labelSize: 12,
+					labelColor: { color: labelColor },
+					renderEdgeLabels: false,
+					defaultDrawNodeLabel: drawLabel,
+					defaultDrawNodeHover: drawHover,
+				});
+				renderer.on("clickNode", ({ node }) => {
+					const graphNode = snapshot.nodes.find((n) => n.id === node);
+					if (!graphNode) return;
+					const pos = graph.getNodeAttributes(node);
+					const anchor = renderer?.graphToViewport({ x: pos.x ?? 0, y: pos.y ?? 0 });
+					setSelected({
+						node: graphNode,
+						state: snapshot.nodeStates[node] ?? "candidate",
+						chatIds: snapshot.nodeSessions[node] ?? [],
+						anchor: anchor ?? { x: 0, y: 0 },
+					});
+				});
+				// Clicking the empty stage closes the node card.
+				renderer.on("clickStage", () => setSelected(null));
+				// One global label gate with a fade: names are fully visible at fit
+				// zoom or closer, then fade out together across LABELS_FADE_SPAN of
+				// zoom (the labels canvas layer's opacity), and only once fully
+				// faded does label rendering switch off. Any pan/zoom also detaches
+				// the card from its node — close it.
+				const labelsCanvas = renderer.getCanvases().labels;
+				let labelsRendering: boolean | null = null;
+				const syncRenderLabels = (ratio: number) => {
+					// 0 at fit zoom → 1 at the end of the fade span
+					const fade = (ratio - LABELS_CAMERA_RATIO) / LABELS_FADE_SPAN;
+					const alpha = Math.min(Math.max(1 - fade, 0), 1);
+					const shouldRender = alpha > 0;
+					if (shouldRender !== labelsRendering) {
+						labelsRendering = shouldRender;
+						renderer?.setSetting("renderLabels", shouldRender);
+					}
+					if (labelsCanvas) labelsCanvas.style.opacity = alpha.toFixed(3);
+				};
+				syncRenderLabels(renderer.getCamera().getState().ratio);
+				renderer.getCamera().on("updated", (state) => {
+					syncRenderLabels(state.ratio);
+					setSelected(null);
+				});
+				// The hover fade: entering schedules renders (sigma re-invokes
+				// drawHover with the new fade); leaving draws through the captured
+				// repainter, since sigma stops calling drawHover once unhovered.
+				// Both directions are bounded (~HOVER_FADE_MS) and cancel each
+				// other, so idle CPU returns to zero after every transition.
+				const animateHoverTo = (target: number) => {
+					if (hoverAnimId !== null) {
+						cancelAnimationFrame(hoverAnimId);
+						hoverAnimId = null;
+					}
+					const from = hover.fade;
+					if (from === target) {
+						if (target === 0) hover.repaint?.(0);
+						return;
+					}
+					const start = performance.now();
+					const tick = (now: number) => {
+						const t = Math.min((now - start) / HOVER_FADE_MS, 1);
+						hover.fade = from + (target - from) * t;
+						if (target === 0) hover.repaint?.(hover.fade);
+						else renderer?.scheduleRefresh();
+						hoverAnimId = t < 1 ? requestAnimationFrame(tick) : null;
+					};
+					hoverAnimId = requestAnimationFrame(tick);
+				};
+				renderer.on("enterNode", () => animateHoverTo(1));
+				renderer.on("leaveNode", () => animateHoverTo(0));
+				renderer.on("leaveStage", () => animateHoverTo(0));
+			});
 
 		return () => {
 			killed = true;
