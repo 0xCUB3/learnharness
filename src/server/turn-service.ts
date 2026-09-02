@@ -6,7 +6,6 @@
  *
  *   buildTeacherContext — graph → instructions block (the W8 read channel)
  *   persistTurn        — the canonical state write (client + agent messages)
- *   spawnTurnJobs      — the async sub-agent protocol kick-off
  *   triggerExtraction  — the graph write channel: fires the extraction
  *                        pipeline (the sole graph writer) once a chat
  *                        crosses the v1 quiz-answer threshold. The trigger
@@ -22,7 +21,6 @@ import { buildGraphContext } from "../core/graph-context.ts";
 import { getGraph, pendingQuizAnswers } from "../core/graph.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
 import { EXTRACTION } from "../../config.ts";
-import type { JobRunner } from "../agent/subagents/runner.ts";
 import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
 
 /**
@@ -47,24 +45,26 @@ export function buildTeacherContext(graphStore: GraphStore, chatId: string): str
  * even when aborted — the partial transcript (including any pending
  * question part) is what makes resume work.
  */
-export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMessage[], isAborted: boolean): void {
-	try {
-		chatStore.saveMessages(chatId, messages);
-	} catch (err) {
-		console.error(`[chat ${chatId}] persist failed:`, err, { isAborted });
-	}
+/**
+ * The SDK assigns assistant-message ids CLIENT-side (useChat); the server's
+ * onFinish synthesis leaves them EMPTY. A message persisted only server-side
+ * (the last turn's, or a wake turn's — nobody re-POSTs it with a client id)
+ * would otherwise land in the record with id "" — and two of those in one
+ * transcript break React keys (the chat map) and steer-dedup lookups. Fill any
+ * missing id here, at the single canonical write: client-authored ids are
+ * NEVER touched (the client's next POST still carries them verbatim).
+ */
+export function withMessageIds(messages: UIMessage[]): UIMessage[] {
+	return messages.map((m) =>
+		m.id ? m : { ...m, id: `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}` },
+	);
 }
 
-/**
- * The async sub-agent protocol (contracts.ts): scan the last assistant
- * message for pending job tool parts and fire the background runners —
- * fire-and-forget, never awaited; the HTTP response is already gone.
- */
-export function spawnTurnJobs(jobRunner: JobRunner, chatId: string, messages: UIMessage[]): void {
+export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMessage[], isAborted: boolean): void {
 	try {
-		jobRunner.spawnPendingJobs(chatId, messages);
+		chatStore.saveMessages(chatId, withMessageIds(messages));
 	} catch (err) {
-		console.error(`[chat ${chatId}] job spawn failed:`, err);
+		console.error(`[chat ${chatId}] persist failed:`, err, { isAborted });
 	}
 }
 

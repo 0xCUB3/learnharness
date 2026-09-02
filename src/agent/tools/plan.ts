@@ -1,6 +1,7 @@
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import type { PlanToolResult, PlanTree } from "../../core/contracts.ts";
+import type { ChatStore } from "../../core/ports.ts";
 import {
 	addEdge,
 	addNode,
@@ -13,7 +14,13 @@ import {
 	setCurrent,
 	updateNode,
 } from "../../core/plan-tree.ts";
-import type { TeacherToolContext } from "../tools.ts";
+
+/** What the plan tools close over (the plan-tree half of the tool context). */
+export interface PlanToolContext {
+	chatId: string;
+	/** The storage port plan tools persist through. */
+	chatStore: ChatStore;
+}
 
 /**
  * Plan-tree tools — W1 workstream (docs/plan.md Wave 1; src/core/contracts.ts
@@ -48,7 +55,7 @@ const edgeSchema = z.object({
  * empty) tree, so the model can see what it's working with and fix the call.
  */
 async function runPlanOp(
-	ctx: TeacherToolContext,
+	ctx: PlanToolContext,
 	op: (tree: PlanTree) => PlanTree,
 ): Promise<PlanToolResult> {
 	const { chatId, chatStore } = ctx;
@@ -65,7 +72,7 @@ async function runPlanOp(
 	}
 }
 
-export function planTools(ctx: TeacherToolContext): ToolSet {
+export function planTools(ctx: PlanToolContext): ToolSet {
 	return {
 		plan_init: tool({
 			description:

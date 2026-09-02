@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ToolLoopAgent, stepCountIs, type LanguageModel, type ToolSet } from "ai";
 import { PATHS } from "../../config.ts";
-import { createTeacherTools, jobTools, questionTools } from "./tools.ts";
 import { modelFor } from "./models.ts";
+import { questionTools } from "./tools.ts";
 
 /**
  * The teacher agent. Everything pi used to provide (agent loop, tool calling,
@@ -20,16 +20,24 @@ import { modelFor } from "./models.ts";
  * src/agent/prompts/*.md fragment in sorted filename order (workers add
  * fragments — nobody edits shared sections of the base prompt). Prefix
  * fragments with a numeric order key: 10-plan-tree.md, 20-jobs.md, …
+ *
+ * ONLY numeric-prefix files load — the loader enforces the convention, so
+ * non-fragment documentation (README.md, …) can live in the directory
+ * without ever leaking into the model's prompt.
  */
 
 const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
 
-function composeInstructions(): string {
+/** A prompt fragment: numeric order key + .md (e.g. 20-jobs.md). Nothing else loads. */
+const FRAGMENT_RE = /^\d+-[\w.-]+\.md$/;
+
+/** Exported for tests: assert what composes into the model's prompt. */
+export function composeInstructions(): string {
 	const base = fs.readFileSync(PATHS.teacherPrompt, "utf-8");
 	if (!fs.existsSync(PROMPTS_DIR)) return base;
 	const fragments = fs
 		.readdirSync(PROMPTS_DIR)
-		.filter((f) => f.endsWith(".md"))
+		.filter((f) => FRAGMENT_RE.test(f))
 		.sort()
 		.map((f) => fs.readFileSync(path.join(PROMPTS_DIR, f), "utf-8").trim())
 		.filter(Boolean);
@@ -56,13 +64,15 @@ export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet, graph
 		// Reasoning tokens stream as reasoning parts into the UI's collapsible block.
 		model: model ?? modelFor("teacher"),
 		instructions: withGraphContext(graphContext),
-		// Tools are per-request (plan tools close over the injected ctx);
-		// chat-handler passes createTeacherTools({ chatId, chatStore }). The
+		// Tools are per-request (plan tools close over the injected ctx; job
+		// tools close over the job store + spawn seam) — chat-handler passes
+		// createTeacherTools({ chatId, chatStore, jobStore, spawn }). The
 		// dependency-free default is the question-only set (client-side tools,
 		// no storage needed) — used when tests pass a bare mock model.
-		tools: tools ?? { ...questionTools, ...jobTools() },
-		// Question and job tools are client-side — a call ends the server turn
-		// automatically. stepCountIs is just the safety net.
+		tools: tools ?? { ...questionTools },
+		// Question tools are client-side (a call ends the server turn);
+		// job tools resolve immediately (fire-and-forget ack). stepCountIs is
+		// just the safety net.
 		stopWhen: stepCountIs(20),
 	});
 }

@@ -49,8 +49,11 @@ composition, and above everything CORRECTNESS: the picture must not assert anyth
 mark on the wrong corner, a vector pointing the wrong way, a point plotted at the wrong coordinate is a
 failure even if it renders cleanly.
 
-Your two tools:
+Your three tools:
 - write_svg({ svg }) — write the complete <svg>…</svg> source (overwrites the previous version).
+- edit_svg({ old_text, new_text }) — a surgical exact-match replacement in the current SVG:
+  old_text must appear EXACTLY ONCE; it is replaced by new_text. Call write_svg first. For anything
+  beyond a one-spot fix (new elements, restructured layout), write_svg the whole document again.
 - render_svg({}) — rasterize the current SVG in headless Chrome. The render arrives as an image in the
   message right after the tool result.
 
@@ -64,8 +67,8 @@ says nothing about whether the geometry is right or the picture is readable. Whe
 - Would a learner instantly read the intended idea from this picture alone?
 
 Workflow: plan the coordinate space (viewBox + margins, nothing touching the edges) → write_svg →
-render_svg → LOOK critically → fix (write_svg) and re-render until correct and clean. Never finish
-without having looked at a render of your FINAL SVG.
+render_svg → LOOK critically → fix (edit_svg for one-spot fixes, write_svg otherwise) and re-render
+until correct and clean. Never finish without having looked at a render of your FINAL SVG.
 
 SVG requirements:
 - A complete <svg> with explicit width/height AND a matching viewBox.
@@ -85,6 +88,14 @@ export function createVisualTools() {
 			inputSchema: z.object({
 				svg: z.string().describe('Complete <svg xmlns="…">…</svg> markup.'),
 			}),
+		}),
+		edit_svg: tool({
+			description:
+				"Replace one exact spot in the current SVG: old_text must appear EXACTLY ONCE and is replaced by new_text. Call write_svg first. For larger changes, write_svg the whole document.",
+			inputSchema: z.object({
+				old_text: z.string().describe("The exact text to replace — must match exactly once in the current SVG."),
+				new_text: z.string().describe("The replacement text."),
+				}),
 		}),
 		render_svg: tool({
 			description: "Render the current SVG to a PNG and show it to you for inspection. No arguments.",
@@ -164,6 +175,36 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 					currentSvg = svg;
 					opts.onActivity?.(`write_svg: ${(svg.length / 1024).toFixed(1)} KB`);
 					toolResults.push(toolText(call.toolCallId, call.toolName, `Saved (${svg.length} bytes). Call render_svg to look at it.`));
+				} else if (call.toolName === "edit_svg") {
+					const edit = call.input as { old_text?: unknown; new_text?: unknown };
+					if (!currentSvg) {
+						toolResults.push(toolText(call.toolCallId, call.toolName, "ERROR: nothing to edit — call write_svg first."));
+						continue;
+					}
+					if (typeof edit.old_text !== "string" || typeof edit.new_text !== "string" || !edit.old_text) {
+						toolResults.push(toolText(call.toolCallId, call.toolName, "ERROR: expected old_text (non-empty) and new_text strings."));
+						continue;
+					}
+					const occurrences = currentSvg.split(edit.old_text).length - 1;
+					if (occurrences === 0) {
+						toolResults.push(
+							toolText(
+								call.toolCallId,
+								call.toolName,
+								`ERROR: old_text not found. Closest line for reference:\n${snippetAround(currentSvg, edit.old_text)}`,
+							),
+						);
+						continue;
+					}
+					if (occurrences > 1) {
+						toolResults.push(
+							toolText(call.toolCallId, call.toolName, `ERROR: old_text appears ${occurrences} times — it must match EXACTLY ONCE. Include more surrounding context to make it unique.`),
+						);
+						continue;
+					}
+					currentSvg = currentSvg.replace(edit.old_text, edit.new_text);
+					opts.onActivity?.("edit_svg: applied");
+					toolResults.push(toolText(call.toolCallId, call.toolName, "OK — replaced 1 occurrence. Call render_svg to look at the edited SVG."));
 				} else if (call.toolName === "render_svg") {
 					if (!currentSvg) {
 						toolResults.push(toolText(call.toolCallId, call.toolName, "ERROR: nothing to render — call write_svg first."));
@@ -181,7 +222,7 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 						toolResults.push(toolText(call.toolCallId, call.toolName, `RENDER ERROR (the SVG may be malformed): ${msg}. Fix it with write_svg and render again.`));
 					}
 				} else {
-					toolResults.push(toolText(call.toolCallId, call.toolName, `ERROR: unknown tool "${call.toolName}". Use write_svg or render_svg.`));
+					toolResults.push(toolText(call.toolCallId, call.toolName, `ERROR: unknown tool "${call.toolName}". Use write_svg, edit_svg, or render_svg.`));
 				}
 			}
 			// Message order: assistant tool-calls → tool results → render image.
@@ -213,6 +254,31 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 
 function toolText(toolCallId: string, toolName: string, value: string): ToolResultPart {
 	return { type: "tool-result", toolCallId, toolName, output: { type: "text", value } };
+}
+
+/** A 3-line numbered context window around the closest fuzzy match for a
+ *  failed edit — enough for the model to see what went wrong and retry
+ *  (the pi svg_tools snippetAround semantics). */
+function snippetAround(svg: string, target: string): string {
+	const words = target.trim().split(/\s+/).filter(Boolean);
+	if (words.length === 0) return "(empty old_text)";
+	const lines = svg.split("\n");
+	let bestAt = -1;
+	let bestScore = -1;
+	for (let i = 0; i < lines.length; i++) {
+		const score = words.filter((w) => lines[i]!.includes(w)).length;
+		if (score > bestScore) {
+			bestScore = score;
+			bestAt = i;
+		}
+	}
+	if (bestAt < 0) return "(no similar line found)";
+	const from = Math.max(0, bestAt - 1);
+	const to = Math.min(lines.length, bestAt + 2);
+	return lines
+		.slice(from, to)
+		.map((line, idx) => `${from + idx + 1} | ${line}`)
+		.join("\n");
 }
 
 function finish(svg: string | null, finalText: string): VisualResult {
