@@ -62,7 +62,7 @@ Storage is **per-entity semantic ports**, never one generic interface: `ChatStor
 
 - **`src/server/stores.ts` is THE composition root for storage**: it instantiates the adapters and hands the port objects to everything else (server modules, the job runner, the extraction pipeline, agent tools). It is the single place a storage decision (JSON vs SQLite, local vs remote) gets re-made.
 - **`src/server/chat-handler.ts` is THE composition root for a turn**: it wires the stores, the job runner, the teacher tools, and the turn services into the SDK stream response. All logic lives behind the seams it calls.
-- The agent layer is dependency-inverted throughout: `createJobRunner({ chatStore, jobStore })`, `createExtractionPipeline({ chatStore, graphStore, extractor?, auditor? })`, `createTeacherTools({ chatId, chatStore })`, `createTeacherAgent(model?, tools?, graphContext?)`. Tests inject the same ports production wires.
+- The agent layer is dependency-inverted throughout: `createJobRunner({ chatStore, jobStore, deliver })` (the `deliver` seam hands steers to the wake pipeline), `createExtractionPipeline({ chatStore, graphStore, extractor?, auditor? })`, `createTeacherTools({ chatId, chatStore, jobStore, spawn })`, `createTeacherAgent(model?, tools?, graphContext?)`. Tests inject the same ports production wires.
 
 ---
 
@@ -93,7 +93,7 @@ chat record ──▶ EXTRACTOR (LLM) ──▶ AUDITOR (LLM) ──▶ MERGER (
 
 1. **`buildTeacherContext`** — the graph read channel (self-updating, failure-contained: a read error never takes the lesson down).
 2. **`persistTurn`** — the canonical state write: client + agent messages persist on every finish, including aborts (the partial transcript is what makes resume-mid-question free).
-3. **`spawnTurnJobs`** — the async sub-agent protocol: pending `research`/`demo`/`visual` tool parts get background runners (fire-and-forget; on completion the runner rewrites the tool part to `output-available`, the client re-syncs, the SDK continuation hands the result to the teacher as a normal tool output).
+3. **Job tools are server-executed, ack-and-steer** — `research`/`demo`/`visual` calls resolve immediately mid-turn with a fire-and-forget ack (the teacher keeps teaching); `spawn(job, input)` fires the background runner. On completion the runner builds a **steer message** (a user-role `UIMessage` with a text part — the model-facing channel — and a `data-subagent-artifact` part, which provider conversion drops) and hands it to the **wake pipeline** (`src/server/jobs.ts`: per-chat serialized queue on `globalThis`, waits for turn-free + no pending quiz, fires a server-side teacher turn via the chat-handler's `setTurnRunner` adapter, 409-retry, idempotent per jobId). Job status flips done/error only after the wake turn persists. The client adopts the wake turn through the existing `turnInFlight` machinery (busy shimmer + composer gate — same as returning mid-turn) and renders the steer as an artifact, never a bubble.
 4. **`triggerExtraction`** — the graph write channel (§3).
 
 Each service is a named, error-contained seam taking explicit deps; failures log one `[chat <id>]` line and never touch the response. Swapping any of them (e.g. the trigger) touches nothing else.

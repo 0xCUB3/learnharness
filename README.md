@@ -45,7 +45,7 @@ graph TB
         DOCK["QuestionDock / AnsweredCard<br/>quiz graded client-side<br/>(question-core)"]
         TREE["TreePanel — plan tree,<br/>topo order, done/current/upcoming"]
         ART["Artifact cards — research brief,<br/>demo in sandboxed iframe, SVG"]
-        COMP["Composer — gated while a<br/>question or job is pending"]
+        COMP["Composer — gated by question<br/>or turn; jobs run in parallel"]
     end
 
     subgraph HOME_UI["Browser · home page (app/)"]
@@ -67,10 +67,11 @@ graph TB
         TA["ToolLoopAgent<br/>system-prompt.md + prompts/*.md fragments<br/>+ graph-context block"]
         QT["quiz · ask_user_question<br/>(client-side tools, no execute)"]
         PT["plan_* tools (server-side,<br/>mutate the chat's tree)"]
-        JT["research · demo · visual<br/>(client-side tools, job protocol)"]
+        JT["research · demo · visual<br/>(server-executed, ack mid-turn)"]
     end
 
-    subgraph SUBS["Background sub-agents (src/agent/subagents)"]
+    subgraph SUBS["Background sub-agents (src/agent/subagents) + wake pipeline (src/server/jobs.ts)"]
+        WAKE["wake queue — serialized per chat,<br/>turn-free + quiz-aware, server turn"]
         RES["researcher<br/>web_search + web_fetch"]
         DEMO["demo-builder<br/>write → headless-run → fix"]
         VIS["visual-maker<br/>write → render → look"]
@@ -100,11 +101,12 @@ graph TB
     TA --> QT & PT & JT
     PT --> CHATS
     CH -->|"onFinish: saveMessages"| CHATS
-    CH -->|"onFinish: spawnPendingJobs"| RES & DEMO & VIS
+    JT -->|"spawn(job, input) — fire-and-forget"| RES & DEMO & VIS
     CH -->|"onFinish: every N quiz answers<br/>(turn-service seam)"| EXT
 
     RES & DEMO & VIS --> JOBS
-    RES & DEMO & VIS -->|"rewrite tool part<br/>→ output-available"| CHATS
+    RES & DEMO & VIS -->|"steer message via `deliver`"| WAKE
+    WAKE -->|"server-side teacher turn<br/>(adopted client-side via turnInFlight)"| CH
 
     EXT -->|"audit-passed findings"| MERGE
     MERGE --> LEDG
@@ -135,8 +137,10 @@ src/
                                 runner (async protocol), headless Chrome helper
   server/chat-handler.ts       one chat turn: compose agent + services, stream
   server/turn-service.ts       turn services: teacher context · persist ·
-                                spawn jobs · extraction trigger (the v1
-                                quiz-answer threshold — one swappable seam)
+                                extraction trigger (the v1 quiz-answer
+                                threshold — one swappable seam)
+  server/jobs.ts               the sub-agent wake pipeline: serialized per-chat
+                                queue, steer delivery, server-side wake turns
   server/stores.ts              THE composition root — the one place adapters wire in
   server/{chats,graph,jobs}.ts  route entry points: chat list, pure-read
                                 graph snapshot, job polling
@@ -159,7 +163,7 @@ data/                           chats/ · graph/ · jobs/ — runtime state, git
 
 **The formal plan tree.** The teacher authors the session's dependency tree with schema-validated tools (`plan_init`, `plan_add_node`, … `plan_set_current`, `plan_mark_done`). The tree persists in the chat record; the tree panel renders from the latest plan tool output in the transcript. Quiz calls can tag a `nodeId`, so outcomes feed the graph per-node.
 
-**The async sub-agent protocol.** `research` / `demo` / `visual` are also client-side tools: the server turn ends at the call, `onFinish` spawns a background runner (fire-and-forget), the job store tracks a live activity line, the client polls `/api/jobs` while parts are pending, and on completion the runner rewrites the tool part in the chat record to `output-available` — the client re-syncs, the continuation fires, the teacher receives the result as a normal tool output. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable model — `MODELS.visualMaker` in config.ts).
+**The async sub-agent protocol (ack-and-steer).** `research` / `demo` / `visual` are server-executed tools: the call resolves immediately mid-turn with a fire-and-forget ack and the teacher keeps teaching; a background runner works in parallel (the job store tracks a live activity line; the client polls `/api/jobs`). On completion the runner builds a **steer message** — a user-role `UIMessage` whose text part is the model-facing result (data parts are dropped by provider conversion) and whose `data-subagent-artifact` part carries the full result for the client — and the **wake pipeline** (`server/jobs.ts`) delivers it: a per-chat serialized queue waits for the turn to end and no question to be pending, then fires a server-side teacher turn that weaves the result into the lesson. The client adopts the wake turn through the same `turnInFlight` machinery as returning mid-stream (busy shimmer, composer gate) and renders steers as artifacts — never a bubble. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable model — `MODELS.visualMaker` in config.ts).
 
 **The knowledge graph (the two channels).** The write channel: the extraction pipeline — extractor (LLM: propositions, edges, probe attribution, each with verbatim evidence) → auditor (LLM: drops anything unbacked) → merger (`mergeFindings`, deterministic: exact/alias identity resolution, event rebuild from the transcript's tool parts, dedupe, checkpoint). Triggered once a chat accumulates `EXTRACTION.everyNQuizAnswers` (default 3, config.ts) new answered quizzes — a v1 placeholder trigger isolated in one seam (`turn-service.ts`), swappable without touching the pipeline. Failure checkpoints nothing; the next trigger re-runs. The read channel: the home view derives node states from the ledgers (`GET /api/graph` is a pure read — forceAtlas2 run-then-freeze, no idle simulation), and at session start the derived graph is rendered into a compact markdown block appended to the teacher's instructions (`buildGraphContext`) — whole graph while small, hotspots + 1-hop neighborhood past 150 nodes.
 
@@ -168,7 +172,7 @@ data/                           chats/ · graph/ · jobs/ — runtime state, git
 All deterministic, no LLM (models are injected as `MockLanguageModelV4` where an agent loop is under test):
 
 1. **Pure core units** — plan-tree ops, question grading, phases, graph merger + trigger helper, graph-context selection, math delimiters.
-2. **Server flows** — `chat-handler` driven directly with a scripted mock model: persistence, job spawning, part rewriting, continuation.
+2. **Server flows** — `chat-handler` driven directly with a scripted mock model: persistence, job dispatch, steer delivery, the wake pipeline (409 retry, quiz deferral, idempotency).
 3. **Sub-agent loops** — researcher/demo-builder/visual-maker with mock models + fake headless API; the extraction pipeline end-to-end with mock models (extractor → auditor → in-memory ledgers).
 4. **Render tests** — transcript, cards, dock, composer, tree panel via React server-side rendering.
 
