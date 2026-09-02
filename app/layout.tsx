@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
+import { TreePanelModeProvider } from "@/components/tree-panel";
 
 export const metadata: Metadata = {
 	title: "Learning Harness",
@@ -13,7 +14,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 		<html lang="en" className="dark">
 			<body className="min-h-dvh antialiased">
 			<SidebarProvider>
-				<AppShell>{children}</AppShell>
+				<TreePanelModeProvider>
+					<AppShell>{children}</AppShell>
+				</TreePanelModeProvider>
 			</SidebarProvider>
 		</body>
 		</html>

@@ -2,7 +2,6 @@ import type { ComponentType } from "react";
 import type { ArtifactPartProps } from "@/src/core";
 import { DemoCard } from "@/components/artifacts/demo-card";
 import { JobCard } from "@/components/artifacts/job-card";
-import { PlanDivider } from "@/components/artifacts/plan-divider";
 import { VisualCard } from "@/components/artifacts/visual-card";
 
 /**
@@ -19,8 +18,9 @@ import { VisualCard } from "@/components/artifacts/visual-card";
  */
 export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>> = {
 	research: JobCard,
-	// Phase divider where the plan lands (W5 fills in the component):
-	plan_init: PlanDivider,
+	// plan_* parts render nothing inline by design: the phase seam is a
+	// message-level boundary, drawn by PhaseDivider in chat.tsx (the old
+	// part-level plan_init divider retired with it).
 	// Artifacts (W6 fills in the components):
 	demo: DemoCard,
 	visual: VisualCard,

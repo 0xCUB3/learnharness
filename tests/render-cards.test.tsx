@@ -18,7 +18,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { QuestionDock } from "../components/question-dock.tsx";
 import { AnsweredCard } from "../components/answered-card.tsx";
-import { PlanDivider } from "../components/artifacts/plan-divider.tsx";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 
 const quizInput = {
@@ -41,7 +40,6 @@ function quizQD(): QuestionData {
 		createdAt: new Date().toISOString(),
 	};
 }
-
 
 function renderDock(props: { toolName: "quiz" | "ask_user_question"; toolCallId: string; input: never; onSubmit?: () => void }) {
 	// expanded=true renders the full form (the collapsed bar is covered by the
@@ -220,44 +218,3 @@ describe("teach-check reveal (W5 phase separation)", () => {
 	});
 });
 
-describe("PlanDivider (the probe→teach seam)", () => {
-	const tree = {
-		nodes: [
-			{ id: "a", title: "A" },
-			{ id: "b", title: "B" },
-			{ id: "c", title: "C" },
-		],
-		edges: [{ from: "a", to: "b" }],
-		currentNodeId: null,
-		doneNodeIds: [],
-		version: 1,
-	};
-
-	it("renders the quiet divider with the node count once output-available", () => {
-		const html = renderToStaticMarkup(
-				<PlanDivider part={{ type: "tool-plan_init", state: "output-available", toolCallId: "p1", output: { ok: true, tree } }} />,
-		);
-		assert.ok(html.includes('data-testid="plan-divider"'));
-		assert.match(html, /Teaching/);
-		assert.match(html, /3 nodes/, "node count from the output tree");
-		assert.ok(!html.includes("banner"), "never a loud banner");
-	});
-
-	it("renders null while the tool streams and on a failed init", () => {
-		const streaming = renderToStaticMarkup(
-				<PlanDivider part={{ type: "tool-plan_init", state: "input-streaming", toolCallId: "p1" }} />,
-		);
-		assert.equal(streaming, "", "null while input-streaming");
-		const failed = renderToStaticMarkup(
-				<PlanDivider
-					part={{
-						type: "tool-plan_init",
-						state: "output-available",
-						toolCallId: "p1",
-						output: { ok: false, error: "Tree already initialized", tree },
-					}}
-				/>,
-		);
-		assert.equal(failed, "", "a refused re-init must not draw a second seam");
-	});
-});

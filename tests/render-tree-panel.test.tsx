@@ -270,3 +270,192 @@ describe("TreePanel rendering", () => {
 		assert.ok(!html.includes("Foundation"), "no node content in the strip");
 	});
 });
+
+// ─── the graph (expanded view) ────────────────────────────────────────────────
+
+import {
+	TreeGraph,
+	graphLayout,
+	wrapTitle,
+	NODE_H,
+	NODE_W,
+} from "../components/tree-panel.tsx";
+
+describe("wrapTitle (box labels)", () => {
+	it("wraps to lines within the char budget", () => {
+		assert.deepEqual(wrapTitle("Chain rule intuition for composites"), [
+			"Chain rule intuition",
+			"for composites",
+		]);
+	});
+
+	it("a title that fits stays one line", () => {
+		assert.deepEqual(wrapTitle("Foundation"), ["Foundation"]);
+	});
+
+	it("overflowing titles end in an ellipsis", () => {
+		const lines = wrapTitle("Substitution and the differential of implicit functions");
+		assert.equal(lines.length, 2);
+		assert.ok(lines.at(-1)?.endsWith("…"));
+	});
+
+	it("a single oversized word is hard-clamped", () => {
+		const lines = wrapTitle("antidifferentiation-techniques-overview");
+		assert.ok(lines.every((l) => l.length <= 22));
+		assert.ok(lines.at(-1)?.endsWith("…"));
+	});
+
+	it("empty titles render one empty line (never an empty array)", () => {
+		assert.deepEqual(wrapTitle(""), [""]);
+	});
+});
+
+describe("graphLayout (layered, top-down)", () => {
+	it("one node per depth row, authoring order within the row, rows centered", () => {
+		const { order, depth } = topoLayout(chainTree);
+		const layout = graphLayout(order, depth);
+		assert.equal(layout.height, NODE_H * 3 + 64 * 2, "three rows plus arrow gaps");
+		// b, a: depth 0; c: depth 1 → wait: a is authored second but is the root.
+		assert.equal(depth.get("a"), 0);
+		assert.equal(depth.get("b"), 1);
+		assert.equal(depth.get("c"), 2);
+		// each row of one node is centered on the (single-column) width.
+		assert.equal(layout.x.get("a"), 0);
+		assert.equal(layout.x.get("b"), 0);
+		assert.equal(layout.x.get("c"), 0);
+		assert.equal(layout.y.get("a"), 0);
+		assert.equal(layout.y.get("b"), NODE_H + 64);
+	});
+
+	it("two same-depth nodes sit side by side, centered over the widest row", () => {
+		const tree: PlanTree = {
+			nodes: [
+				{ id: "r", title: "Root" },
+				{ id: "x", title: "X" },
+				{ id: "y", title: "Y" },
+			],
+			edges: [
+				{ from: "r", to: "x" },
+				{ from: "r", to: "y" },
+			],
+			currentNodeId: null,
+			doneNodeIds: [],
+			version: 1,
+		};
+		const { order, depth } = topoLayout(tree);
+		const layout = graphLayout(order, depth);
+		const xX = layout.x.get("x")!;
+		const xY = layout.x.get("y")!;
+		assert.equal(xY - xX, NODE_W + 28, "one box + one gap apart");
+		// row 1 is the widest → row 0 centers over it: the root sits exactly
+		// between the two dependents' centers (88 and 292 → 190 - 88 = 102).
+		assert.equal(layout.x.get("r"), (2 * NODE_W + 28 - NODE_W) / 2, "the single root centers over the two-wide row");
+		assert.equal(layout.width, 2 * NODE_W + 28);
+	});
+});
+
+describe("TreeGraph rendering", () => {
+	it("renders one box per node with its status, one arrow per edge", () => {
+		const html = renderToStaticMarkup(<TreeGraph tree={chainTree} />);
+		for (const [id, status] of [
+			["a", "done"],
+			["b", "current"],
+			["c", "upcoming"],
+		] as const) {
+			assert.ok(
+				new RegExp(`data-testid="graph-node-${id}"[^>]*data-status="${status}"`).test(html),
+				`${id} is ${status}`,
+			);
+		}
+		assert.equal(html.match(/marker-end="url\(#lh-plan-arrow\)"/g)?.length, 2, "two edges, two arrows");
+	});
+
+	it("colors progress: done boxes carry the teach-phase tint", () => {
+		const html = renderToStaticMarkup(<TreeGraph tree={chainTree} />);
+		assert.match(html, /data-status="done"[\s\S]*?fill-phase-teach\/10/);
+		assert.match(html, /data-status="current"[\s\S]*?stroke-primary/);
+	});
+
+	it("marks the next unlocked node", () => {
+		const tree: PlanTree = {
+			nodes: [
+				{ id: "a", title: "Foundation" },
+				{ id: "b", title: "Middle" },
+			],
+			edges: [{ from: "a", to: "b" }],
+			currentNodeId: null,
+			doneNodeIds: ["a"],
+			version: 2,
+		};
+		const html = renderToStaticMarkup(<TreeGraph tree={tree} />);
+		assert.match(html, /data-testid="graph-node-b"[^>]*data-next="true"/);
+	});
+
+	it("node titles wrap inside the box (two lines max, ellipsis on overflow)", () => {
+		const tree: PlanTree = {
+			nodes: [{ id: "long", title: "Substitution and the differential of implicit functions" }],
+			edges: [],
+			currentNodeId: null,
+			doneNodeIds: [],
+			version: 1,
+		};
+		const html = renderToStaticMarkup(<TreeGraph tree={tree} />);
+		const texts = html.match(/<text[^>]*>([^<]*)<\/text>/g) ?? [];
+		assert.equal(texts.length, 2, "two wrapped lines");
+		assert.ok(texts.at(-1)?.includes("…"));
+	});
+
+	it("hover shows title and summary", () => {
+		const html = renderToStaticMarkup(<TreeGraph tree={chainTree} />);
+		assert.ok(html.includes("Foundation — Where it all starts."));
+	});
+});
+
+// ─── graph view math (pan lock at fit, zoom-to-cursor) ────────────────────────
+
+import {
+	fitGraphView,
+	zoomedGraphView,
+	type GraphView,
+} from "../components/tree-panel.tsx";
+
+describe("fitGraphView / zoomedGraphView", () => {
+	const box = { w: 1000, h: 800 };
+	const viewport = { w: 300, h: 400 };
+
+	it("fit centers the whole graph in the viewport at the given zoom", () => {
+		const v = fitGraphView(box, viewport, 0.3);
+		assert.equal(v.zoom, 0.3);
+		assert.equal(v.x, (300 - 1000 * 0.3) / 2);
+		assert.equal(v.y, (400 - 800 * 0.3) / 2);
+	});
+
+	it("zooming in moves the point under the cursor to stay put (zoom-to-cursor)", () => {
+		const v: GraphView = { zoom: 0.5, x: -100, y: -50 };
+		// world point at cursor (50, 60) pre-zoom: (50 - (-100))/0.5 = 300
+		const next = zoomedGraphView(v, 2, 0.1, { x: 50, y: 60 }, box, viewport);
+		assert.equal(next.zoom, 1);
+		// the same world point maps back to the cursor: (50 - next.x)/1 = 300
+		assert.equal(50 - next.x, 300);
+		assert.equal(60 - next.y, 220);
+	});
+
+	it("zooming out past the floor SNAPS to the centered fit (fully zoomed out = the fit)", () => {
+		const v: GraphView = { zoom: 1.8, x: -900, y: -400 };
+		const next = zoomedGraphView(v, 1 / 8, 0.3, { x: 100, y: 100 }, box, viewport);
+		assert.equal(next.zoom, 0.3, "clamped at the floor");
+		assert.deepEqual(next, fitGraphView(box, viewport, 0.3), "and re-centered: nothing to pan");
+	});
+
+	it("a no-op zoom returns the same view (no drift)", () => {
+		const v: GraphView = { zoom: 2, x: 10, y: 10 };
+		// factor 1 → same zoom; at MAX already → clamped to same → same view
+		assert.equal(zoomedGraphView(v, 1, 0.3, { x: 0, y: 0 }, box, viewport), v);
+	});
+
+	it("zoom-in clamps at the ceiling (2×)", () => {
+		const v: GraphView = { zoom: 1.9, x: 0, y: 0 };
+		const next = zoomedGraphView(v, 3, 0.3, { x: 10, y: 10 }, box, viewport);
+		assert.equal(next.zoom, 2);
+	});
+});

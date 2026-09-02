@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { useStickToBottomContext } from "use-stick-to-bottom";
@@ -24,7 +24,8 @@ import { SidebarToggle } from "@/components/sidebar";
 import { SubAgentsPanel } from "@/components/sub-agents-panel";
 import { TreePanel } from "@/components/tree-panel";
 import type { ArtifactPartProps, JobRecord, QuestionAnswerData, TeacherUIMessage } from "@/src/core";
-import { findPendingToolCall, phaseAt } from "@/src/core";
+import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
+import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4";
@@ -127,13 +128,18 @@ export function Chat({
 	const localStream = status === "submitted" || status === "streaming";
 	const busy = localStream || turnInFlight;
 
-	// Teach-phase check (W5, vision §2 "two phases"): a pending question that
-	// lands after plan_init starts collapsed behind a "Check your
-	// understanding" reveal button; probe-phase questions auto-open as today.
-	// A pending question can never precede plan_init in the transcript (the
-	// teacher's turn ends at the question call), so the session's current
-	// phase IS the question's phase. Pre-plan sessions: all probe — unchanged.
-	const requiresReveal = pending !== null && phaseAt(messages) === "teach";
+	// Teach-phase check (W5, vision §2): a pending question that lands once a
+	// plan node is OCCUPIED (phaseAt3 "teach") starts collapsed behind a
+	// "Check your understanding" reveal button; probe- and plan-phase
+	// questions auto-open as today. A pending question can never precede its
+	// phase's seam in the transcript (the teacher's turn ends at the question
+	// call), so the session's current phase IS the question's phase.
+	const requiresReveal = pending !== null && phaseAt3(messages) === "teach";
+
+	// The phase at every message (one linear fold): the transcript draws a
+	// color-coded dotted divider at each boundary; the header chip reads the
+	// session's current phase.
+	const phases = useMemo(() => phaseTimeline(messages), [messages]);
 
 	// A tool call still streaming its input: the teacher is writing a question.
 	// Shown as a transcript shimmer, exactly like the thinking indicator.
@@ -267,16 +273,23 @@ export function Chat({
 	return (
 		<ChatActionsContext.Provider value={{ chatId, syncFromServer, sendText: (t: string) => void sendMessage({ text: t }) }}>
 		<JobsContext.Provider value={jobs}>
-		<div className="flex h-dvh flex-col">
-			<header className="flex items-center gap-3 px-3 py-2">
-				<SidebarToggle />
-				<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
-			</header>
+		{/* The session surface: the transcript column (header + scroller) and
+		    the plan-tree panel as full-height SIBLINGS — the panel spans top to
+		    bottom exactly like the left sidebar, and the header (name + phase
+		    chip) spans from the left sidebar's edge to the panel's edge. The
+		    dock stays sticky inside the scroller, untouched. */}
+		<div className="flex h-dvh">
+			<div className="flex min-w-0 flex-1 flex-col">
+				{/* h-10, not py-2: the toggle (a size-9 icon button) renders only
+				    while the sidebar is CLOSED — an auto-height row would collapse
+				    when it disappears and slide the title + chip up. */}
+				<header className="flex h-10 items-center gap-3 px-3">
+					<SidebarToggle />
+					<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
+					<PhaseChip phase={phases.at(-1) ?? "probe"} />
+				</header>
 
-			{/* The session row: transcript scroller + the persistent plan-tree panel
-			    (W7, vision §2). The panel is a flex SIBLING of the scroller — the dock
-			    stays sticky inside the scroller, untouched. */}
-			<div className="relative flex min-h-0 flex-1">
+				<div className="relative flex min-h-0 flex-1">
 				<Conversation className="h-full min-w-0 flex-1" initial="instant">
 					<ConversationContent className="min-h-full gap-0 p-0">
 						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
@@ -296,7 +309,11 @@ export function Chat({
 									// can still hold empty ids — the index keeps keys unique for them.
 									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} />
 								) : (
-								<Message key={m.id || `m-${mi}`} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
+									<Fragment key={m.id || `m-${mi}`}>
+									{mi > 0 && phases[mi] !== phases[mi - 1] && (
+										<PhaseDivider phase={phases[mi]!} nodeCount={planNodeCount(m)} />
+									)}
+									<Message from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
 									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
 										{m.role === "user" ? (
 											// User text renders plain: the model's LaTeX pipeline is not
@@ -342,7 +359,8 @@ export function Chat({
 											})
 										)}
 									</MessageContent>
-								</Message>
+									</Message>
+								</Fragment>
 							))}
 
 							{(status === "submitted" || turnInFlight) && <Shimmer className="text-sm">Thinking…</Shimmer>}
@@ -381,10 +399,12 @@ export function Chat({
 					</ConversationContent>
 					<ConversationScrollButton />
 				</Conversation>
-				{/* Right sidebar: live sub-agent fleet (when running) above the plan tree. */}
+				{/* Right sidebar: the live sub-agent fleet (when running) above
+				    the plan tree — the fleet panel renders nothing while idle. */}
 				<div className="hidden shrink-0 flex-col xl:flex">
 					<SubAgentsPanel jobs={jobs} />
 					<TreePanel messages={messages} />
+				</div>
 				</div>
 			</div>
 		</div>
