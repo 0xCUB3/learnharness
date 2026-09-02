@@ -2,6 +2,7 @@
 
 import { BotIcon, PenToolIcon, PlayIcon, SearchIcon } from "lucide-react";
 import type { JobKind, JobRecord } from "@/src/core";
+import { useTreePanelMode } from "@/components/tree-panel";
 
 /**
  * The sub-agents sidebar section (vision §2.5 live observability): what the
@@ -20,9 +21,40 @@ const KIND_META: Record<JobKind, { label: string; Icon: typeof SearchIcon }> = {
 	visual: { label: "Figure maker", Icon: PenToolIcon },
 };
 
+/** The collapsed fleet: a quiet strip on the sidebar rail — bot icon +
+ * running count, exactly like the plan's node-count rail below it. Click
+ * expands the sidebar back to the full fleet list. */
+function SubAgentsRail({ count, onExpand }: { count: number; onExpand: () => void }) {
+	return (
+		<div
+			data-testid="sub-agents-rail"
+			className="flex w-10 shrink-0 flex-col items-center gap-3 border-b border-l border-border/60 bg-card/30 py-3"
+		>
+			<button
+				type="button"
+				onClick={onExpand}
+				title="Show sub-agents"
+				aria-label="Show sub-agents"
+				className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+			>
+				<BotIcon className="size-4" />
+			</button>
+			<span
+				className="text-[10px] tracking-widest text-muted-foreground/70 [writing-mode:vertical-rl]"
+				title={`${count} sub-agent${count === 1 ? "" : "s"} running`}
+			>
+				{count} running
+			</span>
+		</div>
+	);
+}
+
 export function SubAgentsPanel({ jobs }: { jobs: JobRecord[] }) {
+	const { mode, go } = useTreePanelMode();
 	const running = jobs.filter((j) => j.status === "running");
 	if (running.length === 0) return null;
+	if (mode === "rail")
+		return <SubAgentsRail count={running.length} onExpand={() => go("list")} />;
 	return (
 		<aside
 			data-testid="sub-agents-panel"

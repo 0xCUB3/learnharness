@@ -179,6 +179,12 @@ const TreePanelModeContext = createContext<{ mode: PanelMode; go: (next: PanelMo
 	go: () => {},
 });
 
+/** The right sidebar's shared mode — every section of the sidebar (plan,
+ * sub-agents) collapses and expands in lockstep through this hook. */
+export function useTreePanelMode() {
+	return useContext(TreePanelModeContext);
+}
+
 /** Root-layout persistence of the panel mode (rail | list | graph). */
 export function TreePanelModeProvider({ children }: { children: React.ReactNode }) {
 	// SSR default: "list" — server and client first-render agree (no
@@ -220,7 +226,7 @@ export function TreePanel({
 	messages: readonly TreePanelMessage[];
 }) {
 	const tree = useMemo(() => latestTree(messages), [messages]);
-	const { mode, go } = useContext(TreePanelModeContext);
+	const { mode, go } = useTreePanelMode();
 
 	// Empty state: no tree yet → the panel does not render at all. It appears
 	// the moment plan_init's output lands and updates live from there.
