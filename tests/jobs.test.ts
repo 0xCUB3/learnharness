@@ -38,7 +38,7 @@ import {
 	type SubagentSteerMessage,
 	type VisualResult,
 } from "../src/core/contracts.ts";
-import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
+import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
@@ -685,5 +685,22 @@ describe("persistTurn id hygiene", () => {
 		const ids = record!.messages.map((m) => m.id);
 		assert.ok(ids.every((id) => id && id.length > 0), "no empty ids survive persist");
 		assert.equal(new Set(ids).size, ids.length, "ids unique — React keys safe");
+	});
+});
+
+// ─── prompt composition hygiene (the README leak) ─────────────────────────────
+
+describe("prompt composition", () => {
+	it("loads ONLY numeric-prefix fragments — README.md never enters the system prompt", () => {
+		const instructions = composeInstructions();
+		assert.ok(!instructions.includes("Prompt fragments"), "README content must not leak");
+		assert.ok(!instructions.includes("Rules for adding a fragment"), "README content must not leak (rules)");
+		// every numeric fragment DOES compose, verbatim, after the base prompt
+		const base = fs.readFileSync("src/agent/system-prompt.md", "utf-8").trim();
+		assert.ok(instructions.startsWith(base), "base prompt first");
+		for (const f of fs.readdirSync("src/agent/prompts").filter((f) => /^\d+-[\w.-]+\.md$/.test(f)).sort()) {
+			const body = fs.readFileSync(`src/agent/prompts/${f}`, "utf-8").trim();
+		assert.ok(instructions.includes(body), `fragment ${f} must compose verbatim`);
+		}
 	});
 });

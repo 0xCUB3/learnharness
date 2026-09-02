@@ -20,16 +20,24 @@ import { questionTools } from "./tools.ts";
  * src/agent/prompts/*.md fragment in sorted filename order (workers add
  * fragments — nobody edits shared sections of the base prompt). Prefix
  * fragments with a numeric order key: 10-plan-tree.md, 20-jobs.md, …
+ *
+ * ONLY numeric-prefix files load — the loader enforces the convention, so
+ * non-fragment documentation (README.md, …) can live in the directory
+ * without ever leaking into the model's prompt.
  */
 
 const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
 
-function composeInstructions(): string {
+/** A prompt fragment: numeric order key + .md (e.g. 20-jobs.md). Nothing else loads. */
+const FRAGMENT_RE = /^\d+-[\w.-]+\.md$/;
+
+/** Exported for tests: assert what composes into the model's prompt. */
+export function composeInstructions(): string {
 	const base = fs.readFileSync(PATHS.teacherPrompt, "utf-8");
 	if (!fs.existsSync(PROMPTS_DIR)) return base;
 	const fragments = fs
 		.readdirSync(PROMPTS_DIR)
-		.filter((f) => f.endsWith(".md"))
+		.filter((f) => FRAGMENT_RE.test(f))
 		.sort()
 		.map((f) => fs.readFileSync(path.join(PROMPTS_DIR, f), "utf-8").trim())
 		.filter(Boolean);

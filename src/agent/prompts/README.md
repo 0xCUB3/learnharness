@@ -3,7 +3,7 @@
 The teacher's system prompt is composed at agent creation:
 
 1. `src/agent/system-prompt.md` — the base (owned by the orchestrator; do not edit from a worker).
-2. Every `*.md` file in this directory, in **sorted filename order**, joined with `---` separators.
+2. Every numeric-prefix `*.md` fragment in this directory, in **sorted filename order**, joined with `---` separators. The loader enforces the numeric prefix (`\d*-*.md`) — other files (like this README) never enter the model's prompt.
 
 Rules for adding a fragment:
 
