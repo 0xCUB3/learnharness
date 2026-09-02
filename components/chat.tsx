@@ -292,10 +292,11 @@ export function Chat({
 									// Sub-agent delivery (wake-pipeline steer): NO message bubble — the
 									// artifact card sits in the transcript column directly, full width
 									// and centered like the teacher's artifacts (contracts.ts "THE ASYNC
-									// PROTOCOL" §4).
-									<SubagentSteerCard key={m.id} message={m} />
+									// PROTOCOL" §4). Key fallback: legacy transcripts (pre id-hygiene)
+									// can still hold empty ids — the index keeps keys unique for them.
+									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} />
 								) : (
-								<Message key={m.id} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
+								<Message key={m.id || `m-${mi}`} from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
 									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
 										{m.role === "user" ? (
 											// User text renders plain: the model's LaTeX pipeline is not
