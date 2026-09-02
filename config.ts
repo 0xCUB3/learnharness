@@ -38,7 +38,7 @@ export const MODELS = {
 	researcher: { model: "z-ai/glm-5.3-flash", effort: "low" },
 	demoBuilder: { model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** Must be vision-capable: it looks at rendered SVGs. */
-	visualMaker: { model: "anthropic/claude-sonnet-4.5", effort: "low" },
+	visualMaker: { model: "qwen/qwen3.8-max", effort: "low" },
 	/** Extraction is judgment over given evidence — light thinking suffices. */
 	extractor: { model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** The auditor verifies evidence exists; keep it cheap. */
