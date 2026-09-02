@@ -55,9 +55,12 @@ export function VisualOutputCard({ output }: { output: unknown }) {
 	return (
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="visual-card">
 			<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Figure</div>
-			{/* max-w-full + h-auto keeps any oversized model-authored svg inside the column */}
+			{/* Scale to the display area: the svg always fills the card's width
+			   (w-full), h-auto keeps the aspect ratio — no white strips beside
+			   narrower figures, oversized ones shrink to fit. bg-white stays as a
+			   neutral backing for svgs without their own background. */}
 			<div
-				className="mt-2 max-w-full overflow-hidden rounded-lg bg-white [&_svg]:h-auto [&_svg]:max-w-full"
+				className="mt-2 overflow-hidden rounded-lg bg-white [&_svg]:h-auto [&_svg]:w-full"
 				dangerouslySetInnerHTML={{ __html: sanitizeSvg(result.svg) }}
 				data-testid="visual-svg"
 			/>

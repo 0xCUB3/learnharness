@@ -338,6 +338,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
 		assert.ok(html.includes("circle"), "svg content rendered inline");
 		assert.match(html, /Figure/);
+		assert.match(html, /svg\]:w-full/, "svg scales to the display area's full width");
 		assert.ok(!html.includes("Looking at the render"), "model-facing notes never render");
 	});
 
