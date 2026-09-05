@@ -541,12 +541,37 @@ const GRAPH_ZOOM_BTN =
  *  nothing — fully zoomed out IS the fit), never above 2×. */
 const ZOOM_MAX = 2;
 const ZOOM_FLOOR = 0.15;
+/** The fit view's breathing room. The fit is the default view — slim
+ *  margins fit more graph. */
+const FIT_PAD = 16;
+/** The fit may scale a SMALL graph up to fill the panel (wave-2 fix: the
+ *  old ≤1× cap left small diagrams tiny with big empty margins), but
+ *  never past this — a lone node shouldn't become a billboard. */
+const FIT_ZOOM_MAX = 1.5;
 
 /** The graph's view transform: zoom + translation (viewport px). */
 export interface GraphView {
 	zoom: number;
 	x: number;
 	y: number;
+}
+
+/** The zoom that fits a bw×bh graph into a w×h viewport: scales DOWN
+ *  large graphs (floor-clamped) and UP small ones (FIT_ZOOM_MAX-capped)
+ *  so the panel is used, not padded with empty margins. */
+export function fitZoomFor(
+	box: { w: number; h: number },
+	viewport: { w: number; h: number },
+): number {
+	if (!viewport.w || !viewport.h || box.w === 0) return 1;
+	return Math.max(
+		ZOOM_FLOOR,
+		Math.min(
+			(viewport.w - FIT_PAD) / box.w,
+			(viewport.h - FIT_PAD) / box.h,
+			FIT_ZOOM_MAX,
+		),
+	);
 }
 
 /** The fit-centered view: the whole bw×bh graph centered in the w×h
@@ -607,20 +632,13 @@ export function TreeGraph({ tree }: { tree: PlanTree }) {
 		return () => ro.disconnect();
 	}, []);
 
-	// The zoom floor: fully zoomed out, the whole diagram fits the panel.
-	// Pad 16: the fit view IS the default — slim margins fit more graph.
-	const fitZoom = useMemo(() => {
-		const pad = 16;
-		if (!size.w || !size.h || layout.width === 0) return 1;
-		return Math.max(
-			ZOOM_FLOOR,
-			Math.min((size.w - pad) / layout.width, (size.h - pad) / layout.height, 1),
-		);
-	}, [size, layout]);
+	// The zoom floor: fully zoomed out, the whole diagram fills the panel
+	// (small graphs scale UP to use the space, capped at FIT_ZOOM_MAX).
+	const box = useMemo(() => ({ w: layout.width, h: layout.height }), [layout]);
+	const fitZoom = useMemo(() => fitZoomFor(box, size), [box, size]);
 
 	const [view, setView] = useState<GraphView>({ x: 0, y: 0, zoom: 1 });
 	const userAdjustedRef = useRef(false);
-	const box = useMemo(() => ({ w: layout.width, h: layout.height }), [layout]);
 	// Epsilon: zoom is float; "at the floor" needs a tolerance.
 	const atFloor = view.zoom <= fitZoom + 1e-9;
 

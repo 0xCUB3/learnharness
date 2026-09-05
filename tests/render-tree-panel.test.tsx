@@ -459,3 +459,40 @@ describe("fitGraphView / zoomedGraphView", () => {
 		assert.equal(next.zoom, 2);
 	});
 });
+
+// ─── fit sizing (wave-2: small graphs must USE the panel, not float tiny) ─────
+
+import { fitZoomFor } from "../components/tree-panel.tsx";
+
+describe("fitZoomFor", () => {
+	it("a graph smaller than the panel scales UP to use it — no tiny diagram with empty margins", () => {
+		// 5-node chain: 176 wide × 448 tall in a 384×600 panel: height-bound.
+		// Old bug: the ≤1× cap rendered such graphs at natural size, centered,
+		// tiny, with big empty areas above and below.
+		const z = fitZoomFor({ w: 176, h: 448 }, { w: 384, h: 600 });
+		assert.equal(z, (600 - 16) / 448, "height-bound: fills the tall panel");
+		assert.ok(z > 1, "scales UP past 1×");
+	});
+
+	it("the scale-up is capped: a lone node doesn't become a billboard", () => {
+		const z = fitZoomFor({ w: 176, h: 48 }, { w: 384, h: 600 });
+		assert.equal(z, 1.5, "capped at FIT_ZOOM_MAX");
+	});
+
+	it("a wide graph is width-bound; a tall graph is height-bound", () => {
+		assert.equal(fitZoomFor({ w: 1000, h: 100 }, { w: 384, h: 600 }), (384 - 16) / 1000);
+		assert.equal(fitZoomFor({ w: 100, h: 1000 }, { w: 384, h: 600 }), (600 - 16) / 1000);
+	});
+
+	it("a graph larger than the panel scales DOWN, floor-clamped", () => {
+		assert.equal(fitZoomFor({ w: 1500, h: 1500 }, { w: 384, h: 600 }), (384 - 16) / 1500);
+		// absurdly large → clamped at the floor, never disappears
+		assert.equal(fitZoomFor({ w: 5000, h: 5000 }, { w: 384, h: 600 }), 0.15);
+		assert.equal(fitZoomFor({ w: 1e6, h: 1e6 }, { w: 384, h: 600 }), 0.15);
+	});
+
+	it("an unmeasured viewport (SSR / first paint) stays at 1×", () => {
+		assert.equal(fitZoomFor({ w: 1000, h: 800 }, { w: 0, h: 0 }), 1);
+		assert.equal(fitZoomFor({ w: 0, h: 800 }, { w: 384, h: 600 }), 1);
+	});
+});
