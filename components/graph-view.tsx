@@ -38,15 +38,22 @@
  * no per-node size gating, so labels never pop in one by one. (The Obsidian
  * text-fade feel, applied to the whole graph.)
  *
+ * The legend/filters panel (top-right overlay) doubles as the state legend:
+ * a search box plus one row per node state (colored dot, label, count).
+ * Clicking a row toggles that state's visibility; search matches the
+ * name or statement text. Filtering flows through sigma's official
+ * nodeReducer/edgeReducer settings (`hidden`), so rendering, hover,
+ * picking, and labels all respect it; edges drop when either endpoint is
+ * hidden, and an open detail card closes if its node is filtered out.
  * Clicking a node opens the detail card anchored just below the node's
  * viewport position (flipping above near the bottom edge); any camera move
  * (pan/zoom) dismisses it. The `requires` edges render as arrows pointing
  * prerequisite → dependent.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { WaypointsIcon } from "lucide-react";
+import { SearchIcon, WaypointsIcon } from "lucide-react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
@@ -68,6 +75,26 @@ const STATE_LABELS: Record<NodeStateClass, string> = {
 	"dont-know": "don't know",
 	candidate: "candidate",
 };
+
+/** Legend row order (the "progress" reading of the states). */
+const STATES_ORDER: NodeStateClass[] = ["taught", "known", "missed", "dont-know", "candidate"];
+
+/**
+ * Pure filter predicate for the legend/filters panel: a node is visible
+ * when its state is toggled on AND (no query OR name/statement matches).
+ * Exported for tests; the sigma reducers just consume its verdict.
+ */
+export function isNodeVisible(
+	node: Pick<GraphNode, "name" | "statement">,
+	state: NodeStateClass,
+	hiddenStates: ReadonlySet<NodeStateClass>,
+	query: string,
+): boolean {
+	if (hiddenStates.has(state)) return false;
+	const q = query.trim().toLowerCase();
+	if (!q) return true;
+	return node.name.toLowerCase().includes(q) || node.statement.toLowerCase().includes(q);
+}
 
 // ---- Label drawing (canvas) ---------------------------------------------
 //
@@ -324,6 +351,50 @@ export function GraphView() {
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
+	// Legend/filters panel state: toggled-off states + search text.
+	const [hiddenStates, setHiddenStates] = useState<ReadonlySet<NodeStateClass>>(new Set());
+	const [query, setQuery] = useState("");
+	// The sigma instance and its graphology graph live inside the mount
+	// effect; refs expose them to the filters effect, and `rendererEpoch`
+	// re-triggers it when a new renderer is constructed.
+	const rendererRef = useRef<import("sigma").default | null>(null);
+	const graphRef = useRef<Graph | null>(null);
+	const [rendererEpoch, setRendererEpoch] = useState(0);
+
+	const toggleState = (state: NodeStateClass) => {
+		setHiddenStates((prev) => {
+			const next = new Set(prev);
+			if (next.has(state)) next.delete(state);
+			else next.add(state);
+			return next;
+		});
+	};
+
+	// Per-state node counts (of ALL nodes, not filtered ones).
+	const stateCounts = useMemo(() => {
+		const counts: Record<NodeStateClass, number> = {
+			taught: 0,
+			known: 0,
+			missed: 0,
+			"dont-know": 0,
+			candidate: 0,
+		};
+		if (snapshot)
+			for (const state of Object.values(snapshot.nodeStates)) counts[state]++;
+		return counts;
+	}, [snapshot]);
+
+	// The id set that survives the current filters — consumed by the sigma
+	// reducers and the "no matches" hint.
+	const visibleIds = useMemo(() => {
+		const set = new Set<string>();
+		if (snapshot)
+			for (const node of snapshot.nodes) {
+				if (isNodeVisible(node, snapshot.nodeStates[node.id] ?? "candidate", hiddenStates, query))
+					set.add(node.id);
+			}
+		return set;
+	}, [snapshot, hiddenStates, query]);
 
 	// Fetch the derived graph (the route folds stale chats first).
 	useEffect(() => {
@@ -426,6 +497,9 @@ export function GraphView() {
 					defaultDrawNodeLabel: drawLabel,
 					defaultDrawNodeHover: drawHover,
 				});
+				graphRef.current = graph;
+				rendererRef.current = renderer;
+				setRendererEpoch((e) => e + 1);
 				renderer.on("clickNode", ({ node }) => {
 					const graphNode = snapshot.nodes.find((n) => n.id === node);
 					if (!graphNode) return;
@@ -496,9 +570,31 @@ export function GraphView() {
 		return () => {
 			killed = true;
 			if (hoverAnimId !== null) cancelAnimationFrame(hoverAnimId);
+			rendererRef.current = null;
+			graphRef.current = null;
 			renderer?.kill();
 		};
 	}, [snapshot]);
+
+	// Filtering through sigma's official reducers: hidden nodes drop out of
+	// rendering, picking, hover, AND labels; edges drop when either endpoint
+	// is hidden. Re-runs whenever filters change or a renderer is (re)built
+	// (epoch), so the reducers always close over current values.
+	useEffect(() => {
+		const renderer = rendererRef.current;
+		const graph = graphRef.current;
+		if (!renderer || !graph) return;
+		renderer.setSetting("nodeReducer", (key, attrs) =>
+			visibleIds.has(key) ? attrs : { ...attrs, hidden: true },
+		);
+		renderer.setSetting("edgeReducer", (key, attrs) => {
+			const source = graph.source(key);
+			const target = graph.target(key);
+			return visibleIds.has(source) && visibleIds.has(target) ? attrs : { ...attrs, hidden: true };
+		});
+		// The open detail card cannot outlive its node's visibility.
+		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
+	}, [rendererEpoch, visibleIds]);
 
 	// Position the detail card: below the clicked node, flipped above near
 	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
@@ -542,6 +638,52 @@ export function GraphView() {
 				</div>
 			) : (
 				<div ref={containerRef} className="h-full w-full" />
+			)}
+
+			{/* Legend + filters: search box and per-state toggle rows. */}
+			{!isEmpty && (
+				<div className="absolute right-3 top-3 z-10 w-64 rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
+					<div className="relative">
+						<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+						<input
+							value={query}
+							onChange={(e) => setQuery(e.target.value)}
+							placeholder="Search nodes…"
+							spellCheck={false}
+							className="h-8 w-full rounded-lg border bg-background pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+						/>
+					</div>
+					<div className="mt-2 flex flex-col">
+						{STATES_ORDER.map((state) => {
+							const active = !hiddenStates.has(state);
+							return (
+								<button
+									key={state}
+									type="button"
+									onClick={() => toggleState(state)}
+										aria-pressed={!active}
+										className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-accent"
+									>
+									<span
+											className="size-2.5 shrink-0 rounded-full"
+											style={{ background: `var(${STATE_TOKENS[state].cssVar})`, opacity: active ? 1 : 0.25 }}
+										/>
+									<span className={active ? "text-foreground" : "text-muted-foreground line-through"}>
+											{STATE_LABELS[state]}
+									</span>
+									<span className="ml-auto tabular-nums text-[10px] text-muted-foreground">
+											{stateCounts[state]}
+									</span>
+								</button>
+							);
+						})}
+					</div>
+					{snapshot !== null && visibleIds.size === 0 && (query.trim() !== "" || hiddenStates.size > 0) && (
+						<div className="mt-1.5 border-t px-1.5 pt-1.5 text-[11px] text-muted-foreground">
+							No matching nodes.
+						</div>
+					)}
+				</div>
 			)}
 
 			{selected && !isEmpty && (
