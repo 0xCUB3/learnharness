@@ -5,9 +5,10 @@ import { isToolUIPart, type UIMessage } from "ai";
  * blocks the composer — one question at a time, mirroring the teacher's
  * prompt contract. Derived client state; the server enforces nothing.
  *
- * Job tool parts (research/demo/visual) are NOT returned here — they gate
- * sending separately with a "waiting for <job>" affordance (see contracts.ts
- * "THE ASYNC PROTOCOL" §5; use findPendingJobCall).
+ * Job tool parts (research/demo/visual) never pend client-side — the async
+ * protocol resolves them server-side with an immediate ack (see
+ * contracts/jobs.ts "THE ASYNC PROTOCOL"), so job tools are NOT returned
+ * here. This file carries only the question gate and the shared scan helper.
  */
 export interface PendingToolCall {
 	toolCallId: string;
@@ -42,7 +43,4 @@ export function findPendingToolCall(messages: UIMessage[]): PendingToolCall | nu
 	return findPending(messages, QUESTION_TOOLS);
 }
 
-/** The running background job, if any (input-available research/demo/visual part). */
-export function findPendingJobCall(messages: UIMessage[]): PendingToolCall | null {
-	return findPending(messages, JOB_TOOLS);
-}
+

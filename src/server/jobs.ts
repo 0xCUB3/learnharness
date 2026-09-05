@@ -87,8 +87,20 @@ export function setJobRespawn(respawn: JobRespawn): void {
 
 const POLL_MS = 400;
 /** After the gates open, wait a beat before firing — a client that just
- *  answered a question is about to send its continuation; don't 409 it. */
-const GRACE_MS = 1500;
+ *  answered a question is about to send its continuation; don't 409 it.
+ *
+ *  Evidence for 750: the race window is exactly the learner's answer→POST
+ *  flight — sendAutomaticallyWhen dispatches synchronously on addToolOutput,
+ *  the answer hits the record only at the write-ahead persist, and beginTurn
+ *  flips the turn registry immediately after, all before the grace can fire
+ *  (measured localhost RTT ~10ms; typical LAN/production RTT <300ms). 750ms
+ *  is 2.5× the worst realistic flight. A miss self-heals: the pump rechecks
+ *  the gates after the grace AND the wake pipeline retries 409s with a
+ *  backoff ramp — and since the transport's merge-retry (chat-transport.ts)
+ *  made client 409s non-fatal, even a pathological RTT degrades gracefully.
+ *  (Was 1500 — pure guess; 750 claws back 750ms of post-answer delivery
+ *  latency without weakening the guard.) */
+const GRACE_MS = 750;
 /** 409 backoff: capped ramp so a busy client can't spin the pump. */
 const RETRY_BACKOFF_MS = [500, 1000, 2000, 5000] as const;
 
