@@ -2,7 +2,8 @@
 
 import { createContext, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
+import { isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
+import { createChatTransport } from "@/components/chat-transport";
 import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
 	Conversation,
@@ -81,7 +82,7 @@ export function Chat({
 		useChat<TeacherUIMessage>({
 			id: chatId,
 			messages: initialMessages,
-			transport: new DefaultChatTransport({ api: "/api/chat", body: { chatId } }),
+			transport: createChatTransport(chatId),
 			// After the learner answers (addToolOutput), automatically send the
 			// continuation request so the teacher reacts to the answer.
 			sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
