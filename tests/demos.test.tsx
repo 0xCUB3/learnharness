@@ -342,7 +342,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 		assert.ok(!html.includes("Looking at the render"), "model-facing notes never render");
 	});
 
-	it("renders a quiet Research-complete badge — the full brief stays out of the transcript (but persisted)", () => {
+	it("renders a quiet Research-complete one-liner whose collapsed <details> carries the full brief", () => {
 		const steer = buildSubagentSteer(
 			{ id: "jr", kind: "research", toolCallId: "cr" },
 			{
@@ -357,8 +357,14 @@ describe("steer card rendering (the delivered artifact)", () => {
 		assert.match(html, /Research/);
 		assert.match(html, /complete/);
 		assert.match(html, /2 sources/);
-		assert.ok(!html.includes("founded the Academy"), "the long brief never renders inline");
-		assert.ok(!html.includes("britannica"), "source links stay out too — the wake turn cites them");
+		assert.match(html, /view brief/, "the expansion affordance is offered");
+		// the one-liner is a native <details> — collapsed by default, so the
+		// brief + sources ride in the DOM but never clutter the transcript
+		// until the learner opens them (the wave-1 "view full research" ask)
+		assert.match(html, /<details[^>]*data-testid="research-complete-badge"/, "a real disclosure");
+		assert.ok(!/<details[^>]*open/.test(html), "collapsed by default — no `open` attribute");
+		assert.ok(html.includes("founded the Academy"), "the persisted brief rides inside the details");
+		assert.ok(html.includes("britannica.com/plato"), "source links ride inside the details");
 	});
 
 	it("renders the visual failure note with no svg when the build FAILED", () => {
