@@ -16,10 +16,11 @@ This repo is developed in parallel using git worktrees. You are one stream; the 
 
 - **Read `SCOPE.md` at the repo root first** — it holds your mission, your dev-server port, your owned files, and your done-protocol. It is untracked (never commit it).
 - **Stay in your lane.** Only touch files SCOPE.md lists as yours. If work outside your lane is needed, write it up in your final summary instead of doing it.
+- **Contracts are split by domain** (`src/core/contracts/{plan,graph,chat,jobs}.ts`): each stream owns its domain's contract file outright. Schema changes in a domain you don't own go through the master session — never change another domain's contract in your branch.
 - **Gates before every commit:** `npm run typecheck` and `npm test` and `npm run lint` all pass; `npm run build` before declaring done.
 - **Dev server:** always `PORT=<your SCOPE.md port> npm run dev` — port 3000 belongs to the master tree and Next refuses to start a second server on it.
 - `.env.local` is a symlink to the master tree's copy (secrets only — never edit it). Models + reasoning budgets live in `config.ts` MODELS.
-- Your `data/` is disposable scratch (chat records + graph ledgers). The master tree holds the real data. Never copy data between trees.
+- Your `data/` is disposable scratch (chat records + graph ledgers). The master tree holds the real data. Never copy data back into the master tree; a one-way throwaway copy of master's `data/graph` + `data/chats` into your worktree for testing is fine.
 - **Don't merge yourself.** When your wave is done: stop, summarize (what changed, what you deliberately didn't touch, open questions), and wait for the master to merge and rebase you.
 
 <!-- END:lh-workflow -->
