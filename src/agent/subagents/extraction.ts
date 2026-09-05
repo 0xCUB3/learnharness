@@ -25,6 +25,11 @@ import { mergeFindings, type EmissionStats, type GraphDeps } from "../../core/gr
  * trigger while one run is in flight is a no-op (the next trigger picks up
  * whatever the in-flight run missed). On failure nothing is checkpointed —
  * the next trigger re-runs the whole thing.
+ *
+ * Observability (§5 baseline): every stage logs one line per step, its
+ * start, and its duration; the pipeline logs a failure line before
+ * rethrowing, so the server log reads start → stage timings → merged
+ * stats (or failed) for every run.
  */
 
 // ─── the transcript view (what the LLM sees) ────────────────────────────────
@@ -285,10 +290,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
 		const view = transcriptView(record);
 		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} transcript lines)`);
+		const t0 = performance.now();
 
 		const extraction = await extractorAgent.generate({ prompt: `Transcript:\n\n${view}` });
 		for (const part of extraction.content) {
 			if (part.type === "tool-result" && part.toolName === "submit_findings") {
+				console.info(`[extraction ${chatId}] extractor done in ${Math.round(performance.now() - t0)}ms`);
 				return part.output as SessionFindings;
 			}
 		}
@@ -303,6 +310,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			`[extraction ${chatId}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
 				`${Object.keys(findings.attribution.quiz).length} attributions)`,
 		);
+		const t0 = performance.now();
 
 		const review = await auditorAgent.generate({
 			prompt: `Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}`,
@@ -325,12 +333,14 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			`[extraction ${chatId}] audit kept ${verified.propositions.length}/${findings.propositions.length} propositions, ` +
 				`${verified.edges.length}/${findings.edges.length} edges`,
 		);
+		console.info(`[extraction ${chatId}] auditor done in ${Math.round(performance.now() - t0)}ms`);
 		return verified;
 	}
 
 	async function runExtraction(chatId: string): Promise<EmissionStats> {
 		if (inFlight.has(chatId)) return { nodes: 0, edges: 0, events: 0 };
 		inFlight.add(chatId);
+		const t0 = performance.now();
 		try {
 			console.info(`[extraction ${chatId}] pipeline start`);
 			const findings = await extract(chatId);
@@ -338,8 +348,16 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// The merger re-reads the chat record itself — events are rebuilt
 			// from the transcript, never from stale copies.
 			const stats = mergeFindings(chatId, verified, { chatStore, graphStore });
-			console.info(`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events`);
+			console.info(
+				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
+					`(${Math.round(performance.now() - t0)}ms total)`,
+			);
 			return stats;
+		} catch (err) {
+			// The throw travels to the caller; this line is what makes the
+			// run's log legible end-to-end (no hanging "pipeline start").
+			console.error(`[extraction ${chatId}] pipeline failed (${Math.round(performance.now() - t0)}ms):`, err);
+			throw err;
 		} finally {
 			inFlight.delete(chatId);
 		}
