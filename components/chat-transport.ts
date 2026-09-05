@@ -21,7 +21,7 @@
  * a future "server-ahead" heal in the poller). Rare path; self-heals.
  */
 import { DefaultChatTransport } from "ai";
-import type { TeacherUIMessage } from "@/src/core/ui-message";
+import type { TeacherUIMessage } from "@/src/core";
 
 /** How often to poll turnInFlight while the racing turn runs. */
 const TURN_POLL_MS = 500;
