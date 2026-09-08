@@ -77,13 +77,21 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			{answer.text && <div className="mt-2 whitespace-pre-wrap text-sm">“{answer.text}”</div>}
 			{answer.dontKnow && isQuiz && <div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>}
 
+			{answer.note && (
+				<div data-testid="your-thinking" className="mt-3 border-l-2 border-primary/40 pl-3">
+					<span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+						Your thinking
+					</span>
+					<span className="block whitespace-pre-wrap text-sm text-foreground/90">{answer.note}</span>
+				</div>
+			)}
+
 			{isQuiz && answer.explanation && (
 				<div className="mt-3 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
 					<span className="font-medium text-foreground">Why: </span>
 					<MessageResponse className="inline">{answer.explanation}</MessageResponse>
 				</div>
 			)}
-			{answer.note && <div className="mt-2 text-xs text-muted-foreground">Note: {answer.note}</div>}
 		</div>
 	);
 }

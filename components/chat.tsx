@@ -24,7 +24,7 @@ import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import { SubAgentsPanel } from "@/components/sub-agents-panel";
 import { TreePanel } from "@/components/tree-panel";
-import type { ArtifactPartProps, JobRecord, QuestionAnswerData, TeacherUIMessage } from "@/src/core";
+import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TeacherUIMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
 import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
 
@@ -376,6 +376,7 @@ export function Chat({
 						<DockOverlay
 							pending={pending}
 							requiresReveal={requiresReveal}
+							phase={phases.at(-1) ?? "probe"}
 							composer={
 								<Composer
 									// Stop applies only to a LOCAL stream: a server-side turn has no
@@ -428,12 +429,15 @@ export function Chat({
 function DockOverlay({
 	pending,
 	requiresReveal,
+	phase,
 	composer,
 	onSubmitAnswer,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
 	requiresReveal: boolean;
+	/** Session phase at the pending question — scales the thinking field. */
+	phase: Phase3;
 	composer: React.ReactNode;
 	onSubmitAnswer: (output: QuestionAnswerData) => void;
 }) {
@@ -587,6 +591,7 @@ function DockOverlay({
 									input={pending.input as never}
 									expanded={expanded}
 									reveal={revealPending}
+									phase={phase}
 									onExpand={expandAndReveal}
 									onSubmit={onSubmitAnswer}
 								/>

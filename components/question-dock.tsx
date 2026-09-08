@@ -18,13 +18,22 @@ import {
 	type QuestionData,
 	type QuestionMode,
 	type QuizToolInput,
+	type Phase3,
 } from "@/src/core";
 
 /**
  * The question dock — a pending quiz/ask REPLACES the chat composer: the
- * persistent bottom blob morphs into the question. One unit, one action:
- * the bottom field (note for select modes, the answer for free-text asks,
- * "Other" text when Other is picked) plus the Submit button send together.
+ * persistent bottom blob morphs into the question. Two voices meet here:
+ * the teacher's (question, options, explanation) and the learner's —
+ * "Your thinking", a labeled composer-twin field for dumping reasoning,
+ * with Submit docked inside it exactly like the chat composer's send.
+ *
+ * The thinking field is the transfer channel of the whole product (wave-2):
+ * never called "optional", Enter makes a NEWLINE (it is for dumping — soon
+ * dictated, not typed), submission is the button only, and its size scales
+ * with the phase (probing stays quick; teaching invites depth). The
+ * "Other…" option is an editable option ROW — circle + inline input,
+ * styled like its siblings — so picking Other never displaces thinking.
  *
  * Collapse behavior (scroll-up → slim bar) is owned by the DockOverlay in the
  * chat view, which also owns the persistent shell and its height morph. This
@@ -47,9 +56,21 @@ export interface QuestionDockProps {
 	reveal?: boolean;
 	onExpand: () => void;
 	onSubmit: (output: QuestionAnswerData) => void;
+	/** Session phase at the question — scales the thinking field: probing
+	 *  stays quick (one row), teaching invites dumping (three rows). */
+	phase?: Phase3;
 }
 
-export function QuestionDock({ toolName, toolCallId, input, expanded, reveal = false, onExpand, onSubmit }: QuestionDockProps) {
+export function QuestionDock({
+	toolName,
+	toolCallId,
+	input,
+	expanded,
+	reveal = false,
+	onExpand,
+	onSubmit,
+	phase = "probe",
+}: QuestionDockProps) {
 	return (
 		<>
 			{!expanded && (
@@ -65,6 +86,7 @@ export function QuestionDock({ toolName, toolCallId, input, expanded, reveal = f
 					toolName={toolName}
 					toolCallId={toolCallId}
 					input={input}
+					phase={phase}
 					onSubmit={onSubmit}
 				/>
 			</div>
@@ -140,7 +162,13 @@ export function QuestionDockBar({
 }
 
 /** The expanded question: label, question, options, and the unified bottom row. */
-function QuestionDockForm({ toolName, toolCallId, input, onSubmit }: Omit<QuestionDockProps, "expanded" | "onExpand">) {
+function QuestionDockForm({
+	toolName,
+	toolCallId,
+	input,
+	phase = "probe",
+	onSubmit,
+}: Omit<QuestionDockProps, "expanded" | "onExpand">) {
 	const kind = toolName === "quiz" ? ("quiz" as const) : ("ask" as const);
 
 	// Canonical QuestionData, built once per question. Quiz options are
@@ -185,15 +213,18 @@ function QuestionDockForm({ toolName, toolCallId, input, onSubmit }: Omit<Questi
 
 	const [selected, setSelected] = useState<Set<number>>(new Set()); // 0-based indices
 	const [dontKnow, setDontKnow] = useState(false);
-	const [showOther, setShowOther] = useState(false);
-	// The single free-text slot holds one of two values by mode.
-	const [note, setNote] = useState("");
+	// "Other" is selected by typing into its inline input (or clicking its
+	// circle). Picking a sibling option deselects it, but the typed text
+	// survives — the learner's words are never thrown away.
+	const [otherSelected, setOtherSelected] = useState(false);
+	// The learner's transfer channel — thinking, never "a note".
+	const [thinking, setThinking] = useState("");
 	const [other, setOther] = useState("");
 	const [text, setText] = useState("");
 
 	const toggle = (idx: number) => {
 		setDontKnow(false);
-		setShowOther(false);
+		setOtherSelected(false);
 		setSelected((prev) => {
 			if (qd.mode === "multi-select") {
 				const next = new Set(prev);
@@ -208,27 +239,27 @@ function QuestionDockForm({ toolName, toolCallId, input, onSubmit }: Omit<Questi
 	const canSubmit =
 		qd.mode === "text"
 			? text.trim().length > 0
-			: dontKnow || (showOther && other.trim().length > 0) || selected.size > 0;
+			: dontKnow || (otherSelected && other.trim().length > 0) || selected.size > 0;
 
 	const submit = () => {
 		if (!canSubmit) return;
 		const req: AnswerRequest = {
 			dontKnow,
 			values: [...selected].map((i) => qd.options[i]!.value),
-			other: showOther ? other : undefined,
+			other: otherSelected ? other : undefined,
 			text: qd.mode === "text" ? text : undefined,
-			note: qd.mode !== "text" ? note.trim() || undefined : undefined,
+			note: qd.mode !== "text" ? thinking.trim() || undefined : undefined,
 		};
 		onSubmit(buildAnswer(qd, req));
 	};
 
-	// The bottom field: answer (text mode) / own answer (Other) / note.
-	const field =
-		qd.mode === "text"
-			? { value: text, set: setText, placeholder: "Type your answer…" }
-			: showOther
-				? { value: other, set: setOther, placeholder: "Type your own answer…" }
-				: { value: note, set: setNote, placeholder: "Add a note (optional) — anything you're unsure about" };
+	// Selecting Other never clears the thinking field — two channels, the
+	// answer and the reasoning behind it, side by side.
+	const selectOther = () => {
+		setDontKnow(false);
+		setSelected(new Set());
+		setOtherSelected(true);
+	};
 
 	return (
 		<div data-testid="question-dock">
@@ -289,7 +320,7 @@ function QuestionDockForm({ toolName, toolCallId, input, onSubmit }: Omit<Questi
 								type="button"
 								onClick={() => {
 									setSelected(new Set());
-									setShowOther(false);
+									setOtherSelected(false);
 									setDontKnow((v) => !v);
 								}}
 								aria-pressed={dontKnow}
@@ -303,55 +334,104 @@ function QuestionDockForm({ toolName, toolCallId, input, onSubmit }: Omit<Questi
 						)}
 
 						{kind === "ask" && (
-							<button
-								type="button"
-								onClick={() => {
-									setSelected(new Set());
-									setDontKnow(false);
-									setShowOther((v) => !v);
-								}}
-								aria-pressed={showOther}
+							<div
+								role={qd.mode === "multi-select" ? "checkbox" : "radio"}
+								aria-checked={otherSelected}
+								data-testid="other-option"
+								onClick={selectOther}
 								className={cn(
-									"rounded-lg border border-dashed px-3 py-2 text-left text-sm text-muted-foreground transition-colors",
-									showOther && "border-primary text-foreground",
+									"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+									otherSelected ? "border-primary bg-accent" : "border-dashed hover:bg-accent/50",
 								)}
 							>
-								Other…
-							</button>
+								<span
+									className={cn(
+										"mt-0.5 flex size-4 shrink-0 items-center justify-center border",
+										qd.mode === "multi-select" ? "rounded-sm" : "rounded-full",
+										otherSelected
+											? "border-primary bg-primary text-primary-foreground"
+											: "border-muted-foreground/40",
+									)}
+								>
+									{otherSelected && (
+										<span className={cn(qd.mode === "multi-select" ? "text-[10px]" : "size-1.5 rounded-full bg-current")}>
+											{qd.mode === "multi-select" ? "✓" : ""}
+										</span>
+									)}
+								</span>
+								<input
+									value={other}
+									onChange={(e) => {
+										setOther(e.target.value);
+										if (!otherSelected) setOtherSelected(true);
+									}}
+									placeholder="Type your own answer…"
+									className="w-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+									onClick={(e) => e.stopPropagation()}
+								/>
+							</div>
 						)}
 					</div>
 				)}
 			</div>
 
-			{/* The unified bottom row — same slot and radii as the chat composer:
-			    the text field plus Submit, which sends text + selection together. */}
+			{/* The learner's half of the dock — a composer TWIN: a labeled, bordered
+			    field with Submit docked inside, exactly like the chat composer's
+			    send. Select modes get "Your thinking" (Enter makes a newline — it
+			    is for dumping, soon dictated; the button submits); text mode
+			    keeps "Your answer" with Enter-to-submit. */}
 			<form
-				className="flex items-end gap-1.5 border-t border-border/60 p-1.5"
+				className="border-t border-border/60 p-1.5"
 				onSubmit={(e) => {
 					e.preventDefault();
 					submit();
 				}}
 			>
-				<textarea
-					value={field.value}
-					onChange={(e) => field.set(e.target.value)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" && !e.shiftKey) {
-							e.preventDefault();
-							submit();
-						}
-					}}
-					placeholder={field.placeholder}
-					rows={1}
-					className="field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
-				/>
-				<Button
-					type="submit"
-					disabled={!canSubmit}
-					className="h-10 shrink-0 rounded-[10px] px-3.5 text-sm font-medium"
+				<div
+					data-testid={qd.mode === "text" ? "answer-field" : "thinking-field"}
+					className="rounded-xl border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50"
 				>
-					Submit answer
-				</Button>
+					<div className="px-2.5 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+						{qd.mode === "text" ? "Your answer" : "Your thinking"}
+					</div>
+					{qd.mode === "text" ? (
+						<textarea
+							value={text}
+							onChange={(e) => setText(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" && !e.shiftKey) {
+									e.preventDefault();
+									submit();
+								}
+							}}
+							placeholder="Type your answer…"
+							rows={1}
+							className="field-sizing-content max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
+						/>
+					) : (
+						<textarea
+							value={thinking}
+							onChange={(e) => setThinking(e.target.value)}
+							placeholder="Why this answer? What are you unsure about? Say as much as you like — the teacher reads all of this."
+							rows={1}
+							className={cn(
+								"field-sizing-content max-h-48 w-full resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground/70",
+								// Phase-scaled prominence: teaching invites depth,
+								// probing stays quick.
+								phase === "teach" ? "min-h-[4.5rem]" : "min-h-10",
+							)}
+						/>
+					)}
+					<div className="flex items-center justify-end p-1">
+						<Button
+							type="submit"
+							disabled={!canSubmit}
+							className="h-9 rounded-[10px] px-3.5 text-sm font-medium"
+						>
+							Submit answer
+						</Button>
+					</div>
+				</div>
 			</form>
 		</div>
 	);
