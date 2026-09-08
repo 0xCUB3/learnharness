@@ -135,8 +135,8 @@ const FINDINGS: SessionFindings = {
 	propositions: [
 		{
 			id: "p1",
+			name: "Derivative",
 			statement: "The derivative measures how fast a function changes",
-			description: "The derivative of a function at a point is its instantaneous rate of change there.",
 			aliases: [],
 			messages: ["a2"],
 			evidence: ["TEACHER [a2]: The derivative measures how fast a function changes."],
@@ -144,8 +144,8 @@ const FINDINGS: SessionFindings = {
 		},
 		{
 			id: "p2",
-			statement: "Chain rule intuition",
-			description: "The chain rule differentiates composed functions by multiplying local rates.",
+			name: "Chain rule",
+			statement: "The chain rule differentiates composed functions by multiplying local rates.",
 			aliases: [],
 			messages: ["a2"],
 			evidence: ["LEARNER [u1]: teach me the chain rule"],
@@ -267,8 +267,8 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const existingId = "n_existing";
 		ledgers.appendNode({
 			id: existingId,
+			name: "Derivative",
 			statement: "Derivatives measure rates of change",
-			description: "Pre-existing node from an earlier session.",
 			aliases: [],
 			createdAt: "2026-08-01T00:00:00.000Z",
 			provenance: [],

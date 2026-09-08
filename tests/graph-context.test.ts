@@ -51,8 +51,8 @@ import { PATHS } from "../config.ts";
 function node(id: string, statement: string, over: Partial<GraphNode> = {}): GraphNode {
 	return {
 		id,
+		name: statement,
 		statement,
-		description: `${statement} — elaborated.`,
 		aliases: [],
 		createdAt: "2026-08-22T00:00:00.000Z",
 		provenance: [],
@@ -346,16 +346,16 @@ describe("cross-chat edge assertions (merger + read-time merging)", () => {
 			propositions: [
 				{
 					id: "p1",
-					statement: "Derivative as a limit",
-					description: "The derivative is the limit of difference quotients.",
+					name: "Derivative as a limit",
+					statement: "The derivative is the limit of difference quotients.",
 					aliases: [],
 					messages: ["u1"],
 					evidence: ["e"],
 				},
 				{
 					id: "p2",
-					statement: "Chain rule intuition",
-					description: "Composed functions differentiate by multiplying local rates.",
+					name: "Chain rule",
+					statement: "Composed functions differentiate by multiplying local rates.",
 					aliases: [],
 					messages: ["u1"],
 					evidence: ["e"],
@@ -377,8 +377,8 @@ describe("cross-chat edge assertions (merger + read-time merging)", () => {
 			propositions: [
 				{
 					id: "q1",
+					name: "Derivative as a limit",
 					statement: "The derivative as a limit of quotients", // different phrasing
-					description: "…",
 					aliases: [],
 					messages: ["u1"],
 					evidence: ["e"],
@@ -386,8 +386,8 @@ describe("cross-chat edge assertions (merger + read-time merging)", () => {
 				},
 				{
 					id: "q2",
+					name: "Chain rule",
 					statement: "Chain rule, intuitively",
-					description: "…",
 					aliases: [],
 					messages: ["u1"],
 					evidence: ["e"],

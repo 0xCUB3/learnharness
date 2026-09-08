@@ -33,13 +33,18 @@ export interface ProvenancePoint {
 export interface GraphNode {
 	/** Opaque stable id, store-assigned: "n_" + nanoid-like. */
 	id: string;
-	/** The minimal proposition — one true, self-contained statement. This is
-	 *  BOTH the rendering label AND the identity key: the auditor recognizes
-	 *  a re-encounter by judgment (link-or-create), not by string matching. */
+	/** A very short label for the node — a compact handle like a glossary
+	 *  headword ("Will to power", "Divine command theory"): what the graph
+	 *  shows at a glance. Presentational only — not unique, not an identity
+	 *  key, never precise: the statement carries the precision. Set at
+	 *  creation (first line defines); a link-append never changes it. */
+	name: string;
+	/** The minimal proposition — one true, self-contained statement, at
+	 *  full precision. The IDENTITY ANCHOR: the auditor recognizes a
+	 *  re-encounter by judgment against this (link-or-create), not by
+	 *  string matching. Shown in the detail card; the canvas label is the
+	 *  name. */
 	statement: string;
-	/** The elaborated version — required. Same proposition, more words:
-	 *  scope, precision, the "what exactly does it mean". */
-	description: string;
 	/** Verbatim phrasings sessions used for this proposition (the identity
 	 *  audit trail — how the world said what the node says). */
 	aliases: string[];
@@ -108,10 +113,11 @@ export interface LedgerEvent {
  * (nodes/edges/events/mappings/sessions), all append-only.
  *
  *   nodes.jsonl    one line per node — the FIRST line for an id defines
- *                  statement/description/createdAt; later lines for the
+ *                  name/statement/createdAt; later lines for the
  *                  same id are link-appends (a session's re-encounter):
  *                  their statements/aliases join `aliases`, their
- *                  provenance unions. getGraph merges by id.
+ *                  provenance unions; the name stays the first line's.
+ *                  getGraph merges by id.
  *   edges.jsonl    one line per edge ASSERTION; readers merge by
  *                  (from,to,type), unioning provenance.
  *
@@ -136,13 +142,16 @@ export interface LedgerEvent {
 export interface ExtractedProposition {
 	/** Extractor-local id ("p1", …) referenced by edges + attribution. */
 	id: string;
+	/** A very short label — a few words, a compact handle like a glossary
+	 *  headword. Not a sentence, needn't be unique or self-contained: the
+	 *  statement carries the precision. Becomes the node's name on create;
+	 *  on link, the existing node keeps its name. */
+	name: string;
 	/** The minimal proposition — a true, self-contained, world-facing
-	 *  statement. No learner / teacher / session references: misconceptions
-	 *  are stated as the true correction, and wrongness lives in the event
-	 *  ledger, never in the node. */
+	 *  statement, at full precision. No learner / teacher / session
+	 *  references: misconceptions are stated as the true correction, and
+	 *  wrongness lives in the event ledger, never in the node. */
 	statement: string;
-	/** The elaborated version — required. */
-	description: string;
 	/** Verbatim phrasings the session used. */
 	aliases: string[];
 	/** The message ids where this proposition came up — provenance. */

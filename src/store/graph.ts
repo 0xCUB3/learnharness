@@ -83,8 +83,8 @@ const isProvenancePoint = (v: unknown): v is ProvenancePoint =>
 const isGraphNode = (v: unknown): v is GraphNode =>
 	isRecord(v) &&
 	isString(v.id) &&
+	isString(v.name) &&
 	isString(v.statement) &&
-	isString(v.description) &&
 	Array.isArray(v.aliases) &&
 	v.aliases.every(isString) &&
 	isString(v.createdAt) &&

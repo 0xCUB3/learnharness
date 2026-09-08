@@ -99,6 +99,13 @@ const messagesField = z
 
 const propositionSchema = z.object({
 	id: z.string().describe("Local id: \"p1\", \"p2\", … — referenced by edges and attribution."),
+	name: z
+		.string()
+		.describe(
+			"A very short label for the proposition — a few words, a compact handle like a glossary headword " +
+				'(\'Will to power\', \'Divine command theory\'). Not a sentence, needn\'t be unique or ' +
+				"self-contained: the statement carries the precision. This becomes the node's label in the graph.",
+		),
 	statement: z
 		.string()
 		.describe(
@@ -106,11 +113,6 @@ const propositionSchema = z.object({
 				"Never reference the learner, the teacher, or the session: not \"the learner understands X\" but " +
 				'"X". A misconception is stated as the TRUE correction ("Nietzsche did not endorse ' +
 				'might-makes-right social Darwinism") — the wrongness lives in the quiz outcomes, never here.',
-		),
-	description: z
-		.string()
-		.describe(
-			"The elaborated version of the same proposition — more words: scope, precision, what exactly it means. Still true, still world-facing.",
 		),
 	aliases: z.array(z.string()).describe("Verbatim phrasings this session used for the same proposition, if any."),
 	messages: messagesField,
@@ -168,8 +170,12 @@ misconception is NOT a node of its own wrong claim — state the TRUE correction
 quiz outcomes carry that the learner believed the wrong version.
 
 1. PROPOSITIONS — every distinct reasoning-step-sized proposition the session touched:
-   - Each is a self-contained TRUE statement ("statement"), plus its elaboration ("description" — more
-     words, same proposition: scope, precision, what exactly it means).
+   - Each has a "name" — a VERY short label, a few words, a compact handle like a glossary headword
+     ("Will to power", "Divine command theory"). Not a sentence; needn't be unique or self-contained.
+     It becomes the node's label in the graph, so keep it glanceable: names are what one reads on
+     the graph, statements are what one reads on the node.
+   - And a "statement" — the self-contained TRUE proposition at full precision (the elaboration lives
+     in the graph only as this one statement).
    - Include corrections of misconceptions the teacher articulated, and true facts explained in prose.
    - One reasoning step per proposition: never a topic blob, never a sub-step.
    - "messages": the [id] tags of every message where the proposition came up — provenance, report it.
@@ -254,10 +260,12 @@ FAITHFULNESS — verify every candidate against the transcript:
   scale or drop.
 
 IDENTITY — link-or-create, per proposition:
-- You see the current graph (every node: id, statement, description, aliases). For each verified proposition,
+- You see the current graph (every node: id, name, statement, aliases). For each verified proposition,
   decide: does an EXISTING node already state this same proposition?
-- If yes: set "linkTo" to that node's id. The session's phrasings will join its aliases and its provenance.
-- If no: omit "linkTo" and a new node is created.
+- If yes: set "linkTo" to that node's id. The session's phrasings will join its aliases and its provenance;
+  the node keeps its existing name (labels stay stable across sessions — ignore your name for linked nodes).
+- If no: omit "linkTo" and a new node is created, with the extractor's name as its label. Reword only a
+  clearly unglanceable name (an unwieldy sentence of a name); keep it short.
 - When unsure, omit — duplicates are recoverable later; wrong merges are not.
 
 Also drop propositions not referenced by anything else ONLY if they have no other backing — an unreferenced but
@@ -271,7 +279,7 @@ function graphView(nodes: GraphNode[]): string {
 	if (nodes.length === 0) return "(the graph is currently empty — every proposition is a new node)";
 	const lines = nodes.map(
 		(n) =>
-			`- ${n.id} :: ${n.statement}\n  description: ${n.description}` +
+			`- ${n.id} :: ${n.name}\n  statement: ${n.statement}` +
 			(n.aliases.length > 0 ? `\n  aliases: ${n.aliases.join(" | ")}` : ""),
 	);
 	return lines.join("\n");

@@ -166,10 +166,12 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 			// line — the session's phrasings (statement + aliases) join the
 			// node's aliases, the provenance unions. Reads merge by id.
 			graphNodeId = p.linkTo;
+			// Link-append: phrasings + provenance join at read time (the
+			// first line's name/statement/createdAt stand).
 			ledgers.appendNode({
 				id: graphNodeId,
+				name: p.name,
 				statement: p.statement,
-				description: p.description,
 				aliases: [...p.aliases],
 				createdAt: now,
 				provenance: points,
@@ -177,8 +179,8 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 		} else {
 			const node: GraphNode = {
 				id: newGraphNodeId(),
+				name: p.name,
 				statement: p.statement,
-				description: p.description,
 				aliases: [...p.aliases],
 				createdAt: now,
 				provenance: points,
@@ -329,8 +331,9 @@ export interface DerivedGraph {
 
 /**
  * The whole graph from the ledgers. Node LINES may repeat an id (link-
- * appends): the FIRST line defines statement/description/createdAt; later
- * lines' statements and aliases join `aliases`, provenance unions. Edge
+ * appends): the FIRST line defines name/statement/createdAt; later
+ * lines' statements and aliases join `aliases`, provenance unions — the
+ * name never changes after creation. Edge
  * LINES are assertions, merged by (from,to,type) with unioned provenance,
  * first-seen order. `store events, derive state` — this is the only reader
  * that matters.

@@ -10,21 +10,22 @@
  * and cancelled on unmount — idle CPU stays near zero. Physics is
  * placement only: pan/zoom, no dragging, no editing.
  *
- * Labels render the node `statement` (the minimal proposition — identity
- * key + rendering label; the full `description` lives on the detail card)
- * through custom canvas drawers that replace sigma's defaults:
+ * Labels render the node `name` — the very short, glanceable label the
+ * extractor coins (a glossary-headword-style handle); the full-precision
+ * `statement` lives on the detail card. Custom canvas drawers replace
+ * sigma's defaults:
  *   - defaultDrawNodeLabel: plain wrapped text, centered below the node,
  *     word-wrapped at a max line width — no truncation, no one-line sprawl.
  *   - defaultDrawNodeHover: NO background box (sigma's default is a
  *     hardcoded white one). Instead the hovered node gets a soft glow
  *     halo in its own state color at a constant radius, flush with the
- *     disc edge, and its statement brightens — the "this is clickable,
+ *     disc edge, and its name brightens — the "this is clickable,
  *     click for the full fact" affordance. Entering/leaving hover fades
  *     ONE transition factor shared by halo and text alike, so the
  *     halo's opacity and the text's muted→bright cross-fade stay in
  *     sync (no growth, no pulse; interpolating from the current value
  *     means rapid hover toggles glide instead of snapping). Hover
- *     always shows the statement, even when labels are zoomed out.
+ *     always shows the name, even when labels are zoomed out.
  * Node hit-testing is the disc PLUS a pad: sigma picks nodes from a
  * half-resolution framebuffer (no v3 setting enlarges hitboxes), and the
  * glow halo is bigger than the stock hitbox — touching the halo
@@ -82,11 +83,11 @@ const STATES_ORDER: NodeStateClass[] = ["taught", "known", "missed", "dont-know"
 
 /**
  * Pure filter predicate for the legend/filters panel: a node is visible
- * when its state is toggled on AND (no query OR statement matches).
+ * when its state is toggled on AND (no query OR name/statement matches).
  * Exported for tests; the sigma reducers just consume its verdict.
  */
 export function isNodeVisible(
-	node: Pick<GraphNode, "statement" | "description">,
+	node: Pick<GraphNode, "name" | "statement">,
 	state: NodeStateClass,
 	hiddenStates: ReadonlySet<NodeStateClass>,
 	query: string,
@@ -94,7 +95,7 @@ export function isNodeVisible(
 	if (hiddenStates.has(state)) return false;
 	const q = query.trim().toLowerCase();
 	if (!q) return true;
-	return node.statement.toLowerCase().includes(q) || node.description.toLowerCase().includes(q);
+	return node.name.toLowerCase().includes(q) || node.statement.toLowerCase().includes(q);
 }
 
 // ---- Label drawing (canvas) ---------------------------------------------
@@ -102,7 +103,7 @@ export function isNodeVisible(
 // sigma's defaults draw the label on ONE line to the right of the node with
 // a white box on hover. We replace both: names wrap under the node at a max
 // line width, muted at rest; on hover the node pulses a soft glow in its
-// own state color and the statement brightens (no background box).
+// own state color and the name brightens (no background box).
 
 const LABEL_MAX_WIDTH = 170; // px — wraps long names instead of a wide strip
 const LABEL_GAP = 6; // px between node edge and first label line
@@ -227,7 +228,7 @@ function wrapLabel(context: CanvasRenderingContext2D, text: string, maxWidth: nu
 	return lines;
 }
 
-/** The wrapped node statement, centered below the node — used by both drawers
+/** The wrapped node name (the short label), centered below the node — used by both drawers
  *  with identical geometry so hover only changes the color, nothing jumps. */
 function drawName(
 	context: CanvasRenderingContext2D,
@@ -254,7 +255,7 @@ function drawName(
  *  1 = fully hovered): a glow halo in the node's own state color at a
  * CONSTANT radius (opacity fades in/out; the halo never grows) starting
  * flush at the disc edge (the evenodd punch-out keeps the disc itself
- * unpainted). The statement is drawn at partial alpha in the bright hover
+ * unpainted). The name is drawn at partial alpha in the bright hover
  * color — the muted resting label on the layer beneath shows through,
  * so text and halo cross-fade on the SAME factor and stay in sync. */
 function paintHover(
@@ -278,7 +279,7 @@ function paintHover(
 		context.fill("evenodd");
 	}
 	// Same fade factor as the halo: text and glow rise together. The
-	// bright statement at partial alpha over the muted resting label beneath is
+	// bright name at partial alpha over the muted resting label beneath is
 	// a smooth muted→bright cross-fade rather than an instant color swap.
 	context.globalAlpha = fade;
 	drawName(context, data, settings, hoverTextColor);
@@ -435,7 +436,7 @@ export function GraphView() {
 			// frozen layout stable for a given node set across remounts.
 			const rand = seededRandom(node.id);
 			graph.addNode(node.id, {
-				label: node.statement,
+				label: node.name,
 				size: STATE_TOKENS[state].size,
 				color: stateColors.get(state) ?? edgeColor,
 				x: (rand() - 0.5) * 100,
@@ -695,8 +696,8 @@ export function GraphView() {
 					style={{ visibility: "hidden", left: 0, top: 0 }}
 					className="absolute z-10 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
 				>
-					<div className="text-sm font-medium leading-snug">{selected.node.statement}</div>
-					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.description}</div>
+					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
+					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
 					<div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
 						{STATE_LABELS[selected.state]}
 					</div>
