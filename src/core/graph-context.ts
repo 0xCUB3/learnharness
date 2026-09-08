@@ -15,10 +15,9 @@
  * the block is absent (new learner).
  *
  * Selection strategy (§1 "the selection problem", simplest first): the WHOLE
- * graph while it is small; past MAX_NODES, hotspots (missed / dont-know /
- * misconception nodes) plus their 1-hop `requires` neighborhood — a live
- * misconception is always relevant context, and the frontier is where the
- * next session should probe.
+ * graph while it is small; past MAX_NODES, hotspots (missed / dont-know
+ * nodes) plus their 1-hop `follows` neighborhood — the frontier is where
+ * the next session should probe.
  */
 
 import type { GraphEdge, GraphNode } from "./contracts.ts";
@@ -31,22 +30,18 @@ export const GRAPH_CONTEXT_HEADER = "LEARNER KNOWLEDGE GRAPH (auto-generated)";
 /** Above this node count only hotspots + their 1-hop neighborhood are shown. */
 export const MAX_CONTEXT_NODES = 150;
 
-/** Group order for node lines: diagnostic value first (vision §1 hotspots).
- *  A misconception-kind node is a hotspot whatever its state — a live
- *  misconception is always relevant context. */
+/** Group order for node lines: diagnostic value first (vision §1 hotspots). */
 const HOTSPOT_STATES: ReadonlySet<NodeStateClass> = new Set(["missed", "dont-know"]);
 
 function groupOf(node: GraphNode, state: NodeStateClass): number {
-	if (HOTSPOT_STATES.has(state) || node.kind === "misconception") return 0;
+	if (HOTSPOT_STATES.has(state)) return 0;
 	if (state === "known") return 1;
-	if (state === "taught") return 2;
-	return 3; // candidate
+	return 2; // candidate
 }
 
 const GROUP_LABELS = [
-	"Hotspots (missed / dont-know / misconceptions) — likely misconception sites and unexplored ground:",
+	"Hotspots (missed / dont-know) — likely misconception sites and unexplored ground:",
 	"Known (answered correctly):",
-	"Taught (lessons covered them):",
 	"Candidates (never probed — assume nothing):",
 ] as const;
 
@@ -76,9 +71,9 @@ export function renderGraphContext(
 		truncated = true;
 		const hotspots = nodes.filter((n) => isHotspot(n, stateOf(n)));
 		const keep = new Set(hotspots.map((n) => n.id));
-		// 1-hop requires neighborhood: prerequisites AND dependents.
+		// 1-hop follows neighborhood: premises AND derivations.
 		for (const edge of edges) {
-			if (edge.type !== "requires") continue;
+			if (edge.type !== "follows") continue;
 			if (keep.has(edge.from) || keep.has(edge.to)) {
 				keep.add(edge.from);
 				keep.add(edge.to);
@@ -91,7 +86,7 @@ export function renderGraphContext(
 	// ── node lines, grouped/sorted by diagnostic priority ──────────────────────────
 	const lines: string[] = [
 		`===== ${GRAPH_CONTEXT_HEADER} =====`,
-		`${truncated ? `showing ${selected.length} of ${nodes.length} nodes (hotspots + their 1-hop neighborhood)` : `${nodes.length} nodes`}, ${edges.filter((e) => e.type === "requires").length} requires edges`,
+		`${truncated ? `showing ${selected.length} of ${nodes.length} nodes (hotspots + their 1-hop neighborhood)` : `${nodes.length} nodes`}, ${edges.filter((e) => e.type === "follows").length} follows edges`,
 	];
 
 	for (const [group, label] of GROUP_LABELS.entries()) {
@@ -101,19 +96,18 @@ export function renderGraphContext(
 		if (groupNodes.length === 0) continue;
 		lines.push("", label);
 		for (const node of groupNodes) {
-			const kind = node.kind === "misconception" ? " · misconception" : "";
-			lines.push(`• [${stateOf(node)}] ${node.statement} (${node.id})${kind}`);
+			lines.push(`• [${stateOf(node)}] ${node.statement} (${node.id})`);
 		}
 	}
 
 	// ── requires edges, merged into chains ──────────────────────────────────
 	const byId = new Map(selected.map((n) => [n.id, n.statement]));
-	const requires = edges.filter(
-		(e) => e.type === "requires" && byId.has(e.from) && byId.has(e.to),
+	const follows = edges.filter(
+		(e) => e.type === "follows" && byId.has(e.from) && byId.has(e.to),
 	);
-	if (requires.length > 0) {
-		lines.push("", "Requires (prerequisite → dependent):");
-		for (const chain of edgeChains(requires)) {
+	if (follows.length > 0) {
+		lines.push("", "Follows (premise → derivation):");
+		for (const chain of edgeChains(follows)) {
 			lines.push(chain.map((id) => byId.get(id) ?? id).join(" → "));
 		}
 	}
