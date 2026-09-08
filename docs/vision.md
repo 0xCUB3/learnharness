@@ -21,7 +21,7 @@ The graph updates **continuously, not per-session**. A learner who answers a few
 The global graph is an **objective world-model of the domains the learner has encountered**: the facts, their structure (what follows from / is supported by what), and — inferred from that structure plus the event ledger — the state of the learner's understanding. Nothing learner- or session-relative is ever stored **in** the graph; understanding is **inferred, never encoded**.
 
 - **Every node is a true proposition.** Worded objectively, in minimal form as it exists w.r.t. its context. Truth is context-relative and that is fine: "Gravity is a force" and "Gravity is not a force" coexist as nodes — each true in its context (classical mechanics vs. GR), with **the surrounding subgraph as the context**. No context field, no pedantic self-containment of facts.
-- **Node schema:** `statement` — the proposition in minimal form (a short sentence; the rendering label and identity key); `description` — the elaborated version (required); `aliases` — the verbatim phrasings sessions used (merge keys + audit trail). There is **no `kind`** field.
+- **Node schema:** `name` — a very short label for the node, a compact handle like a glossary headword (“Will to power”, “Divine command theory”): what the graph shows at a glance. Presentational only — not unique, not an identity key, never precise. Set at creation; a re-encounter never changes it. `statement` — the proposition at full precision (the identity anchor; shown in the detail card). `aliases` — the verbatim phrasings sessions used (merge keys + audit trail). There is **no `kind`** and **no `description`** (2026-09-08 amendment: with real data, full-sentence canvas labels proved unworkable — ten-line labels, illegible overprint. The label is the name; the precision lives one interaction away in the statement).
 - **Misconceptions are not a node category.** A myth enters the graph as its true correction ("The 10%-of-brain claim is a myth"); the learner's holding of the wrong idea lives entirely in the event ledger. Wrongness is about the learner, and the learner lives in the ledger.
 
 ### Edges (DECIDED 2026-09-02)
@@ -226,6 +226,7 @@ The teacher's context window and attention are precious — it has the lesson to
 | `taught` events (marking things done) | Dropped; the extractor records per-proposition understanding notes (named-word scale) as session-scoped observations instead |
 | Chat-granular node/edge provenance | Message-granular (chat, message) provenance on nodes and edges — the exact derivation points |
 | `name` + `statement` on nodes | `statement` (minimal proposition, the rendering label) + `description` (required elaboration) + `aliases` (verbatim phrasings) |
+| `statement` + `description` (2026-09-02) | `name` (very short label, the rendering handle) + `statement` (full precision, identity anchor, detail card); `description` dropped — full-sentence canvas labels cluttered the graph (2026-09-08, seeing real extracted data) |
 | Updates per completed session | Continuous; partial sessions deposit value |
 | Mermaid DAG as the plan artifact | Structured tools as source of truth; mermaid only for ad-hoc diagrams |
 | UI deferred, "not important" | UI exists (Next.js, v3.4); the graph view is the app's home page |

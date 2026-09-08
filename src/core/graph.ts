@@ -48,7 +48,6 @@ import type {
 	GraphSnapshot,
 	LedgerEvent,
 	LedgerEventKind,
-	NodeStateClass,
 } from "./contracts.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
@@ -166,10 +165,12 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 			// line — the session's phrasings (statement + aliases) join the
 			// node's aliases, the provenance unions. Reads merge by id.
 			graphNodeId = p.linkTo;
+			// Link-append: phrasings + provenance join at read time (the
+			// first line's name/statement/createdAt stand).
 			ledgers.appendNode({
 				id: graphNodeId,
+				name: p.name,
 				statement: p.statement,
-				description: p.description,
 				aliases: [...p.aliases],
 				createdAt: now,
 				provenance: points,
@@ -177,8 +178,8 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 		} else {
 			const node: GraphNode = {
 				id: newGraphNodeId(),
+				name: p.name,
 				statement: p.statement,
-				description: p.description,
 				aliases: [...p.aliases],
 				createdAt: now,
 				provenance: points,
@@ -329,8 +330,9 @@ export interface DerivedGraph {
 
 /**
  * The whole graph from the ledgers. Node LINES may repeat an id (link-
- * appends): the FIRST line defines statement/description/createdAt; later
- * lines' statements and aliases join `aliases`, provenance unions. Edge
+ * appends): the FIRST line defines name/statement/createdAt; later
+ * lines' statements and aliases join `aliases`, provenance unions — the
+ * name never changes after creation. Edge
  * LINES are assertions, merged by (from,to,type) with unioned provenance,
  * first-seen order. `store events, derive state` — this is the only reader
  * that matters.
@@ -374,18 +376,14 @@ export function getGraph(graphStore: GraphStore): DerivedGraph {
 const QUIZ_EVENT_KINDS: ReadonlySet<string> = new Set(["correct", "miss", "dont-know"]);
 
 /**
- * Derive node states from events (never stored): the LATEST quiz event
- * decides (known / missed / dont-know); a node with no quiz events is a
- * candidate. TRANSITIONAL (2026-09-02 redesign): `taught` is unreachable
- * now that no taught events are emitted, and observation events are NOT
- * state inputs — the real state model (dependency depth + topology-derived
- * strength + quiz events) is pending ideation; this keeps the renderer
- * alive until it lands.
+ * The latest quiz outcome per node — a raw EVENT FACT, not a node state
+ * (the transitional node-state classes were removed 2026-09-08: nothing
+ * colors nodes by quiz results anymore). Used by the teacher's
+ * graph-as-context selection (graph-context.ts) to find diagnostic
+ * hotspots; the home renderer does not consume it. Nodes with no quiz
+ * events have no entry.
  */
-export function deriveNodeStates(nodes: GraphNode[], events: LedgerEvent[]): Record<string, NodeStateClass> {
-	const states: Record<string, NodeStateClass> = {};
-	for (const node of nodes) states[node.id] = "candidate";
-
+export function latestQuizOutcomes(nodes: GraphNode[], events: LedgerEvent[]): Map<string, LedgerEventKind> {
 	const latest = new Map<string, { at: string; kind: LedgerEventKind; index: number }>();
 	events.forEach((event, index) => {
 		if (event.nodeId === null) return;
@@ -395,15 +393,12 @@ export function deriveNodeStates(nodes: GraphNode[], events: LedgerEvent[]): Rec
 			latest.set(event.nodeId, { at: event.at, kind: event.kind, index });
 		}
 	});
-
+	const out = new Map<string, LedgerEventKind>();
 	for (const node of nodes) {
 		const last = latest.get(node.id);
-		if (!last) continue; // candidate
-		if (last.kind === "correct") states[node.id] = "known";
-		else if (last.kind === "dont-know") states[node.id] = "dont-know";
-		else states[node.id] = "missed";
+		if (last) out.set(node.id, last.kind);
 	}
-	return states;
+	return out;
 }
 
 // ─── the /api/graph payload ──────────────────────────────────────────────────
@@ -411,7 +406,6 @@ export function deriveNodeStates(nodes: GraphNode[], events: LedgerEvent[]): Rec
 /** Everything the home graph view needs, in one fetch (shape: contracts). */
 export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 	const { nodes, edges, events } = getGraph(deps.graphStore);
-	const nodeStates = deriveNodeStates(nodes, events);
 
 	const nodeChats = new Map<string, Set<string>>();
 	const touch = (nodeId: string, chatId: string): void => {
@@ -453,5 +447,26 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		if (ids.length > 0) nodeSessions[nodeId] = ids;
 	}
 
-	return { nodes, edges, nodeStates, sessions, nodeSessions };
+	// Understanding observations per (node, chat) — the extractor's
+	// session-relative note (latest wins within a chat). Read-time join for
+	// the detail card: the confidence history next to the session list.
+	const nodeObservations: Record<string, Record<string, string>> = {};
+	const latestObs = new Map<string, { at: string; note: string; index: number }>();
+	events.forEach((event, index) => {
+		if (event.kind !== "observation" || event.nodeId === null) return;
+		if (!event.note) return;
+		const key = `${event.nodeId}\u0000${event.chatId}`;
+		const current = latestObs.get(key);
+		if (!current || event.at > current.at || (event.at === current.at && index > current.index)) {
+			latestObs.set(key, { at: event.at, note: event.note, index });
+		}
+	});
+	for (const [key, { note }] of latestObs) {
+		const sep = key.indexOf("\u0000");
+		const nodeId = key.slice(0, sep);
+		const chatId = key.slice(sep + 1);
+		(nodeObservations[nodeId] ??= {})[chatId] = note;
+	}
+
+	return { nodes, edges, sessions, nodeSessions, nodeObservations };
 }

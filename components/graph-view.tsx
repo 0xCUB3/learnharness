@@ -10,13 +10,15 @@
  * and cancelled on unmount — idle CPU stays near zero. Physics is
  * placement only: pan/zoom, no dragging, no editing.
  *
- * Labels render the node `name` (the short header, never the statement)
- * through custom canvas drawers that replace sigma's defaults:
+ * Labels render the node `name` — the very short, glanceable label the
+ * extractor coins (a glossary-headword-style handle); the full-precision
+ * `statement` lives on the detail card. Custom canvas drawers replace
+ * sigma's defaults:
  *   - defaultDrawNodeLabel: plain wrapped text, centered below the node,
  *     word-wrapped at a max line width — no truncation, no one-line sprawl.
  *   - defaultDrawNodeHover: NO background box (sigma's default is a
  *     hardcoded white one). Instead the hovered node gets a soft glow
- *     halo in its own state color at a constant radius, flush with the
+ *     halo in the node's color at a constant radius, flush with the
  *     disc edge, and its name brightens — the "this is clickable,
  *     click for the full fact" affordance. Entering/leaving hover fades
  *     ONE transition factor shared by halo and text alike, so the
@@ -38,36 +40,43 @@
  * no per-node size gating, so labels never pop in one by one. (The Obsidian
  * text-fade feel, applied to the whole graph.)
  *
+ * The search panel (top-right overlay): a search box matching name or
+ * statement text — the transitional node-state classes are gone (2026-09-08;
+ * nodes render uniformly until the state model ideation lands), so there
+ * are no state legend rows or toggles anymore. Filtering flows through
+ * sigma's official
+ * nodeReducer/edgeReducer settings (`hidden`), so rendering, hover,
+ * picking, and labels all respect it; edges drop when either endpoint is
+ * hidden, and an open detail card closes if its node is filtered out.
  * Clicking a node opens the detail card anchored just below the node's
  * viewport position (flipping above near the bottom edge); any camera move
  * (pan/zoom) dismisses it. The `requires` edges render as arrows pointing
  * prerequisite → dependent.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { WaypointsIcon } from "lucide-react";
+import { Loader2Icon, SearchIcon, WaypointsIcon } from "lucide-react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
-import { seededRandom, type GraphNode, type GraphSnapshot, type NodeStateClass } from "@/src/core";
+import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
 
-/** Per-state visuals: color token + node size (WebGL wants hex, not oklch). */
-const STATE_TOKENS: Record<NodeStateClass, { cssVar: string; size: number }> = {
-	taught: { cssVar: "--foreground", size: 10 },
-	known: { cssVar: "--primary", size: 8 },
-	missed: { cssVar: "--destructive", size: 8 },
-	"dont-know": { cssVar: "--muted-foreground", size: 6.5 },
-	candidate: { cssVar: "--ring", size: 5 },
-};
+/** The uniform node look (no state classes — WebGL wants hex, not oklch):
+ *  the accent color + the old "known" size, until the state model lands. */
+const NODE_COLOR_TOKEN = "--primary";
+const NODE_SIZE = 8;
 
-const STATE_LABELS: Record<NodeStateClass, string> = {
-	taught: "taught",
-	known: "known",
-	missed: "missed",
-	"dont-know": "don't know",
-	candidate: "candidate",
-};
+/**
+ * Pure filter predicate for the search panel: a node is visible when the
+ * query is empty or matches its name or statement (case-insensitive).
+ * Exported for tests; the sigma reducers just consume its verdict.
+ */
+export function isNodeVisible(node: Pick<GraphNode, "name" | "statement">, query: string): boolean {
+	const q = query.trim().toLowerCase();
+	if (!q) return true;
+	return node.name.toLowerCase().includes(q) || node.statement.toLowerCase().includes(q);
+}
 
 // ---- Label drawing (canvas) ---------------------------------------------
 //
@@ -199,7 +208,7 @@ function wrapLabel(context: CanvasRenderingContext2D, text: string, maxWidth: nu
 	return lines;
 }
 
-/** The wrapped node name, centered below the node — used by both drawers
+/** The wrapped node name (the short label), centered below the node — used by both drawers
  *  with identical geometry so hover only changes the color, nothing jumps. */
 function drawName(
 	context: CanvasRenderingContext2D,
@@ -313,7 +322,6 @@ function tokenHex(cssVar: string): string {
 
 interface Selection {
 	node: GraphNode;
-	state: NodeStateClass;
 	chatIds: string[];
 	/** Node position in container pixels (from graphToViewport at click time). */
 	anchor: { x: number; y: number };
@@ -324,8 +332,29 @@ export function GraphView() {
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
+	// Search panel state: the query text.
+	const [query, setQuery] = useState("");
+	// The sigma instance and its graphology graph live inside the mount
+	// effect; refs expose them to the filters effect, and `rendererEpoch`
+	// re-triggers it when a new renderer is constructed.
+	const rendererRef = useRef<import("sigma").default | null>(null);
+	const graphRef = useRef<Graph | null>(null);
+	const [rendererEpoch, setRendererEpoch] = useState(0);
 
-	// Fetch the derived graph (the route folds stale chats first).
+	// The id set that survives the current search — consumed by the sigma
+	// reducers and the "no matches" hint.
+	const visibleIds = useMemo(() => {
+		const set = new Set<string>();
+		if (snapshot)
+			for (const node of snapshot.nodes) {
+				if (isNodeVisible(node, query)) set.add(node.id);
+			}
+		return set;
+	}, [snapshot, query]);
+
+	// Fetch the derived graph. Re-runs when a background pipeline run
+	// finishes (refreshTick) — its merges just landed in the ledger.
+	const [refreshTick, setRefreshTick] = useState(0);
 	useEffect(() => {
 		let cancelled = false;
 		fetch("/api/graph")
@@ -336,6 +365,30 @@ export function GraphView() {
 			.catch((err) => console.error("[graph] fetch failed:", err));
 		return () => {
 			cancelled = true;
+		};
+	}, [refreshTick]);
+
+	// Background pipeline status: poll /api/graph/status; when a run
+	// finishes (some -> none), refetch the graph.
+	const [pipelineRuns, setPipelineRuns] = useState<{ chatId: string; title: string; phase: string; startedAt: number }[]>([]);
+	useEffect(() => {
+		let cancelled = false;
+		let hadRuns = false;
+		const poll = () =>
+			fetch("/api/graph/status")
+				.then((res) => res.json() as Promise<{ runs: typeof pipelineRuns }>)
+				.then(({ runs }) => {
+					if (cancelled) return;
+					setPipelineRuns(runs);
+					if (hadRuns && runs.length === 0) setRefreshTick((t) => t + 1);
+					hadRuns = runs.length > 0;
+				})
+				.catch(() => {}); // status is cosmetic — never surface poll errors
+		poll();
+		const timer = setInterval(poll, 2000);
+		return () => {
+			cancelled = true;
+			clearInterval(timer);
 		};
 	}, []);
 
@@ -348,24 +401,20 @@ export function GraphView() {
 		const edgeColor = tokenHex("--ring");
 		const labelColor = tokenHex("--muted-foreground");
 		const hoverTextColor = tokenHex("--foreground");
-		const stateColors = new Map<NodeStateClass, string>();
-		for (const state of Object.keys(STATE_TOKENS) as NodeStateClass[]) {
-			stateColors.set(state, tokenHex(STATE_TOKENS[state].cssVar));
-		}
+		const nodeColor = tokenHex(NODE_COLOR_TOKEN);
 		// Mutable hover-transition state: 0 = resting, 1 = fully hovered.
 		const hover: HoverState = { fade: 0, repaint: null };
 		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, hoverTextColor, hover);
 
 		const graph = new Graph();
 		for (const node of snapshot.nodes) {
-			const state: NodeStateClass = snapshot.nodeStates[node.id] ?? "candidate";
 			// Seeded start positions (FA2 requires non-zero x/y) keep the
 			// frozen layout stable for a given node set across remounts.
 			const rand = seededRandom(node.id);
 			graph.addNode(node.id, {
-				label: node.statement,
-				size: STATE_TOKENS[state].size,
-				color: stateColors.get(state) ?? edgeColor,
+				label: node.name,
+				size: NODE_SIZE,
+				color: nodeColor,
 				x: (rand() - 0.5) * 100,
 				y: (rand() - 0.5) * 100,
 			});
@@ -426,6 +475,9 @@ export function GraphView() {
 					defaultDrawNodeLabel: drawLabel,
 					defaultDrawNodeHover: drawHover,
 				});
+				graphRef.current = graph;
+				rendererRef.current = renderer;
+				setRendererEpoch((e) => e + 1);
 				renderer.on("clickNode", ({ node }) => {
 					const graphNode = snapshot.nodes.find((n) => n.id === node);
 					if (!graphNode) return;
@@ -433,7 +485,6 @@ export function GraphView() {
 					const anchor = renderer?.graphToViewport({ x: pos.x ?? 0, y: pos.y ?? 0 });
 					setSelected({
 						node: graphNode,
-						state: snapshot.nodeStates[node] ?? "candidate",
 						chatIds: snapshot.nodeSessions[node] ?? [],
 						anchor: anchor ?? { x: 0, y: 0 },
 					});
@@ -496,9 +547,31 @@ export function GraphView() {
 		return () => {
 			killed = true;
 			if (hoverAnimId !== null) cancelAnimationFrame(hoverAnimId);
+			rendererRef.current = null;
+			graphRef.current = null;
 			renderer?.kill();
 		};
 	}, [snapshot]);
+
+	// Filtering through sigma's official reducers: hidden nodes drop out of
+	// rendering, picking, hover, AND labels; edges drop when either endpoint
+	// is hidden. Re-runs whenever filters change or a renderer is (re)built
+	// (epoch), so the reducers always close over current values.
+	useEffect(() => {
+		const renderer = rendererRef.current;
+		const graph = graphRef.current;
+		if (!renderer || !graph) return;
+		renderer.setSetting("nodeReducer", (key, attrs) =>
+			visibleIds.has(key) ? attrs : { ...attrs, hidden: true },
+		);
+		renderer.setSetting("edgeReducer", (key, attrs) => {
+			const source = graph.source(key);
+			const target = graph.target(key);
+			return visibleIds.has(source) && visibleIds.has(target) ? attrs : { ...attrs, hidden: true };
+		});
+		// The open detail card cannot outlive its node's visibility.
+		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
+	}, [rendererEpoch, visibleIds]);
 
 	// Position the detail card: below the clicked node, flipped above near
 	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
@@ -544,6 +617,44 @@ export function GraphView() {
 				<div ref={containerRef} className="h-full w-full" />
 			)}
 
+			{/* Legend + filters: search box and per-state toggle rows. */}
+			{!isEmpty && (
+				<div className="absolute right-3 top-3 z-10 w-64 rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
+					<div className="relative">
+						<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+						<input
+							value={query}
+							onChange={(e) => setQuery(e.target.value)}
+							placeholder="Search nodes…"
+							spellCheck={false}
+							className="h-8 w-full rounded-lg border bg-background pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+						/>
+					</div>
+					{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
+						<div className="mt-1.5 border-t px-1.5 pt-1.5 text-[11px] text-muted-foreground">
+							No matching nodes.
+						</div>
+					)}
+				</div>
+			)}
+
+			{/* Background pipeline status: what is currently running. */}
+			{pipelineRuns.length > 0 && (
+				<div className="absolute bottom-3 left-3 z-10 flex flex-col gap-1.5">
+					{pipelineRuns.map((run) => (
+						<div
+							key={run.chatId}
+							className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
+						>
+							<Loader2Icon className="size-3.5 shrink-0 animate-spin" />
+							<span className="capitalize">{run.phase}</span>
+							<span className="max-w-48 truncate text-foreground">{run.title}</span>
+							<span className="tabular-nums">{Math.max(0, Math.round((Date.now() - run.startedAt) / 1000))}s</span>
+						</div>
+					))}
+				</div>
+			)}
+
 			{selected && !isEmpty && (
 				<div
 					ref={cardRef}
@@ -552,23 +663,31 @@ export function GraphView() {
 					style={{ visibility: "hidden", left: 0, top: 0 }}
 					className="absolute z-10 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
 				>
-					<div className="text-sm font-medium leading-snug">{selected.node.statement}</div>
-					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.description}</div>
-					<div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
-						{STATE_LABELS[selected.state]}
-					</div>
+					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
+					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
 					{selected.chatIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>
-							{selected.chatIds.map((chatId) => (
-								<Link
-									key={chatId}
-									href={`/chat/${chatId}`}
-									className="truncate rounded-md px-2 py-1 text-sm text-foreground transition-colors hover:bg-accent"
-								>
-									{snapshot?.sessions[chatId] ?? chatId}
-								</Link>
-							))}
+							{selected.chatIds.map((chatId) => {
+								// That session's understanding observation — the
+								// extractor's named-word note (confidence history).
+								const note = snapshot?.nodeObservations?.[selected.node.id]?.[chatId];
+								return (
+									<div key={chatId} className="flex items-center gap-1.5">
+										<Link
+											href={`/chat/${chatId}`}
+											className="min-w-0 flex-1 truncate rounded-md px-2 py-1 text-sm text-foreground transition-colors hover:bg-accent"
+										>
+											{snapshot?.sessions[chatId] ?? chatId}
+										</Link>
+										{note && (
+											<span className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+												{note}
+											</span>
+										)}
+									</div>
+								);
+							})}
 						</div>
 					) : (
 						<div className="mt-3 text-xs text-muted-foreground">No sessions recorded.</div>

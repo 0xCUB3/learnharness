@@ -30,6 +30,11 @@ import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../
  * trigger while one run is in flight is a no-op (the next trigger picks up
  * whatever the in-flight run missed). On failure nothing is checkpointed —
  * the next trigger re-runs the whole thing.
+ *
+ * Observability (§5 baseline): every stage logs one line per step, its
+ * start, and its duration; the pipeline logs a failure line before
+ * rethrowing, so the server log reads start → stage timings → merged
+ * stats (or failed) for every run.
  */
 
 // ─── the transcript view (what the extractor + auditor see) ─────────────────
@@ -94,6 +99,13 @@ const messagesField = z
 
 const propositionSchema = z.object({
 	id: z.string().describe("Local id: \"p1\", \"p2\", … — referenced by edges and attribution."),
+	name: z
+		.string()
+		.describe(
+			"A very short label for the proposition — a few words, a compact handle like a glossary headword " +
+				'(\'Will to power\', \'Divine command theory\'). Not a sentence, needn\'t be unique or ' +
+				"self-contained: the statement carries the precision. This becomes the node's label in the graph.",
+		),
 	statement: z
 		.string()
 		.describe(
@@ -101,11 +113,6 @@ const propositionSchema = z.object({
 				"Never reference the learner, the teacher, or the session: not \"the learner understands X\" but " +
 				'"X". A misconception is stated as the TRUE correction ("Nietzsche did not endorse ' +
 				'might-makes-right social Darwinism") — the wrongness lives in the quiz outcomes, never here.',
-		),
-	description: z
-		.string()
-		.describe(
-			"The elaborated version of the same proposition — more words: scope, precision, what exactly it means. Still true, still world-facing.",
 		),
 	aliases: z.array(z.string()).describe("Verbatim phrasings this session used for the same proposition, if any."),
 	messages: messagesField,
@@ -163,8 +170,12 @@ misconception is NOT a node of its own wrong claim — state the TRUE correction
 quiz outcomes carry that the learner believed the wrong version.
 
 1. PROPOSITIONS — every distinct reasoning-step-sized proposition the session touched:
-   - Each is a self-contained TRUE statement ("statement"), plus its elaboration ("description" — more
-     words, same proposition: scope, precision, what exactly it means).
+   - Each has a "name" — a VERY short label, a few words, a compact handle like a glossary headword
+     ("Will to power", "Divine command theory"). Not a sentence; needn't be unique or self-contained.
+     It becomes the node's label in the graph, so keep it glanceable: names are what one reads on
+     the graph, statements are what one reads on the node.
+   - And a "statement" — the self-contained TRUE proposition at full precision (the elaboration lives
+     in the graph only as this one statement).
    - Include corrections of misconceptions the teacher articulated, and true facts explained in prose.
    - One reasoning step per proposition: never a topic blob, never a sub-step.
    - "messages": the [id] tags of every message where the proposition came up — provenance, report it.
@@ -249,10 +260,12 @@ FAITHFULNESS — verify every candidate against the transcript:
   scale or drop.
 
 IDENTITY — link-or-create, per proposition:
-- You see the current graph (every node: id, statement, description, aliases). For each verified proposition,
+- You see the current graph (every node: id, name, statement, aliases). For each verified proposition,
   decide: does an EXISTING node already state this same proposition?
-- If yes: set "linkTo" to that node's id. The session's phrasings will join its aliases and its provenance.
-- If no: omit "linkTo" and a new node is created.
+- If yes: set "linkTo" to that node's id. The session's phrasings will join its aliases and its provenance;
+  the node keeps its existing name (labels stay stable across sessions — ignore your name for linked nodes).
+- If no: omit "linkTo" and a new node is created, with the extractor's name as its label. Reword only a
+  clearly unglanceable name (an unwieldy sentence of a name); keep it short.
 - When unsure, omit — duplicates are recoverable later; wrong merges are not.
 
 Also drop propositions not referenced by anything else ONLY if they have no other backing — an unreferenced but
@@ -266,7 +279,7 @@ function graphView(nodes: GraphNode[]): string {
 	if (nodes.length === 0) return "(the graph is currently empty — every proposition is a new node)";
 	const lines = nodes.map(
 		(n) =>
-			`- ${n.id} :: ${n.statement}\n  description: ${n.description}` +
+			`- ${n.id} :: ${n.name}\n  statement: ${n.statement}` +
 			(n.aliases.length > 0 ? `\n  aliases: ${n.aliases.join(" | ")}` : ""),
 	);
 	return lines.join("\n");
@@ -289,6 +302,25 @@ function createAuditor(model: LanguageModel) {
 				`[extraction] auditor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
 			),
 	});
+}
+
+// ─── the pipeline status registry ─────────────────────────────────────────────
+
+/** The pipeline phases, in order — what the home status endpoint shows. */
+export type ExtractionPhase = "extracting" | "auditing" | "merging";
+
+/** One in-flight pipeline run. Module-level: one process, one registry. */
+interface RunningExtraction {
+	chatId: string;
+	phase: ExtractionPhase;
+	startedAt: number;
+}
+
+const runningExtractions = new Map<string, RunningExtraction>();
+
+/** In-flight pipeline runs (oldest first) — the /api/graph/status payload. */
+export function extractionStatuses(): RunningExtraction[] {
+	return [...runningExtractions.values()].sort((a, b) => a.startedAt - b.startedAt);
 }
 
 // ─── the pipeline ───────────────────────────────────────────────────────────
@@ -314,15 +346,25 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	const auditorAgent = createAuditor(deps.auditor ?? modelFor("auditor"));
 	const inFlight = new Set<string>();
 
+	function setPhase(chatId: string, phase: ExtractionPhase): void {
+		runningExtractions.set(chatId, {
+			chatId,
+			phase,
+			startedAt: runningExtractions.get(chatId)?.startedAt ?? Date.now(),
+		});
+	}
+
 	async function extract(chatId: string): Promise<SessionFindings> {
 		const record = chatStore.getChat(chatId);
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
 		const view = transcriptView(record);
 		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} transcript lines)`);
+		const t0 = performance.now();
 
 		const extraction = await extractorAgent.generate({ prompt: `Transcript:\n\n${view}` });
 		for (const part of extraction.content) {
 			if (part.type === "tool-result" && part.toolName === "submit_findings") {
+				console.info(`[extraction ${chatId}] extractor done in ${Math.round(performance.now() - t0)}ms`);
 				return part.output as SessionFindings;
 			}
 		}
@@ -338,6 +380,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			`[extraction ${chatId}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
 				`${Object.keys(findings.attribution.quiz).length} attributions, ${graph.nodes.length} graph nodes)`,
 		);
+		const t0 = performance.now();
 
 		const review = await auditorAgent.generate({
 			prompt:
@@ -362,23 +405,37 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`${auditResult.edges.length}/${findings.edges.length} edges, ` +
 				`${auditResult.propositions.filter((p) => p.linkTo !== undefined).length} linked to existing nodes`,
 		);
+		console.info(`[extraction ${chatId}] auditor done in ${Math.round(performance.now() - t0)}ms`);
 		return auditResult;
 	}
 
 	async function runExtraction(chatId: string): Promise<EmissionStats> {
 		if (inFlight.has(chatId)) return { nodes: 0, edges: 0, events: 0 };
 		inFlight.add(chatId);
+		const t0 = performance.now();
 		try {
 			console.info(`[extraction ${chatId}] pipeline start`);
+			setPhase(chatId, "extracting");
 			const findings = await extract(chatId);
+			setPhase(chatId, "auditing");
 			const auditResult = await audit(chatId, findings);
+			setPhase(chatId, "merging");
 			// The merger re-reads the chat record itself — events are rebuilt
 			// from the transcript, never from stale copies.
 			const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore });
-			console.info(`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events`);
+			console.info(
+				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
+					`(${Math.round(performance.now() - t0)}ms total)`,
+			);
 			return stats;
+		} catch (err) {
+			// The throw travels to the caller; this line is what makes the
+			// run's log legible end-to-end (no hanging "pipeline start").
+			console.error(`[extraction ${chatId}] pipeline failed (${Math.round(performance.now() - t0)}ms):`, err);
+			throw err;
 		} finally {
 			inFlight.delete(chatId);
+			runningExtractions.delete(chatId); // done or failed — no longer running
 		}
 	}
 

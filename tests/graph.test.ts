@@ -167,8 +167,8 @@ function fixtureAudit(): AuditResult {
 		propositions: [
 			{
 				id: "p1",
+				name: "Alpha",
 				statement: "Alpha intuition",
-				description: "Alpha intuition, elaborated: what alpha means and how it behaves in practice.",
 				aliases: ["alpha feel"],
 				messages: ["a1", "a3"],
 				evidence: ["fixture evidence"],
@@ -176,16 +176,16 @@ function fixtureAudit(): AuditResult {
 			},
 			{
 				id: "p2",
+				name: "Beta rule",
 				statement: "Beta rule",
-				description: "The beta rule and when it applies.",
 				aliases: [],
 				messages: ["a4"],
 				evidence: ["fixture evidence"],
 			},
 			{
 				id: "p3",
+				name: "Gamma",
 				statement: "Gamma application",
-				description: "Applying the whole framework to gamma cases.",
 				aliases: [],
 				messages: ["a5"],
 				evidence: ["fixture evidence"],
@@ -241,7 +241,7 @@ describe("the merger (mergeFindings)", () => {
 		const idByStatement = new Map(graph.nodes.map((n) => [n.statement, n.id]));
 		for (const node of graph.nodes) {
 			assert.match(node.id, /^n_/);
-			assert.ok(node.description.length > 0, "description is required");
+			assert.ok(node.name.length > 0, "name is required");
 			assert.equal("kind" in node, false, "no kind field");
 			assert.ok(Array.isArray(node.provenance), "message-granular provenance");
 		}
@@ -333,8 +333,8 @@ describe("the merger (mergeFindings)", () => {
 				propositions: [
 					{
 						id: "q1",
+						name: "Alpha",
 						statement: "Alpha feel", // a DIFFERENT phrasing — identity is the verdict, not strings
-						description: "The intuitive grasp of alpha.",
 						aliases: ["alpha intuition"],
 						messages: ["a1"],
 						evidence: ["fixture evidence"],
@@ -363,13 +363,12 @@ describe("the merger (mergeFindings)", () => {
 		assert.deepEqual(m, { chatId: chat2.id, sourceId: "q1", graphNodeId: alphaId });
 	});
 
-	it("derives node states and sessions in graphSnapshot", () => {
+	it("derives sessions and per-session understanding observations in graphSnapshot", () => {
 		const snap = graphSnapshot(graphDeps);
 		const idByStatement = new Map(snap.nodes.map((n) => [n.statement, n.id]));
-		// Alpha's latest quiz is call-9 (chat2, correct) → known.
-		assert.equal(snap.nodeStates[idByStatement.get("Alpha intuition")!], "known");
-		assert.equal(snap.nodeStates[idByStatement.get("Beta rule")!], "missed");
-		assert.equal(snap.nodeStates[idByStatement.get("Gamma application")!], "dont-know");
+		// No node-state classes anymore (2026-09-08): the snapshot carries
+		// only the objective graph + sessions; quiz outcomes stay ledger data.
+		assert.equal("nodeStates" in snap, false);
 
 		assert.equal(snap.sessions[chat1.id], "Graph fixture");
 		assert.equal(snap.sessions[chat2Id], "Graph fixture 2");
@@ -379,6 +378,12 @@ describe("the merger (mergeFindings)", () => {
 		);
 		// Gamma was only ever touched by chat1.
 		assert.deepEqual(snap.nodeSessions[idByStatement.get("Gamma application")!], [chat1.id]);
+
+		// Understanding observations: (node → chat → the extractor's note).
+		// Alpha carries chat1's "solid after the check"; chat2's q1 has no note.
+		const alphaObs = snap.nodeObservations[idByStatement.get("Alpha intuition")!] ?? {};
+		assert.equal(alphaObs[chat1.id], "solid after the check");
+		assert.equal(alphaObs[chat2Id], undefined);
 	});
 
 	it("never string-matches without a verdict — an identical statement without linkTo is a NEW node", () => {
@@ -390,8 +395,8 @@ describe("the merger (mergeFindings)", () => {
 				propositions: [
 					{
 						id: "r1",
+						name: "Alpha",
 						statement: "Alpha intuition", // IDENTICAL to the existing node's statement
-						description: "Same words, no verdict.",
 						aliases: [],
 						messages: ["u1"],
 						evidence: ["fixture evidence"],
@@ -473,22 +478,24 @@ describe("graph ledger store", () => {
 	it("round-trips lines and skips corrupt / foreign-shaped lines (strict reads)", () => {
 		const node = {
 			id: "n_storetest",
-			statement: "Store test",
-			description: "Store test, elaborated.",
+			name: "Store test",
+			statement: "Store test, elaborated.",
 			aliases: [] as string[],
 			createdAt: "2026-08-22T00:00:00.000Z",
 			provenance: [{ chatId: "chat_c", messageId: "m1" }],
 		};
 		graphStore.appendNode(node);
-		// A torn append and a legacy pre-redesign node (old schema) — both skipped.
+		// A torn append and a pre-name-pivot node (old schema: description, no
+		// name) — both skipped by the strict guard.
 		fs.appendFileSync(
 			LEDGER_FILES.nodes,
-			`{not json}\n${JSON.stringify({ id: "legacy", statement: "Legacy shape", kind: "truth", name: "Legacy", createdAt: "2026-08-22T00:00:00.000Z" })}\n`,
+			`{not json}\n${JSON.stringify({ id: "legacy", statement: "Legacy shape", description: "Old schema.", aliases: [], createdAt: "2026-08-22T00:00:00.000Z", provenance: [] })}\n`,
 			"utf-8",
 		);
 		const nodes = graphStore.readNodes().filter((n) => n.id === "n_storetest" || n.id === "legacy");
 		assert.equal(nodes.length, 1);
-		assert.equal(nodes[0]!.statement, "Store test");
+		assert.equal(nodes[0]!.name, "Store test");
+		assert.equal(nodes[0]!.statement, "Store test, elaborated.");
 		assert.deepEqual(nodes[0]!.provenance, [{ chatId: "chat_c", messageId: "m1" }]);
 	});
 
@@ -496,8 +503,8 @@ describe("graph ledger store", () => {
 		const line = (msgId: string) =>
 			JSON.stringify({
 				id: "n_linktest",
+				name: "Link test",
 				statement: `Phrasing ${msgId}`,
-				description: "Elaboration.",
 				aliases: [],
 				createdAt: "2026-08-22T00:00:00.000Z",
 				provenance: [{ chatId: "chat_c", messageId: msgId }],
