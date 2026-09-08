@@ -42,7 +42,10 @@ export function Composer({
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
 				onKeyDown={(e) => {
-					if (e.key === "Enter" && !e.shiftKey) {
+					// Chat convention: Enter sends, Shift+Enter is a newline.
+					// ⌘/Ctrl+Enter also sends — the universal submit shortcut
+					// across every input in the app (thinking field, answers).
+					if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
 						e.preventDefault();
 						if (busy) onStop();
 						else if (canSend) onSend();

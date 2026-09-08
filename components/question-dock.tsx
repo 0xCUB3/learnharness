@@ -399,7 +399,9 @@ function QuestionDockForm({
 							value={text}
 							onChange={(e) => setText(e.target.value)}
 							onKeyDown={(e) => {
-								if (e.key === "Enter" && !e.shiftKey) {
+								// Chat convention: Enter submits, Shift+Enter is a newline;
+								// ⌘/Ctrl+Enter also submits (universal across the app).
+								if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
 									e.preventDefault();
 									submit();
 								}
