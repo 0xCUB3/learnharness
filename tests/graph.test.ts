@@ -363,7 +363,7 @@ describe("the merger (mergeFindings)", () => {
 		assert.deepEqual(m, { chatId: chat2.id, sourceId: "q1", graphNodeId: alphaId });
 	});
 
-	it("derives node states and sessions in graphSnapshot", () => {
+	it("derives sessions and per-session understanding observations in graphSnapshot", () => {
 		const snap = graphSnapshot(graphDeps);
 		const idByStatement = new Map(snap.nodes.map((n) => [n.statement, n.id]));
 		// No node-state classes anymore (2026-09-08): the snapshot carries
@@ -378,6 +378,12 @@ describe("the merger (mergeFindings)", () => {
 		);
 		// Gamma was only ever touched by chat1.
 		assert.deepEqual(snap.nodeSessions[idByStatement.get("Gamma application")!], [chat1.id]);
+
+		// Understanding observations: (node → chat → the extractor's note).
+		// Alpha carries chat1's "solid after the check"; chat2's q1 has no note.
+		const alphaObs = snap.nodeObservations[idByStatement.get("Alpha intuition")!] ?? {};
+		assert.equal(alphaObs[chat1.id], "solid after the check");
+		assert.equal(alphaObs[chat2Id], undefined);
 	});
 
 	it("never string-matches without a verdict — an identical statement without linkTo is a NEW node", () => {

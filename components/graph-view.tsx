@@ -625,15 +625,26 @@ export function GraphView() {
 					{selected.chatIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>
-							{selected.chatIds.map((chatId) => (
-								<Link
-									key={chatId}
-									href={`/chat/${chatId}`}
-									className="truncate rounded-md px-2 py-1 text-sm text-foreground transition-colors hover:bg-accent"
-								>
-									{snapshot?.sessions[chatId] ?? chatId}
-								</Link>
-							))}
+							{selected.chatIds.map((chatId) => {
+								// That session's understanding observation — the
+								// extractor's named-word note (confidence history).
+								const note = snapshot?.nodeObservations?.[selected.node.id]?.[chatId];
+								return (
+									<div key={chatId} className="flex items-center gap-1.5">
+										<Link
+											href={`/chat/${chatId}`}
+											className="min-w-0 flex-1 truncate rounded-md px-2 py-1 text-sm text-foreground transition-colors hover:bg-accent"
+										>
+											{snapshot?.sessions[chatId] ?? chatId}
+										</Link>
+										{note && (
+											<span className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+												{note}
+											</span>
+										)}
+									</div>
+								);
+							})}
 						</div>
 					) : (
 						<div className="mt-3 text-xs text-muted-foreground">No sessions recorded.</div>

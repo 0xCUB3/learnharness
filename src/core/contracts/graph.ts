@@ -229,6 +229,11 @@ export interface GraphSnapshot {
 	sessions: Record<string, string>;
 	/** nodeId → chatIds that touched the node (click-through provenance). */
 	nodeSessions: Record<string, string[]>;
+	/** nodeId → chatId → that session's understanding observation (the
+	 *  extractor's per-session named-word note; session-relative data,
+	 *  shown next to the session list — the confidence history). Multiple
+	 *  notes for one (node, chat) collapse to the latest. */
+	nodeObservations: Record<string, Record<string, string>>;
 }
 
 /** Derive a short chat title from the learner's first message (pure).

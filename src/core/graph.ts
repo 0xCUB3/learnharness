@@ -447,5 +447,26 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		if (ids.length > 0) nodeSessions[nodeId] = ids;
 	}
 
-	return { nodes, edges, sessions, nodeSessions };
+	// Understanding observations per (node, chat) — the extractor's
+	// session-relative note (latest wins within a chat). Read-time join for
+	// the detail card: the confidence history next to the session list.
+	const nodeObservations: Record<string, Record<string, string>> = {};
+	const latestObs = new Map<string, { at: string; note: string; index: number }>();
+	events.forEach((event, index) => {
+		if (event.kind !== "observation" || event.nodeId === null) return;
+		if (!event.note) return;
+		const key = `${event.nodeId}\u0000${event.chatId}`;
+		const current = latestObs.get(key);
+		if (!current || event.at > current.at || (event.at === current.at && index > current.index)) {
+			latestObs.set(key, { at: event.at, note: event.note, index });
+		}
+	});
+	for (const [key, { note }] of latestObs) {
+		const sep = key.indexOf("\u0000");
+		const nodeId = key.slice(0, sep);
+		const chatId = key.slice(sep + 1);
+		(nodeObservations[nodeId] ??= {})[chatId] = note;
+	}
+
+	return { nodes, edges, sessions, nodeSessions, nodeObservations };
 }
