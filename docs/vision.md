@@ -2,7 +2,7 @@
 
 Living document. Started 2026-08-22, capturing the current vision and all agreed decisions. Amend as things evolve.
 
-Prior art: `knowledge graph design.md` in the Obsidian vault (2025-08-20 ideation) — still canonical for the epistemic model (known vs understood, requires/supports, event ledger, calibration rubric, merging policy). This document records what today's decisions **amend** in it, and adds the session-experience and presentation layers the original doc deferred.
+Prior art: `knowledge graph design.md` in the Obsidian vault (2025-08-20 ideation) — was canonical for the epistemic model; the 2026-09-02 node-theory + construction redesign in §1 amends it further (no misconception nodes, `follows`/`supports`, no taught events, message-granular provenance). This document records what today's decisions **amend** in it, and adds the session-experience and presentation layers the original doc deferred.
 
 ---
 
@@ -10,33 +10,55 @@ Prior art: `knowledge graph design.md` in the Obsidian vault (2025-08-20 ideatio
 
 Everything the learner learns accumulates into one persistent, cross-domain graph. It is the home page of the app and the heart of the system: structure builds out visibly over time, and the data supports frontier expansion, what-next queries, repairs, unlock-value (per the original design doc).
 
+**Node theory + construction redesigned 2026-09-02** — the subsections below from "What the graph is" through "Understanding is derived" are the current philosophy, superseding both the original design doc's epistemic model in part and the 2026-08-22 live-emission construction decision (see the amendments table).
+
 ### Critical requirement: frequent updates
 
-The graph updates **continuously, not per-session**. A learner who answers a few questions and leaves without "finishing" a session must still see something new on the home page. Partial sessions deposit value. This requirement drove the construction decision below.
+The graph updates **continuously, not per-session**. A learner who answers a few questions and leaves without "finishing" a session must still see something new on the home page. Partial sessions deposit value. The background extraction pipeline's checkpoint mechanism satisfies this (fold on home/idle, never the same turns twice) — not live emission.
 
-### Construction: live events + background consolidation (DECIDED)
+### What the graph is — node theory (DECIDED 2026-09-02)
 
-**Amendment to the original design doc.** The original doc stated "the teacher agent is never modified; all graph-building is post-hoc," and rejected live structured emission as too much cognitive load. That is now **reversed**, because the teacher will be maintaining a formal plan tree anyway (§2) — once it does, live emission is nearly free, and it's the only way to satisfy the frequent-updates requirement.
+The global graph is an **objective world-model of the domains the learner has encountered**: the facts, their structure (what follows from / is supported by what), and — inferred from that structure plus the event ledger — the state of the learner's understanding. Nothing learner- or session-relative is ever stored **in** the graph; understanding is **inferred, never encoded**.
 
-- **Live:** the teacher maintains the session's dependency tree via structured tools and tags quiz outcomes to tree nodes as they happen. The home graph reflects this in near real time.
-- **Background consolidation (lightweight, frequent):** cross-session node merging (embed → kNN → LLM adjudication, conservative — duplicates over wrong merges), calibration rubric application, and edges that were articulated only in prose. Runs on navigation home / idle — not as a heavy per-session batch.
-- The original three-stage transcript-extraction pipeline survives only as (a) the retroactive bootstrap over old session files, (b) the audit/faithfulness net.
+- **Every node is a true proposition.** Worded objectively, in minimal form as it exists w.r.t. its context. Truth is context-relative and that is fine: "Gravity is a force" and "Gravity is not a force" coexist as nodes — each true in its context (classical mechanics vs. GR), with **the surrounding subgraph as the context**. No context field, no pedantic self-containment of facts.
+- **Node schema:** `statement` — the proposition in minimal form (a short sentence; the rendering label and identity key); `description` — the elaborated version (required); `aliases` — the verbatim phrasings sessions used (merge keys + audit trail). There is **no `kind`** field.
+- **Misconceptions are not a node category.** A myth enters the graph as its true correction ("The 10%-of-brain claim is a myth"); the learner's holding of the wrong idea lives entirely in the event ledger. Wrongness is about the learner, and the learner lives in the ledger.
 
-### One substrate, merged across sessions (DECIDED)
+### Edges (DECIDED 2026-09-02)
 
-A single node model: propositions at one-reasoning-step grain, `requires`/`supports` edges, no edge scalars. A session's plan tree **is** a session-scoped subgraph. The global graph is the merge of all session trees:
+Two kinds, no scalars, no encoded strength — prerequisiteness is a spectrum, and we deliberately refuse to formalize the spectrum:
 
-- **v1 (bare bones):** merge = naive union. No adjudication yet.
-- **later:** the embed + LLM-adjudication merge pipeline from the design doc (the quiet superpower: cross-session/cross-domain edges only ever get created here).
+- **`follows`** — `A → B`: B is *derivable* from A (A is a premise of B). If C follows from both A and B, both `A → C` and `B → C` exist; joint requirements are just sibling edges.
+- **`supports`** — `A → B`: A *grounds or justifies* B without entailing it.
 
-Carried over unchanged from the design doc: known (evidence property) vs understood (derived structural property); event ledger as source of truth with derived state recomputed; anchored 5-level calibration rubric; misconception nodes as first-class structure; candidate node class for frontier territory.
+Strength/depth of dependencies is **derived at read time** from topology (chains, corroboration), never stored — this is the input the future understanding model consumes.
+
+### Provenance — message granularity (DECIDED 2026-09-02)
+
+Every node records every **(chat, message) point** where it came up; every edge records every message that asserted it. Deep-linkable to the exact transcript points — the derivation audit trail is a first-class feature, not a byproduct.
+
+### Construction: free-form extraction, fully decoupled from sessions (DECIDED 2026-09-02 — supersedes live emission)
+
+**Second amendment, reversing the 2026-08-22 live-emission decision.** The session's plan tree is the teacher's scaffolding for the session experience (§2); the global graph does not depend on it — structurally or otherwise. What the teacher formalizes is session-relative; the graph must not inherit those choices. (The original design doc's post-hoc stance was right after all.)
+
+Three stages, one pipeline — the sole graph writer:
+
+- **Extractor (LLM) — session-only scope.** Sees ONLY the session transcript (tree-blind, with message ids). Reports freely, with verbatim evidence: propositions from anywhere in the session (one reasoning step each; prose counts as much as anything the teacher formalized), edges as the transcript articulates them, message-granular provenance, retroactive quiz attribution, and per proposition an **understanding note** — how strongly the learner accepted/understood it in this session, a small named-word scale, no numbers. The notes are data for the future state model; their treatment is TBD.
+- **Auditor (LLM) — the global-graph scope.** Sees the extractor's output AND the existing graph. Two jobs: the faithfulness net (every candidate verified against verbatim evidence — unchanged), and the **identity judgment**: link each proposition to an existing node (recording the session's phrasing as an alias) or create it new. Conservative: duplicates over wrong merges.
+- **Merger (deterministic).** Append-only ledger writes; quiz event kinds/refs rebuilt mechanically from quiz tool parts. Every judgment is an LLM's; everything mechanical stays code.
+
+**Event ledger (amended):** quiz outcomes are rebuilt deterministically from quiz tool parts (correct / miss / don't-know, plus the learner's note). **There is no `taught` event** — no marking-things-done. The extractor's per-proposition understanding notes join the ledger as session-scoped observations. Identity is no longer exact-string matching — it is the auditor's judgment, with aliases as the phrasing record.
+
+### Understanding is derived (amended 2026-09-02)
+
+Known vs. understood, event ledger as source of truth, derived state recomputed on read — carried over from the design doc in spirit. The state model itself is now an explicit design discussion: **node states should be session-independent and computed from the depth and strength of dependencies** (the `follows`/`supports` topology) plus quiz events and understanding notes. That redesign is pending ideation; the current five-class derivation (taught / known / missed / don't-know / candidate) is transitional. The anchored calibration rubric stays parked until real data.
 
 ### Rendering (DECIDED — research report 2026-08-22)
 
 - **Library: sigma.js v3 + graphology + graphology-layout-forceatlas2.** ~40 KB gzipped all-in — half of vis-network, a third of cytoscape, far below react-force-graph (~250 KB deps) and cosmos.gl (luma.gl stack).
 - **Layout: synchronous run-then-freeze.** `forceAtlas2.assign(graph, { iterations: 100, settings: inferSettings(graph) })` runs once, writes x/y, and no animation loop ever starts — near-zero idle CPU (sigma only redraws on camera/graph events). <150 ms at hundreds of nodes; at ~2k enable `barnesHutOptimize`, then the bundled Web Worker, then server-cached positions — in that order, only if latency bites.
 - **Labels at zoom:** sigma's `labelRenderedSizeThreshold` replicates Obsidian's "text fade threshold" exactly.
-- **Pan/zoom** built in; hover/click events (`enterNode`, `clickNode`) free. Typed edges: `EdgeArrowProgram` and/or two edge colors for `requires` vs `supports`.
+- **Pan/zoom** built in; hover/click events (`enterNode`, `clickNode`) free. Typed edges: `EdgeArrowProgram` and/or two edge colors for `follows` vs `supports`.
 - **React integration:** thin ~40-line `useEffect` wrapper (sigma is imperative; `@react-sigma/core` exists but is optional).
 - **Obsidian internals (confirmed by research):** PixiJS **WebGL** renderer (canvas fallback), custom d3-force-style simulation (its four force sliders map 1:1 onto d3-force primitives), zoom-gated label fade, alpha-decay settling. Our chosen stack reproduces that feel with a documented, maintained library.
 - Rejected: vis-network / cytoscape.js (Canvas 2D, 3× bundle, editing features we don't need), react-force-graph-2d (best freeze API but heaviest dep tree; its strength is *animated* simulation, which we explicitly don't want), cosmos.gl (GPU forces — overkill below ~10k nodes).
@@ -47,11 +69,11 @@ Carried over unchanged from the design doc: known (evidence property) vs underst
 
 Every session starts with the learner's knowledge graph as base context for the teacher. This is what makes probing *precise* — probe questions can target subtleties and nuances at the boundary of what the learner actually holds, instead of re-discovering it from scratch each session. Personalization compounds across sessions.
 
-**The selection problem (open):** the whole graph may eventually be too much context, and pedagogical relevance ≠ semantic closeness. What matters for a new topic: (a) its **structural neighborhood** — the `requires`-edge subtree the topic stands on, regardless of surface similarity; (b) **diagnostic hotspots** — misconception / shaky / floating nodes anywhere in the graph (a live misconception is always relevant context); (c) the frontier strip near the topic. Candidate strategies, to tune on real data: whole graph while it's small; k-hop structural neighborhood around the topic's nodes; ledger-informed slices (weak/misconceived/floating first); a cheap routing pass that picks subtrees given the session topic.
+**The selection problem (open):** the whole graph may eventually be too much context, and pedagogical relevance ≠ semantic closeness. What matters for a new topic: (a) its **structural neighborhood** — the `follows`-edge subtree the topic stands on, regardless of surface similarity; (b) **diagnostic hotspots** — nodes the ledger marks as shaky / misunderstood / misconceived, anywhere in the graph (a live misconception — events showing the learner holds a node wrong — is always relevant context); (c) the frontier strip near the topic. Candidate strategies, to tune on real data: whole graph while it's small; k-hop structural neighborhood around the topic's nodes; ledger-informed slices (weak/misconceived/floating first); a cheap routing pass that picks subtrees given the session topic.
 
 ### Home page
 
-The graph view replaces the current placeholder. v1: all nodes from all sessions (naive union), node color/shape by state class (taught / probed / known / not-held / candidate later), pan/zoom, labels at zoom. Clicking a node → the session(s) that touched it (cheap version: title list). Everything richer (frontier glow, rot map, blast radius) comes after the consolidation pipeline exists.
+The graph view replaces the current placeholder. v1: all nodes from all sessions, node color/shape by state class (the current five classes are transitional — see "Understanding is derived"), pan/zoom, labels at zoom. Clicking a node → the exact (session, message) points where it came up (message-granular provenance, deep-linked). Everything richer (frontier glow, rot map, blast radius) comes after the state model exists.
 
 ---
 
@@ -63,6 +85,7 @@ Goal: a learning session must look and feel structurally different from a ChatGP
 
 - The agent authors the tree via **structured tools** — `add_node`, `add_edge`, `reparent`, `remove_node`, `set_current`, … — schema-validated, with stable node identity across edits. Mermaid text as the source of truth was rejected: edits would be text surgery and identity would drift.
 - The agent may edit the tree mid-session at its own initiative (detour when the learner asks something worth exploring, go deeper, prune) — that power is explicit.
+- The tree is **session scaffolding only**: the global graph is built by free-form post-hoc extraction that is deliberately tree-blind (§1, construction). Nothing structural rides from the tree into the graph.
 - **"Where we are"** is tracked as structured state (a `set_current` tool), not inferred from the transcript.
 - **Mermaid survives only for ad-hoc lesson diagrams** (flows, cycles, comparisons) that are not the plan tree — and the teacher is explicitly **encouraged to diagram freely in explanations**; diagrams are first-class teaching output, not decoration. Its rendering quality must improve (integrated display, working zoom/pan — current code-block-ish rendering is unacceptable), but it's now a peripheral concern.
 
@@ -173,7 +196,7 @@ The teacher's context window and attention are precious — it has the lesson to
 2. **Bare-bones global graph + home view** — live emission from tree tools into a graph store, naive-union merge, home page renders it with the chosen lightweight renderer. *This is the "see something appear even from a partial session" milestone.* **✅ Wave 2 (W4): JSONL ledgers, idempotent emission, sigma.js + forceAtlas2 home view, foldStaleChats catch-up. Live-verified.**
 3. **Phase separation** — probe/teach marker, transcript divider, collapsed teach-phase checks. **✅ Wave 2 (W5): phaseAt from first plan_init, "Teaching · N nodes" divider, invitation bar + reveal. Live-verified.**
 4. **Right-panel tree view** — persistent, current-position highlight. **✅ Wave 3 (W7): topo order, done/current/next/upcoming, progress header, collapse-to-rail persisted. Live-verified.**
-5. **Background consolidation** — merge adjudication, calibration, prose-only edges. **◐ Wave 3 (W8, lite): exact/alias-match merge + graph-as-context injection (whole graph while small, 150-node cap with hotspot+1-hop truncation). Live-verified personalization. Full embed+adjudication merge and calibration rubric remain deferred.**
+5. **Background consolidation → free-form extraction pipeline** — merge adjudication, calibration, prose-only edges. **◐ Wave 3 (W8, lite) shipped exact/alias-match merge + graph-as-context injection. Superseded direction (2026-09-02): the pipeline becomes free-form post-hoc extraction (extractor session-only → auditor with global-graph identity judgment → deterministic merger), tree-blind, message-granular provenance, no taught events, per-proposition understanding notes. Minimal implementation of the §1 philosophy next.**
 6. **Demo capability** — the `demo` artifact contract (sandboxed iframe, error-fix loop) + the **demo-builder sub-agent** that tests code before delivery (§2.5). High value; slots in any time after step 1. **✅ Wave 2 (W6): demo + visual tools, verifying builders (headless Chrome), sandboxed demo card, SVG card. Live-verified (visual needs a vision-capable LH_VISUAL_MODEL).**
 6b. **Researcher tool** — fact verification for the teacher (§2.5); cheap port of proven pi pieces. **✅ Wave 1 (W2): async job protocol, live activity card, sourced brief, teacher continuation. Live-verified.**
 7. **Presentation fixes** — LaTeX delimiters, line breaks, mermaid integration. **✅ Wave 1 (W3): \(…\)/\[…\] contract ($ literal forever), remark-breaks, dark mermaid + styled streamdown chrome. Live-verified.**
@@ -185,8 +208,8 @@ The teacher's context window and attention are precious — it has the lesson to
 ## 5. Open questions
 
 1. ~~Graph rendering library + layout architecture~~ — **decided 2026-08-22: sigma.js + forceatlas2, run-then-freeze** (see §1). Remaining: run the 2k-node synthetic benchmark before implementation.
-2. What exactly the naive-union v1 shows for overlapping topics across sessions (duplicate nodes acceptable until consolidation? — presumed yes, cosmetic only).
-3. How the probe phase's questions map onto tree nodes when no tree exists yet (probe happens *before* the plan is written — do probe outcomes attach to a provisional node set, or to the eventual tree retroactively?).
+2. ~~Overlapping topics across sessions~~ — resolved by the 2026-09-02 model: identity is the auditor's judgment (link-or-create, aliases as phrasings); duplicates are acceptable-and-correctable, wrong merges are not.
+3. ~~Probe questions when no tree exists yet~~ — resolved by free-form extraction: quiz attribution is retroactive against the whole transcript (extractor judgment, auditor-verified), with no dependence on the tree at all.
 4. Home-graph v1 interactions beyond pan/zoom (node click → session list? — presumed cheap yes).
 5. Grain mismatch frequency (`subsumes`-style relations) — per original doc, measured by data, not pre-solved.
 6. Aggregation semantics for understanding (min / mean / two-level) — fit on real data, per original doc.
@@ -197,7 +220,12 @@ The teacher's context window and attention are precious — it has the lesson to
 
 | Original | Now |
 |---|---|
-| Teacher never modified; graph built post-hoc | Teacher emits structured data live; background pass consolidates |
+| Teacher never modified; graph built post-hoc | Post-hoc again (2026-09-02): free-form extraction, fully decoupled from the session's formalism — the 2026-08-22 live-emission reversal is itself reversed |
+| Misconception nodes as first-class structure | No node `kind`: every node is a true proposition; misconceptions enter as true corrections, wrongness lives in the event ledger |
+| `requires` edges | `follows` / `supports` — derivability vs. grounding; strength derived at read time, never stored |
+| `taught` events (marking things done) | Dropped; the extractor records per-proposition understanding notes (named-word scale) as session-scoped observations instead |
+| Chat-granular node/edge provenance | Message-granular (chat, message) provenance on nodes and edges — the exact derivation points |
+| `name` + `statement` on nodes | `statement` (minimal proposition, the rendering label) + `description` (required elaboration) + `aliases` (verbatim phrasings) |
 | Updates per completed session | Continuous; partial sessions deposit value |
 | Mermaid DAG as the plan artifact | Structured tools as source of truth; mermaid only for ad-hoc diagrams |
 | UI deferred, "not important" | UI exists (Next.js, v3.4); the graph view is the app's home page |
