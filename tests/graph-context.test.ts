@@ -1,13 +1,14 @@
 /**
- * Graph-as-context tests (W8; vision §1 "the graph as session context").
+ * Graph-as-context tests (vision §1 "the graph as session context", 2026-09-02
+ * redesign vocabulary: follows edges, no node kinds).
  *
  *   renderGraphContext  — pure: empty / small / cap-truncation rendering
  *   buildGraphContext   — per-request entry point (derived-graph → block)
  *   injection plumbing  — chat-flow style: the teacher's instructions carry
  *                         the block (MockLanguageModelV4 captures the prompt)
- *   exact-match merge   — the merger (mergeFindings) dedupes
- *                         case/whitespace-identical statements onto existing
- *                         nodes (no fuzzy matching)
+ *   cross-chat edges    — the merger (mergeFindings) appends one ASSERTION
+ *                         line per session; reads merge with unioned
+ *                         message-granular provenance
  *
  * Ledger isolation: NONE needed for the merge tests — the merger's ledger is
  * injectable (in-memory), so the live data/graph files are only ever READ
@@ -22,7 +23,14 @@ import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
-import type { GraphEdge, GraphNode, LedgerEvent, SessionFindings } from "../src/core/contracts.ts";
+import type {
+	AuditResult,
+	GraphEdge,
+	GraphNode,
+	LedgerEvent,
+	NodeMapping,
+	SessionCheckpoint,
+} from "../src/core/contracts.ts";
 import type { NodeStateClass } from "../src/core/contracts.ts";
 import { getGraph, mergeFindings } from "../src/core/graph.ts";
 import type { GraphStore } from "../src/core/ports.ts";
@@ -35,19 +43,25 @@ import {
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { chatStore } from "../src/store/chats.ts";
-import type { NodeMapping, SessionCheckpoint } from "../src/core/contracts.ts";
 import { graphStore } from "../src/store/graph.ts";
-import { createTree } from "../src/core/plan-tree.ts";
 import { PATHS } from "../config.ts";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
 function node(id: string, statement: string, over: Partial<GraphNode> = {}): GraphNode {
-	return { id, name: statement.split(";")[0]!, statement, aliases: [], kind: "truth", createdAt: "2026-08-22T00:00:00.000Z", ...over };
+	return {
+		id,
+		statement,
+		description: `${statement} — elaborated.`,
+		aliases: [],
+		createdAt: "2026-08-22T00:00:00.000Z",
+		provenance: [],
+		...over,
+	};
 }
 
 function edge(from: string, to: string): GraphEdge {
-	return { from, to, type: "requires", provenance: ["chat_x"] };
+	return { from, to, type: "follows", provenance: [{ chatId: "chat_x", messageId: "m1" }] };
 }
 
 function states(...entries: [string, NodeStateClass][]): Record<string, NodeStateClass> {
@@ -61,7 +75,7 @@ describe("renderGraphContext (pure)", () => {
 		assert.equal(renderGraphContext([], [], {}), null);
 	});
 
-	it("renders a header, state-grouped node lines (hotspots first), and chained requires edges", () => {
+	it("renders a header, state-grouped node lines (hotspots first), and chained follows edges", () => {
 		const nodes = [
 			node("n_a", "Chain rule intuition"),
 			node("n_b", "Quotient rule"),
@@ -73,26 +87,26 @@ describe("renderGraphContext (pure)", () => {
 			["n_a", "known"],
 			["n_b", "missed"],
 			["n_c", "candidate"],
-			["n_d", "taught"],
+			["n_d", "dont-know"],
 		);
 		const out = renderGraphContext(nodes, edges, st)!;
 
 		assert.ok(out.includes(GRAPH_CONTEXT_HEADER), "header line present");
-		assert.match(out, /4 nodes, 3 requires edges/);
+		assert.match(out, /4 nodes, 3 follows edges/);
 
 		// Node lines: "• [state] statement (id)".
 		assert.ok(out.includes("• [missed] Quotient rule (n_b)"));
 		assert.ok(out.includes("• [known] Chain rule intuition (n_a)"));
-		assert.ok(out.includes("• [taught] Composite functions (n_d)"));
+		assert.ok(out.includes("• [dont-know] Composite functions (n_d)"));
 		assert.ok(out.includes("• [candidate] Product rule (n_c)"));
 
-		// Groups in the decided order: hotspots, known, taught, candidates.
-		const order = ["Hotspots", "Known", "Taught", "Candidates"].map((g) => out.indexOf(g));
+		// Groups in the decided order: hotspots, known, candidates.
+		const order = ["Hotspots", "Known", "Candidates"].map((g) => out.indexOf(g));
 		assert.deepEqual([...order].sort((a, b) => a - b), order, "groups appear in priority order");
 
 		// Edges merged into chains: d → a → b → c (one line, three arrows).
 		assert.ok(out.includes("Composite functions → Chain rule intuition → Quotient rule → Product rule"));
-		assert.ok(out.includes("Requires (prerequisite → dependent)"));
+		assert.ok(out.includes("Follows (premise → derivation)"));
 		assert.ok(out.includes("===== end of knowledge graph ====="), "clear end delimiter");
 	});
 
@@ -104,15 +118,8 @@ describe("renderGraphContext (pure)", () => {
 		assert.ok(!out.includes("B → C"), "no edge was invented between siblings");
 	});
 
-	it("marks misconception-kind nodes as hotspots even when their state is candidate", () => {
-		const nodes = [node("n_m", "Division by zero is fine", { kind: "misconception" })];
-		const out = renderGraphContext(nodes, [], states(["n_m", "candidate"]))!;
-		assert.match(out, /• \[candidate\] Division by zero is fine \(n_m\) · misconception/);
-		assert.ok(out.includes("Hotspots"), "misconception nodes join the hotspot group");
-	});
-
-	it("caps at MAX_CONTEXT_NODES: hotspots + their 1-hop requires neighborhood only, with a truncation note", () => {
-		// 3 hotspots, each with a prerequisite and a dependent (1-hop), plus a
+	it("caps at MAX_CONTEXT_NODES: hotspots + their 1-hop follows neighborhood only, with a truncation note", () => {
+		// 3 hotspots, each with a premise and a derivation (1-hop), plus a
 		// long tail of disconnected candidates that must drop out.
 		const nodes: GraphNode[] = [];
 		const edges: GraphEdge[] = [];
@@ -121,7 +128,7 @@ describe("renderGraphContext (pure)", () => {
 			const h = `n_h${i}`;
 			const pre = `n_p${i}`;
 			const dep = `n_d${i}`;
-			nodes.push(node(pre, `Prerequisite ${i}`), node(h, `Hotspot ${i}`), node(dep, `Dependent ${i}`));
+			nodes.push(node(pre, `Premise ${i}`), node(h, `Hotspot ${i}`), node(dep, `Derivation ${i}`));
 			edges.push(edge(pre, h), edge(h, dep));
 			st[pre] = "known";
 			st[h] = "missed";
@@ -139,11 +146,11 @@ describe("renderGraphContext (pure)", () => {
 
 		const out = renderGraphContext(nodes, edges, st)!;
 		assert.ok(out.includes("• [missed] Hotspot 1 (n_h1)"), "hotspots stay");
-		assert.ok(out.includes("• [known] Prerequisite 1 (n_p1)"), "1-hop prerequisites stay");
-		assert.ok(out.includes("• [candidate] Dependent 1 (n_d1)"), "1-hop dependents stay");
+		assert.ok(out.includes("• [known] Premise 1 (n_p1)"), "1-hop premises stay");
+		assert.ok(out.includes("• [candidate] Derivation 1 (n_d1)"), "1-hop derivations stay");
 		assert.ok(!out.includes("Far away"), "disconnected nodes drop out");
 		assert.match(out, new RegExp(`showing 9 of ${nodes.length} nodes`), "truncation is noted");
-		assert.ok(out.includes(", 6 requires edges"), "edges among the selected nodes stay");
+		assert.ok(out.includes(", 6 follows edges"), "edges among the selected nodes stay");
 	});
 
 	it("keeps the full graph at exactly the cap (no truncation note)", () => {
@@ -169,11 +176,11 @@ describe("buildGraphContext", () => {
 	it("derives states from events and renders the block", () => {
 		const nodes = [node("n_a", "Solo node"), node("n_b", "Checked node")];
 		const events: LedgerEvent[] = [
-			{ nodeId: "n_b", kind: "check-correct", chatId: "c1", at: "2026-08-22T00:00:00.000Z", ref: "r1" },
+			{ nodeId: "n_b", kind: "correct", chatId: "c1", at: "2026-08-22T00:00:00.000Z", ref: "r1" },
 		];
 		const out = buildGraphContext({ nodes, edges: [], events })!;
 		assert.ok(out.includes(GRAPH_CONTEXT_HEADER));
-		assert.ok(out.includes("• [known] Checked node (n_b)"), "check-correct → known");
+		assert.ok(out.includes("• [known] Checked node (n_b)"), "correct → known");
 		assert.ok(out.includes("• [candidate] Solo node (n_a)"), "no events → candidate");
 	});
 
@@ -244,7 +251,7 @@ describe("graph-context injection (chat-flow style)", () => {
 			nodes: [node("n_ctx", "Chain rule intuition"), node("n_ctx2", "Derivative as a limit")],
 			edges: [edge("n_ctx2", "n_ctx")],
 			events: [
-				{ nodeId: "n_ctx2", kind: "check-correct", chatId: "c1", at: "2026-08-22T00:00:00.000Z", ref: "r1" },
+				{ nodeId: "n_ctx2", kind: "correct", chatId: "c1", at: "2026-08-22T00:00:00.000Z", ref: "r1" },
 			] as LedgerEvent[],
 		};
 		const context = buildGraphContext(graph);
@@ -296,7 +303,7 @@ describe("graph-context injection (chat-flow style)", () => {
 	});
 });
 
-// ─── exact-match merge (merger identity resolution) ──────────────────────────
+// ─── cross-chat edge assertions (merger + read-time merging) ────────────────
 
 /** An in-memory stand-in for the five ledgers (the GraphStore port, core/ports.ts). */
 function memoryLedgers() {
@@ -317,128 +324,100 @@ function memoryLedgers() {
 		appendCheckpoint: (c: SessionCheckpoint) => void checkpoints.push(c),
 		readCheckpoints: () => checkpoints.map((c) => ({ ...c })),
 		// Test accessors (not part of the GraphStore surface).
-		counts: { get nodes() { return nodes.length; }, get mappings() { return mappings.length; } },
-	} satisfies GraphStore & { counts: { nodes: number; mappings: number } };
+		counts: { get nodes() { return nodes.length; } },
+	} satisfies GraphStore & { counts: { nodes: number } };
 }
 
-/** Findings as the extractor would file them for a plan tree: one
- *  proposition per node (statement = title, treeNodeId set), one `requires`
- *  edge per tree edge — the merge tests drive the merger with these. */
-function treeFindings(tree: ReturnType<typeof createTree>): SessionFindings {
-	const idByNodeId = new Map(tree.nodes.map((n, i) => [n.id, `p${i + 1}`]));
-	return {
-		propositions: tree.nodes.map((n, i) => ({
-			id: `p${i + 1}`,
-			name: n.title,
-			statement: n.title,
-			aliases: [],
-			kind: "truth" as const,
-			treeNodeId: n.id,
-			evidence: ["fixture evidence"],
-		})),
-		edges: tree.edges.map((e) => ({
-			from: idByNodeId.get(e.from)!,
-			to: idByNodeId.get(e.to)!,
-			type: "requires" as const,
-			evidence: ["fixture evidence"],
-		})),
-		attribution: { quiz: {} },
-	};
-}
-
-/** A real chat record with a stored tree (the merger reads the real chat store). */
-function fixtureChat(title: string, tree: ReturnType<typeof createTree>) {
+/** A minimal chat record with one user message (the merger reads the real chat store). */
+function fixtureChat(title: string) {
 	const chat = chatStore.createChat(title);
 	createdChats.push(chat.id);
-	chatStore.saveTree(chat.id, tree);
 	chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "go" }] }]);
 	return chatStore.getChat(chat.id)!;
 }
 
-describe("exact-match merge (merger identity resolution)", () => {
-	it("maps a case/whitespace-identical title onto the existing node instead of duplicating", () => {
+describe("cross-chat edge assertions (merger + read-time merging)", () => {
+	it("a second session asserting the same edge appends a second line; reads merge with unioned provenance", () => {
 		const ledgers = memoryLedgers();
-		const tree1 = createTree([{ id: "cr", title: "Chain rule intuition" }], []);
-		const chat1 = fixtureChat("Merge A", tree1);
-		let stats = mergeFindings(chat1.id, treeFindings(tree1), { chatStore, graphStore: ledgers });
-		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 0 });
-		const firstId = ledgers.readNodes()[0]!.id;
 
-		// Second session, same proposition: different casing + padding.
-		const tree2 = createTree([{ id: "cr2", title: "  chain Rule INTUITION " }], []);
-		const chat2 = fixtureChat("Merge B", tree2);
-		stats = mergeFindings(chat2.id, treeFindings(tree2), { chatStore, graphStore: ledgers });
-		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 }, "no duplicate node appended");
-
-		assert.equal(ledgers.counts.nodes, 1, "still exactly one graph node");
-		assert.equal(ledgers.readNodes()[0]!.id, firstId);
-		// Provenance stays honest: one mapping line per (chat, graph node).
-		assert.equal(ledgers.counts.mappings, 2);
-		assert.deepEqual(ledgers.readMappings()[1], { chatId: chat2.id, sourceId: "cr2", graphNodeId: firstId });
-	});
-
-	it("matches aliases too (exact, case-insensitive)", () => {
-		const ledgers = memoryLedgers();
-		ledgers.appendNode({
-			id: "n_alias",
-			name: "Differentiation",
-			statement: "Differentiation basics",
-			aliases: ["the derivative"],
-			kind: "truth",
-			createdAt: "2026-08-22T00:00:00.000Z",
-		});
-		const tree = createTree([{ id: "d", title: "The Derivative" }], []);
-		const chat = fixtureChat("Merge alias", tree);
-		const stats = mergeFindings(chat.id, treeFindings(tree), { chatStore, graphStore: ledgers });
-		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 }, "alias match → no new node");
-		assert.deepEqual(ledgers.readMappings(), [{ chatId: chat.id, sourceId: "d", graphNodeId: "n_alias" }]);
-	});
-
-	it("does NOT fuzzy-match near-identical titles (that stays deferred)", () => {
-		const ledgers = memoryLedgers();
-		const tree1 = createTree([{ id: "cr", title: "Chain rule intuition" }], []);
-		const chat1 = fixtureChat("Fuzzy A", tree1);
-		mergeFindings(chat1.id, treeFindings(tree1), { chatStore, graphStore: ledgers });
-		const tree2 = createTree([{ id: "cr2", title: "Chain rules intuition" }], []);
-		const chat2 = fixtureChat("Fuzzy B", tree2);
-		const stats = mergeFindings(chat2.id, treeFindings(tree2), { chatStore, graphStore: ledgers });
-		assert.equal(stats.nodes, 1, "near-miss statements stay separate nodes");
-		assert.equal(ledgers.counts.nodes, 2);
-	});
-
-	it("merged nodes unify the second chat's edges onto the existing graph node", () => {
-		const ledgers = memoryLedgers();
-		const tree1 = createTree(
-			[
-				{ id: "base", title: "Derivative as a limit" },
-				{ id: "chain", title: "Chain rule intuition" },
+		// Session 1: two fresh propositions + a follows edge between them.
+		const chat1 = fixtureChat("Edge A");
+		const verdict1: AuditResult = {
+			propositions: [
+				{
+					id: "p1",
+					statement: "Derivative as a limit",
+					description: "The derivative is the limit of difference quotients.",
+					aliases: [],
+					messages: ["u1"],
+					evidence: ["e"],
+				},
+				{
+					id: "p2",
+					statement: "Chain rule intuition",
+					description: "Composed functions differentiate by multiplying local rates.",
+					aliases: [],
+					messages: ["u1"],
+					evidence: ["e"],
+				},
 			],
-			[{ from: "base", to: "chain" }],
-		);
-		const chat1 = fixtureChat("Edge A", tree1);
-		mergeFindings(chat1.id, treeFindings(tree1), { chatStore, graphStore: ledgers });
+			edges: [{ from: "p1", to: "p2", type: "follows", messages: ["u1"], evidence: ["e"] }],
+			attribution: { quiz: {} },
+			dropped: [],
+		};
+		let stats = mergeFindings(chat1.id, verdict1, { chatStore, graphStore: ledgers });
+		assert.deepEqual(stats, { nodes: 2, edges: 1, events: 0 });
+		const base = ledgers.readNodes()[0]!.id;
+		const chain = ledgers.readNodes()[1]!.id;
 
-		// Second session re-teaches the same two propositions (exact statements
-		// modulo case) and asserts the same edge — it must dedupe onto the
-		// existing nodes.
-		const tree2 = createTree(
-			[
-				{ id: "base", title: "derivative as a limit" },
-				{ id: "chain", title: "chain rule intuition" },
+		// Session 2: the auditor links both propositions to the SAME nodes
+		// (identity verdicts) and asserts the same relation.
+		const chat2 = fixtureChat("Edge B");
+		const verdict2: AuditResult = {
+			propositions: [
+				{
+					id: "q1",
+					statement: "The derivative as a limit of quotients", // different phrasing
+					description: "…",
+					aliases: [],
+					messages: ["u1"],
+					evidence: ["e"],
+					linkTo: base,
+				},
+				{
+					id: "q2",
+					statement: "Chain rule, intuitively",
+					description: "…",
+					aliases: [],
+					messages: ["u1"],
+					evidence: ["e"],
+					linkTo: chain,
+				},
 			],
-			[{ from: "base", to: "chain" }],
-		);
-		const chat2 = fixtureChat("Edge B", tree2);
-		const stats = mergeFindings(chat2.id, treeFindings(tree2), { chatStore, graphStore: ledgers });
-		// A new ASSERTION line is appended (provenance is honest) — reads merge
-		// by (from,to,type), so the derived graph still has one edge with both
-		// sessions in its provenance.
+			edges: [{ from: "q1", to: "q2", type: "follows", messages: ["u1"], evidence: ["e"] }],
+			attribution: { quiz: {} },
+			dropped: [],
+		};
+		stats = mergeFindings(chat2.id, verdict2, { chatStore, graphStore: ledgers });
+
+		// No new nodes; ONE new assertion line (per-session honest provenance).
 		assert.deepEqual(stats, { nodes: 0, edges: 1, events: 0 }, "no new nodes, one re-assertion line");
-		assert.equal(ledgers.counts.nodes, 2);
+		assert.equal(ledgers.counts.nodes, 4, "2 defining lines + 2 link-appends for the linked propositions");
 		const lines = ledgers.readEdges();
 		assert.equal(lines.length, 2, "two assertion lines for the same edge");
 		assert.equal(lines[0]!.from, lines[1]!.from);
 		assert.equal(lines[0]!.to, lines[1]!.to);
-		assert.deepEqual(lines.map((l) => l.provenance), [[chat1.id], [chat2.id]]);
+		assert.deepEqual(lines.map((l) => l.provenance), [
+			[{ chatId: chat1.id, messageId: "u1" }],
+			[{ chatId: chat2.id, messageId: "u1" }],
+		]);
+
+		// Read-time merging: one derived edge, both sessions in its provenance.
+		const derived = getGraph(ledgers).edges;
+		assert.equal(derived.length, 1);
+		assert.deepEqual(derived[0]!.provenance, [
+			{ chatId: chat1.id, messageId: "u1" },
+			{ chatId: chat2.id, messageId: "u1" },
+		]);
 	});
 });

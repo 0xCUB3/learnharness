@@ -1,13 +1,16 @@
 /**
- * The extraction pipeline tests (vision §1 construction): extractor →
- * auditor → merger, the sole graph writer.
+ * The extraction pipeline tests (vision §1 construction, 2026-09-02 redesign):
+ * extractor → auditor → merger, the sole graph writer — tree-blind,
+ * free-form, with the auditor owning faithfulness and identity.
  *
- *   transcriptView  — the compact view both LLM stages see (pure)
+ *   transcriptView  — the compact view both LLM stages see (pure):
+ *                     message-id-tagged verbatim text + quiz lines, NO tree
  *   pipeline        — MockLanguageModelV4 drives both agents: findings out,
- *                     audit verdict in, deterministic merge applied; failure
- *                     paths checkpoint nothing; single-flight per chat
+ *                     audit verdict (with linkTo identity) in, deterministic
+ *                     merge applied; failure paths checkpoint nothing;
+ *                     single-flight per chat
  *
- * The merger itself (identity resolution, event rebuild, idempotency) is
+ * The merger itself (identity verdicts, event rebuild, idempotency) is
  * tested in tests/graph.test.ts directly against mergeFindings — here it is
  * the integration: what one full pipeline run does to the ledgers.
  *
@@ -21,9 +24,16 @@ import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
 import { MockLanguageModelV4 } from "ai/test";
 import type { UIMessage } from "ai";
-import type { GraphEdge, GraphNode, LedgerEvent, NodeMapping, SessionCheckpoint, SessionFindings } from "../src/core/contracts.ts";
+import type {
+	AuditResult,
+	GraphEdge,
+	GraphNode,
+	LedgerEvent,
+	NodeMapping,
+	SessionCheckpoint,
+	SessionFindings,
+} from "../src/core/contracts.ts";
 import type { GraphStore } from "../src/core/ports.ts";
-import { createTree, markDone } from "../src/core/plan-tree.ts";
 import { createExtractionPipeline, transcriptView } from "../src/agent/subagents/extraction.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
@@ -72,7 +82,7 @@ function quizPart(toolCallId: string, input: Record<string, unknown>, output: Re
 	return { type: "tool-quiz", toolCallId, state: "output-available", input, output };
 }
 
-function planPart(toolCallId: string, name: string, input: Record<string, unknown>, tree: ReturnType<typeof createTree>): unknown {
+function planPart(toolCallId: string, name: string, input: Record<string, unknown>, tree: unknown): unknown {
 	return {
 		type: `tool-${name}`,
 		toolCallId,
@@ -82,21 +92,11 @@ function planPart(toolCallId: string, name: string, input: Record<string, unknow
 	};
 }
 
-/** A session-shaped fixture chat: probe → plan → check → mark_done. */
+/** A session-shaped fixture chat: probe → teaching text → check. Tree-blind
+ *  world: the plan tree is NOT part of extraction — it is noise. */
 function fixtureChat() {
-	const tree = markDone(
-		createTree(
-			[
-				{ id: "cr", title: "Chain rule intuition" },
-				{ id: "apply", title: "Applying the chain rule" },
-			],
-			[{ from: "cr", to: "apply" }],
-		),
-		"cr",
-	);
 	const chat = chatStore.createChat("Extraction fixture");
 	createdChats.push(chat.id);
-	chatStore.saveTree(chat.id, tree);
 	chatStore.saveMessages(chat.id, [
 		user("u1", "teach me the chain rule"),
 		assistant("a1", [
@@ -107,15 +107,14 @@ function fixtureChat() {
 		]),
 		assistant("a2", [
 			{ type: "text", text: "The derivative measures how fast a function changes." },
-			planPart("p1", "plan_init", { nodes: [], edges: [] }, tree),
+			planPart("p1", "plan_init", { nodes: [], edges: [] }, { nodes: [], edges: [], currentNodeId: null, doneNodeIds: [], version: 1 }),
 		]),
 		assistant("a3", [
-			quizPart("check-1", { question: "Check", nodeId: "apply" }, {
+			quizPart("check-1", { question: "Check" }, {
 				questionId: "check-1", kind: "quiz", questionText: "Check", correct: true, dontKnow: false,
 				answeredAt: "2026-08-22T02:00:00.000Z",
 			}),
 		]),
-		assistant("a4", [planPart("p2", "plan_mark_done", { id: "cr" }, tree)]),
 	]);
 	return { chatId: chat.id, record: chatStore.getChat(chat.id)! };
 }
@@ -130,30 +129,38 @@ after(() => {
 	}
 });
 
-/** What the extractor would produce for the fixture session. */
+/** What the extractor would produce for the fixture session — tree-blind,
+ *  free-form, with message-granular provenance + an understanding note. */
 const FINDINGS: SessionFindings = {
 	propositions: [
 		{
 			id: "p1",
-			name: "Chain rule",
-			statement: "Chain rule intuition",
+			statement: "The derivative measures how fast a function changes",
+			description: "The derivative of a function at a point is its instantaneous rate of change there.",
 			aliases: [],
-			kind: "truth",
-			treeNodeId: "cr",
-			evidence: ["TEACHER: The derivative measures how fast a function changes."],
+			messages: ["a2"],
+			evidence: ["TEACHER [a2]: The derivative measures how fast a function changes."],
+			understanding: "solid",
 		},
 		{
 			id: "p2",
-			name: "Applying chain rule",
-			statement: "Applying the chain rule",
+			statement: "Chain rule intuition",
+			description: "The chain rule differentiates composed functions by multiplying local rates.",
 			aliases: [],
-			kind: "truth",
-			treeNodeId: "apply",
-			evidence: ["FINAL PLAN TREE (node ids): cr = Chain rule intuition; apply = Applying the chain rule"],
+			messages: ["a2"],
+			evidence: ["LEARNER [u1]: teach me the chain rule"],
 		},
 	],
-	edges: [{ from: "p1", to: "p2", type: "requires", evidence: ["TREE EDGES: cr requires apply"] }],
-	attribution: { quiz: { "probe-1": "p1" } },
+	edges: [
+		{
+			from: "p1",
+			to: "p2",
+			type: "follows",
+			messages: ["a2"],
+			evidence: ["LEARNER [u1]: teach me the chain rule"],
+		},
+	],
+	attribution: { quiz: { "probe-1": "p1", "check-1": "p2" } },
 };
 
 /** A model whose ONE tool call is `name` with the given input; then text. */
@@ -202,28 +209,26 @@ function silentModel(): MockLanguageModelV4 {
 // ─── transcriptView (pure) ───────────────────────────────────────────────────
 
 describe("transcriptView (pure)", () => {
-	it("shows the final tree, verbatim conversation, structured events — plan ops folded", () => {
+	it("shows message-id-tagged verbatim conversation + quiz lines — tree-blind, plan ops folded", () => {
 		const { record } = fixtureChat();
 		const view = transcriptView(record);
 
-		// The final tree with node ids (the extractor's backbone + the
-		// pruned-out stays pruned — only the FINAL tree is shown).
 		assert.match(view, /SESSION: Extraction fixture/);
-		assert.match(view, /FINAL PLAN TREE \(node ids\): cr = Chain rule intuition; apply = Applying the chain rule/);
-		assert.match(view, /TREE EDGES: cr requires apply/);
 
-		// Conversation verbatim — evidence quotes can come from it.
-		assert.match(view, /LEARNER: teach me the chain rule/);
-		assert.match(view, /TEACHER: The derivative measures how fast a function changes\./);
+		// Conversation verbatim, each line tagged with its message id —
+		// the provenance anchors the extractor reports back.
+		assert.match(view, /LEARNER \[u1\] teach me the chain rule/);
+		assert.match(view, /TEACHER \[a2\] The derivative measures how fast a function changes\./);
 
 		// Structured events, attribution-ready.
 		assert.match(view, /QUIZ \[probe-1\] What is a derivative, roughly\? — the learner answered incorrectly/);
 		assert.match(view, /QUIZ \[check-1\] Check — the learner answered correctly/);
-		assert.match(view, /TEACHER marked tree node done \[p2\]: cr/);
 
-		// plan_init / plan_mark_done tool parts themselves are folded into
-		// the tree line — no raw JSON noise.
-		assert.doesNotMatch(view, /plan_init/);
+		// TREE-BLIND: no plan tree, no tree edges, no mark_done lines — plan
+		// ops fold to the generic one-liner like every other non-quiz tool.
+		assert.doesNotMatch(view, /FINAL PLAN TREE/);
+		assert.doesNotMatch(view, /TREE EDGES/);
+		assert.match(view, /\(plan_init tool result delivered\)/);
 		assert.doesNotMatch(view, /output-available/);
 	});
 
@@ -253,48 +258,61 @@ describe("transcriptView (pure)", () => {
 // ─── the pipeline ───────────────────────────────────────────────────────────
 
 describe("the extraction pipeline (extractor → auditor → merger)", () => {
-	it("runs end to end: findings → audit verdict → deterministic merge + checkpoint", async () => {
+	it("runs end to end: findings → audit verdict (identity) → deterministic merge + checkpoint", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
 
-		// The auditor passes p1 through, drops p2 (unbacked), re-points the
-		// probe attribution to p1, and records the drop.
-		const verified: SessionFindings = {
-			propositions: [FINDINGS.propositions[0]!],
+		// The auditor passes p1 through and LINKS it to a pre-existing node
+		// (identity verdict), drops p2 (unbacked) + the edge with it.
+		const existingId = "n_existing";
+		ledgers.appendNode({
+			id: existingId,
+			statement: "Derivatives measure rates of change",
+			description: "Pre-existing node from an earlier session.",
+			aliases: [],
+			createdAt: "2026-08-01T00:00:00.000Z",
+			provenance: [],
+		});
+		const verdict: AuditResult = {
+			propositions: [
+				{ ...FINDINGS.propositions[0]!, linkTo: existingId },
+			],
 			edges: [],
 			attribution: { quiz: { "probe-1": "p1" } },
+			dropped: [{ ref: "p2", reason: "evidence not found" }, { ref: "p1→p2", reason: "endpoint dropped" }],
 		};
 
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
-			auditor: submitModel("submit_review", { ...verified, dropped: [{ ref: "p2", reason: "evidence not found" }] }),
+			auditor: submitModel("submit_review", verdict),
 		});
 		const stats = await pipeline.runExtraction(chatId);
 
-		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 3 });
+		// The linked proposition created NO new node; the understanding note
+		// became an observation; both quizzes became events.
+		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 3 });
 
-		// Only the audited proposition became a node; mapping provenance kept.
-		assert.equal(ledgers.readNodes().length, 1);
-		assert.equal(ledgers.readNodes()[0]!.statement, "Chain rule intuition");
-		assert.deepEqual(ledgers.readMappings(), [{ chatId, sourceId: "cr", graphNodeId: ledgers.readNodes()[0]!.id }]);
+		// Link-append: the phrasing joined the existing node's aliases and
+		// the provenance unioned; no second node line defines a new node.
+		assert.equal(ledgers.readNodes().length, 2); // the pre-seeded line + the link line
+		assert.deepEqual(ledgers.readMappings(), [{ chatId, sourceId: "p1", graphNodeId: existingId }]);
 
-		// Events rebuilt deterministically from the transcript — the probe
-		// retroactively attributed, the check tagged, mark_done mapped.
+		// Events rebuilt deterministically: quizzes in transcript order, then
+		// the observation. check-1's attribution pointed at the DROPPED p2 →
+		// unresolvable → null (the question text is kept for later attribution).
 		const events = ledgers.readEvents();
 		assert.deepEqual(
-			events.map((e) => [e.kind, e.ref]),
+			events.map((e) => [e.kind, e.ref, e.nodeId]),
 			[
-				["probe-miss", "probe-1"],
-				["check-correct", "check-1"],
-				["taught", "taught:cr"],
+				["miss", "probe-1", existingId],
+				["correct", "check-1", null],
+				["observation", "obs:p1", existingId],
 			],
 		);
-		const nodeId = ledgers.readNodes()[0]!.id;
-		assert.equal(events[0]!.nodeId, nodeId, "probe attributed via audit");
-		assert.equal(events[1]!.nodeId, null, "tagged to a dropped proposition → null");
-		assert.equal(events[2]!.nodeId, nodeId, "taught via tree-node mapping");
+		assert.equal(events[0]!.nodeId, existingId, "probe attributed via the verdict's mapping");
+		assert.equal(events[2]!.note, "solid", "the understanding note joins the ledger");
 
 		// Checkpointed through the record's updatedAt — never the same turns twice.
 		assert.equal(ledgers.readCheckpoints().length, 1);
@@ -318,7 +336,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: silentModel(),
-			auditor: submitModel("submit_review", FINDINGS),
+			auditor: submitModel("submit_review", { ...FINDINGS, dropped: [] }),
 		});
 		await assert.rejects(failingExtractor.runExtraction(chatId), /the extractor never submitted findings/);
 		assert.equal(ledgers.readCheckpoints().length, 0);

@@ -1,23 +1,28 @@
 import { ToolLoopAgent, stepCountIs, tool, type LanguageModel, type UIMessage } from "ai";
 import { z } from "zod";
 import { modelFor } from "../models.ts";
-import type { AuditResult, ChatRecord, SessionFindings } from "../../core/contracts.ts";
-import { mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
+import type { AuditResult, ChatRecord, GraphNode, SessionFindings } from "../../core/contracts.ts";
+import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
 
 /**
- * The extraction pipeline (vision §1 construction) — the sole graph writer.
- * Three stages, one orchestrator:
+ * The extraction pipeline (vision §1 construction, 2026-09-02 redesign) — the
+ * sole graph writer. Three stages, one orchestrator:
  *
- *   extractor (LLM)  transcript → SessionFindings (propositions, edges,
- *                    event attribution — each with verbatim evidence)
- *   auditor (LLM)    findings → AuditResult (the verified subset + drops)
+ *   extractor (LLM)  transcript → SessionFindings (free-form propositions,
+ *                    follows/supports edges, quiz attribution, understanding
+ *                    notes — each with verbatim evidence). TREE-BLIND: it
+ *                    sees only the transcript, never the plan tree.
+ *   auditor (LLM)    findings + THE CURRENT GRAPH → AuditResult: the
+ *                    verified subset with an identity verdict per
+ *                    proposition (linkTo an existing node, or create), plus
+ *                    the drops for the log.
  *   merger (core)    mergeFindings() → deterministic ledger appends
  *
  * The LLM stages supply only the judgment calls; the deterministic rebuild
  * in the merger owns everything that must never be mis-copied (event kinds,
- * timestamps, refs). Both agents are single-tool-call workers: their whole
- * deliverable is one zod-validated submit call — a ToolLoopAgent purely so
- * the model can retry a schema-invalid call.
+ * timestamps, refs, provenance points). Both agents are single-tool-call
+ * workers: their whole deliverable is one zod-validated submit call — a
+ * ToolLoopAgent purely so the model can retry a schema-invalid call.
  *
  * Created via createExtractionPipeline(deps) — the composition root
  * (chat-handler) injects the storage ports + models; this module never
@@ -27,7 +32,7 @@ import { mergeFindings, type EmissionStats, type GraphDeps } from "../../core/gr
  * the next trigger re-runs the whole thing.
  */
 
-// ─── the transcript view (what the LLM sees) ────────────────────────────────
+// ─── the transcript view (what the extractor + auditor see) ─────────────────
 
 /**
  * A quiz tool part's outcome, one line: the attribution evidence.
@@ -44,46 +49,35 @@ function quizLine(part: { toolCallId: string; input: unknown; output: unknown })
 }
 
 /**
- * The compact transcript the extractor + auditor both see: user/teacher
- * text verbatim (evidence quotes must match it), the final plan tree, and
- * the structured tool events (quiz outcomes, mark_done). Job tool parts
- * (research/demo/visual) are noise for extraction — their outcomes are
- * summarized as one line each.
+ * The compact transcript both LLM stages see: user/teacher text VERBATIM,
+ * each tagged with its message id (provenance anchors — the extractor
+ * reports them back per proposition/edge), and quiz outcome lines.
+ * TREE-BLIND by design (2026-09-02): no plan tree, no mark_done —
+ * extraction is free-form, decoupled from the session's plan. Job tool
+ * parts (research/demo/visual) are noise for extraction — their outcomes
+ * are summarized as one line each.
  */
 export function transcriptView(record: ChatRecord): string {
 	const lines: string[] = [];
 	lines.push(`SESSION: ${record.title}`);
 
-	if (record.tree && record.tree.nodes.length > 0) {
-		const nodes = record.tree.nodes.map((n) => `${n.id} = ${n.title}`).join("; ");
-		lines.push(`FINAL PLAN TREE (node ids): ${nodes}`);
-		if (record.tree.edges.length > 0) {
-			const edges = record.tree.edges.map((e) => `${e.from} requires ${e.to}`).join("; ");
-			lines.push(`TREE EDGES: ${edges}`);
-		}
-	}
-
-	for (const message of record.messages as UIMessage[]) {
+	record.messages.forEach((message, index) => {
 		const who = message.role === "user" ? "LEARNER" : "TEACHER";
-		for (const part of message.parts) {
+		const mid = (message as UIMessage).id || `m${index}`;
+		for (const part of (message as UIMessage).parts) {
 			if (part.type === "text" && part.text.trim()) {
-				lines.push(`${who}: ${part.text.trim()}`);
+				lines.push(`${who} [${mid}] ${part.text.trim()}`);
 			} else if (part.type.startsWith("tool-")) {
 				const name = part.type.slice("tool-".length);
 				const p = part as unknown as { toolCallId: string; state: string; input: unknown; output: unknown };
 				if (name === "quiz" && p.state === "output-available") {
 					lines.push(quizLine(p));
-				} else if (name === "plan_mark_done" && p.state === "output-available") {
-					const input = p.input as { id?: unknown } | undefined;
-					lines.push(`TEACHER marked tree node done [${p.toolCallId}]: ${typeof input?.id === "string" ? input.id : "?"}`);
-				} else if (name.startsWith("plan_")) {
-					// plan ops are folded into the FINAL PLAN TREE line above
 				} else if (p.state === "output-available") {
 					lines.push(`(${name} tool result delivered)`);
 				}
 			}
 		}
-	}
+	});
 	return lines.join("\n");
 }
 
@@ -94,87 +88,98 @@ const evidence = z
 	.min(1)
 	.describe("Verbatim quotes from the transcript that back this. The auditor will check every quote.");
 
+const messagesField = z
+	.array(z.string())
+	.describe("The message ids (from the [id] tags in the transcript) where this came up — provenance.");
+
+const propositionSchema = z.object({
+	id: z.string().describe("Local id: \"p1\", \"p2\", … — referenced by edges and attribution."),
+	statement: z
+		.string()
+		.describe(
+			"The proposition as one reasoning step — a TRUE, self-contained, world-facing statement. " +
+				"Never reference the learner, the teacher, or the session: not \"the learner understands X\" but " +
+				'"X". A misconception is stated as the TRUE correction ("Nietzsche did not endorse ' +
+				'might-makes-right social Darwinism") — the wrongness lives in the quiz outcomes, never here.',
+		),
+	description: z
+		.string()
+		.describe(
+			"The elaborated version of the same proposition — more words: scope, precision, what exactly it means. Still true, still world-facing.",
+		),
+	aliases: z.array(z.string()).describe("Verbatim phrasings this session used for the same proposition, if any."),
+	messages: messagesField,
+	evidence,
+	understanding: z
+		.string()
+		.optional()
+		.describe(
+			'One note about THIS session\'s evidence of the learner\'s grasp of this proposition, on a named-word scale ' +
+				'("solid", "shaky", "accepted", "resisted", "not yet engaged") — no numbers, no predictions.',
+		),
+});
+
+const edgeSchema = z.object({
+	from: z.string().describe("Proposition id that is followed / supported."),
+	to: z.string().describe("Proposition id that follows / is supported by `from`."),
+	type: z
+		.enum(["follows", "supports"])
+		.describe('"follows" = to is derivable from from; "supports" = from grounds to without entailing it.'),
+	messages: messagesField,
+	evidence,
+});
+
 const findingsSchema = z.object({
 	propositions: z
-		.array(
-			z.object({
-				id: z.string().describe("Local id: \"p1\", \"p2\", … — referenced by edges and attribution."),
-				name: z.string().describe(
-					"A short 2-6 word name for the fact — its header, used for rendering. Not a sentence.",
-				),
-				statement: z
-					.string()
-					.describe(
-						"The proposition as one reasoning step — an OBJECTIVE, world-facing fact. " +
-							"Never reference the learner, the teacher, or the session: not \"the learner " +
-							'understands X\" but \"X\"; not \"the learner thinks Y\" but the wrong idea itself, ' +
-							'stated as a claim (\"Reading: Nietzsche endorsed might-makes-right social Darwinism\"), ' +
-							"with kind \"misconception\" carrying that it is wrong.",
-					),
-				aliases: z.array(z.string()).describe("Verbatim alternate phrasings from this session, if any."),
-				kind: z.enum(["truth", "misconception"]).describe("misconception = a wrong idea the learner holds or was warned about."),
-				treeNodeId: z.string().optional().describe("The plan-tree node id this came from, when it did."),
-				evidence,
-			}),
-		)
-		.describe("Every distinct proposition the session touched — from the plan tree AND from prose."),
+		.array(propositionSchema)
+		.describe("Every distinct proposition the session touched — true statements, misconception-free."),
 	edges: z
-		.array(
-			z.object({
-				from: z.string().describe("Proposition id that is the prerequisite / support."),
-				to: z.string().describe("Proposition id that depends on / is supported by `from`."),
-				type: z.enum(["requires", "supports"]),
-				evidence,
-			}),
-		)
-		.describe("Relations between propositions. `requires` = prerequisite; `supports` = helpful but not prerequisite. Include relations the plan tree does NOT show when the transcript articulates them."),
+		.array(edgeSchema)
+		.describe("Relations between propositions: follows (derivable) / supports (grounds without entailing)."),
 	attribution: z
 		.object({
 			quiz: z
 				.record(z.string(), z.string().nullable())
-				.describe("toolCallId of every UNTAGGED quiz line → the proposition id it was really testing. Probe questions asked BEFORE the tree existed are attributed RETROACTIVELY — the whole transcript is visible; map them to the proposition they were probing (often articulated only later). null when genuinely unattributable. Tagged quizzes (with a tree nodeId in the transcript view) resolve automatically — do not include them."),
+				.describe(
+					"toolCallId of EVERY quiz line → the proposition id it was really testing. Attribute RETROACTIVELY — the whole transcript is visible; map each quiz to the proposition it tests (often articulated elsewhere in the session). null when genuinely unattributable.",
+				),
 		})
-		.describe("Probe attribution — your only event judgment."),
+		.describe("Quiz attribution — your only event judgment."),
 });
 
 const EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE session
 transcript and report what was learned — as structured findings for the learner's global knowledge graph.
 
-The transcript view shows: the session's final plan tree (dependency map, with node ids), the conversation
-verbatim (LEARNER / TEACHER), and structured events (QUIZ lines with the learner's outcome, mark_done lines).
+The transcript view shows: the conversation verbatim (LEARNER / TEACHER lines, each tagged with its message id)
+and QUIZ outcome lines.
 
 Report, with verbatim evidence quotes for everything:
 
-NODE THEORY — the graph is a set of objective facts, full stop. A node is what is true (or falsely
-believed) about the world, never anything about the learner or the session. The learner's
-relationship to a fact — whether they know it, missed it, or hold it as a misconception — is
-expressed ENTIRELY by the quiz-outcome events you attribute; it never leaks into the node itself.
-So no "the learner understands X", no "discussed in this session": the node is just X. A
-misconception node states the wrong idea itself as a claim, with kind "misconception" marking it
-wrong — never "the learner believes Y".
+NODE THEORY — the graph is a set of TRUE propositions about the world, full stop. A node is never anything
+about the learner or the session. The learner's relationship to a proposition — whether they know it, missed
+it, resisted it — is expressed ENTIRELY by the quiz outcomes and your understanding note; it never leaks into
+the node itself. So no "the learner understands X", no "discussed in this session": the node is just X. A
+misconception is NOT a node of its own wrong claim — state the TRUE correction as the proposition, and let the
+quiz outcomes carry that the learner believed the wrong version.
 
 1. PROPOSITIONS — every distinct reasoning-step-sized proposition the session touched:
-   - Each carries a "name": a short 2-6 word header (the rendering handle), and a "statement": the
-     full fact as one objective reasoning step.
-   - Plan-tree nodes become propositions (pass their treeNodeId) — statement from the node title, enriched to a
-     complete proposition if the prose elaborates it.
-   - Propositions that appeared only in prose (teacher explanations, learner questions) get fresh ids.
-   - Include MISCONCEPTIONS — wrong ideas the learner showed or the teacher warned against — with kind
-     "misconception".
+   - Each is a self-contained TRUE statement ("statement"), plus its elaboration ("description" — more
+     words, same proposition: scope, precision, what exactly it means).
+   - Include corrections of misconceptions the teacher articulated, and true facts explained in prose.
    - One reasoning step per proposition: never a topic blob, never a sub-step.
-   - aliases: verbatim alternate phrasings this session used for the same thing.
+   - "messages": the [id] tags of every message where the proposition came up — provenance, report it.
+   - "aliases": verbatim phrasings this session used for the same proposition.
+   - "understanding": ONE named-word-scale note on the evidence of the learner's grasp, for this session
+     only ("solid", "shaky", "accepted", "resisted", "not yet engaged"). No numbers, no predictions.
 
 2. EDGES between propositions:
-   - The tree's dependency edges are the backbone: from = prerequisite, to = dependent, type "requires".
-   - Also include relations articulated only in prose. Use "supports" when the transcript presents something as
-     helpful but NOT a prerequisite.
+   - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
+   - "supports": from GROUNDS to without entailing it (helpful context, not a prerequisite).
+   - Only relations the transcript actually articulates — with evidence.
 
-3. ATTRIBUTION — UNTAGGED quizzes only:
-   - QUIZ lines whose question carries a tree nodeId resolve automatically; do not attribute those.
-   - The others are PROBE-phase questions (asked before the tree was initialized) that test prerequisite
-     understanding. Attribute them RETROACTIVELY to the proposition they were really probing — even if that
-     proposition is only articulated later in the session. The QUIZ question text is your guide. If you truly
-     cannot tell, use null.
+3. ATTRIBUTION — every QUIZ line gets a mapping: toolCallId → the proposition id it was really testing.
+   Attribute RETROACTIVELY — a quiz often tests a proposition the session only articulates later; the
+   question text is your guide. If you truly cannot tell, use null.
 
 Evidence discipline: every quote must appear VERBATIM in the transcript view (a QUIZ line counts as the
 transcript). The auditor rejects anything unbacked. When in doubt, report; the auditor decides.
@@ -205,6 +210,16 @@ function createExtractor(model: LanguageModel) {
 // ─── the auditor ───────────────────────────────────────────────────────────
 
 const auditSchema = findingsSchema.extend({
+	propositions: z.array(
+		propositionSchema.extend({
+			linkTo: z
+				.string()
+				.optional()
+				.describe(
+					"The id of the EXISTING graph node this proposition IS — your identity verdict. Absent = create a new node. When unsure, omit: duplicates over wrong merges.",
+				),
+		}),
+	),
 	dropped: z
 		.array(
 			z.object({
@@ -216,27 +231,46 @@ const auditSchema = findingsSchema.extend({
 });
 
 const AUDITOR_INSTRUCTIONS = `You are the audit stage of a learning application's extraction pipeline. You receive
-ONE session transcript and a set of proposed findings (propositions, edges, event attribution). Your job is the
-faithfulness net: verify every candidate against the transcript, keep only what is backed, and return the
-verified subset.
+ONE session transcript, a set of proposed findings (propositions, edges, quiz attribution), and the CURRENT
+knowledge graph. Your jobs: the faithfulness net, and identity.
 
-Verify:
-- PROPOSITIONS: every evidence quote must appear (near-)verbatim in the transcript view, and the statement must
-  be a faithful reading of it. The node theory applies: a statement must be an OBJECTIVE, world-facing fact —
-  reword learner- or session-relative statements ("the learner understands X" → "X") or drop them when the
-  objective fact is not actually backed. Drop invented or bloated statements. Conservative: when two proposed propositions
-  are really one, keep the better-stated one and drop the other.
-- EDGES: the evidence must actually articulate the relation, in the direction claimed (from = prerequisite).
-  Drop direction-swapped or speculative edges.
-- ATTRIBUTION: only UNTAGGED quizzes carry attribution — the QUIZ line's question must genuinely test the
-  attributed proposition. Drop wrong attributions to null, or re-point them to the proposition the question
-  actually tests.
+FAITHFULNESS — verify every candidate against the transcript:
+- PROPOSITIONS: every evidence quote must appear (near-)verbatim in the transcript view, and the statement
+  must be a faithful reading of it. The node theory applies: a statement must be a TRUE, self-contained,
+  world-facing fact — reword learner- or session-relative statements ("the learner understands X" → "X"), state
+  misconceptions as the true correction, or drop them when no objective fact is backed. Drop invented or
+  bloated statements. Conservative: when two proposed propositions are really one, keep the better-stated one
+  and drop the other.
+- EDGES: the evidence must actually articulate the relation, in the direction claimed. Drop
+  direction-swapped or speculative edges.
+- ATTRIBUTION: the QUIZ line's question must genuinely test the attributed proposition. Drop wrong
+  attributions to null, or re-point them to the proposition the question actually tests.
+- UNDERSTANDING notes: verify against the quiz outcomes and the session's evidence; reword to a named-word
+  scale or drop.
+
+IDENTITY — link-or-create, per proposition:
+- You see the current graph (every node: id, statement, description, aliases). For each verified proposition,
+  decide: does an EXISTING node already state this same proposition?
+- If yes: set "linkTo" to that node's id. The session's phrasings will join its aliases and its provenance.
+- If no: omit "linkTo" and a new node is created.
+- When unsure, omit — duplicates are recoverable later; wrong merges are not.
 
 Also drop propositions not referenced by anything else ONLY if they have no other backing — an unreferenced but
 well-evidenced proposition is still knowledge.
 
 Never invent new candidates. Your entire deliverable is ONE submit_review call containing the verified findings
-(the same shapes you received) plus the dropped list.`;
+(the same shapes you received, with linkTo added) plus the dropped list.`;
+
+/** The current graph, compact — the auditor's identity context. */
+function graphView(nodes: GraphNode[]): string {
+	if (nodes.length === 0) return "(the graph is currently empty — every proposition is a new node)";
+	const lines = nodes.map(
+		(n) =>
+			`- ${n.id} :: ${n.statement}\n  description: ${n.description}` +
+			(n.aliases.length > 0 ? `\n  aliases: ${n.aliases.join(" | ")}` : ""),
+	);
+	return lines.join("\n");
+}
 
 function createAuditor(model: LanguageModel) {
 	return new ToolLoopAgent({
@@ -244,7 +278,7 @@ function createAuditor(model: LanguageModel) {
 		instructions: AUDITOR_INSTRUCTIONS,
 		tools: {
 			submit_review: tool({
-				description: "Submit the verified findings subset + the dropped list.",
+				description: "Submit the verified findings subset (with identity verdicts) + the dropped list.",
 				inputSchema: auditSchema,
 				execute: async (review) => review,
 			}),
@@ -295,17 +329,20 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		throw new Error("the extractor never submitted findings");
 	}
 
-	async function audit(chatId: string, findings: SessionFindings): Promise<SessionFindings> {
+	async function audit(chatId: string, findings: SessionFindings): Promise<AuditResult> {
 		const record = chatStore.getChat(chatId);
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
 		const view = transcriptView(record);
+		const graph = getGraph(graphStore);
 		console.info(
 			`[extraction ${chatId}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
-				`${Object.keys(findings.attribution.quiz).length} attributions)`,
+				`${Object.keys(findings.attribution.quiz).length} attributions, ${graph.nodes.length} graph nodes)`,
 		);
 
 		const review = await auditorAgent.generate({
-			prompt: `Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}`,
+			prompt:
+				`Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}\n\n` +
+				`Current knowledge graph (${graph.nodes.length} nodes):\n\n${graphView(graph.nodes)}`,
 		});
 		let auditResult: AuditResult | null = null;
 		for (const part of review.content) {
@@ -320,12 +357,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 					auditResult.dropped.map((d) => `${d.ref} (${d.reason})`).join("; "),
 			);
 		}
-		const { dropped: _dropped, ...verified } = auditResult;
 		console.info(
-			`[extraction ${chatId}] audit kept ${verified.propositions.length}/${findings.propositions.length} propositions, ` +
-				`${verified.edges.length}/${findings.edges.length} edges`,
+			`[extraction ${chatId}] audit kept ${auditResult.propositions.length}/${findings.propositions.length} propositions, ` +
+				`${auditResult.edges.length}/${findings.edges.length} edges, ` +
+				`${auditResult.propositions.filter((p) => p.linkTo !== undefined).length} linked to existing nodes`,
 		);
-		return verified;
+		return auditResult;
 	}
 
 	async function runExtraction(chatId: string): Promise<EmissionStats> {
@@ -334,10 +371,10 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		try {
 			console.info(`[extraction ${chatId}] pipeline start`);
 			const findings = await extract(chatId);
-			const verified = await audit(chatId, findings);
+			const auditResult = await audit(chatId, findings);
 			// The merger re-reads the chat record itself — events are rebuilt
 			// from the transcript, never from stale copies.
-			const stats = mergeFindings(chatId, verified, { chatStore, graphStore });
+			const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore });
 			console.info(`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events`);
 			return stats;
 		} finally {
@@ -347,3 +384,4 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 
 	return { runExtraction };
 }
+

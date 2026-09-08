@@ -1,50 +1,69 @@
 /**
  * Knowledge-graph contracts — nodes, ledgers, extraction findings
  *
+ * The minimal implementation of the graph vision (docs/vision.md §1, the
+ * 2026-09-02 redesign): every node is a TRUE proposition; edges are follows
+ * (derivable) and supports (grounds without entailing); provenance is
+ * message-granular; extraction is free-form and post-hoc, fully decoupled
+ * from the session's plan tree; the event ledger records quiz outcomes plus
+ * the extractor's per-proposition understanding observations. Anything not
+ * yet decided (the state model, strength derivation, understanding
+ * treatment, selection strategies) is deliberately NOT here — transitional
+ * stubs carry the renderer until those land.
+ *
  * Part of the domain-split contracts (src/core/contracts/): each domain file
  * is owned outright by its stream — cross-domain schema changes go through
- * master. Pure types + protocol docs + tiny pure helpers; type-only imports
- * of "ai" (safe everywhere: server, client, tests). See docs/vision.md.
+ * master. Pure types + protocol docs + tiny pure helpers. See docs/vision.md.
  */
 // ─── Knowledge graph (vision §1 — global, cross-session) ────────────────────
 
-export type EdgeType = "requires" | "supports";
+/** Two relations only (DECIDED 2026-09-02): follows = b is derivable from a;
+ *  supports = a grounds b without entailing it. No scalars, no encoded
+ *  strength — strength is derived at read time from topology. */
+export type EdgeType = "follows" | "supports";
+
+/** One provenance point — message-granular (DECIDED 2026-09-02): nodes and
+ *  edges record every (chat, message) where they came up, deep-linkable to
+ *  the exact transcript point. */
+export interface ProvenancePoint {
+	chatId: string;
+	messageId: string;
+}
 
 export interface GraphNode {
 	/** Opaque stable id, store-assigned: "n_" + nanoid-like. */
 	id: string;
-	/** Short name / header for the fact (2-6 words) — the rendering handle.
-	 *  NODE THEORY: a node is an OBJECTIVE fact, never learner- or
-	 *  session-relative. No "the learner understands…", no "this session
-	 *  covered…" — just the fact, world-facing. The learner's relationship
-	 *  to the fact lives ENTIRELY in the event ledger: state labels are
-	 *  derived from quiz outcomes, never written into the node. */
-	name: string;
-	/** Canonical proposition statement — the full fact, one reasoning step,
-	 *  also objective (no learner / teacher / session references). */
+	/** The minimal proposition — one true, self-contained statement. This is
+	 *  BOTH the rendering label AND the identity key: the auditor recognizes
+	 *  a re-encounter by judgment (link-or-create), not by string matching. */
 	statement: string;
-	/** Verbatim alternate statements from sessions (merge target audit trail). */
+	/** The elaborated version — required. Same proposition, more words:
+	 *  scope, precision, the "what exactly does it mean". */
+	description: string;
+	/** Verbatim phrasings sessions used for this proposition (the identity
+	 *  audit trail — how the world said what the node says). */
 	aliases: string[];
-	kind: "truth" | "misconception";
 	createdAt: string;
+	/** Every (chat, message) point where this proposition came up. */
+	provenance: ProvenancePoint[];
 }
 
 export interface GraphEdge {
-	/** Prerequisite GraphNode id. */
 	from: string;
 	to: string;
 	type: EdgeType;
-	/** Chat ids that asserted this edge (teacher may simplify — auditable). */
-	provenance: string[];
+	/** Every (chat, message) point where this relation was asserted. */
+	provenance: ProvenancePoint[];
 }
 
 /** mappings.jsonl line — the session→graph identity map: the extraction
- *  pipeline's proposition (identified by its source id) → the graph node it
- *  merged into. The merge audit trail: one line per (chat, graph node). */
+ *  pipeline's proposition (identified by its run-local source id) → the
+ *  graph node it resolved to (created or linked). The audit trail of the
+ *  auditor's identity verdicts; also the chat-scoped resolution table the
+ *  merger uses to point events and edges at node ids. */
 export interface NodeMapping {
 	chatId: string;
-	/** The writer's local id for the proposition — a plan-tree node id when
-	 *  tree-derived, else the extractor's proposition id ("p1", …). */
+	/** The extractor's run-local proposition id ("p1", …). */
 	sourceId: string;
 	graphNodeId: string;
 }
@@ -57,23 +76,26 @@ export interface SessionCheckpoint {
 	foldedAt: string;
 }
 
-export type LedgerEventKind =
-	| "probe-correct"
-	| "probe-miss"
-	| "dont-know"
-	| "misconception-signaled"
-	| "taught"
-	| "check-correct"
-	| "check-incorrect";
+/**
+ * Event kinds (DECIDED 2026-09-02): quiz outcomes only — correct / miss /
+ * dont-know — plus `observation`, the extractor's per-proposition
+ * understanding note joining the ledger as a session-scoped observation
+ * (named-word scale; treatment pending the state-model ideation). No
+ * `taught` events at all; no misconception kind — a misconception is a
+ * TRUE correction in the graph, and the wrongness lives here, in the
+ * ledger, until the state model exists.
+ */
+export type LedgerEventKind = "correct" | "miss" | "dont-know" | "observation";
 
 export interface LedgerEvent {
-	/** null = not yet attributed (untagged probe events; consolidation assigns). */
+	/** null = not yet attributed. */
 	nodeId: string | null;
 	kind: LedgerEventKind;
 	chatId: string;
 	at: string;
-	/** Idempotency key: the quiz part's toolCallId or `taught:<treeNodeId>` —
-	 * re-emission of the same chat must never double-record an event. */
+	/** Idempotency key: the quiz part's toolCallId, or `obs:<sourceId>` for
+	 *  understanding observations — re-emission of the same chat must never
+	 *  double-record an event. */
 	ref?: string;
 	/** The learner's quiz note — diagnostic gold (vision §1 calibration). */
 	note?: string;
@@ -83,91 +105,121 @@ export interface LedgerEvent {
 
 /**
  * Store format (src/store/graph.ts): JSONL ledgers at config.LEDGER_FILES
- * (nodes/edges/events/mappings/sessions). The derived graph is rebuilt by
- * reading the ledgers — store events, derive state. sessions.jsonl is the
- * extraction checkpoint: which chats the extraction pipeline has processed,
- * and through which updatedAt (never extract the same turns twice).
+ * (nodes/edges/events/mappings/sessions), all append-only.
+ *
+ *   nodes.jsonl    one line per node — the FIRST line for an id defines
+ *                  statement/description/createdAt; later lines for the
+ *                  same id are link-appends (a session's re-encounter):
+ *                  their statements/aliases join `aliases`, their
+ *                  provenance unions. getGraph merges by id.
+ *   edges.jsonl    one line per edge ASSERTION; readers merge by
+ *                  (from,to,type), unioning provenance.
+ *
+ * The derived graph is rebuilt by reading the ledgers — store events,
+ * derive state. sessions.jsonl is the extraction checkpoint: which chats
+ * the extraction pipeline has processed, and through which updatedAt
+ * (never extract the same turns twice).
  *
  * The EXTRACTION PIPELINE is the sole graph writer (extractor → auditor →
- * merger): the extractor proposes propositions/edges/attribution with
- * verbatim evidence, the auditor drops anything unbacked, and the merger
- * (core/graph.ts, deterministic) resolves identity against the existing
- * ledgers and appends. See SessionFindings below.
+ * merger), tree-blind and post-hoc: the extractor reads only the transcript
+ * and proposes propositions/edges/quiz-attribution with verbatim evidence;
+ * the auditor sees the extractor's output PLUS the current graph, owns
+ * faithfulness (evidence check) and identity (link-or-create: point each
+ * proposition at the existing node it is, or let it be created — recording
+ * the session's phrasings as aliases); the merger (core/graph.ts,
+ * deterministic) applies the verdicts and appends.
  */
 
 // ─── Extraction findings (extractor output → audit → merger input) ───────────
 
-/** One proposed proposition — a node candidate. */
+/** One proposed proposition — a node candidate (or a re-encounter of one). */
 export interface ExtractedProposition {
 	/** Extractor-local id ("p1", …) referenced by edges + attribution. */
 	id: string;
-	/** Short name / header for the fact (2-6 words) — the rendering handle. */
-	name: string;
-	/** Canonical one-reasoning-step statement — an objective, world-facing
-	 *  fact (no learner / teacher / session references; the learner's
-	 *  relationship to it is carried only by the event attribution). */
+	/** The minimal proposition — a true, self-contained, world-facing
+	 *  statement. No learner / teacher / session references: misconceptions
+	 *  are stated as the true correction, and wrongness lives in the event
+	 *  ledger, never in the node. */
 	statement: string;
-	/** Verbatim alternate phrasings from the session (merge aliases). */
+	/** The elaborated version — required. */
+	description: string;
+	/** Verbatim phrasings the session used. */
 	aliases: string[];
-	kind: "truth" | "misconception";
-	/** The plan-tree node this came from, when it did (mapping provenance). */
-	treeNodeId?: string;
+	/** The message ids where this proposition came up — provenance. */
+	messages: string[];
 	/** Verbatim transcript quotes backing the proposition. */
 	evidence: string[];
+	/** The extractor's understanding note for this proposition IN THIS
+	 *  session — a named-word scale ("solid", "shaky", "accepted",
+	 *  "resisted"), no numbers. Joins the ledger as an observation event;
+	 *  treatment pending the state-model ideation. */
+	understanding?: string;
 }
 
 /** One proposed relation between two propositions. */
 export interface ExtractedEdge {
-	/** Proposition id that is the prerequisite / support. */
+	/** Proposition id that is followed / supported. */
 	from: string;
-	/** Proposition id that depends on / is supported by `from`. */
 	to: string;
 	type: EdgeType;
+	/** The message ids where this relation was asserted — provenance. */
+	messages: string[];
 	/** Verbatim transcript quotes backing the relation. */
 	evidence: string[];
 }
 
-/** The extractor's event attribution — its ONLY say about events. The kinds,
- * timestamps, idempotency refs, notes and question texts are all rebuilt
- * deterministically by the merger from the transcript's quiz / mark_done
- * tool parts; the LLM supplies exactly the judgment call: WHICH proposition
- * each one is about (vision open question: probes attribute retroactively,
- * against the whole transcript — a pre-tree probe can map to a proposition
- * the tree only articulates later). */
-/** The extractor's event attribution — its ONLY say about events. Event
- *  kinds, timestamps, idempotency refs, notes and question texts are all
- *  rebuilt deterministically by the merger from the transcript's tool
- *  parts, and TAGGED events (quiz nodeId, mark_done tree node) resolve
- *  deterministically through the proposition mapping. The LLM supplies
- *  exactly the one judgment call that needs it — the vision's open
- *  probe-attribution question: WHICH proposition did an UNTAGGED probe
- *  test? Answered retroactively against the whole transcript — a pre-tree
- *  probe can map to a proposition the tree only articulates later. */
+/**
+ * The extractor's quiz attribution — its ONLY say about quiz events. Event
+ * kinds, timestamps, idempotency refs, notes and question texts are all
+ * rebuilt deterministically by the merger from the transcript's quiz tool
+ * parts; the LLM supplies exactly the judgment call: WHICH proposition each
+ * quiz tested. Tree-blind, so EVERY quiz attributes here (there is no tree
+ * mapping to lean on) — retroactively against the whole transcript.
+ */
 export interface ExtractionAttribution {
-	/** UNTAGGED quiz toolCallId → proposition id; missing / null =
-	 *  unattributed (the event lands with nodeId null + the question text,
-	 *  exactly like unattributable probes always did). */
+	/** quiz toolCallId → proposition id; null / missing = unattributed (the
+	 *  event lands with nodeId null + the question text, a later-
+	 *  attribution input). */
 	quiz: Record<string, string | null>;
 }
 
-/** The extractor's — and, filtered, the auditor's — output shape. */
+/** The extractor's output shape. */
 export interface SessionFindings {
 	propositions: ExtractedProposition[];
 	edges: ExtractedEdge[];
 	attribution: ExtractionAttribution;
 }
 
-/** The auditor's verdict: the verified subset, plus the drops (for the log —
- *  the audit trail of what was rejected and why). */
-export interface AuditResult extends SessionFindings {
+/** The auditor's verdict on one proposition: the findings, plus `linkTo` —
+ *  the identity judgment. Absent = create a new node. */
+export interface AuditedProposition extends ExtractedProposition {
+	/** The existing GraphNode id this proposition IS — the auditor's
+	 *  identity verdict. On link, the session's phrasings (statement,
+	 *  aliases) join the node's aliases and the provenance unions.
+	 *  Conservative: when unsure, leave it out — duplicates over wrong
+	 *  merges. */
+	linkTo?: string;
+}
+
+/** The auditor's output: the verified findings (with identity verdicts),
+ * plus the drops (the audit trail of what was rejected and why). */
+export interface AuditResult {
+	propositions: AuditedProposition[];
+	edges: ExtractedEdge[];
+	attribution: ExtractionAttribution;
 	/** Dropped candidates: proposition id, edge "from→to", or attribution
 	 *  toolCallId — with the reason. */
 	dropped: { ref: string; reason: string }[];
 }
 
-/** Per-node state class for the home view (vision §1 "Home page") — derived,
- * never stored: taught if ANY taught event; else the LATEST quiz event decides
- * (known / missed / dont-know); a node with no events is a candidate. */
+/**
+ * Per-node state class for the home view — TRANSITIONAL (kept so the
+ * renderer survives the contract change untouched). Derived, never stored:
+ * the LATEST quiz event decides (known / missed / dont-know); a node with
+ * no quiz events is a candidate. `taught` is now unreachable (no taught
+ * events are emitted anymore) — the real state model (dependency depth +
+ * topology-derived strength + quiz events) is pending ideation.
+ */
 export type NodeStateClass = "taught" | "known" | "missed" | "dont-know" | "candidate";
 
 /** The GET /api/graph payload — everything the home view's PURE renderer needs. */
@@ -187,4 +239,3 @@ export function titleFromPrompt(prompt: string): string {
 	const oneLine = prompt.replace(/\s+/g, " ").trim();
 	return oneLine.length > 72 ? `${oneLine.slice(0, 72)}…` : oneLine;
 }
-
