@@ -6,51 +6,34 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { isNodeVisible } from "../components/graph-view.tsx";
-import type { NodeStateClass } from "../src/core/index.ts";
 
-const none: ReadonlySet<NodeStateClass> = new Set();
 const node = {
 	name: "Money multiplier",
 	statement: "The maximum ratio of broad money a bank can create from each unit of base money.",
 };
 
-describe("isNodeVisible (legend/filters predicate)", () => {
-	it("is visible with no filters", () => {
-		assert.equal(isNodeVisible(node, "known", none, ""), true);
-	});
-
-	it("is hidden when its state is toggled off, even if the query matches", () => {
-		const hidden = new Set<NodeStateClass>(["known"]);
-		assert.equal(isNodeVisible(node, "known", hidden, "money"), false);
-	});
-
-	it("a toggled-off state does not affect other states", () => {
-		const hidden = new Set<NodeStateClass>(["known"]);
-		assert.equal(isNodeVisible(node, "taught", hidden, ""), true);
+describe("isNodeVisible (search predicate)", () => {
+	it("is visible with an empty query", () => {
+		assert.equal(isNodeVisible(node, ""), true);
 	});
 
 	it("search matches the statement case-insensitively", () => {
-		assert.equal(isNodeVisible(node, "candidate", none, "MONEY multiplier"), true);
+		assert.equal(isNodeVisible(node, "MONEY multiplier"), true);
 	});
 
 	it("search matches the statement when the name does not", () => {
-		assert.equal(isNodeVisible(node, "candidate", none, "MAXIMUM ratio"), true);
-		assert.equal(isNodeVisible(node, "candidate", none, " velocity"), false);
+		assert.equal(isNodeVisible(node, "MAXIMUM ratio"), true);
+		assert.equal(isNodeVisible(node, " velocity"), false);
 	});
 
 	it("search matches the name when the statement does not", () => {
-		assert.equal(isNodeVisible(node, "candidate", none, "money MULTIPLIER"), true);
-		assert.equal(isNodeVisible(node, "candidate", none, " banking"), false);
+		assert.equal(isNodeVisible(node, "money MULTIPLIER"), true);
+		assert.equal(isNodeVisible(node, " banking"), false);
 	});
 
 	it("whitespace-only query is no filter", () => {
-		assert.equal(isNodeVisible(node, "missed", none, "   "), true);
+		assert.equal(isNodeVisible(node, "   "), true);
 	});
 
-	it("a node with no state entry defaults to candidate", () => {
-		// candidate hidden → invisible; visible otherwise.
-		const hidden = new Set<NodeStateClass>(["candidate"]);
-		assert.equal(isNodeVisible(node, "candidate", hidden, ""), false);
-		assert.equal(isNodeVisible(node, "candidate", none, ""), true);
-	});
+
 });

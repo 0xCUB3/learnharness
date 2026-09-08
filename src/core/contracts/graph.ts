@@ -221,21 +221,10 @@ export interface AuditResult {
 	dropped: { ref: string; reason: string }[];
 }
 
-/**
- * Per-node state class for the home view — TRANSITIONAL (kept so the
- * renderer survives the contract change untouched). Derived, never stored:
- * the LATEST quiz event decides (known / missed / dont-know); a node with
- * no quiz events is a candidate. `taught` is now unreachable (no taught
- * events are emitted anymore) — the real state model (dependency depth +
- * topology-derived strength + quiz events) is pending ideation.
- */
-export type NodeStateClass = "taught" | "known" | "missed" | "dont-know" | "candidate";
-
 /** The GET /api/graph payload — everything the home view's PURE renderer needs. */
 export interface GraphSnapshot {
 	nodes: GraphNode[];
 	edges: GraphEdge[];
-	nodeStates: Record<string, NodeStateClass>;
 	/** chatId → title, for every chat that touched the graph. */
 	sessions: Record<string, string>;
 	/** nodeId → chatIds that touched the node (click-through provenance). */

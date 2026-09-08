@@ -31,7 +31,7 @@ import type {
 	NodeMapping,
 	SessionCheckpoint,
 } from "../src/core/contracts.ts";
-import type { NodeStateClass } from "../src/core/contracts.ts";
+import type { LedgerEventKind } from "../src/core/contracts.ts";
 import { getGraph, mergeFindings } from "../src/core/graph.ts";
 import type { GraphStore } from "../src/core/ports.ts";
 import {
@@ -64,18 +64,19 @@ function edge(from: string, to: string): GraphEdge {
 	return { from, to, type: "follows", provenance: [{ chatId: "chat_x", messageId: "m1" }] };
 }
 
-function states(...entries: [string, NodeStateClass][]): Record<string, NodeStateClass> {
-	return Object.fromEntries(entries);
+/** Latest-quiz-outcome map: nodeId → quiz event kind (the raw event fact). */
+function outcomes(...entries: [string, LedgerEventKind][]): Map<string, LedgerEventKind> {
+	return new Map(entries);
 }
 
 // ─── renderGraphContext (pure) ───────────────────────────────────────────────
 
 describe("renderGraphContext (pure)", () => {
 	it("returns null for an empty graph (inject nothing)", () => {
-		assert.equal(renderGraphContext([], [], {}), null);
+		assert.equal(renderGraphContext([], [], outcomes()), null);
 	});
 
-	it("renders a header, state-grouped node lines (hotspots first), and chained follows edges", () => {
+	it("renders a header, outcome-grouped node lines (hotspots first), and chained follows edges", () => {
 		const nodes = [
 			node("n_a", "Chain rule intuition"),
 			node("n_b", "Quotient rule"),
@@ -83,25 +84,24 @@ describe("renderGraphContext (pure)", () => {
 			node("n_d", "Composite functions"),
 		];
 		const edges = [edge("n_a", "n_b"), edge("n_b", "n_c"), edge("n_d", "n_a")];
-		const st = states(
-			["n_a", "known"],
-			["n_b", "missed"],
-			["n_c", "candidate"],
+		const oc = outcomes(
+			["n_a", "correct"],
+			["n_b", "miss"],
 			["n_d", "dont-know"],
 		);
-		const out = renderGraphContext(nodes, edges, st)!;
+		const out = renderGraphContext(nodes, edges, oc)!;
 
 		assert.ok(out.includes(GRAPH_CONTEXT_HEADER), "header line present");
 		assert.match(out, /4 nodes, 3 follows edges/);
 
-		// Node lines: "• [state] statement (id)".
-		assert.ok(out.includes("• [missed] Quotient rule (n_b)"));
-		assert.ok(out.includes("• [known] Chain rule intuition (n_a)"));
+		// Node lines: "• [outcome] statement (id)".
+		assert.ok(out.includes("• [miss] Quotient rule (n_b)"));
+		assert.ok(out.includes("• [correct] Chain rule intuition (n_a)"));
 		assert.ok(out.includes("• [dont-know] Composite functions (n_d)"));
-		assert.ok(out.includes("• [candidate] Product rule (n_c)"));
+		assert.ok(out.includes("• [never probed] Product rule (n_c)"));
 
-		// Groups in the decided order: hotspots, known, candidates.
-		const order = ["Hotspots", "Known", "Candidates"].map((g) => out.indexOf(g));
+		// Groups in the decided order: hotspots, correct, never probed.
+		const order = ["Hotspots", "Answered correctly", "Never probed"].map((g) => out.indexOf(g));
 		assert.deepEqual([...order].sort((a, b) => a - b), order, "groups appear in priority order");
 
 		// Edges merged into chains: d → a → b → c (one line, three arrows).
@@ -112,7 +112,7 @@ describe("renderGraphContext (pure)", () => {
 
 	it("renders branching edges as sibling chains, not one false chain", () => {
 		const nodes = [node("n_a", "A"), node("n_b", "B"), node("n_c", "C")];
-		const out = renderGraphContext(nodes, [edge("n_a", "n_b"), edge("n_a", "n_c")], states())!;
+		const out = renderGraphContext(nodes, [edge("n_a", "n_b"), edge("n_a", "n_c")], outcomes())!;
 		assert.ok(out.includes("A → B"));
 		assert.ok(out.includes("A → C"));
 		assert.ok(!out.includes("B → C"), "no edge was invented between siblings");
@@ -123,16 +123,15 @@ describe("renderGraphContext (pure)", () => {
 		// long tail of disconnected candidates that must drop out.
 		const nodes: GraphNode[] = [];
 		const edges: GraphEdge[] = [];
-		const st: Record<string, NodeStateClass> = {};
+		const oc = new Map<string, LedgerEventKind>();
 		const hotspot = (i: number) => {
 			const h = `n_h${i}`;
 			const pre = `n_p${i}`;
 			const dep = `n_d${i}`;
 			nodes.push(node(pre, `Premise ${i}`), node(h, `Hotspot ${i}`), node(dep, `Derivation ${i}`));
 			edges.push(edge(pre, h), edge(h, dep));
-			st[pre] = "known";
-			st[h] = "missed";
-			st[dep] = "candidate";
+			oc.set(pre, "correct");
+			oc.set(h, "miss");
 		};
 		hotspot(1);
 		hotspot(2);
@@ -140,14 +139,13 @@ describe("renderGraphContext (pure)", () => {
 		for (let i = 0; i < MAX_CONTEXT_NODES; i++) {
 			const id = `n_f${i}`;
 			nodes.push(node(id, `Far away ${i}`));
-			st[id] = "candidate";
 		}
 		assert.ok(nodes.length > MAX_CONTEXT_NODES, "fixture exceeds the cap");
 
-		const out = renderGraphContext(nodes, edges, st)!;
-		assert.ok(out.includes("• [missed] Hotspot 1 (n_h1)"), "hotspots stay");
-		assert.ok(out.includes("• [known] Premise 1 (n_p1)"), "1-hop premises stay");
-		assert.ok(out.includes("• [candidate] Derivation 1 (n_d1)"), "1-hop derivations stay");
+		const out = renderGraphContext(nodes, edges, oc)!;
+		assert.ok(out.includes("• [miss] Hotspot 1 (n_h1)"), "hotspots stay");
+		assert.ok(out.includes("• [correct] Premise 1 (n_p1)"), "1-hop premises stay");
+		assert.ok(out.includes("• [never probed] Derivation 1 (n_d1)"), "1-hop derivations stay");
 		assert.ok(!out.includes("Far away"), "disconnected nodes drop out");
 		assert.match(out, new RegExp(`showing 9 of ${nodes.length} nodes`), "truncation is noted");
 		assert.ok(out.includes(", 6 follows edges"), "edges among the selected nodes stay");
@@ -155,14 +153,14 @@ describe("renderGraphContext (pure)", () => {
 
 	it("keeps the full graph at exactly the cap (no truncation note)", () => {
 		const nodes = Array.from({ length: MAX_CONTEXT_NODES }, (_, i) => node(`n_${i}`, `Node ${i}`));
-		const out = renderGraphContext(nodes, [], {})!;
-		assert.ok(out.includes(`• [candidate] Node ${MAX_CONTEXT_NODES - 1}`));
+		const out = renderGraphContext(nodes, [], outcomes())!;
+		assert.ok(out.includes(`• [never probed] Node ${MAX_CONTEXT_NODES - 1}`));
 		assert.ok(!out.includes("showing"), "at the cap nothing is dropped");
 	});
 
 	it("returns null when a too-large graph has no hotspots at all", () => {
 		const nodes = Array.from({ length: MAX_CONTEXT_NODES + 1 }, (_, i) => node(`n_${i}`, `Node ${i}`));
-		assert.equal(renderGraphContext(nodes, [], {}), null);
+		assert.equal(renderGraphContext(nodes, [], outcomes()), null);
 	});
 });
 
@@ -173,15 +171,15 @@ describe("buildGraphContext", () => {
 		assert.equal(buildGraphContext({ nodes: [], edges: [], events: [] }), null);
 	});
 
-	it("derives states from events and renders the block", () => {
+	it("derives latest quiz outcomes from events and renders the block", () => {
 		const nodes = [node("n_a", "Solo node"), node("n_b", "Checked node")];
 		const events: LedgerEvent[] = [
 			{ nodeId: "n_b", kind: "correct", chatId: "c1", at: "2026-08-22T00:00:00.000Z", ref: "r1" },
 		];
 		const out = buildGraphContext({ nodes, edges: [], events })!;
 		assert.ok(out.includes(GRAPH_CONTEXT_HEADER));
-		assert.ok(out.includes("• [known] Checked node (n_b)"), "correct → known");
-		assert.ok(out.includes("• [candidate] Solo node (n_a)"), "no events → candidate");
+		assert.ok(out.includes("• [correct] Checked node (n_b)"), "correct → answered correctly");
+		assert.ok(out.includes("• [never probed] Solo node (n_a)"), "no events → never probed");
 	});
 
 	it("reads the live ledgers without throwing (read-only integration)", () => {

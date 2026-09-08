@@ -18,7 +18,7 @@
  *     word-wrapped at a max line width — no truncation, no one-line sprawl.
  *   - defaultDrawNodeHover: NO background box (sigma's default is a
  *     hardcoded white one). Instead the hovered node gets a soft glow
- *     halo in its own state color at a constant radius, flush with the
+ *     halo in the node's color at a constant radius, flush with the
  *     disc edge, and its name brightens — the "this is clickable,
  *     click for the full fact" affordance. Entering/leaving hover fades
  *     ONE transition factor shared by halo and text alike, so the
@@ -40,10 +40,11 @@
  * no per-node size gating, so labels never pop in one by one. (The Obsidian
  * text-fade feel, applied to the whole graph.)
  *
- * The legend/filters panel (top-right overlay) doubles as the state legend:
- * a search box plus one row per node state (colored dot, label, count).
- * Clicking a row toggles that state's visibility; search matches the
- * name or statement text. Filtering flows through sigma's official
+ * The search panel (top-right overlay): a search box matching name or
+ * statement text — the transitional node-state classes are gone (2026-09-08;
+ * nodes render uniformly until the state model ideation lands), so there
+ * are no state legend rows or toggles anymore. Filtering flows through
+ * sigma's official
  * nodeReducer/edgeReducer settings (`hidden`), so rendering, hover,
  * picking, and labels all respect it; edges drop when either endpoint is
  * hidden, and an open detail card closes if its node is filtered out.
@@ -59,40 +60,19 @@ import { SearchIcon, WaypointsIcon } from "lucide-react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
-import { seededRandom, type GraphNode, type GraphSnapshot, type NodeStateClass } from "@/src/core";
+import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
 
-/** Per-state visuals: color token + node size (WebGL wants hex, not oklch). */
-const STATE_TOKENS: Record<NodeStateClass, { cssVar: string; size: number }> = {
-	taught: { cssVar: "--foreground", size: 10 },
-	known: { cssVar: "--primary", size: 8 },
-	missed: { cssVar: "--destructive", size: 8 },
-	"dont-know": { cssVar: "--muted-foreground", size: 6.5 },
-	candidate: { cssVar: "--ring", size: 5 },
-};
-
-const STATE_LABELS: Record<NodeStateClass, string> = {
-	taught: "taught",
-	known: "known",
-	missed: "missed",
-	"dont-know": "don't know",
-	candidate: "candidate",
-};
-
-/** Legend row order (the "progress" reading of the states). */
-const STATES_ORDER: NodeStateClass[] = ["taught", "known", "missed", "dont-know", "candidate"];
+/** The uniform node look (no state classes — WebGL wants hex, not oklch):
+ *  the accent color + the old "known" size, until the state model lands. */
+const NODE_COLOR_TOKEN = "--primary";
+const NODE_SIZE = 8;
 
 /**
- * Pure filter predicate for the legend/filters panel: a node is visible
- * when its state is toggled on AND (no query OR name/statement matches).
+ * Pure filter predicate for the search panel: a node is visible when the
+ * query is empty or matches its name or statement (case-insensitive).
  * Exported for tests; the sigma reducers just consume its verdict.
  */
-export function isNodeVisible(
-	node: Pick<GraphNode, "name" | "statement">,
-	state: NodeStateClass,
-	hiddenStates: ReadonlySet<NodeStateClass>,
-	query: string,
-): boolean {
-	if (hiddenStates.has(state)) return false;
+export function isNodeVisible(node: Pick<GraphNode, "name" | "statement">, query: string): boolean {
 	const q = query.trim().toLowerCase();
 	if (!q) return true;
 	return node.name.toLowerCase().includes(q) || node.statement.toLowerCase().includes(q);
@@ -342,7 +322,6 @@ function tokenHex(cssVar: string): string {
 
 interface Selection {
 	node: GraphNode;
-	state: NodeStateClass;
 	chatIds: string[];
 	/** Node position in container pixels (from graphToViewport at click time). */
 	anchor: { x: number; y: number };
@@ -353,8 +332,7 @@ export function GraphView() {
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
-	// Legend/filters panel state: toggled-off states + search text.
-	const [hiddenStates, setHiddenStates] = useState<ReadonlySet<NodeStateClass>>(new Set());
+	// Search panel state: the query text.
 	const [query, setQuery] = useState("");
 	// The sigma instance and its graphology graph live inside the mount
 	// effect; refs expose them to the filters effect, and `rendererEpoch`
@@ -363,40 +341,16 @@ export function GraphView() {
 	const graphRef = useRef<Graph | null>(null);
 	const [rendererEpoch, setRendererEpoch] = useState(0);
 
-	const toggleState = (state: NodeStateClass) => {
-		setHiddenStates((prev) => {
-			const next = new Set(prev);
-			if (next.has(state)) next.delete(state);
-			else next.add(state);
-			return next;
-		});
-	};
-
-	// Per-state node counts (of ALL nodes, not filtered ones).
-	const stateCounts = useMemo(() => {
-		const counts: Record<NodeStateClass, number> = {
-			taught: 0,
-			known: 0,
-			missed: 0,
-			"dont-know": 0,
-			candidate: 0,
-		};
-		if (snapshot)
-			for (const state of Object.values(snapshot.nodeStates)) counts[state]++;
-		return counts;
-	}, [snapshot]);
-
-	// The id set that survives the current filters — consumed by the sigma
+	// The id set that survives the current search — consumed by the sigma
 	// reducers and the "no matches" hint.
 	const visibleIds = useMemo(() => {
 		const set = new Set<string>();
 		if (snapshot)
 			for (const node of snapshot.nodes) {
-				if (isNodeVisible(node, snapshot.nodeStates[node.id] ?? "candidate", hiddenStates, query))
-					set.add(node.id);
+				if (isNodeVisible(node, query)) set.add(node.id);
 			}
 		return set;
-	}, [snapshot, hiddenStates, query]);
+	}, [snapshot, query]);
 
 	// Fetch the derived graph (the route folds stale chats first).
 	useEffect(() => {
@@ -421,24 +375,20 @@ export function GraphView() {
 		const edgeColor = tokenHex("--ring");
 		const labelColor = tokenHex("--muted-foreground");
 		const hoverTextColor = tokenHex("--foreground");
-		const stateColors = new Map<NodeStateClass, string>();
-		for (const state of Object.keys(STATE_TOKENS) as NodeStateClass[]) {
-			stateColors.set(state, tokenHex(STATE_TOKENS[state].cssVar));
-		}
+		const nodeColor = tokenHex(NODE_COLOR_TOKEN);
 		// Mutable hover-transition state: 0 = resting, 1 = fully hovered.
 		const hover: HoverState = { fade: 0, repaint: null };
 		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, hoverTextColor, hover);
 
 		const graph = new Graph();
 		for (const node of snapshot.nodes) {
-			const state: NodeStateClass = snapshot.nodeStates[node.id] ?? "candidate";
 			// Seeded start positions (FA2 requires non-zero x/y) keep the
 			// frozen layout stable for a given node set across remounts.
 			const rand = seededRandom(node.id);
 			graph.addNode(node.id, {
 				label: node.name,
-				size: STATE_TOKENS[state].size,
-				color: stateColors.get(state) ?? edgeColor,
+				size: NODE_SIZE,
+				color: nodeColor,
 				x: (rand() - 0.5) * 100,
 				y: (rand() - 0.5) * 100,
 			});
@@ -509,7 +459,6 @@ export function GraphView() {
 					const anchor = renderer?.graphToViewport({ x: pos.x ?? 0, y: pos.y ?? 0 });
 					setSelected({
 						node: graphNode,
-						state: snapshot.nodeStates[node] ?? "candidate",
 						chatIds: snapshot.nodeSessions[node] ?? [],
 						anchor: anchor ?? { x: 0, y: 0 },
 					});
@@ -655,32 +604,7 @@ export function GraphView() {
 							className="h-8 w-full rounded-lg border bg-background pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
 						/>
 					</div>
-					<div className="mt-2 flex flex-col">
-						{STATES_ORDER.map((state) => {
-							const active = !hiddenStates.has(state);
-							return (
-								<button
-									key={state}
-									type="button"
-									onClick={() => toggleState(state)}
-										aria-pressed={!active}
-										className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-accent"
-									>
-									<span
-											className="size-2.5 shrink-0 rounded-full"
-											style={{ background: `var(${STATE_TOKENS[state].cssVar})`, opacity: active ? 1 : 0.25 }}
-										/>
-									<span className={active ? "text-foreground" : "text-muted-foreground line-through"}>
-											{STATE_LABELS[state]}
-									</span>
-									<span className="ml-auto tabular-nums text-[10px] text-muted-foreground">
-											{stateCounts[state]}
-									</span>
-								</button>
-							);
-						})}
-					</div>
-					{snapshot !== null && visibleIds.size === 0 && (query.trim() !== "" || hiddenStates.size > 0) && (
+					{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
 						<div className="mt-1.5 border-t px-1.5 pt-1.5 text-[11px] text-muted-foreground">
 							No matching nodes.
 						</div>
@@ -698,9 +622,6 @@ export function GraphView() {
 				>
 					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
 					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
-					<div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
-						{STATE_LABELS[selected.state]}
-					</div>
 					{selected.chatIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>

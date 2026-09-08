@@ -20,9 +20,8 @@
  * the next session should probe.
  */
 
-import type { GraphEdge, GraphNode } from "./contracts.ts";
-import { deriveNodeStates, type DerivedGraph } from "./graph.ts";
-import type { NodeStateClass } from "./contracts.ts";
+import type { GraphEdge, GraphNode, LedgerEventKind } from "./contracts.ts";
+import { latestQuizOutcomes, type DerivedGraph } from "./graph.ts";
 
 /** The section header the teacher is taught to recognize (50-graph-context.md). */
 export const GRAPH_CONTEXT_HEADER = "LEARNER KNOWLEDGE GRAPH (auto-generated)";
@@ -30,46 +29,51 @@ export const GRAPH_CONTEXT_HEADER = "LEARNER KNOWLEDGE GRAPH (auto-generated)";
 /** Above this node count only hotspots + their 1-hop neighborhood are shown. */
 export const MAX_CONTEXT_NODES = 150;
 
-/** Group order for node lines: diagnostic value first (vision §1 hotspots). */
-const HOTSPOT_STATES: ReadonlySet<NodeStateClass> = new Set(["missed", "dont-know"]);
+/**
+ * Group order for node lines: diagnostic value first (vision §1 hotspots).
+ * No node-state classes (removed 2026-09-08) — the grouping is the raw
+ * event fact: the node's LATEST quiz outcome (miss/dont-know = hotspot).
+ */
+type Outcome = LedgerEventKind | "never-probed";
 
-function groupOf(node: GraphNode, state: NodeStateClass): number {
-	if (HOTSPOT_STATES.has(state)) return 0;
-	if (state === "known") return 1;
-	return 2; // candidate
+function groupOf(outcome: Outcome): number {
+	if (outcome === "miss" || outcome === "dont-know") return 0;
+	if (outcome === "correct") return 1;
+	return 2; // never probed
 }
 
 const GROUP_LABELS = [
-	"Hotspots (missed / dont-know) — likely misconception sites and unexplored ground:",
-	"Known (answered correctly):",
-	"Candidates (never probed — assume nothing):",
+	"Hotspots (last answer wrong or don't-know) — likely misconception sites and unexplored ground:",
+	"Answered correctly:",
+	"Never probed (assume nothing):",
 ] as const;
 
 /** A hotspot is a node worth showing even under truncation (§1: diagnostic hotspots). */
-function isHotspot(node: GraphNode, state: NodeStateClass): boolean {
-	return groupOf(node, state) === 0;
+function isHotspot(outcome: Outcome): boolean {
+	return groupOf(outcome) === 0;
 }
 
 /**
  * Render the context block, or null when there is nothing worth injecting
  * (no nodes; or a truncated graph whose selection came out empty).
  *
- * Pure: callers hand in exactly what getGraph(graphStore) + deriveNodeStates() produce.
+ * Pure: callers hand in exactly what getGraph(graphStore) produces; the
+ * outcomes are the raw latest-quiz-event facts (core/graph.ts).
  */
 export function renderGraphContext(
 	nodes: GraphNode[],
 	edges: GraphEdge[],
-	states: Record<string, NodeStateClass>,
+	outcomes: Map<string, LedgerEventKind>,
 ): string | null {
 	if (nodes.length === 0) return null;
 
 	// ── selection ───────────────────────────────────────────────────────────
-	const stateOf = (node: GraphNode): NodeStateClass => states[node.id] ?? "candidate";
+	const outcomeOf = (node: GraphNode): Outcome => outcomes.get(node.id) ?? "never-probed";
 	let selected = nodes;
 	let truncated = false;
 	if (nodes.length > MAX_CONTEXT_NODES) {
 		truncated = true;
-		const hotspots = nodes.filter((n) => isHotspot(n, stateOf(n)));
+		const hotspots = nodes.filter((n) => isHotspot(outcomeOf(n)));
 		const keep = new Set(hotspots.map((n) => n.id));
 		// 1-hop follows neighborhood: premises AND derivations.
 		for (const edge of edges) {
@@ -91,12 +95,14 @@ export function renderGraphContext(
 
 	for (const [group, label] of GROUP_LABELS.entries()) {
 		const groupNodes = selected
-			.filter((n) => groupOf(n, stateOf(n)) === group)
+			.filter((n) => groupOf(outcomeOf(n)) === group)
 			.sort((a, b) => (a.statement < b.statement ? -1 : a.statement > b.statement ? 1 : 0));
 		if (groupNodes.length === 0) continue;
 		lines.push("", label);
 		for (const node of groupNodes) {
-			lines.push(`• [${stateOf(node)}] ${node.statement} (${node.id})`);
+			const outcome = outcomeOf(node);
+			const tag = outcome === "never-probed" ? "never probed" : outcome;
+			lines.push(`• [${tag}] ${node.statement} (${node.id})`);
 		}
 	}
 
@@ -161,6 +167,6 @@ function edgeChains(edges: GraphEdge[]): string[][] {
  * chat-handler, so it self-updates as the graph grows mid-session).
  */
 export function buildGraphContext(graph: DerivedGraph): string | null {
-	const states = deriveNodeStates(graph.nodes, graph.events);
-	return renderGraphContext(graph.nodes, graph.edges, states);
+	const outcomes = latestQuizOutcomes(graph.nodes, graph.events);
+	return renderGraphContext(graph.nodes, graph.edges, outcomes);
 }

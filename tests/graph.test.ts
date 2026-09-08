@@ -366,10 +366,9 @@ describe("the merger (mergeFindings)", () => {
 	it("derives node states and sessions in graphSnapshot", () => {
 		const snap = graphSnapshot(graphDeps);
 		const idByStatement = new Map(snap.nodes.map((n) => [n.statement, n.id]));
-		// Alpha's latest quiz is call-9 (chat2, correct) → known.
-		assert.equal(snap.nodeStates[idByStatement.get("Alpha intuition")!], "known");
-		assert.equal(snap.nodeStates[idByStatement.get("Beta rule")!], "missed");
-		assert.equal(snap.nodeStates[idByStatement.get("Gamma application")!], "dont-know");
+		// No node-state classes anymore (2026-09-08): the snapshot carries
+		// only the objective graph + sessions; quiz outcomes stay ledger data.
+		assert.equal("nodeStates" in snap, false);
 
 		assert.equal(snap.sessions[chat1.id], "Graph fixture");
 		assert.equal(snap.sessions[chat2Id], "Graph fixture 2");
