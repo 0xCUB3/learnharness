@@ -56,7 +56,7 @@ export interface GraphStore {
 	appendEdge(assertion: GraphEdge): void;
 	readEdges(): GraphEdge[];
 
-	/** Append one quiz outcome / taught event. */
+	/** Append one quiz outcome / understanding observation. */
 	appendEvent(event: LedgerEvent): void;
 	readEvents(): LedgerEvent[];
 

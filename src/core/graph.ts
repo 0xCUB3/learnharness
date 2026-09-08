@@ -2,22 +2,34 @@
  * The knowledge graph: merger (the deterministic final stage of the
  * extraction pipeline — vision §1 construction) + derivation (reads).
  *
- * The extraction pipeline is the SOLE graph writer:
+ * The extraction pipeline is the SOLE graph writer, tree-blind and post-hoc:
  *
- *   extractor (LLM)  → SessionFindings: propositions, edges, and event
- *                      attribution, each with verbatim evidence
- *   auditor (LLM)    → the verified subset (unbacked candidates dropped)
+ *   extractor (LLM)  → SessionFindings: propositions, edges, quiz
+ *                      attribution, per-proposition understanding notes —
+ *                      each with verbatim evidence, from the transcript ALONE
+ *   auditor (LLM)    → AuditResult: the verified subset, with the IDENTITY
+ *                      VERDICT per proposition (linkTo an existing node, or
+ *                      create), and the drops for the log
  *   merger (HERE)    → mergeFindings(): deterministic ledger appends
  *
  * The merger is deliberately the ONLY stage that touches the ledgers, and it
- * is pure code: the LLM supplies exactly the judgment calls (what was
- * taught, what depends on what, which proposition a quiz tested), while
- * event kinds/timestamps/refs — anything the model could silently
- * mis-copy — are rebuilt deterministically from the transcript's tool
- * parts. Idempotent + incremental: statement/alias matching dedupes nodes,
- * (from,to,type) dedupes edge assertions, chat-scoped refs dedupe events,
- * one mapping line per (chat, graph node), and sessions.jsonl checkpoints
- * which chats have been extracted (never the same turns twice).
+ * is pure code: the LLM supplies exactly the judgment calls (what the
+ * propositions are, what follows/supports what, which proposition a quiz
+ * tested, whether a proposition IS an existing node), while event
+ * kinds/timestamps/refs/provenance — anything the model could silently
+ * mis-copy — are rebuilt deterministically from the transcript's tool parts
+ * and the message ids in the findings. Idempotent + incremental: refs are
+ * chat-scoped idempotency keys, edges dedupe by (from,to,type)-already-
+ * asserted-by-this-chat, mapping lines dedupe by (chat, sourceId), and
+ * sessions.jsonl checkpoints which chats have been extracted (never the
+ * same turns twice).
+ *
+ * Identity across re-encounters is the AUDITOR's judgment (link-or-create),
+ * not string matching: the conservative v1 exact-statement merge was
+ * replaced by the 2026-09-02 redesign. A re-extracted session's
+ * propositions link to the existing nodes; the link appends a node line
+ * whose phrasings join `aliases` and whose provenance unions (getGraph
+ * merges lines by id).
  *
  * Derivation below (getGraph / deriveNodeStates / graphSnapshot) is reads
  * only — everything is recomputed from the ledgers. Every function takes
@@ -29,14 +41,14 @@
 import { randomBytes } from "node:crypto";
 import { isToolUIPart, type UIMessage } from "ai";
 import type {
+	AuditResult,
 	GraphEdge,
 	GraphNode,
+	ProvenancePoint,
 	GraphSnapshot,
 	LedgerEvent,
 	LedgerEventKind,
 	NodeStateClass,
-	PlanToolResult,
-	SessionFindings,
 } from "./contracts.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
@@ -80,19 +92,25 @@ function toolParts(messages: UIMessage[]): ToolPartView[] {
 	return out;
 }
 
-/** A plan tool part's output, if it is a well-formed PlanToolResult. */
-function planResult(part: ToolPartView): PlanToolResult | null {
-	if (part.state !== "output-available") return null;
-	const out = part.output;
-	if (typeof out !== "object" || out === null) return null;
-	if (!("tree" in out) || typeof (out as PlanToolResult).ok !== "boolean") return null;
-	return out as PlanToolResult;
+/** (chatId, messageIds) → provenance points; order-preserving, deduped. */
+function pointsOf(chatId: string, messages: string[]): ProvenancePoint[] {
+	const seen = new Set<string>();
+	const out: ProvenancePoint[] = [];
+	for (const messageId of messages) {
+		if (messageId.length === 0 || seen.has(messageId)) continue;
+		seen.add(messageId);
+		out.push({ chatId, messageId });
+	}
+	return out;
 }
+
+const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
+	a.chatId === b.chatId && a.messageId === b.messageId;
 
 // ─── the merger (extraction pipeline stage 3 — deterministic) ────────────────
 
 export interface EmissionStats {
-	/** New graph nodes appended (and mappings with them). */
+	/** New graph nodes appended. */
 	nodes: number;
 	/** New edge assertions appended. */
 	edges: number;
@@ -102,156 +120,135 @@ export interface EmissionStats {
 
 /**
  * Merge one chat's audited findings into the graph ledgers — the pipeline's
- * apply stage. Deterministic + idempotent: re-merging the same findings (or
+ * apply stage. Deterministic + idempotent: re-merging the same verdicts (or
  * a later re-extraction of the same chat) appends nothing but the new.
  *
- * Identity resolution (v1: conservative): a proposition whose statement or
- * alias EXACTLY matches (case-insensitive, trimmed) an existing node's
- * statement or alias merges onto it; everything else is a new node. One
- * mapping line per (chat, graph node) — the merge audit trail. Fuzzy /
- * embedding adjudication stays deferred (vision §1 consolidation).
+ * Identity is the auditor's link-or-create verdict: `linkTo` an existing
+ * node (validated against the ledger — an unknown id falls back to create)
+ * appends a LINK line (the session's phrasings join the node's aliases and
+ * the provenance unions; getGraph merges lines by id); absent → a new node.
+ * Mapping lines record each verdict: one per (chat, sourceId). Idempotent:
+ * a proposition id already mapped for this chat reuses its resolution.
  *
- * Events are rebuilt deterministically from the transcript's quiz and
- * plan_mark_done parts (kinds, timestamps, notes, refs). TAGGED events
- * (quiz nodeId, mark_done tree node) resolve through the proposition
- * mapping — deterministic; the findings' attribution is consulted ONLY for
- * untagged probe quizzes: the retroactive probe-attribution resolution (a
- * pre-tree probe maps to a proposition the tree only articulates later).
- * Unattributed quizzes land with nodeId null + the question text, exactly
- * like the unattributable ones always have.
+ * Events are rebuilt deterministically from the transcript: quiz outcomes
+ * (correct / miss / dont-know; kinds + timestamps + refs from the tool
+ * parts, nodeId from the extractor's attribution through this run's
+ * mapping) plus one observation event per proposition carrying an
+ * understanding note (ref `obs:<sourceId>`). No taught events, ever.
  */
-export function mergeFindings(chatId: string, findings: SessionFindings, deps: GraphDeps): EmissionStats {
+export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDeps): EmissionStats {
 	const { graphStore: ledgers, chatStore } = deps;
 	const record = chatStore.getChat(chatId);
 	if (!record) return { nodes: 0, edges: 0, events: 0 };
 	const stats: EmissionStats = { nodes: 0, edges: 0, events: 0 };
 
-	// 1. Identity resolution. mapping: proposition id (and tree node id)
-	//    → graph node id — from this chat's existing mapping lines, then
-	//    extended as findings resolve. chatNodeIds: graph nodes this chat has
-	//    already mapped onto — the (chat, graph node) mapping dedupe.
+	// 1. Resolution: this run's propositions → graph node ids. Existing
+	//    mapping lines for THIS chat are loaded first — the audit trail doubles
+	//    as the resolution table, which makes re-merging the same chat
+	//    idempotent (a re-extraction re-merges through the auditor's linkTo
+	//    verdicts instead). Fresh sourceIds resolve as the verdicts say.
+	const existingIds = new Set(ledgers.readNodes().map((n) => n.id));
 	const mapping = new Map<string, string>();
-	const chatNodeIds = new Set<string>();
+	const seenMappingKeys = new Set<string>();
 	for (const m of ledgers.readMappings()) {
-		if (m.chatId !== chatId || typeof m.sourceId !== "string") continue;
+		if (m.chatId !== chatId) continue;
 		mapping.set(m.sourceId, m.graphNodeId);
-		chatNodeIds.add(m.graphNodeId);
-	}
-
-	// 2. Propositions → graph nodes. Exact statement/alias match against the
-	//    whole ledger first (cross-session reuse), then against propositions
-	//    created earlier in THIS merge (intra-findings dedupe).
-	const norm = (s: string): string => s.trim().toLowerCase();
-	const existingByTitle = new Map<string, string>();
-	for (const node of ledgers.readNodes()) {
-		for (const title of [node.statement, ...node.aliases]) {
-			const key = norm(title);
-			if (key && !existingByTitle.has(key)) existingByTitle.set(key, node.id);
-		}
+		seenMappingKeys.add(m.sourceId);
 	}
 	const now = new Date().toISOString();
-	for (const p of findings.propositions) {
-		if (mapping.has(p.id)) continue;
-		const keys = [p.statement, ...p.aliases].map(norm).filter((k) => k.length > 0);
-		const matchId = keys.map((k) => existingByTitle.get(k)).find((id) => id !== undefined);
+
+	for (const p of audit.propositions) {
+		if (mapping.has(p.id)) continue; // already resolved for this chat — idempotent
+		const points = pointsOf(chatId, p.messages);
 		let graphNodeId: string;
-		if (matchId !== undefined) {
-			graphNodeId = matchId; // reuse — conservative merge, duplicates over wrong merges
-		} else {
-			const graphNode: GraphNode = {
-				id: newGraphNodeId(),
-				name: p.name,
+		if (p.linkTo !== undefined && existingIds.has(p.linkTo)) {
+			// Identity verdict: this proposition IS that node. Append a link
+			// line — the session's phrasings (statement + aliases) join the
+			// node's aliases, the provenance unions. Reads merge by id.
+			graphNodeId = p.linkTo;
+			ledgers.appendNode({
+				id: graphNodeId,
 				statement: p.statement,
+				description: p.description,
 				aliases: [...p.aliases],
-				kind: p.kind,
 				createdAt: now,
+				provenance: points,
+			});
+		} else {
+			const node: GraphNode = {
+				id: newGraphNodeId(),
+				statement: p.statement,
+				description: p.description,
+				aliases: [...p.aliases],
+				createdAt: now,
+				provenance: points,
 			};
-			ledgers.appendNode(graphNode);
+			ledgers.appendNode(node);
 			stats.nodes++;
-			graphNodeId = graphNode.id;
-		}
-		for (const key of keys) if (!existingByTitle.has(key)) existingByTitle.set(key, graphNodeId);
-		if (!chatNodeIds.has(graphNodeId)) {
-			ledgers.appendMapping({ chatId, sourceId: p.treeNodeId ?? p.id, graphNodeId });
-			chatNodeIds.add(graphNodeId);
+			graphNodeId = node.id;
+			existingIds.add(graphNodeId);
 		}
 		mapping.set(p.id, graphNodeId);
-		if (p.treeNodeId !== undefined) mapping.set(p.treeNodeId, graphNodeId);
+		if (!seenMappingKeys.has(p.id)) {
+			ledgers.appendMapping({ chatId, sourceId: p.id, graphNodeId });
+			seenMappingKeys.add(p.id);
+		}
 	}
 
-	// 3. Edges. Dedupe by (from,to,type) across the whole ledger: an existing
-	//    assertion just gains this chatId as provenance (appended as a new
-	//    line; reads merge).
-	const asserted = new Map<string, Set<string>>();
+	// 2. Edges. Resolve endpoints through the mapping; dedupe by
+	//    (from,to,type) already asserted by THIS chat (an existing assertion
+	//    by another chat stays untouched — provenance unions at read time).
+	const assertedByChat = new Set<string>();
 	for (const line of ledgers.readEdges()) {
 		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
-		let provenance = asserted.get(key);
-		if (!provenance) {
-			provenance = new Set();
-			asserted.set(key, provenance);
-		}
-		for (const c of line.provenance) provenance.add(c);
+		if (line.provenance.some((pt) => pt.chatId === chatId)) assertedByChat.add(key);
 	}
-	for (const edge of findings.edges) {
+	for (const edge of audit.edges) {
 		const from = mapping.get(edge.from);
 		const to = mapping.get(edge.to);
 		if (!from || !to || from === to) continue; // unmapped endpoint — skip
 		const key = `${from}\u0000${to}\u0000${edge.type}`;
-		const provenance = asserted.get(key);
-		if (provenance?.has(chatId)) continue; // already asserted by this chat
-		ledgers.appendEdge({ from, to, type: edge.type, provenance: [chatId] });
-		if (provenance) provenance.add(chatId);
-		else asserted.set(key, new Set([chatId]));
+		if (assertedByChat.has(key)) continue;
+		ledgers.appendEdge({ from, to, type: edge.type, provenance: pointsOf(chatId, edge.messages) });
+		assertedByChat.add(key);
 		stats.edges++;
 	}
 
-	// 4. Events, rebuilt deterministically in transcript order so the
-	//    probe/check boundary is exact: quizzes BEFORE the first plan_init
-	//    output are probes. Refs are chat-scoped (a quiz toolCallId or
-	//    taught:<treeNodeId>) — a ref already in the ledger means this turn
-	//    was extracted before. The findings' attribution supplies the
-	//    nodeId, nothing else.
+	// 3. Events, rebuilt deterministically in transcript order. Refs are
+	//    chat-scoped idempotency keys (quiz toolCallId, obs:<sourceId>) —
+	//    a ref already in the ledger means this evidence was extracted before.
 	const seenRefs = new Set<string>();
 	for (const event of ledgers.readEvents()) {
 		if (event.chatId === chatId && event.ref) seenRefs.add(event.ref);
 	}
-	let planSeen = false;
 	for (const part of toolParts(record.messages)) {
-		// The boundary flips on the first plan_init OUTPUT, whatever it says
-		// (an ok:false "tree already initialized" still means a tree exists).
-		if (part.name === "plan_init" && part.state === "output-available") planSeen = true;
-
-		if (part.name === "quiz" && part.state === "output-available") {
-			const event = quizEvent(part, chatId, mapping, findings, planSeen, now);
-			if (event?.ref !== undefined && !seenRefs.has(event.ref)) {
-				ledgers.appendEvent(event);
-				seenRefs.add(event.ref);
-				stats.events++;
-			}
-		}
-
-		if (part.name === "plan_mark_done" && part.state === "output-available") {
-			const result = planResult(part);
-			const input = part.input as { id?: unknown } | undefined;
-			if (result?.ok && typeof input?.id === "string") {
-				const ref = `taught:${input.id}`;
-				if (!seenRefs.has(ref)) {
-					// mark_done is tagged with the tree node id — deterministic.
-					ledgers.appendEvent({
-						nodeId: mapping.get(input.id) ?? null,
-						kind: "taught",
-						chatId,
-						at: now,
-						ref,
-					});
-					seenRefs.add(ref);
-					stats.events++;
-				}
-			}
+		if (part.name !== "quiz" || part.state !== "output-available") continue;
+		const event = quizEvent(part, chatId, audit, mapping, now);
+		if (event?.ref !== undefined && !seenRefs.has(event.ref)) {
+			ledgers.appendEvent(event);
+			seenRefs.add(event.ref);
+			stats.events++;
 		}
 	}
+	// Understanding observations: one per proposition carrying a note,
+	// resolved to the node the verdict mapped it to.
+	for (const p of audit.propositions) {
+		if (p.understanding === undefined || p.understanding.length === 0) continue;
+		const ref = `obs:${p.id}`;
+		if (seenRefs.has(ref)) continue;
+		ledgers.appendEvent({
+			nodeId: mapping.get(p.id) ?? null,
+			kind: "observation",
+			chatId,
+			at: now,
+			ref,
+			note: p.understanding,
+		});
+		seenRefs.add(ref);
+		stats.events++;
+	}
 
-	// 5. Checkpoint: this chat is extracted through its current updatedAt.
+	// 4. Checkpoint: this chat is extracted through its current updatedAt.
 	ledgers.appendCheckpoint({ chatId, foldedAt: record.updatedAt });
 	return stats;
 }
@@ -261,9 +258,8 @@ export function mergeFindings(chatId: string, findings: SessionFindings, deps: G
 function quizEvent(
 	part: ToolPartView,
 	chatId: string,
+	audit: AuditResult,
 	mapping: Map<string, string>,
-	findings: SessionFindings,
-	planSeen: boolean,
 	now: string,
 ): LedgerEvent | null {
 	const out = part.output;
@@ -274,16 +270,13 @@ function quizEvent(
 
 	let kind: LedgerEventKind;
 	if (answer.dontKnow === true) kind = "dont-know";
-	else if (answer.correct === true) kind = planSeen ? "check-correct" : "probe-correct";
-	else kind = planSeen ? "check-incorrect" : "probe-miss";
+	else if (answer.correct === true) kind = "correct";
+	else kind = "miss";
 
-	// Tagged (input.nodeId) resolves deterministically through the mapping;
-	// attribution is the LLM judgment call for UNTAGGED probes only — the
-	// vision's open probe-attribution question, resolved retroactively.
-	const input = part.input as { nodeId?: unknown } | undefined;
-	const tagged = typeof input?.nodeId === "string" ? mapping.get(input.nodeId) : undefined;
-	const attributedId = findings.attribution.quiz[part.toolCallId];
-	const nodeId = tagged ?? (attributedId ? (mapping.get(attributedId) ?? null) : null);
+	// Tree-blind: EVERY quiz attributes through the extractor's judgment —
+	// the vision's retroactive attribution, with no tree mapping to lean on.
+	const attributedId = audit.attribution.quiz[part.toolCallId];
+	const nodeId = attributedId ? (mapping.get(attributedId) ?? null) : null;
 
 	const event: LedgerEvent = {
 		nodeId,
@@ -293,7 +286,7 @@ function quizEvent(
 		ref: part.toolCallId,
 	};
 	if (typeof answer.note === "string" && answer.note.length > 0) event.note = answer.note;
-	// The question text is the attribution input for unattributed probes.
+	// The question text is the attribution input for unattributed quizzes.
 	if (nodeId === null && typeof answer.questionText === "string") event.question = answer.questionText;
 	return event;
 }
@@ -335,20 +328,39 @@ export interface DerivedGraph {
 }
 
 /**
- * The whole graph from the ledgers. Edge LINES are assertions; the returned
- * edges are merged by (from,to,type) with unioned provenance, first-seen
- * order. `store events, derive state` — this is the only reader that matters.
+ * The whole graph from the ledgers. Node LINES may repeat an id (link-
+ * appends): the FIRST line defines statement/description/createdAt; later
+ * lines' statements and aliases join `aliases`, provenance unions. Edge
+ * LINES are assertions, merged by (from,to,type) with unioned provenance,
+ * first-seen order. `store events, derive state` — this is the only reader
+ * that matters.
  */
 export function getGraph(graphStore: GraphStore): DerivedGraph {
-	const nodes = graphStore.readNodes();
+	// Merge node lines by id (first line defines; later lines add phrasings).
+	const byId = new Map<string, GraphNode>();
+	for (const line of graphStore.readNodes()) {
+		const existing = byId.get(line.id);
+		if (!existing) {
+			byId.set(line.id, { ...line, aliases: [...line.aliases], provenance: [...line.provenance] });
+			continue;
+		}
+		// A later line's statement is a phrasing, not a replacement.
+		for (const phrasing of [line.statement, ...line.aliases]) {
+			if (phrasing.length > 0 && !existing.aliases.includes(phrasing)) existing.aliases.push(phrasing);
+		}
+		for (const pt of line.provenance) {
+			if (!existing.provenance.some((q) => samePoint(q, pt))) existing.provenance.push(pt);
+		}
+	}
+
 	const merged: GraphEdge[] = [];
 	const byKey = new Map<string, GraphEdge>();
 	for (const line of graphStore.readEdges()) {
 		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
 		const existing = byKey.get(key);
 		if (existing) {
-			for (const c of line.provenance) {
-				if (!existing.provenance.includes(c)) existing.provenance.push(c);
+			for (const pt of line.provenance) {
+				if (!existing.provenance.some((q) => samePoint(q, pt))) existing.provenance.push(pt);
 			}
 		} else {
 			const edge: GraphEdge = { ...line, provenance: [...line.provenance] };
@@ -356,34 +368,27 @@ export function getGraph(graphStore: GraphStore): DerivedGraph {
 			merged.push(edge);
 		}
 	}
-	return { nodes, edges: merged, events: graphStore.readEvents() };
+	return { nodes: [...byId.values()], edges: merged, events: graphStore.readEvents() };
 }
 
-const QUIZ_EVENT_KINDS: ReadonlySet<string> = new Set([
-	"probe-correct",
-	"check-correct",
-	"probe-miss",
-	"check-incorrect",
-	"dont-know",
-]);
+const QUIZ_EVENT_KINDS: ReadonlySet<string> = new Set(["correct", "miss", "dont-know"]);
 
 /**
- * Derive node states from events (never stored): taught if ANY taught event;
- * else the LATEST quiz event decides (known / missed / dont-know); a node
- * with no events is a candidate.
+ * Derive node states from events (never stored): the LATEST quiz event
+ * decides (known / missed / dont-know); a node with no quiz events is a
+ * candidate. TRANSITIONAL (2026-09-02 redesign): `taught` is unreachable
+ * now that no taught events are emitted, and observation events are NOT
+ * state inputs — the real state model (dependency depth + topology-derived
+ * strength + quiz events) is pending ideation; this keeps the renderer
+ * alive until it lands.
  */
 export function deriveNodeStates(nodes: GraphNode[], events: LedgerEvent[]): Record<string, NodeStateClass> {
 	const states: Record<string, NodeStateClass> = {};
 	for (const node of nodes) states[node.id] = "candidate";
 
-	const taught = new Set<string>();
 	const latest = new Map<string, { at: string; kind: LedgerEventKind; index: number }>();
 	events.forEach((event, index) => {
 		if (event.nodeId === null) return;
-		if (event.kind === "taught") {
-			taught.add(event.nodeId);
-			return;
-		}
 		if (!QUIZ_EVENT_KINDS.has(event.kind)) return;
 		const current = latest.get(event.nodeId);
 		if (!current || event.at > current.at || (event.at === current.at && index > current.index)) {
@@ -392,13 +397,9 @@ export function deriveNodeStates(nodes: GraphNode[], events: LedgerEvent[]): Rec
 	});
 
 	for (const node of nodes) {
-		if (taught.has(node.id)) {
-			states[node.id] = "taught";
-			continue;
-		}
 		const last = latest.get(node.id);
 		if (!last) continue; // candidate
-		if (last.kind === "probe-correct" || last.kind === "check-correct") states[node.id] = "known";
+		if (last.kind === "correct") states[node.id] = "known";
 		else if (last.kind === "dont-know") states[node.id] = "dont-know";
 		else states[node.id] = "missed";
 	}
@@ -422,10 +423,13 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		chats.add(chatId);
 	};
 	for (const m of deps.graphStore.readMappings()) touch(m.graphNodeId, m.chatId);
+	for (const node of nodes) {
+		for (const pt of node.provenance) touch(node.id, pt.chatId);
+	}
 	for (const edge of edges) {
-		for (const chatId of edge.provenance) {
-			touch(edge.from, chatId);
-			touch(edge.to, chatId);
+		for (const pt of edge.provenance) {
+			touch(edge.from, pt.chatId);
+			touch(edge.to, pt.chatId);
 		}
 	}
 	for (const event of events) {

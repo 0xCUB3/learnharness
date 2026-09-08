@@ -81,11 +81,11 @@ const STATES_ORDER: NodeStateClass[] = ["taught", "known", "missed", "dont-know"
 
 /**
  * Pure filter predicate for the legend/filters panel: a node is visible
- * when its state is toggled on AND (no query OR name/statement matches).
+ * when its state is toggled on AND (no query OR statement matches).
  * Exported for tests; the sigma reducers just consume its verdict.
  */
 export function isNodeVisible(
-	node: Pick<GraphNode, "name" | "statement">,
+	node: Pick<GraphNode, "statement" | "description">,
 	state: NodeStateClass,
 	hiddenStates: ReadonlySet<NodeStateClass>,
 	query: string,
@@ -93,7 +93,7 @@ export function isNodeVisible(
 	if (hiddenStates.has(state)) return false;
 	const q = query.trim().toLowerCase();
 	if (!q) return true;
-	return node.name.toLowerCase().includes(q) || node.statement.toLowerCase().includes(q);
+	return node.statement.toLowerCase().includes(q) || node.description.toLowerCase().includes(q);
 }
 
 // ---- Label drawing (canvas) ---------------------------------------------
@@ -434,7 +434,7 @@ export function GraphView() {
 			// frozen layout stable for a given node set across remounts.
 			const rand = seededRandom(node.id);
 			graph.addNode(node.id, {
-				label: node.name,
+				label: node.statement,
 				size: STATE_TOKENS[state].size,
 				color: stateColors.get(state) ?? edgeColor,
 				x: (rand() - 0.5) * 100,
@@ -694,8 +694,8 @@ export function GraphView() {
 					style={{ visibility: "hidden", left: 0, top: 0 }}
 					className="absolute z-10 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
 				>
-					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
-					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
+					<div className="text-sm font-medium leading-snug">{selected.node.statement}</div>
+					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.description}</div>
 					<div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
 						{STATE_LABELS[selected.state]}
 					</div>

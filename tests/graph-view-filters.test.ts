@@ -9,7 +9,10 @@ import { isNodeVisible } from "../components/graph-view.tsx";
 import type { NodeStateClass } from "../src/core/index.ts";
 
 const none: ReadonlySet<NodeStateClass> = new Set();
-const node = { name: "Money multiplier", statement: "The money multiplier is the maximum ratio of broad money to base money." };
+const node = {
+	statement: "The money multiplier is the maximum ratio of broad money to base money.",
+	description: "How much broad money banks create from each unit of base money.",
+};
 
 describe("isNodeVisible (legend/filters predicate)", () => {
 	it("is visible with no filters", () => {
@@ -26,11 +29,11 @@ describe("isNodeVisible (legend/filters predicate)", () => {
 		assert.equal(isNodeVisible(node, "taught", hidden, ""), true);
 	});
 
-	it("search matches the name case-insensitively", () => {
+	it("search matches the statement case-insensitively", () => {
 		assert.equal(isNodeVisible(node, "candidate", none, "MONEY multiplier"), true);
 	});
 
-	it("search matches the statement when the name does not", () => {
+	it("search matches the description when the statement does not", () => {
 		assert.equal(isNodeVisible(node, "candidate", none, "maximum ratio"), true);
 		assert.equal(isNodeVisible(node, "candidate", none, " velocity"), false);
 	});

@@ -1,20 +1,26 @@
 /**
  * GraphStore — the fs JSONL adapter: five append-only ledgers at
  * config.LEDGER_FILES (contracts.ts "v1 emission").
- *   nodes.jsonl     GraphNode        — one line per graph node
+ *   nodes.jsonl     GraphNode        — one line per node write: the FIRST
+ *                                      line for an id defines it; a later
+ *                                      line with a REPEATED id is a
+ *                                      link-append (session phrasings join
+ *                                      aliases, provenance unions); reads
+ *                                      merge by id (core/graph.ts getGraph)
  *   edges.jsonl    GraphEdge        — one line per edge ASSERTION (a second
  *                                      session asserting the same (from,to,type)
  *                                      appends another line; reads merge)
- *   events.jsonl    LedgerEvent      — quiz outcomes + taught events
+ *   events.jsonl    LedgerEvent      — quiz outcomes + understanding observations
  *   mappings.jsonl  NodeMapping      — the session→graph identity map:
  *                                      (chatId, sourceId) → graphNodeId
  *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
  *
  * Implements core/ports.ts GraphStore. data/graph/* is exclusively this
- * adapter's. Reads are strict against the contracts.ts shapes: corrupt lines
- * are skipped, never guessed at — the ledgers are the source of truth and
- * everything else is derived (core/graph.ts, which takes this port as a
- * parameter). Same idioms as src/store/chats.ts: sync fs, no framework.
+ * adapter's. Reads are strict against the contracts.ts shapes (the 2026-09-02
+ * graph redesign): corrupt lines are skipped, never guessed at — the ledgers
+ * are the source of truth and everything else is derived (core/graph.ts,
+ * which takes this port as a parameter). Same idioms as src/store/chats.ts:
+ * sync fs, no framework.
  */
 
 import * as fs from "node:fs";
@@ -26,6 +32,7 @@ import type {
 	LedgerEvent,
 	LedgerEventKind,
 	NodeMapping,
+	ProvenancePoint,
 	SessionCheckpoint,
 } from "../core/contracts.ts";
 import type { GraphStore } from "../core/ports.ts";
@@ -69,26 +76,22 @@ function readValid<T>(file: string, isValid: (v: unknown) => v is T): T[] {
 	return readRawLines(file).filter(isValid);
 }
 
-/** Pre-name ledger line (the first extraction runs) — read tolerantly. */
-type StoredGraphNode = Omit<GraphNode, "name"> & { name?: string };
+/** Provenance points are (chatId, messageId) pairs — message-granular. */
+const isProvenancePoint = (v: unknown): v is ProvenancePoint =>
+	isRecord(v) && isString(v.chatId) && isString(v.messageId);
 
-const isStoredGraphNode = (v: unknown): v is StoredGraphNode =>
+const isGraphNode = (v: unknown): v is GraphNode =>
 	isRecord(v) &&
 	isString(v.id) &&
 	isString(v.statement) &&
+	isString(v.description) &&
 	Array.isArray(v.aliases) &&
-	(v.kind === "truth" || v.kind === "misconception") &&
+	v.aliases.every(isString) &&
 	isString(v.createdAt) &&
-	(v.name === undefined || isString(v.name));
+	Array.isArray(v.provenance) &&
+	v.provenance.every(isProvenancePoint);
 
-/** Derived header for legacy node lines written before `name` existed:
- *  the first clause of the statement, capped — good enough to render. */
-function nameFromStatement(statement: string): string {
-	const clause = statement.split(/[.;:—]/)[0]!.trim();
-	return clause.length > 60 ? `${clause.slice(0, 57)}…` : clause || statement;
-}
-
-const EDGE_TYPES = ["requires", "supports"] as const;
+const EDGE_TYPES = ["follows", "supports"] as const;
 
 const isGraphEdge = (v: unknown): v is GraphEdge =>
 	isRecord(v) &&
@@ -96,17 +99,9 @@ const isGraphEdge = (v: unknown): v is GraphEdge =>
 	isString(v.to) &&
 	(EDGE_TYPES as readonly string[]).includes(v.type as string) &&
 	Array.isArray(v.provenance) &&
-	v.provenance.every(isString);
+	v.provenance.every(isProvenancePoint);
 
-const EVENT_KINDS: readonly LedgerEventKind[] = [
-	"probe-correct",
-	"probe-miss",
-	"dont-know",
-	"misconception-signaled",
-	"taught",
-	"check-correct",
-	"check-incorrect",
-];
+const EVENT_KINDS: readonly LedgerEventKind[] = ["correct", "miss", "dont-know", "observation"];
 
 const isLedgerEvent = (v: unknown): v is LedgerEvent =>
 	isRecord(v) &&
@@ -127,13 +122,11 @@ export const graphStore: GraphStore = {
 	appendNode(node: GraphNode): void {
 		appendLine(LEDGER_FILES.nodes, node);
 	},
-	/** Raw node lines in append order (ids are unique — no merging needed).
-	 *  Legacy lines without a `name` get one derived from the statement. */
+	/** Raw node lines in append order. A node id may appear on more than
+	 *  one line (a later session's LINK-append: phrasings + provenance); the
+	 *  derivation (core/graph.ts getGraph) merges lines by id. */
 	readNodes(): GraphNode[] {
-		return readValid(LEDGER_FILES.nodes, isStoredGraphNode).map((n) => ({
-			...n,
-			name: n.name ?? nameFromStatement(n.statement),
-		}));
+		return readValid(LEDGER_FILES.nodes, isGraphNode);
 	},
 
 	/** Append one edge ASSERTION; readers merge lines by (from,to,type). */
