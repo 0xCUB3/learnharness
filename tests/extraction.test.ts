@@ -34,7 +34,7 @@ import type {
 	SessionFindings,
 } from "../src/core/contracts.ts";
 import type { GraphStore } from "../src/core/ports.ts";
-import { createExtractionPipeline, transcriptView } from "../src/agent/subagents/extraction.ts";
+import { createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
@@ -163,13 +163,16 @@ const FINDINGS: SessionFindings = {
 	attribution: { quiz: { "probe-1": "p1", "check-1": "p2" } },
 };
 
-/** A model whose ONE tool call is `name` with the given input; then text. */
-function submitModel(name: string, input: unknown): MockLanguageModelV4 {
+/** A model whose ONE tool call is `name` with the given input; then text.
+ *  `onCall` (optional) fires at the moment of the first generate — the
+ *  observation point for mid-run assertions. */
+function submitModel(name: string, input: unknown, onCall?: () => void): MockLanguageModelV4 {
 	let turn = 0;
 	return new MockLanguageModelV4({
 		doGenerate: async () => {
 			turn++;
 			if (turn === 1) {
+				onCall?.();
 				return {
 					content: [
 						{
@@ -340,6 +343,39 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		});
 		await assert.rejects(failingExtractor.runExtraction(chatId), /the extractor never submitted findings/);
 		assert.equal(ledgers.readCheckpoints().length, 0);
+	});
+
+	it("reports its phase through the status registry while running, and clears it when done", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const existingId = "n_existing";
+		ledgers.appendNode({
+			id: existingId,
+			name: "Derivative",
+			statement: "Derivatives measure rates of change",
+			aliases: [],
+			createdAt: "2026-08-01T00:00:00.000Z",
+			provenance: [],
+		});
+		const seen: (string | undefined)[] = [];
+		const phaseOf = () => extractionStatuses().find((r) => r.chatId === chatId)?.phase;
+		const verdict: AuditResult = {
+			propositions: [{ ...FINDINGS.propositions[0]!, linkTo: existingId }],
+			edges: [],
+			attribution: { quiz: {} },
+			dropped: [{ ref: "p2", reason: "evidence not found" }],
+		};
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			// Each stage's first generate is the observation point: the
+			// registry must already carry this chat at the right phase.
+			extractor: submitModel("submit_findings", FINDINGS, () => seen.push(phaseOf())),
+			auditor: submitModel("submit_review", verdict, () => seen.push(phaseOf())),
+		});
+		await pipeline.runExtraction(chatId);
+		assert.deepEqual(seen, ["extracting", "auditing"]);
+		assert.equal(extractionStatuses().length, 0, "the registry clears when the run ends");
 	});
 
 	it("is single-flight per chat — a concurrent second run is a no-op", async () => {

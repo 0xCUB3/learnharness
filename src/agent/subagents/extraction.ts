@@ -304,6 +304,25 @@ function createAuditor(model: LanguageModel) {
 	});
 }
 
+// ─── the pipeline status registry ─────────────────────────────────────────────
+
+/** The pipeline phases, in order — what the home status endpoint shows. */
+export type ExtractionPhase = "extracting" | "auditing" | "merging";
+
+/** One in-flight pipeline run. Module-level: one process, one registry. */
+interface RunningExtraction {
+	chatId: string;
+	phase: ExtractionPhase;
+	startedAt: number;
+}
+
+const runningExtractions = new Map<string, RunningExtraction>();
+
+/** In-flight pipeline runs (oldest first) — the /api/graph/status payload. */
+export function extractionStatuses(): RunningExtraction[] {
+	return [...runningExtractions.values()].sort((a, b) => a.startedAt - b.startedAt);
+}
+
 // ─── the pipeline ───────────────────────────────────────────────────────────
 
 export interface ExtractionModels {
@@ -326,6 +345,14 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	const extractorAgent = createExtractor(deps.extractor ?? modelFor("extractor"));
 	const auditorAgent = createAuditor(deps.auditor ?? modelFor("auditor"));
 	const inFlight = new Set<string>();
+
+	function setPhase(chatId: string, phase: ExtractionPhase): void {
+		runningExtractions.set(chatId, {
+			chatId,
+			phase,
+			startedAt: runningExtractions.get(chatId)?.startedAt ?? Date.now(),
+		});
+	}
 
 	async function extract(chatId: string): Promise<SessionFindings> {
 		const record = chatStore.getChat(chatId);
@@ -388,8 +415,11 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		const t0 = performance.now();
 		try {
 			console.info(`[extraction ${chatId}] pipeline start`);
+			setPhase(chatId, "extracting");
 			const findings = await extract(chatId);
+			setPhase(chatId, "auditing");
 			const auditResult = await audit(chatId, findings);
+			setPhase(chatId, "merging");
 			// The merger re-reads the chat record itself — events are rebuilt
 			// from the transcript, never from stale copies.
 			const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore });
@@ -405,6 +435,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			throw err;
 		} finally {
 			inFlight.delete(chatId);
+			runningExtractions.delete(chatId); // done or failed — no longer running
 		}
 	}
 

@@ -56,7 +56,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { SearchIcon, WaypointsIcon } from "lucide-react";
+import { Loader2Icon, SearchIcon, WaypointsIcon } from "lucide-react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
@@ -352,7 +352,9 @@ export function GraphView() {
 		return set;
 	}, [snapshot, query]);
 
-	// Fetch the derived graph (the route folds stale chats first).
+	// Fetch the derived graph. Re-runs when a background pipeline run
+	// finishes (refreshTick) — its merges just landed in the ledger.
+	const [refreshTick, setRefreshTick] = useState(0);
 	useEffect(() => {
 		let cancelled = false;
 		fetch("/api/graph")
@@ -363,6 +365,30 @@ export function GraphView() {
 			.catch((err) => console.error("[graph] fetch failed:", err));
 		return () => {
 			cancelled = true;
+		};
+	}, [refreshTick]);
+
+	// Background pipeline status: poll /api/graph/status; when a run
+	// finishes (some -> none), refetch the graph.
+	const [pipelineRuns, setPipelineRuns] = useState<{ chatId: string; title: string; phase: string; startedAt: number }[]>([]);
+	useEffect(() => {
+		let cancelled = false;
+		let hadRuns = false;
+		const poll = () =>
+			fetch("/api/graph/status")
+				.then((res) => res.json() as Promise<{ runs: typeof pipelineRuns }>)
+				.then(({ runs }) => {
+					if (cancelled) return;
+					setPipelineRuns(runs);
+					if (hadRuns && runs.length === 0) setRefreshTick((t) => t + 1);
+					hadRuns = runs.length > 0;
+				})
+				.catch(() => {}); // status is cosmetic — never surface poll errors
+		poll();
+		const timer = setInterval(poll, 2000);
+		return () => {
+			cancelled = true;
+			clearInterval(timer);
 		};
 	}, []);
 
@@ -609,6 +635,23 @@ export function GraphView() {
 							No matching nodes.
 						</div>
 					)}
+				</div>
+			)}
+
+			{/* Background pipeline status: what is currently running. */}
+			{pipelineRuns.length > 0 && (
+				<div className="absolute bottom-3 left-3 z-10 flex flex-col gap-1.5">
+					{pipelineRuns.map((run) => (
+						<div
+							key={run.chatId}
+							className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
+						>
+							<Loader2Icon className="size-3.5 shrink-0 animate-spin" />
+							<span className="capitalize">{run.phase}</span>
+							<span className="max-w-48 truncate text-foreground">{run.title}</span>
+							<span className="tabular-nums">{Math.max(0, Math.round((Date.now() - run.startedAt) / 1000))}s</span>
+						</div>
+					))}
 				</div>
 			)}
 
