@@ -41,6 +41,18 @@ function quizQD(): QuestionData {
 	};
 }
 
+function askQD(): QuestionData {
+	const options = normalizeOptions([{ label: "Very" }, { label: "Somewhat" }]);
+	return {
+		id: "a1",
+		kind: "ask",
+		question: "How confident are you?",
+		mode: "single-select",
+		options,
+		createdAt: new Date().toISOString(),
+	};
+}
+
 function renderDock(props: { toolName: "quiz" | "ask_user_question"; toolCallId: string; input: never; onSubmit?: () => void }) {
 	// expanded=true renders the full form (the collapsed bar is covered by the
 	// QuestionDockBar test below). No scroll context needed — the DockOverlay
@@ -63,6 +75,7 @@ describe("render smoke tests", () => {
 		assert.match(html, /Why this answer\? What are you unsure about\?/, "placeholder invites, not apologizes");
 		assert.ok(!html.includes("optional"), "the field is never called optional");
 		assert.match(html, /Submit answer/, "send becomes Submit answer");
+		assert.match(html, /⌘\/Ctrl \+ ↵ submits/, "the ⌘/Ctrl+Enter shortcut is discoverable");
 		// The v1 desync bug: options are buttons with ARIA roles, not native inputs.
 		assert.ok(!html.includes('type="radio"'), "no native radio inputs");
 		assert.ok(html.includes('role="radio"'), "button-based radio role present");
@@ -117,6 +130,7 @@ describe("render smoke tests", () => {
 		assert.ok(html.includes('data-testid="answer-field"'), "text mode is the answer field");
 		assert.match(html, /Your answer/, "labeled as the answer");
 		assert.ok(!html.includes('data-testid="thinking-field"'), "no thinking field in text mode (v1)");
+		assert.ok(!html.includes("⌘/Ctrl"), "no dump shortcut hint — Enter already submits");
 	});
 
 	it("AnsweredCard grades quiz answers (✓/✗ + explanation)", () => {
@@ -125,6 +139,19 @@ describe("render smoke tests", () => {
 		assert.match(html, /incorrect/);
 		assert.match(html, /innermost/, "explanation renders post-answer");
 		assert.ok(html.includes("✓") && html.includes("✗"));
+	});
+
+	it("AnsweredCard renders the learner's own Other answer AS an option row", () => {
+		const answer = buildAnswer(askQD(), { other: "Fairly confident — but shaky on applications" });
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
+		assert.ok(html.includes('data-testid="answered-other"'), "the Other answer is an option row");
+		assert.match(html, /border-primary bg-accent/, "styled like its selected siblings");
+		assert.match(html, /shaky on applications/, "the typed words render");
+		// Inside the options container — same list, not a loose quote outside it.
+		assert.ok(
+			html.indexOf("Very") < html.indexOf("answered-other"),
+			"the Other row sits with the listed options",
+		);
 	});
 
 	it("AnsweredCard promotes the learner's thinking to a first-class block", () => {

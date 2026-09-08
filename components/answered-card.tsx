@@ -41,9 +41,9 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				<MessageResponse>{answer.questionText}</MessageResponse>
 			</div>
 
-			{answer.options && answer.options.length > 0 && (
+			{((answer.options?.length ?? 0) > 0 || answer.other) && (
 				<div className="flex flex-col gap-1.5 text-sm">
-					{answer.options.map((opt) => {
+					{answer.options?.map((opt) => {
 						const sel = selectedIdx.has(opt.index);
 						const key = isQuiz && correctIdx.has(opt.index);
 						return (
@@ -70,10 +70,20 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 							</div>
 						);
 					})}
+					{/* The learner's own typed option is an OPTION — same container,
+					    same selected styling as its siblings, not a loose quote
+					    floating outside the list. Quotes keep the learner's words. */}
+					{answer.other && (
+						<div
+							data-testid="answered-other"
+							className="flex items-start gap-2 rounded-lg border border-primary bg-accent px-3 py-1.5"
+						>
+							<span>“{answer.other}”</span>
+						</div>
+					)}
 				</div>
 			)}
 
-			{answer.other && <div className="mt-2 text-sm">“{answer.other}”</div>}
 			{answer.text && <div className="mt-2 whitespace-pre-wrap text-sm">“{answer.text}”</div>}
 			{answer.dontKnow && isQuiz && <div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>}
 

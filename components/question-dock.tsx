@@ -412,6 +412,14 @@ function QuestionDockForm({
 						<textarea
 							value={thinking}
 							onChange={(e) => setThinking(e.target.value)}
+							onKeyDown={(e) => {
+								// ⌘↵ on macOS, Ctrl↵ elsewhere — the Gmail convention; plain
+								// Enter stays a newline (this field is for dumping).
+								if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+									e.preventDefault();
+									submit();
+								}
+							}}
 							placeholder="Why this answer? What are you unsure about? Say as much as you like — the teacher reads all of this."
 							rows={1}
 							className={cn(
@@ -422,11 +430,16 @@ function QuestionDockForm({
 							)}
 						/>
 					)}
-					<div className="flex items-center justify-end p-1">
+					<div className="flex items-center justify-between gap-2 p-1">
+						{qd.mode !== "text" && (
+							<span aria-hidden className="pl-1.5 text-[10px] text-muted-foreground">
+								⌘/Ctrl + ↵ submits
+							</span>
+						)}
 						<Button
 							type="submit"
 							disabled={!canSubmit}
-							className="h-9 rounded-[10px] px-3.5 text-sm font-medium"
+							className="ml-auto h-9 rounded-[10px] px-3.5 text-sm font-medium"
 						>
 							Submit answer
 						</Button>
