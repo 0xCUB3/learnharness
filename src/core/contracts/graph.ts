@@ -102,7 +102,8 @@ export interface LedgerEvent {
 	 *  understanding observations — re-emission of the same chat must never
 	 *  double-record an event. */
 	ref?: string;
-	/** The learner's quiz note — diagnostic gold (vision §1 calibration). */
+	/** The learner's quiz note (diagnostic gold), or the understanding
+	 *  LEVEL word for observations — a session-relative judgment. */
 	note?: string;
 	/** The quiz question text, when nodeId is null (later attribution input). */
 	question?: string;
@@ -138,6 +139,16 @@ export interface LedgerEvent {
 
 // ─── Extraction findings (extractor output → audit → merger input) ───────────
 
+/**
+ * The extractor's standardized per-session understanding scale (DECIDED
+ * 2026-09-08): a CLOSED named-word list — no numbers, no prose, no
+ * justifications (a justification, if the agent wants one, is dropped;
+ * it is not stored). The level is session- and extraction-run-relative
+ * judgment about the learner, shown next to its session — never a node
+ * property.
+ */
+export type UnderstandingLevel = "solid" | "shaky" | "accepted" | "resisted" | "not yet engaged";
+
 /** One proposed proposition — a node candidate (or a re-encounter of one). */
 export interface ExtractedProposition {
 	/** Extractor-local id ("p1", …) referenced by edges + attribution. */
@@ -158,11 +169,11 @@ export interface ExtractedProposition {
 	messages: string[];
 	/** Verbatim transcript quotes backing the proposition. */
 	evidence: string[];
-	/** The extractor's understanding note for this proposition IN THIS
-	 *  session — a named-word scale ("solid", "shaky", "accepted",
-	 *  "resisted"), no numbers. Joins the ledger as an observation event;
-	 *  treatment pending the state-model ideation. */
-	understanding?: string;
+	/** The extractor's understanding level for this proposition IN THIS
+	 *  session — one word from the UnderstandingLevel scale. Joins the
+	 *  ledger as an observation event (note = the level word); treatment
+	 *  pending the state-model ideation. */
+	understanding?: UnderstandingLevel;
 }
 
 /** One proposed relation between two propositions. */
