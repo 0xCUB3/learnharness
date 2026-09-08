@@ -1,9 +1,9 @@
 /**
- * Graph merger + trigger + derivation tests (vision §1; contracts.ts
- * "extraction pipeline"). The merger (core/graph.ts mergeFindings) is the
- * pipeline's deterministic apply stage: findings in, ledger appends out —
- * identity resolution, retroactive probe attribution, event rebuild, and
- * the idempotency guarantees.
+ * Graph merger + trigger + derivation tests (vision §1, 2026-09-02 redesign).
+ * The merger (core/graph.ts mergeFindings) is the pipeline's deterministic
+ * apply stage: AUDITED VERDICTS in, ledger appends out — link-or-create
+ * identity (the auditor's linkTo, never string matching), deterministic quiz
+ * events, understanding observations, and the idempotency guarantees.
  *
  * Ledger isolation: PATHS is fixed at import time, so the five data/graph
  * ledgers are backed up and cleared before the suite and restored after
@@ -18,9 +18,8 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
 import type { UIMessage } from "ai";
-import type { PlanTree, PlanToolResult, SessionFindings } from "../src/core/contracts.ts";
+import type { AuditResult } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
-import { createTree, markDone } from "../src/core/plan-tree.ts";
 import { getGraph, graphSnapshot, mergeFindings, pendingQuizAnswers, type GraphDeps } from "../src/core/graph.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -80,16 +79,6 @@ function quizPart(
 	return { type: "tool-quiz", toolCallId, state: "output-available", input, output };
 }
 
-function planPart(toolCallId: string, name: string, input: Record<string, unknown>, tree: PlanTree): unknown {
-	return {
-		type: `tool-${name}`,
-		toolCallId,
-		state: "output-available",
-		input,
-		output: { ok: true, tree } satisfies PlanToolResult,
-	};
-}
-
 function answer(over: Partial<QuestionAnswerData>): QuestionAnswerData {
 	return {
 		questionId: "q",
@@ -102,59 +91,17 @@ function answer(over: Partial<QuestionAnswerData>): QuestionAnswerData {
 	};
 }
 
-/** Create a chat in the real store with a tree and messages; returns the record. */
-function fixtureChat(title: string, tree: PlanTree | null, messages: UIMessage[]) {
+/** Create a chat in the real store with messages; returns the record.
+ *  Tree-blind world: the plan tree is irrelevant to the merger — no tree. */
+function fixtureChat(title: string, messages: UIMessage[]) {
 	const chat = chatStore.createChat(title);
 	createdChats.push(chat.id);
-	if (tree) chatStore.saveTree(chat.id, tree);
 	chatStore.saveMessages(chat.id, messages);
 	return chatStore.getChat(chat.id)!;
 }
 
-/** The fixture tree: alpha → beta, gamma free-floating, alpha done. */
-function fixtureTree(): PlanTree {
-	return markDone(
-		createTree(
-			[
-				{ id: "alpha", title: "Alpha intuition" },
-				{ id: "beta", title: "Beta rule" },
-				{ id: "gamma", title: "Gamma application" },
-			],
-			[{ from: "alpha", to: "beta" }],
-		),
-		"alpha",
-	);
-}
-
-/**
- * Findings shaped exactly like what the extractor would produce for a
- * session's plan tree: one proposition per tree node (statement = title,
- * treeNodeId set), one `requires` edge per tree edge.
- */
-function treeFindings(tree: PlanTree): SessionFindings {
-	const idByNodeId = new Map(tree.nodes.map((n, i) => [n.id, `p${i + 1}`]));
-	return {
-		propositions: tree.nodes.map((n, i) => ({
-			id: `p${i + 1}`,
-			name: n.title,
-			statement: n.title,
-			aliases: [],
-			kind: "truth" as const,
-			treeNodeId: n.id,
-			evidence: ["fixture evidence"],
-		})),
-		edges: tree.edges.map((e) => ({
-			from: idByNodeId.get(e.from)!,
-			to: idByNodeId.get(e.to)!,
-			type: "requires" as const,
-			evidence: ["fixture evidence"],
-		})),
-		attribution: { quiz: {} },
-	};
-}
-
-/** The full fixture transcript: probes → plan → checks → mark_done → noise. */
-function fixtureMessages(tree: PlanTree): UIMessage[] {
+/** The full fixture transcript: five graded quizzes + a dismissed one + an ask. */
+function fixtureMessages(): UIMessage[] {
 	return [
 		user("u1", "teach me the fixture topic"),
 		assistant("a1", [
@@ -171,32 +118,30 @@ function fixtureMessages(tree: PlanTree): UIMessage[] {
 				answer({ questionId: "call-2", questionText: "Q2 text", dontKnow: true, correct: false, answeredAt: "2026-08-22T01:01:00.000Z" }),
 			),
 		]),
-		assistant("a3", [planPart("p1", "plan_init", { nodes: [], edges: [] }, tree)]),
-		assistant("a4", [
+		assistant("a3", [
+			// input.nodeId "alpha" is deliberately present and IGNORED —
+			// attribution is the only quiz→node path in the tree-blind world.
 			quizPart(
 				"call-3",
 				{ question: "Q3", nodeId: "alpha", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
 				answer({ questionId: "call-3", questionText: "Q3 text", correct: true, note: "recalled the diagram", answeredAt: "2026-08-22T02:00:00.000Z" }),
 			),
 		]),
-		assistant("a5", [
+		assistant("a4", [
 			quizPart(
 				"call-4",
-				{ question: "Q4", nodeId: "beta", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
+				{ question: "Q4", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
 				answer({ questionId: "call-4", questionText: "Q4 text", correct: false, answeredAt: "2026-08-22T02:01:00.000Z" }),
 			),
 		]),
-		assistant("a6", [
-			// nodeId present but NOT in the tree → tagged-but-unmapped: the
-			// attribution can rescue it, or it lands null + question text.
+		assistant("a5", [
 			quizPart(
 				"call-5",
-				{ question: "Q5", nodeId: "ghost", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
+				{ question: "Q5", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
 				answer({ questionId: "call-5", questionText: "Q5 text", dontKnow: true, correct: false, answeredAt: "2026-08-22T02:02:00.000Z" }),
 			),
 		]),
-		assistant("a7", [planPart("p2", "plan_mark_done", { id: "alpha" }, tree)]),
-		assistant("a8", [
+		assistant("a6", [
 			// dismissed quiz + an answered ask — neither becomes an event
 			quizPart(
 				"call-6",
@@ -214,25 +159,58 @@ function fixtureMessages(tree: PlanTree): UIMessage[] {
 	];
 }
 
-/**
- * The extractor's findings for the fixture chat: the tree as propositions +
- * the probe attribution. The audit stage is a no-op pass-through in these
- * merger tests — its behavior is tested with the pipeline (extraction.test).
- */
-function fixtureFindings(): SessionFindings {
-	const findings = treeFindings(fixtureTree());
-	// Untagged probe quizzes: call-1 attributed retroactively to Alpha (the
-	// vision's open question — resolved by the extractor); call-2 genuinely
-	// unattributable; call-5's ghost nodeId is rescued onto Gamma.
-	findings.attribution.quiz = { "call-1": "p1", "call-2": null, "call-5": "p3" };
-	return findings;
+/** The auditor's verdict for the fixture chat: three verified propositions
+ *  (no linkTo — the graph starts empty), one follows edge, all quizzes
+ *  attributed, one understanding note. */
+function fixtureAudit(): AuditResult {
+	return {
+		propositions: [
+			{
+				id: "p1",
+				statement: "Alpha intuition",
+				description: "Alpha intuition, elaborated: what alpha means and how it behaves in practice.",
+				aliases: ["alpha feel"],
+				messages: ["a1", "a3"],
+				evidence: ["fixture evidence"],
+				understanding: "solid after the check",
+			},
+			{
+				id: "p2",
+				statement: "Beta rule",
+				description: "The beta rule and when it applies.",
+				aliases: [],
+				messages: ["a4"],
+				evidence: ["fixture evidence"],
+			},
+			{
+				id: "p3",
+				statement: "Gamma application",
+				description: "Applying the whole framework to gamma cases.",
+				aliases: [],
+				messages: ["a5"],
+				evidence: ["fixture evidence"],
+			},
+		],
+		edges: [
+			{
+				from: "p1",
+				to: "p2",
+				type: "follows",
+				messages: ["a4"],
+				evidence: ["fixture evidence"],
+			},
+		],
+		attribution: { quiz: { "call-1": "p1", "call-2": null, "call-3": "p1", "call-4": "p2", "call-5": "p3" } },
+		dropped: [],
+	};
 }
 
 /** The chat every merger test folds (shared, so ordering is intentional). */
-const chat1 = fixtureChat("Graph fixture", fixtureTree(), fixtureMessages(fixtureTree()));
+const chat1 = fixtureChat("Graph fixture", fixtureMessages());
 
-/** Set by the cross-session test; the snapshot test (which runs after it) reads it. */
+/** Set by the cross-session tests; the snapshot test (which runs after) reads them. */
 let chat2Id = "";
+let chat3Id = "";
 
 // ─── the merger ──────────────────────────────────────────────────────────────
 
@@ -248,71 +226,83 @@ function scopedGraph(chatIds: string[]) {
 	);
 	return {
 		nodes: graph.nodes.filter((n) => nodeIds.has(n.id)),
-		edges: graph.edges.filter((e) => e.provenance.some((c) => chatIds.includes(c))),
+		edges: graph.edges.filter((e) => e.provenance.some((pt) => chatIds.includes(pt.chatId))),
 		events: graph.events.filter((e) => chatIds.includes(e.chatId)),
 	};
 }
 
 describe("the merger (mergeFindings)", () => {
-	it("merges propositions/edges by identity and rebuilds events with retroactive probe attribution", () => {
-		const stats = mergeFindings(chat1.id, fixtureFindings(), graphDeps);
+	it("creates nodes from the verdicts, rebuilds quiz events deterministically, records observations", () => {
+		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps);
 		assert.deepEqual(stats, { nodes: 3, edges: 1, events: 6 });
 
 		const graph = scopedGraph([chat1.id]);
 		assert.equal(graph.nodes.length, 3);
 		const idByStatement = new Map(graph.nodes.map((n) => [n.statement, n.id]));
 		for (const node of graph.nodes) {
-			assert.equal(node.kind, "truth");
-			assert.deepEqual(node.aliases, []);
 			assert.match(node.id, /^n_/);
+			assert.ok(node.description.length > 0, "description is required");
+			assert.equal("kind" in node, false, "no kind field");
+			assert.ok(Array.isArray(node.provenance), "message-granular provenance");
 		}
+		// Provenance is message-granular: p1 came up in a1 and a3.
+		const alpha = graph.nodes.find((n) => n.statement === "Alpha intuition")!;
+		assert.deepEqual(alpha.provenance, [
+			{ chatId: chat1.id, messageId: "a1" },
+			{ chatId: chat1.id, messageId: "a3" },
+		]);
 
-		// The tree edge alpha→beta becomes a `requires` edge on the mapped nodes.
+		// The follows edge, provenance attached.
 		assert.equal(graph.edges.length, 1);
 		const edge = graph.edges[0]!;
 		assert.equal(edge.from, idByStatement.get("Alpha intuition"));
 		assert.equal(edge.to, idByStatement.get("Beta rule"));
-		assert.equal(edge.type, "requires");
-		assert.deepEqual(edge.provenance, [chat1.id]);
+		assert.equal(edge.type, "follows");
+		assert.deepEqual(edge.provenance, [{ chatId: chat1.id, messageId: "a4" }]);
+
+		// Mapping lines: one per (chat, sourceId).
+		assert.deepEqual(
+			graphStore.readMappings().map((m) => m.sourceId),
+			["p1", "p2", "p3"],
+		);
 
 		// Events — kinds, refs, notes, and the attribution paths.
 		assert.equal(graph.events.length, 6);
 		const byRef = new Map(graph.events.map((e) => [e.ref, e]));
 
-		const probeMiss = byRef.get("call-1")!;
-		assert.equal(probeMiss.kind, "probe-miss"); // quiz BEFORE plan_init
-		assert.equal(probeMiss.nodeId, idByStatement.get("Alpha intuition"), "retroactive probe attribution");
-		assert.equal(probeMiss.question, undefined, "attributed → no question text needed");
+		const miss = byRef.get("call-1")!;
+		assert.equal(miss.kind, "miss");
+		assert.equal(miss.nodeId, idByStatement.get("Alpha intuition"), "attributed quiz");
 
-		const probeDontKnow = byRef.get("call-2")!;
-		assert.equal(probeDontKnow.kind, "dont-know"); // same kind, both phases
-		assert.equal(probeDontKnow.nodeId, null, "unattributable probe → null");
-		assert.equal(probeDontKnow.question, "Q2 text");
+		const dontKnow = byRef.get("call-2")!;
+		assert.equal(dontKnow.kind, "dont-know");
+		assert.equal(dontKnow.nodeId, null, "unattributable → null");
+		assert.equal(dontKnow.question, "Q2 text");
 
-		const check = byRef.get("call-3")!;
-		assert.equal(check.kind, "check-correct"); // quiz AFTER plan_init
-		assert.equal(check.nodeId, idByStatement.get("Alpha intuition"), "tagged quiz → deterministic");
-		assert.equal(check.note, "recalled the diagram");
+		const correct = byRef.get("call-3")!;
+		assert.equal(correct.kind, "correct");
+		assert.equal(correct.nodeId, idByStatement.get("Alpha intuition"), "attribution wins over the ignored input.nodeId");
+		assert.equal(correct.note, "recalled the diagram");
 
-		const checkMiss = byRef.get("call-4")!;
-		assert.equal(checkMiss.kind, "check-incorrect");
-		assert.equal(checkMiss.nodeId, idByStatement.get("Beta rule"));
+		const miss2 = byRef.get("call-4")!;
+		assert.equal(miss2.kind, "miss");
+		assert.equal(miss2.nodeId, idByStatement.get("Beta rule"));
 
-		const ghost = byRef.get("call-5")!;
-		assert.equal(ghost.kind, "dont-know");
-		assert.equal(ghost.nodeId, idByStatement.get("Gamma application"), "tagged-but-unmapped rescued by attribution");
-		assert.equal(ghost.question, undefined);
+		const dontKnow2 = byRef.get("call-5")!;
+		assert.equal(dontKnow2.kind, "dont-know");
+		assert.equal(dontKnow2.nodeId, idByStatement.get("Gamma application"));
 
-		const taught = byRef.get("taught:alpha")!;
-		assert.equal(taught.kind, "taught");
-		assert.equal(taught.nodeId, idByStatement.get("Alpha intuition"), "mark_done → tree-node mapping");
+		const observation = byRef.get("obs:p1")!;
+		assert.equal(observation.kind, "observation");
+		assert.equal(observation.nodeId, idByStatement.get("Alpha intuition"));
+		assert.equal(observation.note, "solid after the check");
 
 		// The dismissed quiz and the ask question became nothing.
 		assert.equal([...byRef.keys()].filter((r) => r === "call-6" || r === "call-7").length, 0);
 	});
 
-	it("is idempotent — re-merging the same findings appends nothing", () => {
-		const stats = mergeFindings(chat1.id, fixtureFindings(), graphDeps);
+	it("is idempotent — re-merging the same verdicts appends nothing", () => {
+		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps);
 		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 });
 		const graph = scopedGraph([chat1.id]);
 		assert.equal(graph.nodes.length, 3);
@@ -322,38 +312,63 @@ describe("the merger (mergeFindings)", () => {
 		assert.equal(graphStore.readCheckpoints().filter((c) => c.chatId === chat1.id).length, 2);
 	});
 
-	it("merges a second session onto the same nodes and accumulates edge provenance", () => {
-		// chat2 re-teaches the same two propositions (identical statements) —
-		// the conservative identity resolution recognizes them.
-		const tree2 = createTree(
-			[
-				{ id: "a", title: "Alpha intuition" },
-				{ id: "b", title: "Beta rule" },
-			],
-			[{ from: "a", to: "b" }],
-		);
-		const chat2 = fixtureChat("Graph fixture 2", tree2, [
+	it("applies a linkTo verdict: phrasings join aliases, provenance unions, no duplicate node", () => {
+		const alphaId = scopedGraph([chat1.id]).nodes.find((n) => n.statement === "Alpha intuition")!.id;
+		const chat2 = fixtureChat("Graph fixture 2", [
 			user("u1", "again"),
-			assistant("a1", [planPart("p1", "plan_init", { nodes: [], edges: [] }, tree2)]),
+			assistant("a1", [
+				quizPart(
+					"call-9",
+					{ question: "Q9", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
+					answer({ questionId: "call-9", questionText: "Q9 text", correct: true, answeredAt: "2026-08-22T03:00:00.000Z" }),
+				),
+			]),
 		]);
-
-		const stats = mergeFindings(chat2.id, treeFindings(tree2), graphDeps);
-		assert.deepEqual(stats, { nodes: 0, edges: 1, events: 0 });
 		chat2Id = chat2.id;
 
+		// The auditor's identity verdict: this proposition IS the alpha node.
+		const stats = mergeFindings(
+			chat2.id,
+			{
+				propositions: [
+					{
+						id: "q1",
+						statement: "Alpha feel", // a DIFFERENT phrasing — identity is the verdict, not strings
+						description: "The intuitive grasp of alpha.",
+						aliases: ["alpha intuition"],
+						messages: ["a1"],
+						evidence: ["fixture evidence"],
+						linkTo: alphaId,
+					},
+				],
+				edges: [],
+				attribution: { quiz: { "call-9": "q1" } },
+				dropped: [],
+			},
+			graphDeps,
+		);
+		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 1 });
+
 		const after = scopedGraph([chat1.id, chat2.id]);
-		assert.equal(after.nodes.length, 3); // no duplicate nodes
-		assert.equal(after.edges.length, 1); // one merged edge…
-		assert.deepEqual(after.edges[0]!.provenance, [chat1.id, chat2.id]); // …two sessions
+		assert.equal(after.nodes.length, 3, "no duplicate node");
+		const alpha = getGraph(graphStore).nodes.find((n) => n.id === alphaId)!;
+		assert.ok(alpha.aliases.includes("Alpha feel"), "the session's phrasing joins the aliases");
+		assert.ok(alpha.aliases.includes("alpha intuition"));
+		assert.ok(
+			alpha.provenance.some((pt) => pt.chatId === chat2.id && pt.messageId === "a1"),
+			"provenance unions",
+		);
+		// The mapping records the verdict: (chat2, q1) → the linked node.
+		const m = graphStore.readMappings().find((x) => x.chatId === chat2.id)!;
+		assert.deepEqual(m, { chatId: chat2.id, sourceId: "q1", graphNodeId: alphaId });
 	});
 
-	it("derives node states, sessions, and node provenance in graphSnapshot", () => {
+	it("derives node states and sessions in graphSnapshot", () => {
 		const snap = graphSnapshot(graphDeps);
 		const idByStatement = new Map(snap.nodes.map((n) => [n.statement, n.id]));
-		assert.equal(snap.nodeStates[idByStatement.get("Alpha intuition")!], "taught");
+		// Alpha's latest quiz is call-9 (chat2, correct) → known.
+		assert.equal(snap.nodeStates[idByStatement.get("Alpha intuition")!], "known");
 		assert.equal(snap.nodeStates[idByStatement.get("Beta rule")!], "missed");
-		// Gamma: no taught/checks — but the rescued dont-know probe (call-5)
-		// makes its latest event a dont-know.
 		assert.equal(snap.nodeStates[idByStatement.get("Gamma application")!], "dont-know");
 
 		assert.equal(snap.sessions[chat1.id], "Graph fixture");
@@ -366,8 +381,35 @@ describe("the merger (mergeFindings)", () => {
 		assert.deepEqual(snap.nodeSessions[idByStatement.get("Gamma application")!], [chat1.id]);
 	});
 
+	it("never string-matches without a verdict — an identical statement without linkTo is a NEW node", () => {
+		const chat3 = fixtureChat("Graph fixture 3", [user("u1", "third")]);
+		chat3Id = chat3.id;
+		const stats = mergeFindings(
+			chat3.id,
+			{
+				propositions: [
+					{
+						id: "r1",
+						statement: "Alpha intuition", // IDENTICAL to the existing node's statement
+						description: "Same words, no verdict.",
+						aliases: [],
+						messages: ["u1"],
+						evidence: ["fixture evidence"],
+						// no linkTo — identity is the auditor's call alone
+					},
+				],
+				edges: [],
+				attribution: { quiz: {} },
+				dropped: [],
+			},
+			graphDeps,
+		);
+		assert.equal(stats.nodes, 1, "created — the merger does not match strings");
+		assert.equal(getGraph(graphStore).nodes.filter((n) => n.statement === "Alpha intuition").length, 2);
+	});
+
 	it("returns zeros for unknown chats", () => {
-		assert.deepEqual(mergeFindings("chat_does_not_exist", treeFindings(fixtureTree()), graphDeps), {
+		assert.deepEqual(mergeFindings("chat_does_not_exist", fixtureAudit(), graphDeps), {
 			nodes: 0,
 			edges: 0,
 			events: 0,
@@ -379,14 +421,12 @@ describe("the merger (mergeFindings)", () => {
 
 describe("the trigger helper (pendingQuizAnswers)", () => {
 	it("counts answered quizzes not yet in the ledger — dismissed/ask never count", () => {
-		const tree = createTree([{ id: "solo", title: "Solo node" }], []);
-		const chat = fixtureChat("Trigger fixture", tree, [
+		const chat = fixtureChat("Trigger fixture", [
 			user("u1", "go"),
-			assistant("a1", [planPart("p1", "plan_init", { nodes: [], edges: [] }, tree)]),
-			assistant("a2", [
+			assistant("a1", [
 				quizPart(
 					"call-s",
-					{ question: "QS", nodeId: "solo", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
+					{ question: "QS", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
 					answer({ questionId: "call-s", questionText: "QS text", correct: true, answeredAt: "2026-08-22T03:00:00.000Z" }),
 				),
 				quizPart(
@@ -407,7 +447,9 @@ describe("the trigger helper (pendingQuizAnswers)", () => {
 		assert.equal(pendingQuizAnswers(chat.id, graphDeps), 1, "one answered quiz pending");
 		assert.equal(pendingQuizAnswers("chat_does_not_exist", graphDeps), 0);
 
-		mergeFindings(chat.id, treeFindings(tree), graphDeps);
+		mergeFindings(chat.id, fixtureAudit(), graphDeps);
+		// call-s is unattributed here (fixtureAudit has no call-s attribution)
+		// — but it still becomes an event, so nothing stays pending.
 		assert.equal(pendingQuizAnswers(chat.id, graphDeps), 0, "extracted → nothing pending");
 
 		// A NEW answered quiz raises the count again (the re-trigger path).
@@ -416,7 +458,7 @@ describe("the trigger helper (pendingQuizAnswers)", () => {
 			assistant("a3", [
 				quizPart(
 					"call-s4",
-					{ question: "QS4", nodeId: "solo", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
+					{ question: "QS4", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
 					answer({ questionId: "call-s4", questionText: "QS4 text", correct: false, answeredAt: "2026-08-22T03:01:00.000Z" }),
 				),
 			]),
@@ -429,29 +471,43 @@ describe("the trigger helper (pendingQuizAnswers)", () => {
 
 describe("graph ledger store", () => {
 	it("round-trips lines and skips corrupt / foreign-shaped lines (strict reads)", () => {
-		const node = { id: "n_storetest", name: "Store test", statement: "Store test", aliases: [], kind: "truth" as const, createdAt: "2026-08-22T00:00:00.000Z" };
+		const node = {
+			id: "n_storetest",
+			statement: "Store test",
+			description: "Store test, elaborated.",
+			aliases: [] as string[],
+			createdAt: "2026-08-22T00:00:00.000Z",
+			provenance: [{ chatId: "chat_c", messageId: "m1" }],
+		};
 		graphStore.appendNode(node);
-		// A torn append and a legacy V0-shaped node (different schema) — both skipped.
+		// A torn append and a legacy pre-redesign node (old schema) — both skipped.
 		fs.appendFileSync(
 			LEDGER_FILES.nodes,
-			`{not json}\n${JSON.stringify({ id: "legacy", statement: "Legacy shape", domain: "x", state: "known" })}\n`,
+			`{not json}\n${JSON.stringify({ id: "legacy", statement: "Legacy shape", kind: "truth", name: "Legacy", createdAt: "2026-08-22T00:00:00.000Z" })}\n`,
 			"utf-8",
 		);
 		const nodes = graphStore.readNodes().filter((n) => n.id === "n_storetest" || n.id === "legacy");
 		assert.equal(nodes.length, 1);
 		assert.equal(nodes[0]!.statement, "Store test");
-		assert.equal(nodes[0]!.name, "Store test");
+		assert.deepEqual(nodes[0]!.provenance, [{ chatId: "chat_c", messageId: "m1" }]);
 	});
 
-	it("derives a name for pre-name ledger lines (legacy reads)", () => {
-		// A full, valid node line written before `name` existed.
-		fs.appendFileSync(
-			LEDGER_FILES.nodes,
-			`${JSON.stringify({ id: "n_prename", statement: "Derivatives measure instantaneous change; they are limits.", aliases: [], kind: "truth", createdAt: "2026-08-22T00:00:00.000Z" })}\n`,
-			"utf-8",
-		);
-		const node = graphStore.readNodes().find((n) => n.id === "n_prename");
-		assert.ok(node);
-		assert.equal(node.name, "Derivatives measure instantaneous change");
+	it("returns RAW node lines — repeated ids (link-appends) are each their own line; getGraph merges", () => {
+		const line = (msgId: string) =>
+			JSON.stringify({
+				id: "n_linktest",
+				statement: `Phrasing ${msgId}`,
+				description: "Elaboration.",
+				aliases: [],
+				createdAt: "2026-08-22T00:00:00.000Z",
+				provenance: [{ chatId: "chat_c", messageId: msgId }],
+			});
+		fs.appendFileSync(LEDGER_FILES.nodes, `${line("m1")}\n${line("m2")}\n`, "utf-8");
+		const lines = graphStore.readNodes().filter((n) => n.id === "n_linktest");
+		assert.equal(lines.length, 2, "the store returns raw lines, one per append");
+		const merged = getGraph(graphStore).nodes.find((n) => n.id === "n_linktest")!;
+		assert.equal(merged.statement, "Phrasing m1", "the FIRST line defines the node");
+		assert.ok(merged.aliases.includes("Phrasing m2"), "later phrasings join the aliases");
+		assert.deepEqual(merged.provenance.map((p) => p.messageId), ["m1", "m2"]);
 	});
 });
