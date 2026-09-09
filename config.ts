@@ -33,16 +33,16 @@ export interface ModelSpec {
 
 export const MODELS = {
 	/** The teacher — streaming, lesson-facing: smart, but keep it lively. */
-	teacher: { model: "z-ai/glm-5.3-flash", effort: "medium" },
+	teacher: { model: "z-ai/glm-5.3-flash", effort: "minimal" },
 	/** Background sub-agents: fast and cheap beats deep thought. */
-	researcher: { model: "z-ai/glm-5.3-flash", effort: "low" },
-	demoBuilder: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	researcher: { model: "z-ai/glm-5.3-flash", effort: "minimal" },
+	demoBuilder: { model: "z-ai/glm-5.3-flash", effort: "minimal" },
 	/** Must be vision-capable: it looks at rendered SVGs. */
-	visualMaker: { model: "qwen/qwen3.8-max", effort: "low" },
+	visualMaker: { model: "qwen/qwen3.8-max", effort: "minimal" },
 	/** Extraction is judgment over given evidence — light thinking suffices. */
-	extractor: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	extractor: { model: "z-ai/glm-5.3-flash", effort: "minimal" },
 	/** The auditor verifies evidence exists; keep it cheap. */
-	auditor: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	auditor: { model: "z-ai/glm-5.3-flash", effort: "minimal" },
 } satisfies Record<string, ModelSpec>;
 
 export type ModelRole = keyof typeof MODELS;

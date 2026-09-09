@@ -3,7 +3,7 @@ import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { createTeacherTools } from "../agent/tools.ts";
-import { deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
+import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { stores } from "./stores.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { buildTeacherContext, persistTurn, triggerExtraction } from "./turn-service.ts";
@@ -71,6 +71,16 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
 	}
 
+	// CONTINUATION COALESCING (async protocol §4, the delivery-starvation fix):
+	// steers finished while a quiz chain held the wake gates ride THIS turn —
+	// appended after the learner's answer (conversion-safe: the answer carries
+	// its output). Claiming happens after beginTurn, so this turn owns the
+	// registry and the write-ahead persist below makes the claim durable.
+	const steers = claimSteers(chatId);
+	const outgoing = (
+		steers.length > 0 ? [...(body.messages as UIMessage[]), ...steers] : body.messages
+	) as UIMessage[];
+
 	// Write-ahead persistence: the request body IS the client's canonical
 	// state, so it goes on disk BEFORE the stream starts. The learner's answer
 	// is durable the instant the request arrives — any remount, second tab, or
@@ -78,7 +88,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 	// returns mid-turn reads turnInFlight from the registry and re-attaches by
 	// polling instead of resurrecting the stale transcript.)
 	try {
-		stores.chatStore.saveMessages(chatId, body.messages as UIMessage[]);
+		stores.chatStore.saveMessages(chatId, outgoing);
 	} catch (err) {
 		console.error(`[chat ${chatId}] write-ahead persist failed:`, err);
 	}
@@ -97,7 +107,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 				}),
 				buildTeacherContext(stores.graphStore, chatId),
 			),
-		uiMessages: body.messages as UIMessage[],
+		uiMessages: outgoing,
 		// Tool-call validation failures are messages OUR schemas authored (the
 		// quiz authoring contract, unknown tools) — safe and useful in the
 		// transcript: they are exactly what the teacher saw and retried on. The

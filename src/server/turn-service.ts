@@ -55,9 +55,23 @@ export function buildTeacherContext(graphStore: GraphStore, chatId: string): str
  * NEVER touched (the client's next POST still carries them verbatim).
  */
 export function withMessageIds(messages: UIMessage[]): UIMessage[] {
-	return messages.map((m) =>
+	const filled = messages.map((m) =>
 		m.id ? m : { ...m, id: `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}` },
 	);
+	// Same id twice = the SDK's continuation merge couldn't happen in place
+	// (continuation coalescing appends a user-role steer AFTER the assistant
+	// message being continued, so onFinish carries the input copy AND the
+	// extended response copy under one id). Keep the LAST occurrence — it is
+	// the SDK's final merge state (a superset of the earlier copy).
+	const seen = new Set<string>();
+	const deduped: UIMessage[] = [];
+	for (let i = filled.length - 1; i >= 0; i--) {
+		const m = filled[i]!;
+		if (seen.has(m.id)) continue;
+		seen.add(m.id);
+		deduped.unshift(m);
+	}
+	return deduped;
 }
 
 export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMessage[], isAborted: boolean): void {

@@ -2,18 +2,8 @@ import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import type { PlanToolResult, PlanTree } from "../../core/contracts.ts";
 import type { ChatStore } from "../../core/ports.ts";
-import {
-	addEdge,
-	addNode,
-	createTree,
-	emptyTree,
-	markDone,
-	PlanTreeError,
-	removeEdge,
-	removeNode,
-	setCurrent,
-	updateNode,
-} from "../../core/plan-tree.ts";
+import { createTree, emptyTree, PlanTreeError } from "../../core/plan-tree.ts";
+import { parseMermaidPlan } from "./mermaid-plan.ts";
 
 /** What the plan tools close over (the plan-tree half of the tool context). */
 export interface PlanToolContext {
@@ -23,161 +13,66 @@ export interface PlanToolContext {
 }
 
 /**
- * Plan-tree tools — W1 workstream (docs/plan.md Wave 1; src/core/contracts.ts
- * "Plan tree"). SERVER-SIDE tools WITH execute: read the chat record, apply a
- * pure validated op from src/core/plan-tree.ts, persist via saveTree, and
- * return PlanToolResult — the FULL updated tree every time, so the UI tree
- * panel renders the latest state straight from the transcript's tool outputs.
+ * The plan tool — AUTHOR-ONCE protocol (2026-09-03 design pass): the teacher
+ * WRITES the map and never tracks progress. One tool, plan_init, takes the
+ * whole dependency map as a mermaid `graph TD` block:
  *
- * Edges are `requires` edges: from = prerequisite, to = dependent
- * ("from must be understood before to").
+ *   - call it ONCE at the probe→teach seam (the call fires the phase divider)
+ *   - statuses (done / current / upcoming) are DERIVED from check outcomes
+ *     (contracts.ts derivePlanStatuses) — the teacher never declares them
+ *   - re-call it any time the map is wrong: the new block replaces the tree
+ *     wholesale. Node slugs are permanent — reused ids keep their derived
+ *     done status, so a mid-lesson rewrite never resets honest progress
+ *   - checks name the node they assess (quiz nodeId, validated against the
+ *     live tree at the call boundary) — that tag is the only thing statuses
+ *     derive from
+ *
+ * The former mutation tools (add/update/remove node/edge, set_current,
+ * mark_done) are gone by design: restructuring is a rewrite, tracking is
+ * derived. SERVER-SIDE with execute: parse → validate → persist → return
+ * the FULL canonicalized tree (PlanToolResult), so the tree panel renders the
+ * latest state straight from the transcript's tool outputs.
  */
-
-const nodeId = z
-	.string()
-	.min(1)
-	.describe("Stable node slug, e.g. 'chain-rule-intuition'. Ids are permanent — never reuse or rename one mid-session.");
-
-const nodeSchema = z.object({
-	id: nodeId.describe("Stable node slug, e.g. 'chain-rule-intuition'. Ids are permanent — never reuse or rename one mid-session."),
-	title: z.string().min(1).describe("Short label for the tree panel — at most ~6 words."),
-	summary: z.string().optional().describe("1-2 sentences: what this node covers."),
-});
-
-const edgeSchema = z.object({
-	from: nodeId.describe("Prerequisite node id (must be understood before `to`)."),
-	to: nodeId.describe("Node id that depends on `from`."),
-});
-
-/**
- * Shared execute wrapper: load record → apply pure op → persist → PlanToolResult.
- * PlanTreeError and missing chats become {ok:false} with the current (or
- * empty) tree, so the model can see what it's working with and fix the call.
- */
-async function runPlanOp(
-	ctx: PlanToolContext,
-	op: (tree: PlanTree) => PlanTree,
-): Promise<PlanToolResult> {
-	const { chatId, chatStore } = ctx;
-	const record = chatStore.getChat(chatId);
-	if (!record) return { ok: false, error: `Chat not found: ${chatId}`, tree: emptyTree() };
-	const current = record.tree ?? emptyTree();
-	try {
-		const next = op(current);
-		chatStore.saveTree(chatId, next);
-		return { ok: true, tree: next };
-	} catch (err) {
-		if (err instanceof PlanTreeError) return { ok: false, error: err.message, tree: current };
-		throw err;
-	}
-}
-
 export function planTools(ctx: PlanToolContext): ToolSet {
 	return {
 		plan_init: tool({
 			description:
-				"Initialize this session's plan tree — the dependency map of the lesson, which the learner sees live in a side panel. " +
-				"Call ONCE, after probing, before teaching begins: pass the full initial node set and the `requires` edges between them " +
-				"(edge direction: from = prerequisite, to = dependent — from must be understood before to). The tree must be a DAG (no cycles). " +
-				"Refuses to run if a tree already exists — after that, use the other plan_* tools to evolve it.",
+				"Write or REWRITE this session's plan map — the dependency graph the learner sees live in a side panel. " +
+				"Call once after probing, before teaching begins; re-call whenever the map is wrong (the new block replaces the old tree). " +
+				"A mermaid `graph TD` block: one node per line (`slug[Short Title]` — slugs are permanent lowercase ids), `-->` edges meaning " +
+				"'from must be understood before to'. 5–15 nodes: a map, not a syllabus — one reasoning step per node, compress. " +
+				"Every check you fire names the node it assesses via `nodeId`; where the lesson stands derives from those outcomes.",
 			inputSchema: z.object({
-				nodes: z.array(nodeSchema).min(1).describe("The initial nodes. A map, not a syllabus: one reasoning step per node."),
-				edges: z
-					.array(edgeSchema)
-					.optional()
-					.describe("Initial `requires` edges between the nodes. Edge direction: from = prerequisite, to = dependent."),
+				mermaid: z
+					.string()
+					.min(1)
+					.describe(
+						"A mermaid `graph TD` block, e.g.:\ngraph TD\n  primitives[Number primitives] --> operators[Arithmetic operators]\n  operators --> expressions[Evaluating expressions]\n" +
+							"Node lines: `slug[Title]`. Edge lines: `slug --> slug` (from = prerequisite). No subgraphs, styles, classes, or other mermaid features.",
+					),
 			}),
-			execute: async ({ nodes, edges }): Promise<PlanToolResult> => {
-				const record = ctx.chatStore.getChat(ctx.chatId);
-				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}`, tree: emptyTree() };
-				const existing = record.tree;
-				if (existing && existing.nodes.length > 0) {
-					return {
-						ok: false,
-						error: "Tree already initialized — use the mutation tools",
-						tree: existing,
-					};
+			execute: async ({ mermaid }): Promise<PlanToolResult> => {
+				const { chatId, chatStore } = ctx;
+				const record = chatStore.getChat(chatId);
+				if (!record) return { ok: false, error: `Chat not found: ${chatId}`, tree: emptyTree() };
+				const current = record.tree ?? emptyTree();
+
+				const parsed = parseMermaidPlan(mermaid);
+				if (!parsed.ok || !parsed.plan) {
+					// The parser collects every problem; the teacher fixes and retries.
+					return { ok: false, error: parsed.problems.join("\n"), tree: current };
 				}
-				return runPlanOp(ctx, () => createTree(nodes, edges ?? []));
+				try {
+					// createTree validates the structure (duplicate ids, missing
+					// edge endpoints, self-loops, cycles → PlanTreeError).
+					const next = createTree(parsed.plan.nodes, parsed.plan.edges);
+					chatStore.saveTree(chatId, next);
+					return { ok: true, tree: next };
+				} catch (err) {
+					if (err instanceof PlanTreeError) return { ok: false, error: err.message, tree: current };
+					throw err;
+				}
 			},
-		}),
-
-		plan_add_node: tool({
-			description:
-				"Add one node to the plan tree. Optionally pass `parents`: node ids this new node depends on (a `requires` edge parent → this node is " +
-				"created for each; a parent must be understood before this node). Parents must already exist; the result must stay a DAG.",
-			inputSchema: z.object({
-				id: nodeId,
-				title: z.string().min(1).describe("Short label for the tree panel — at most ~6 words."),
-				summary: z.string().optional().describe("1-2 sentences: what this node covers."),
-				parents: z
-					.array(nodeId)
-					.optional()
-					.describe("Ids of prerequisite nodes — each gets a `requires` edge pointing to this node. All must already exist."),
-			}),
-			execute: async ({ id, title, summary, parents }): Promise<PlanToolResult> =>
-				runPlanOp(ctx, (tree) => addNode(tree, { id, title, ...(summary !== undefined ? { summary } : {}) }, parents)),
-		}),
-
-		plan_update_node: tool({
-			description:
-				"Update a node's `title` and/or `summary`. The node must exist; the id never changes. Use this to sharpen a vague node, not to change its meaning.",
-			inputSchema: z
-				.object({
-					id: nodeId,
-					title: z.string().min(1).optional().describe("New short label (at most ~6 words)."),
-					summary: z.string().optional().describe("New 1-2 sentence summary."),
-				})
-				.refine((v) => v.title !== undefined || v.summary !== undefined, {
-					message: "Pass at least one of `title` or `summary` — an update with neither changes nothing.",
-				}),
-			execute: async ({ id, title, summary }): Promise<PlanToolResult> =>
-				runPlanOp(ctx, (tree) => updateNode(tree, id, { ...(title !== undefined ? { title } : {}), ...(summary !== undefined ? { summary } : {}) })),
-		}),
-
-		plan_remove_node: tool({
-			description:
-				"Remove a node from the plan tree — prune what proves unnecessary. Cascades: every edge touching the node (both directions), its current " +
-				"status, and its done status are removed with it.",
-			inputSchema: z.object({ id: nodeId }),
-			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => removeNode(tree, id)),
-		}),
-
-		plan_add_edge: tool({
-			description:
-				"Add a `requires` edge to the plan tree. Direction: from = prerequisite, to = dependent — `from` must be understood before `to`. " +
-				"Both nodes must exist; self-loops, duplicate edges, and anything that would create a cycle are rejected.",
-			inputSchema: z.object({
-				from: nodeId.describe("Prerequisite node id (must be understood before `to`)."),
-				to: nodeId.describe("Dependent node id (requires `from`)."),
-			}),
-			execute: async ({ from, to }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => addEdge(tree, from, to)),
-		}),
-
-		plan_remove_edge: tool({
-			description:
-				"Remove an existing `requires` edge from the plan tree (the nodes stay). Use when a dependency turns out to be wrong or unnecessary.",
-			inputSchema: z.object({
-				from: nodeId.describe("Prerequisite end of the edge to remove."),
-				to: nodeId.describe("Dependent end of the edge to remove."),
-			}),
-			execute: async ({ from, to }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => removeEdge(tree, from, to)),
-		}),
-
-		plan_set_current: tool({
-			description:
-				"Set the CURRENT node — where the lesson is right now. Call it the moment you START teaching a node, so the learner sees their position " +
-				"on the map. The node must exist. This marks position only; it does not mark anything done.",
-			inputSchema: z.object({ id: nodeId.describe("The node you are starting to teach now.") }),
-			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => setCurrent(tree, id)),
-		}),
-
-		plan_mark_done: tool({
-			description:
-				"Mark a node DONE — and only when the learner has DEMONSTRATED it (a correct check), not when you finished explaining it. " +
-				"The node must exist. Idempotent.",
-			inputSchema: z.object({ id: nodeId.describe("The node the learner just demonstrated.") }),
-			execute: async ({ id }): Promise<PlanToolResult> => runPlanOp(ctx, (tree) => markDone(tree, id)),
 		}),
 	};
 }
