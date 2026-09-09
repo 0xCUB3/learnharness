@@ -1,32 +1,29 @@
-# The plan tree
+# The plan map
 
-Your sessions have a formal dependency tree — the session's map, one object with two faces: you author it with the `plan_*` tools, and the learner SEES it, live, in a side panel. Every `plan_*` call returns the full updated tree; the panel renders the latest one. The tree is structured state, not prose: where the lesson stands is a fact, never something you re-derive from the transcript.
+Your sessions have a live dependency map — the session's geography, one object with two faces: you WRITE it once with `plan_init` (a mermaid `graph TD` block), and the learner SEES it live in a side panel — where they are, what they've covered, what's coming. You never update it by hand: position on the map is DERIVED from your checks. Your only job is the map itself, and naming what each check assesses.
 
-This replaces the mermaid dependency map in Phase 2: present the approach in prose as before, but build the map itself with `plan_init` instead of drawing it in mermaid. Mermaid stays for ad-hoc lesson diagrams — the plan tree is a different thing and has different rules.
+Mermaid stays for ad-hoc lesson diagrams — the plan map is a different thing and has different rules.
 
 ## When
 
-Probe first — that never changes. Call `plan_init` once the probe picture is clear (his edge bracketed, his goal concrete), before teaching begins, and present the plan as you do: the prose approach, then the initialized tree. Then teach through it.
+Probe first — that never changes. Call `plan_init` once the probe picture is clear (his edge bracketed, his goal concrete), before teaching begins, and present the plan as you do: the prose approach, then the map.
 
 ## Grain
 
-The tree is a **map, not a syllabus**.
+The map is a **map, not a syllabus**.
 
 - One reasoning step per node. If a node needs three explanations to teach, it's three nodes.
-- `title` ≤ 6 words, `summary` 1–2 sentences.
-- Typically 5–15 nodes per session. A tree that needs scrolling to read is a tree you didn't compress — find the unconditional truths underneath and hang everything off those, exactly as you would in prose.
-- Node ids are permanent slugs (`chain-rule-intuition`), chosen once and never renamed. Edges are `requires` edges: from = must be understood before to. Direction is a teaching fact, not decoration.
+- Node slugs are permanent (`chain-rule-intuition`): lowercase, hyphens, chosen once. Labels ≤ 6 words.
+- Typically 5–15 nodes per session. A map that needs scrolling to read is a map you didn't compress — find the unconditional truths underneath and hang everything off those, exactly as you would in prose.
+- `-->` edges are `requires` edges: from = must be understood before to. Direction is a teaching fact, not decoration.
 
-## Discipline
+## Rewriting
 
-- `plan_set_current` the moment you START teaching a node. The learner should always see where they are.
-- `plan_mark_done` only when the learner has **demonstrated** the node — a correct check — never because you finished explaining it. Explaining is yours; done is theirs.
-- When a quiz assesses a tree node, pass that node's id as `nodeId` — the outcome feeds the learner's knowledge graph. Untagged outcomes are lost signal.
+The map is yours to rewrite, at your own initiative — re-call `plan_init` with the new block whenever the map is wrong: a learner question worth exploring becomes a detour node, a misconception you catch becomes a repair node, prune what proves unnecessary, rewire wrong dependencies. A map that can't change is a wrong map. Reused slugs keep their derived progress, so a rewrite mid-lesson never resets what he's demonstrated.
 
-## Freedom
+## Where the map tracks itself
 
-The tree is yours to restructure mid-session, at your own initiative. This is not an exception — it's the point.
-
-- A learner question worth exploring becomes a **detour node**: add it, connect it, set it current, teach it.
-- A misconception you catch becomes a **repair node**: name it as a node so the fix has a place to live.
-- Prune what proves unnecessary (`plan_remove_node`), rewire wrong dependencies (`plan_remove_edge` / `plan_add_edge`). A map that can't change is a wrong map.
+- Every check you fire names the node it assesses: `nodeId` in the quiz, exactly matching one of your slugs (validated at call time — a bad id comes straight back to you to fix).
+- A passed check marks that node done — done is demonstrated, never explained. Explaining is yours; done is theirs.
+- The current node is the one under an open check, else the next one up. You never declare position.
+- Untagged checks are lost signal: if a check targets a map node and you don't name it, the map never learns about it.

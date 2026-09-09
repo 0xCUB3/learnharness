@@ -107,7 +107,7 @@ export function quizInputProblems(input: {
 	return problems;
 }
 
-export const quizInputSchema = z
+export const quizInputObject = z
 	.object({
 		question: z.string().describe("The single quiz question to ask. Ask exactly one question per tool call."),
 		options: z
@@ -142,8 +142,10 @@ export const quizInputSchema = z
 			.string()
 			.optional()
 			.describe(
-				"Optional plan-tree node id this question assesses. Set whenever the question targets a tree node — " +
-					"the outcome feeds the learner's knowledge graph. Omit for ad-hoc probes.",
+				"Optional plan-tree node id this question assesses — must EXACTLY match one of this session's " +
+					"plan_init node slugs (validated at call time; a mismatched id is rejected back to you). " +
+					"Set it whenever the question targets a map node — the outcome drives the learner's live session map. " +
+					"Omit for ad-hoc checks.",
 			),
 	})
 	// The cross-field authoring contract (the Gate-3 hardening): a quiz whose
@@ -152,6 +154,12 @@ export const quizInputSchema = z
 	// failure, returns the validation error to the teacher as a tool result —
 	// the teacher retries with a fixed quiz in the same turn. Schema-valid ⇔
 	// gradeable: the rules are exactly what the grading path accepts.
+	//
+	// NOTE the split: the raw object (pre-refinement) is exported for
+	// composition — tools.ts questionToolsFor chains the per-session plan-nodeId
+	// validation (it reads the live chat record, which this core never touches)
+	// on top of this shared refinement.
+export const quizInputSchema = quizInputObject
 	.superRefine((input, ctx) => {
 		for (const problem of quizInputProblems(input)) {
 			ctx.addIssue({ code: "custom", message: problem });

@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import type { PlanTree, PlanToolResult } from "../src/core/contracts.ts";
+import { derivePlanStatuses, derivedNodeStatus, type PlanTree, type PlanToolResult } from "../src/core/contracts.ts";
 import {
 	addEdge,
 	addNode,
@@ -26,6 +26,7 @@ import {
 	updateNode,
 } from "../src/core/plan-tree.ts";
 import { planTools } from "../src/agent/tools/plan.ts";
+import { parseMermaidPlan } from "../src/agent/tools/mermaid-plan.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
@@ -233,138 +234,231 @@ function newChat(title: string): string {
 	return chat.id;
 }
 
-describe("plan tools (execute against the real store)", () => {
-	it("plan_init creates and persists the tree; result is ok with the full tree", async () => {
-		const chatId = newChat("Plan tools: init");
+describe("plan_init — the author-once mermaid tool (execute against the real store)", () => {
+	it("parses a mermaid block, builds the tree, persists, returns the full tree", async () => {
+		const chatId = newChat("Plan: init");
 		const tools = planTools({ chatId, chatStore });
 
 		const res = await exec(tools, "plan_init", {
-			nodes: [
-				{ id: "truth", title: "Core truth" },
-				{ id: "goal", title: "The goal" },
-			],
-			edges: [{ from: "truth", to: "goal" }],
+			mermaid: "graph TD\n  primitives[Number primitives] --> operators[Arithmetic operators]\n  operators --> expressions[Evaluating expressions]\n  detour[Side quest]\n",
 		});
 		assert.equal(res.ok, true);
 		assert.equal(res.error, undefined);
 		assert.equal(res.tree.version, 1);
-		assert.equal(res.tree.nodes.length, 2);
-		assert.deepEqual(res.tree.edges, [{ from: "truth", to: "goal" }]);
+		assert.deepEqual(
+			res.tree.nodes.map((n) => n.id),
+			["primitives", "operators", "expressions", "detour"],
+		);
+		assert.deepEqual(res.tree.edges, [
+			{ from: "primitives", to: "operators" },
+			{ from: "operators", to: "expressions" },
+		]);
 
 		const saved = chatStore.getChat(chatId)!.tree;
 		assert.ok(saved, "tree persisted to the chat record");
 		assert.deepEqual(saved, res.tree);
 	});
 
-	it("plan_init refuses to re-init and never silently wipes the existing tree", async () => {
-		const chatId = newChat("Plan tools: re-init");
+	it("RE-CALLABLE: a rewrite replaces the tree wholesale (the mutation tools are gone)", async () => {
+		const chatId = newChat("Plan: rewrite");
 		const tools = planTools({ chatId, chatStore });
-		await exec(tools, "plan_init", { nodes: [{ id: "a", title: "A" }] });
+		await exec(tools, "plan_init", {
+			mermaid: "graph TD\n  a[First attempt] --> b[Early shape]\n",
+		});
 
 		const res = await exec(tools, "plan_init", {
-			nodes: [{ id: "totally", title: "Different tree" }],
+			mermaid: "graph TD\n  truth[The core truth]\n  goal[The sink] --> truth\n",
 		});
-		assert.equal(res.ok, false);
-		assert.equal(res.error, "Tree already initialized — use the mutation tools");
-		assert.deepEqual(res.tree.nodes.map((n: { id: string }) => n.id), ["a"], "existing tree returned, not wiped");
-
-		const saved = chatStore.getChat(chatId)!.tree!;
-		assert.deepEqual(saved.nodes.map((n) => n.id), ["a"]);
+		assert.equal(res.ok, true, "re-init is the sanctioned rewrite path now");
+		assert.deepEqual(
+			res.tree.nodes.map((n) => n.id),
+			["truth", "goal"],
+		);
+		assert.deepEqual(
+			chatStore.getChat(chatId)!.tree!.nodes.map((n) => n.id),
+			["truth", "goal"],
+			"rewrite persisted",
+		);
 	});
 
-	it("plan_init returns an error result on invalid input (cycle) without persisting", async () => {
-		const chatId = newChat("Plan tools: bad init");
+	it("parse failures collect EVERY problem with line numbers and persist nothing", async () => {
+		const chatId = newChat("Plan: bad parse");
 		const tools = planTools({ chatId, chatStore });
+
 		const res = await exec(tools, "plan_init", {
-			nodes: [
-				{ id: "a", title: "A" },
-				{ id: "b", title: "B" },
-			],
-			edges: [
-				{ from: "a", to: "b" },
-				{ from: "b", to: "a" },
-			],
+			mermaid: "graph TD\n  Foo Bar[x] --> y\n  a --> a\n  subgraph hi\n",
 		});
 		assert.equal(res.ok, false);
-		assert.match(res.error!, /cycle/);
+		const err = res.error!;
+		assert.match(err, /line 2/);
+		assert.match(err, /line 3/);
+		assert.match(err, /line 4/);
 		assert.deepEqual(res.tree, emptyTree());
 		assert.equal(chatStore.getChat(chatId)!.tree, undefined, "nothing persisted on failure");
 	});
 
-	it("mutation round-trip: add node with parents, set current, mark done — each persists", async () => {
-		const chatId = newChat("Plan tools: round-trip");
+	it("structural failures (cycle) become ok:false without persisting", async () => {
+		const chatId = newChat("Plan: cycle");
 		const tools = planTools({ chatId, chatStore });
-
-		await exec(tools, "plan_init", {
-			nodes: [
-				{ id: "ratelimit", title: "Token bucket" },
-				{ id: "burst", title: "Burst vs steady" },
-			],
-			edges: [{ from: "ratelimit", to: "burst" }],
+		const res = await exec(tools, "plan_init", {
+			mermaid: "graph TD\n  a[A] --> b[B]\n  b --> a\n",
 		});
-
-		const added = await exec(tools, "plan_add_node", {
-			id: "detour",
-			title: "Why leaky bucket differs",
-			summary: "Learner asked about the leaky-bucket variant.",
-			parents: ["ratelimit"],
-		});
-		assert.equal(added.ok, true);
-		assert.deepEqual(
-			added.tree.edges.map((e) => `${e.from}→${e.to}`),
-			["ratelimit→burst", "ratelimit→detour"],
-		);
-		assert.equal(added.tree.version, 2);
-		assert.deepEqual(chatStore.getChat(chatId)!.tree!, added.tree, "add_node persisted");
-
-		const current = await exec(tools, "plan_set_current", { id: "detour" });
-		assert.equal(current.ok, true);
-		assert.equal(current.tree.currentNodeId, "detour");
-		assert.equal(chatStore.getChat(chatId)!.tree!.currentNodeId, "detour", "set_current persisted");
-
-		const done = await exec(tools, "plan_mark_done", { id: "ratelimit" });
-		assert.equal(done.ok, true);
-		assert.deepEqual(done.tree.doneNodeIds, ["ratelimit"]);
-		assert.deepEqual(chatStore.getChat(chatId)!.tree!.doneNodeIds, ["ratelimit"], "mark_done persisted");
-		assert.equal(done.tree.version, 4);
+		assert.equal(res.ok, false);
+		assert.match(res.error!, /cycle/);
+		assert.deepEqual(res.tree, emptyTree());
 	});
 
-	it("invalid mutations return ok:false with the current tree and persist nothing", async () => {
-		const chatId = newChat("Plan tools: invalid ops");
-		const tools = planTools({ chatId, chatStore });
-		await exec(tools, "plan_init", { nodes: [{ id: "a", title: "A" }] });
-		const before = chatStore.getChat(chatId)!.tree!;
-
-		const dup = await exec(tools, "plan_add_node", { id: "a", title: "Impostor" });
-		assert.equal(dup.ok, false);
-		assert.match(dup.error!, /already exists/);
-		assert.deepEqual(dup.tree, before);
-
-		const missing = await exec(tools, "plan_set_current", { id: "ghost" });
-		assert.equal(missing.ok, false);
-		assert.match(missing.error!, /unknown node id "ghost"|not in the tree/);
-
-		const badEdge = await exec(tools, "plan_add_edge", { from: "a", to: "a" });
-		assert.equal(badEdge.ok, false);
-		assert.match(badEdge.error!, /self-loop/);
-
-		assert.deepEqual(chatStore.getChat(chatId)!.tree!, before, "record untouched by failed ops");
-	});
-
-	it("mutation tools work on a fresh (uninitialized) chat: the tree seeds from empty", async () => {
-		const chatId = newChat("Plan tools: no init");
-		const tools = planTools({ chatId, chatStore });
-		const res = await exec(tools, "plan_add_node", { id: "a", title: "A" });
-		assert.equal(res.ok, true);
-		assert.equal(res.tree.nodes.length, 1);
-		assert.ok(chatStore.getChat(chatId)!.tree, "tree seeded without plan_init");
+	it("only plan_init exists — the seven mutation/tracking tools are gone by design", () => {
+		const tools = planTools({ chatId: "chat_x", chatStore });
+		assert.deepEqual(Object.keys(tools), ["plan_init"]);
 	});
 
 	it("unknown chat returns ok:false with the empty tree", async () => {
 		const tools = planTools({ chatId: "chat_nonexistent", chatStore });
-		const res = await exec(tools, "plan_mark_done", { id: "a" });
+		const res = await exec(tools, "plan_init", { mermaid: "graph TD\n  a[A]\n" });
 		assert.equal(res.ok, false);
 		assert.match(res.error!, /Chat not found/);
 		assert.deepEqual(res.tree, emptyTree());
+	});
+});
+
+// ─── the mermaid subset parser ────────────────────────────────────────────────
+
+describe("parseMermaidPlan (the constrained mermaid subset)", () => {
+	const parse = (m: string) => parseMermaidPlan(m);
+
+	it("accepts graph TD and flowchart TB headers (case-insensitive), comments, and blank lines", () => {
+		for (const header of ["graph TD", "graph td", "flowchart TB", "Flowchart td"]) {
+			const res = parse(`${header}\n%% a comment\n\n  a[Alpha]\n`);
+			assert.equal(res.ok, true, header);
+			assert.deepEqual(res.plan!.nodes, [{ id: "a", title: "Alpha" }]);
+		}
+	});
+
+	it("bare ids fall back to id-as-title; bracket and paren labels both work", () => {
+		const res = parse("graph TD\n  bare\n  bracket[Bracket title]\n  paren(\"Paren title\")\n");
+		assert.deepEqual(res.plan!.nodes, [
+			{ id: "bare", title: "bare" },
+			{ id: "bracket", title: "Bracket title" },
+			{ id: "paren", title: "Paren title" },
+		]);
+	});
+
+	it("edges register bare endpoints as nodes and dedupe duplicate edges", () => {
+		const res = parse("graph TD\n  a --> b[Bee]\n  a --> b[Bee]\n");
+		assert.deepEqual(res.plan!.nodes, [
+			{ id: "a", title: "a" },
+			{ id: "b", title: "Bee" },
+		]);
+		assert.deepEqual(res.plan!.edges, [{ from: "a", to: "b" }]);
+	});
+
+	it("labels on both edge endpoints survive; forward references are fine", () => {
+		const res = parse("graph TD\n  downstream[Later thing] --> upstream[Earlier thing]\n");
+		assert.deepEqual(res.plan!.edges, [{ from: "downstream", to: "upstream" }]);
+		assert.deepEqual(res.plan!.nodes, [
+			{ id: "downstream", title: "Later thing" },
+			{ id: "upstream", title: "Earlier thing" },
+		]);
+	});
+
+	it("rejects: non-slug ids, self-loops, chained edges, subgraphs, missing header, empty", () => {
+		assert.ok(!parse("graph TD\n  Foo Bar[x]\n").ok, "id with a space");
+		assert.match(parse("graph TD\n  Foo Bar[x]\n").problems[0]!, /line 2.*slug/);
+		assert.ok(!parse("graph TD\n  a --> a\n").ok, "self-loop");
+		assert.ok(!parse("graph TD\n  a --> b --> c\n").ok, "chained edge");
+		assert.match(parse("graph TD\n  a --> b --> c\n").problems[0]!, /one edge per line/);
+		assert.ok(!parse("graph TD\n  subgraph cluster\n").ok, "subgraph");
+		assert.ok(!parse("digraph G\n  a\n").ok, "wrong header");
+		assert.ok(!parse("%% only a comment\n").ok, "empty plan");
+	});
+
+	it("the first label wins when a node line repeats (relabeling mid-block is ignored)", () => {
+		const res = parse("graph TD\n  a[First label]\n  a[Second label]\n");
+		assert.deepEqual(res.plan!.nodes, [{ id: "a", title: "First label" }]);
+	});
+});
+
+// ─── derived statuses (the tracking the teacher no longer does) ───────────────
+
+describe("derivePlanStatuses (statuses derive from checks, never declarations)", () => {
+	const tree: PlanTree = {
+		nodes: [
+			{ id: "a", title: "A" },
+			{ id: "b", title: "B" },
+			{ id: "c", title: "C" },
+		],
+		edges: [
+			{ from: "a", to: "b" },
+			{ from: "b", to: "c" },
+		],
+		currentNodeId: null,
+		doneNodeIds: [],
+		version: 1,
+	};
+	const quizPart = (state: string, nodeId: string | undefined, correct?: boolean) => ({
+		type: "tool-quiz",
+		state,
+		input: nodeId === undefined ? {} : { nodeId },
+		output: correct === undefined ? undefined : { correct },
+	});
+	type QuizPart = { type: string; state: string; input: unknown; output?: unknown };
+	const msg = (...parts: QuizPart[]) => ({ parts });
+
+	it("empty transcript → current = first node (authoring order, no prereqs), nothing done", () => {
+		const st = derivePlanStatuses(tree, []);
+		assert.equal(st.current, "a");
+		assert.equal(st.done.size, 0);
+	});
+
+	it("a passed check on a tags it done; current advances to the next topologically-ready node", () => {
+		const st = derivePlanStatuses(tree, [msg(quizPart("output-available", "a", true))]);
+		assert.deepEqual([...st.done], ["a"]);
+		assert.equal(st.current, "b");
+	});
+
+	it("a pending check OWNS current, wherever the topo frontier is", () => {
+		const st = derivePlanStatuses(tree, [
+			msg(quizPart("output-available", "a", true)),
+			msg(quizPart("input-available", "c")), // a jump check on the sink
+		]);
+		assert.equal(st.current, "c", "the open check is where we are");
+		assert.deepEqual([...st.done], ["a"]);
+	});
+
+	it("a FAILED check marks nothing done (explaining is yours, done is theirs)", () => {
+		const st = derivePlanStatuses(tree, [msg(quizPart("output-available", "a", false))]);
+		assert.equal(st.done.size, 0);
+		assert.equal(st.current, "a", "frontier unmoved — resume teaching");
+	});
+
+	it("untagged checks and unknown nodeIds are lost signal — ignored", () => {
+		const st = derivePlanStatuses(tree, [
+			msg(quizPart("output-available", undefined, true)),
+			msg(quizPart("output-available", "ghost", true)),
+		]);
+		assert.equal(st.done.size, 0);
+		assert.equal(st.current, "a");
+	});
+
+	it("prereqs gate the frontier: c isn't next until b is demonstrated", () => {
+		const st = derivePlanStatuses(tree, [msg(quizPart("output-available", "a", true))]);
+		assert.equal(st.current, "b", "c requires b");
+		const st2 = derivePlanStatuses(tree, [
+			msg(quizPart("output-available", "a", true)),
+			msg(quizPart("output-available", "b", true)),
+		]);
+		assert.equal(st2.current, "c");
+		assert.equal(derivedNodeStatus(st2, "a"), "done");
+		assert.equal(derivedNodeStatus(st2, "c"), "current");
+		assert.equal(derivedNodeStatus(st2, "b"), "done");
+	});
+
+	it("a rewritten map keeps honest progress for reused slugs (derivation matches the CURRENT tree)", () => {
+		const rewritten: PlanTree = { ...tree, nodes: [tree.nodes[0]!, tree.nodes[1]!] };
+		const st = derivePlanStatuses(rewritten, [msg(quizPart("output-available", "a", true))]);
+		assert.equal(st.current, "b");
+		const orphaned = derivePlanStatuses(rewritten, [msg(quizPart("output-available", "c", true))]);
+		assert.equal(orphaned.done.size, 0, "a slug removed from the rewrite stops counting");
 	});
 });
