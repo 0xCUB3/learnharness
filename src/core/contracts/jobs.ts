@@ -73,6 +73,17 @@ export interface JobRecord {
  *     a polling client that sees the flip re-syncs once and gets the
  *     finished record.
  *
+ *     CONTINUATION COALESCING: the idle window above can starve — a
+ *     quiz-chaining teacher ends every turn with a new pending check, so
+ *     the gates never stay open long enough for a wake to fire. The fix:
+ *     when a client turn wins the turn registry, the handler CLAIMS every
+ *     queued, undelivered steer (jobs.ts claimSteers) and appends it after
+ *     the learner's answer in that very turn — conversion-safe, because the
+ *     answered quiz carries its output. Every answer flushes pending
+ *     steers immediately; the wake pump remains for turns that end with no
+ *     pending question. The pump re-checks steerDelivered right before
+ *     firing, so a claim racing the pump converges to exactly one delivery.
+ *
  *  5. No pending job parts ever exist, so the composer never gates on jobs
  *     (the learner can interject mid-job; the steer queues behind their
  *     turn) and job tool outputs never trigger the client-side

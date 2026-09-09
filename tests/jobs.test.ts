@@ -41,7 +41,7 @@ import {
 import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
+import { claimSteers, deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
 import { persistTurn, withMessageIds } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
@@ -640,6 +640,97 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 		assert.equal(fired, 0, "no duplicate wake for an already-delivered steer");
 		assert.equal(jobStore.getJob(jobId)!.status, "done", "the job still flips — recovery completes");
 	});
+
+// ─── continuation coalescing (the delivery-starvation fix) ───────────────────
+
+describe("claimSteers + pump duplicate-guard (continuation coalescing)", () => {
+	it("claims queued undelivered steers: resolves deliver(), flips the job done, empties the queue", async () => {
+		const { chatId, jobId, steer } = setup();
+		let fired = 0;
+		setTurnRunner(async () => {
+			fired++;
+			return 200;
+		});
+
+		const delivery = deliverJobResult(steer);
+		await delay(300); // the pump is inside waitForIdle's grace (750ms)
+		const claimed = claimSteers(chatId);
+
+		assert.equal(claimed.length, 1, "the queued steer is claimed");
+		assert.equal(claimed[0]!.id, steer.id);
+		// The handler's write-ahead persist lands the claim immediately after
+		// claiming (the very next statement in handleChatRequest).
+		const record = chatStore.getChat(chatId)!;
+		chatStore.saveMessages(chatId, [...record.messages, ...claimed] as never);
+		await delivery; // the runner's deliver() promise resolves on claim
+		assert.equal(jobStore.getJob(jobId)!.status, "done", "job flips done at claim");
+		assert.deepEqual(claimSteers(chatId), [], "queue is empty after the claim");
+		await delay(800);
+		assert.equal(fired, 0, "the pump never fires a wake for a claimed steer");
+	});
+
+	it("finalizes already-delivered steers without returning them (a wake raced in)", async () => {
+		const { chatId, jobId, steer } = setup();
+		const record = chatStore.getChat(chatId)!;
+		chatStore.saveMessages(chatId, [...record.messages, steer] as never);
+
+		const delivery = deliverJobResult(steer);
+		await delay(100); // let the pump see it first (its top-of-loop idempotent skip)
+		const claimed = claimSteers(chatId);
+		assert.equal(claimed.length, 0, "delivered steers are not re-claimed");
+		assert.equal(jobStore.getJob(jobId)!.status, "done");
+		await delivery;
+	});
+
+	it("claimSteers on a chat with no queue returns [] and touches nothing", () => {
+		assert.deepEqual(claimSteers("chat_never_existed"), []);
+	});
+
+	it("pump duplicate-guard: a steer coalesced into the record while the gates were closed is never double-fired", async () => {
+		const { chatId, jobId, steer } = setup();
+		let fired = 0;
+		setTurnRunner(async () => {
+			fired++;
+			return 200;
+		});
+
+		// Gates closed: a pending quiz parks the pump in waitForIdle.
+		chatStore.saveMessages(chatId, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] },
+			{
+				id: "a1",
+				role: "assistant",
+				parts: [{ type: "tool-quiz", toolCallId: "quiz-call", state: "input-available", input: { question: "q", choices: ["a", "b"] } }],
+			},
+		] as never);
+		const delivery = deliverJobResult(steer);
+		await delay(1200);
+		assert.equal(fired, 0, "parked behind the pending quiz");
+
+		// The client turn coalesces: it claims the steer and lands it in the record.
+		const claimed = claimSteers(chatId);
+		assert.equal(claimed.length, 1, "coalescing claims the parked steer");
+		const record = chatStore.getChat(chatId)!;
+		chatStore.saveMessages(chatId, [...record.messages, steer] as never); // write-ahead persist
+
+		// The learner answers: the gates open — the parked pump must see the
+		// delivered steer via its post-idle re-check, NOT fire a second turn.
+		const answered = chatStore.getChat(chatId)!.messages.map((m) =>
+			m.id === "a1"
+				? {
+						...m,
+						parts: [{ type: "tool-quiz", toolCallId: "quiz-call", state: "output-available", input: { question: "q", choices: ["a", "b"] }, output: { answer: "a", correct: true, explanation: "" } }],
+					}
+				: m,
+		);
+		chatStore.saveMessages(chatId, answered as never);
+
+		await delivery;
+		await delay(1500);
+		assert.equal(fired, 0, "no duplicate wake after coalescing");
+		assert.equal(jobStore.getJob(jobId)!.status, "done");
+	});
+});
 
 	it("fails the job (error status) when the wake turn errors unrecoverably", async () => {
 		const { jobId, steer } = setup();

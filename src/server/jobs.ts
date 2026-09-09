@@ -128,6 +128,45 @@ export function deliverJobResult(steer: SubagentSteerMessage): Promise<void> {
 	});
 }
 
+/**
+ * CONTINUATION COALESCING ("THE ASYNC PROTOCOL" §4): the chat-handler calls
+ * this the instant a client turn wins the turn registry, BEFORE its
+ * write-ahead persist. Undelivered steers for the chat ride THAT turn —
+ * appended after the learner's answer, which is conversion-safe (the
+ * answered quiz carries its output) — instead of waiting for the pump's
+ * idle window, which a quiz-chaining teacher may never open (the delivery
+ * starvation bug: every turn ends with a new pending quiz, so the gates
+ * never stay open long enough to fire a wake).
+ *
+ * Claimed steers resolve their deliver() promise and flip the job done
+ * here: the caller holds the turn registry, so the write-ahead persist is
+ * imminent and durable. Steers already in the transcript (a wake raced in)
+ * are finalized, not returned. The pump re-checks steerDelivered right
+ * before firing, so a claim racing the pump converges to exactly one
+ * delivery either way.
+ */
+export function claimSteers(chatId: string): SubagentSteerMessage[] {
+	const s = state();
+	const queue = s.queues.get(chatId);
+	if (!queue || queue.length === 0) return [];
+	const record = stores.chatStore.getChat(chatId);
+	if (!record) return []; // the handler validated the chat; defensive only
+	const claimed: SubagentSteerMessage[] = [];
+	for (const entry of queue) {
+		const jobId = jobIdOf(entry.steer);
+		if (steerDelivered(record.messages, jobId)) {
+			// A wake already landed it — just finish the bookkeeping.
+			finalizeJob(jobId);
+		} else {
+			claimed.push(entry.steer);
+			finalizeJob(jobId); // delivery is now the client turn's job
+		}
+		entry.resolve();
+	}
+	s.queues.delete(chatId);
+	return claimed;
+}
+
 function chatIdOf(steer: SubagentSteerMessage): string {
 	// The chat is resolvable from the job record; the steer's metadata
 	// carries jobId, which indexes the store.
@@ -191,6 +230,15 @@ async function pump(chatId: string): Promise<void> {
 				const err = new Error("wake pipeline: no turn runner wired (setTurnRunner)");
 				failJob(jobId, err);
 				entry.reject(err);
+				continue;
+			}
+
+			// A client continuation may have COALESCED this steer (claimSteers) while
+			// the gates were closed — re-check before firing: exactly one delivery.
+			if (steerDelivered(fresh.messages, jobId)) {
+				queue.shift();
+				finalizeJob(jobId);
+				entry.resolve();
 				continue;
 			}
 
@@ -288,6 +336,7 @@ function recoverStaleJobs(): void {
 				if (job.status !== "running") continue;
 				if (now - Date.parse(job.updatedAt) < STALE_JOB_MS) continue;
 				if (!stores.chatStore.getChat(job.chatId)) continue;
+				if (isTurnRunning(job.chatId)) continue; // a wake turn may be delivering it right now
 				if (job.result) {
 					// The wake never fired (or crashed mid-flight): re-deliver.
 					const steer = buildSubagentSteer(job, job.result as never);
