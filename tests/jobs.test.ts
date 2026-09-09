@@ -764,6 +764,33 @@ describe("persistTurn id hygiene", () => {
 		assert.notEqual(filled[0]!.id, filled[1]!.id);
 	});
 
+	it("persistTurn dedupes same-id continuation copies, keeping the LAST (the SDK's merged superset)", () => {
+		// The coalescing shape: a steer (user-role) rides a quiz-answer
+		// continuation AFTER the assistant message being continued, so the
+		// SDK's onFinish list carries the input copy AND the extended
+		// response copy under one id — the record must keep only the merge.
+		const chat = chatStore.createChat("Test: dedupe continuation copies");
+		trackChat(chat.id);
+		const short = { id: "msg_dup_1", role: "assistant", parts: [{ type: "text", text: "step 1" }] };
+		const long = { id: "msg_dup_1", role: "assistant", parts: [{ type: "text", text: "step 1" }, { type: "text", text: "step 2 (continued)" }] };
+		persistTurn(chatStore, chat.id, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
+			short,
+			{ id: "steer_x", role: "user", parts: [{ type: "text", text: "research complete" }] },
+			long,
+		], false);
+		const record = chatStore.getChat(chat.id)!;
+		assert.equal(record.messages.length, 3, "the duplicate entry is dropped");
+		assert.deepEqual(
+			record.messages.map((m) => m.id),
+			["u1", "steer_x", "msg_dup_1"],
+			"order preserved, steer before the merged assistant copy",
+		);
+		const merged = record.messages[2]!;
+		assert.equal(merged.parts.length, 2, "the KEPT copy is the extended one");
+		assert.equal((merged.parts[1] as { text: string }).text, "step 2 (continued)");
+	});
+
 	it("persistTurn saves every message with a unique non-empty id (wake turns never re-POSTed)", () => {
 		const chat = chatStore.createChat("Test: persist ids");
 		trackChat(chat.id);
