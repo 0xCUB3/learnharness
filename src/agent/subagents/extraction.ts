@@ -118,11 +118,12 @@ const propositionSchema = z.object({
 	messages: messagesField,
 	evidence,
 	understanding: z
-		.string()
+		.enum(["solid", "shaky", "accepted", "resisted", "not yet engaged"])
 		.optional()
 		.describe(
-			'One note about THIS session\'s evidence of the learner\'s grasp of this proposition, on a named-word scale ' +
-				'("solid", "shaky", "accepted", "resisted", "not yet engaged") — no numbers, no predictions.',
+			"ONE word — the learner's grasp of this proposition in THIS session, from the fixed scale " +
+				'"solid" | "shaky" | "accepted" | "resisted" | "not yet engaged". Nothing else: no numbers, ' +
+				"no justification, no explanation.",
 		),
 });
 
@@ -180,8 +181,9 @@ quiz outcomes carry that the learner believed the wrong version.
    - One reasoning step per proposition: never a topic blob, never a sub-step.
    - "messages": the [id] tags of every message where the proposition came up — provenance, report it.
    - "aliases": verbatim phrasings this session used for the same proposition.
-   - "understanding": ONE named-word-scale note on the evidence of the learner's grasp, for this session
-     only ("solid", "shaky", "accepted", "resisted", "not yet engaged"). No numbers, no predictions.
+   - "understanding": ONE word from the fixed scale — "solid", "shaky", "accepted", "resisted", or
+     "not yet engaged" — judging the learner's grasp of the proposition in THIS session. Strictly one
+     word, no numbers, no justification, no explanation (a wrong-shaped note is rejected by the schema).
 
 2. EDGES between propositions:
    - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
@@ -256,8 +258,9 @@ FAITHFULNESS — verify every candidate against the transcript:
   direction-swapped or speculative edges.
 - ATTRIBUTION: the QUIZ line's question must genuinely test the attributed proposition. Drop wrong
   attributions to null, or re-point them to the proposition the question actually tests.
-- UNDERSTANDING notes: verify against the quiz outcomes and the session's evidence; reword to a named-word
-  scale or drop.
+- UNDERSTANDING levels: verify against the quiz outcomes and the session's evidence; each note must be
+  exactly one word from the fixed scale ("solid", "shaky", "accepted", "resisted", "not yet engaged") —
+  reword or drop anything else. No justifications.
 
 IDENTITY — link-or-create, per proposition:
 - You see the current graph (every node: id, name, statement, aliases). For each verified proposition,

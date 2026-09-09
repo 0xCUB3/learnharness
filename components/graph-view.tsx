@@ -464,8 +464,13 @@ export function GraphView() {
 					nodeProgramClasses: { circle: PaddedNodeCircleProgram },
 					defaultEdgeType: "arrow",
 					// All labels appear/disappear together: no per-node size gating
-					// (threshold 0) — a single camera-ratio switch toggles them below.
+					// (threshold 0) and NO sigma label-grid declutter (density →
+					// ∞) — clustered nodes otherwise lose their cells' label
+					// quota and pop in late, un-faded, mid-zoom. The camera-ratio
+					// gate below is the ONLY label culling: every label appears at
+					// the same zoom with the same fade.
 					labelRenderedSizeThreshold: 0,
+					labelDensity: Number.MAX_SAFE_INTEGER,
 					// Match the app typography (Geist via the body's stack).
 					labelFont: getComputedStyle(document.body).fontFamily,
 					labelWeight: "500",
@@ -680,8 +685,11 @@ export function GraphView() {
 										>
 											{snapshot?.sessions[chatId] ?? chatId}
 										</Link>
+										{/* The note is a fixed-scale word (solid/shaky/...) — the
+										    session name is the main thing; the chip is bounded so
+										    it can never push or overflow the row. */}
 										{note && (
-											<span className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+											<span className="max-w-28 shrink-0 truncate whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
 												{note}
 											</span>
 										)}

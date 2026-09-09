@@ -172,7 +172,7 @@ function fixtureAudit(): AuditResult {
 				aliases: ["alpha feel"],
 				messages: ["a1", "a3"],
 				evidence: ["fixture evidence"],
-				understanding: "solid after the check",
+				understanding: "solid",
 			},
 			{
 				id: "p2",
@@ -295,7 +295,7 @@ describe("the merger (mergeFindings)", () => {
 		const observation = byRef.get("obs:p1")!;
 		assert.equal(observation.kind, "observation");
 		assert.equal(observation.nodeId, idByStatement.get("Alpha intuition"));
-		assert.equal(observation.note, "solid after the check");
+		assert.equal(observation.note, "solid");
 
 		// The dismissed quiz and the ask question became nothing.
 		assert.equal([...byRef.keys()].filter((r) => r === "call-6" || r === "call-7").length, 0);
@@ -380,9 +380,9 @@ describe("the merger (mergeFindings)", () => {
 		assert.deepEqual(snap.nodeSessions[idByStatement.get("Gamma application")!], [chat1.id]);
 
 		// Understanding observations: (node → chat → the extractor's note).
-		// Alpha carries chat1's "solid after the check"; chat2's q1 has no note.
+		// Alpha carries chat1's "solid" level; chat2's q1 has no level.
 		const alphaObs = snap.nodeObservations[idByStatement.get("Alpha intuition")!] ?? {};
-		assert.equal(alphaObs[chat1.id], "solid after the check");
+		assert.equal(alphaObs[chat1.id], "solid");
 		assert.equal(alphaObs[chat2Id], undefined);
 	});
 
