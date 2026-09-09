@@ -27,6 +27,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
+import type { UIMessage } from "ai";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import {
@@ -771,8 +772,8 @@ describe("persistTurn id hygiene", () => {
 		// response copy under one id — the record must keep only the merge.
 		const chat = chatStore.createChat("Test: dedupe continuation copies");
 		trackChat(chat.id);
-		const short = { id: "msg_dup_1", role: "assistant", parts: [{ type: "text", text: "step 1" }] };
-		const long = { id: "msg_dup_1", role: "assistant", parts: [{ type: "text", text: "step 1" }, { type: "text", text: "step 2 (continued)" }] };
+		const short: UIMessage = { id: "msg_dup_1", role: "assistant", parts: [{ type: "text", text: "step 1" }] };
+		const long: UIMessage = { id: "msg_dup_1", role: "assistant", parts: [{ type: "text", text: "step 1" }, { type: "text", text: "step 2 (continued)" }] };
 		persistTurn(chatStore, chat.id, [
 			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
 			short,

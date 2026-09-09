@@ -178,11 +178,15 @@ export function Chat({
 	// ── Central job observability (contracts.ts "THE ASYNC PROTOCOL" §4) ──
 	// ONE poll of /api/jobs drives every job surface (transcript dispatch
 	// cards, the sub-agents panel) and re-syncs the transcript exactly once
-	// when a job settles: job status flips done/error only AFTER the wake
-	// turn's messages are persisted, so a completion means the record already
-	// holds the steer + the teacher's response — one syncFromServer adopts it
-	// all. Poll fast while jobs run, slow otherwise (new-dispatch discovery),
-	// and not at all when this session has never dispatched a job.
+	// when a job settles. A settle no longer implies the record is complete:
+	// CONTINUATION COALESCING flips the job done at claim time — while the
+	// learner's own answer turn is still streaming (and a settle can race a
+	// second job's wake turn). Syncing mid-turn would swap in a stale snapshot
+	// mid-stream, which breaks the SDK's in-place continuation merge (duplicate
+	// message ids). So: a settle during a busy turn defers the sync; the next
+	// idle poll tick adopts the finished record. Poll fast while jobs run,
+	// slow otherwise (new-dispatch discovery), and not at all when this
+	// session has never dispatched a job.
 	const [jobs, setJobs] = useState<JobRecord[]>([]);
 	const jobPartCount = useMemo(
 		() =>
@@ -201,6 +205,8 @@ export function Chat({
 	const localStreamRef = useRef(false);
 	localStreamRef.current = localStream;
 	const jobStatusRef = useRef<Map<string, string>>(new Map());
+	// A settle seen during a busy turn — the sync is owed, not dropped.
+	const pendingSyncRef = useRef(false);
 	useEffect(() => {
 		if (pollMs === 0) return;
 		let cancelled = false;
@@ -214,8 +220,25 @@ export function Chat({
 				const list = data.jobs ?? [];
 				for (const j of list) {
 					const prev = jobStatusRef.current.get(j.id);
-					if (prev === "running" && j.status !== "running") void syncFromServer();
+					if (prev === "running" && j.status !== "running") {
+						// The record is only guaranteed complete when no turn is in
+					// flight — locally or server-side. A coalesced settle fires
+					// mid-turn by design; adopt the record on the first idle tick.
+						if (localStreamRef.current || data.turnInFlight === true) {
+							pendingSyncRef.current = true;
+						} else {
+							void syncFromServer();
+					}
+				}
 					jobStatusRef.current.set(j.id, j.status);
+				}
+				if (
+					pendingSyncRef.current &&
+					!localStreamRef.current &&
+					data.turnInFlight !== true
+				) {
+					pendingSyncRef.current = false;
+					void syncFromServer();
 				}
 				setJobs(list);
 				// Wake-turn adoption: a server-side teacher turn with no client request
