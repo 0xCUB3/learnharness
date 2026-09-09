@@ -41,6 +41,18 @@ function quizQD(): QuestionData {
 	};
 }
 
+function askQD(): QuestionData {
+	const options = normalizeOptions([{ label: "Very" }, { label: "Somewhat" }]);
+	return {
+		id: "a1",
+		kind: "ask",
+		question: "How confident are you?",
+		mode: "single-select",
+		options,
+		createdAt: new Date().toISOString(),
+	};
+}
+
 function renderDock(props: { toolName: "quiz" | "ask_user_question"; toolCallId: string; input: never; onSubmit?: () => void }) {
 	// expanded=true renders the full form (the collapsed bar is covered by the
 	// QuestionDockBar test below). No scroll context needed — the DockOverlay
@@ -56,9 +68,14 @@ describe("render smoke tests", () => {
 		assert.match(html, /Which planet is closest to the sun\?/);
 		assert.match(html, /Mercury/);
 		assert.match(html, /I don&#x27;t know|I don't know/);
-		// The unified bottom row: note field + Submit answer live INSIDE the dock.
-		assert.match(html, /Add a note/, "note field is the dock's bottom row");
+		// The learner's voice: a labeled "Your thinking" composer-twin lives
+		// INSIDE the dock — never called optional, inviting the dump.
+		assert.ok(html.includes('data-testid="thinking-field"'), "thinking field present");
+		assert.match(html, /Your thinking/, "labeled as the learner's voice");
+		assert.match(html, /Why this answer\? What are you unsure about\?/, "placeholder invites, not apologizes");
+		assert.ok(!html.includes("optional"), "the field is never called optional");
 		assert.match(html, /Submit answer/, "send becomes Submit answer");
+		assert.match(html, /⌘\/Ctrl \+ ↵ submits/, "the ⌘/Ctrl+Enter shortcut is discoverable");
 		// The v1 desync bug: options are buttons with ARIA roles, not native inputs.
 		assert.ok(!html.includes('type="radio"'), "no native radio inputs");
 		assert.ok(html.includes('role="radio"'), "button-based radio role present");
@@ -69,15 +86,51 @@ describe("render smoke tests", () => {
 		assert.ok(!html.includes("innermost"), "explanation must not render pre-answer");
 	});
 
-	it("ask dock renders Other + note field, no grading affordance", () => {
+	it("ask dock renders the editable Other row + thinking field, no grading affordance", () => {
 		const html = renderDock({
 			toolName: "ask_user_question",
 			toolCallId: "a1",
 			input: { question: "How confident are you?", options: [{ label: "Very" }, { label: "Somewhat" }] } as never,
 		});
-		assert.match(html, /Other/);
 		assert.ok(!html.includes("I don&#x27;t know"), "ask has no 'I don't know'");
-		assert.match(html, /Add a note/, "ask select-mode also gets the note row");
+		// Other is an editable OPTION ROW — a sibling of the options, with the
+		// radio circle + an inline input; picking it never displaces thinking.
+		assert.ok(html.includes('data-testid="other-option"'), "Other is an option row");
+		assert.match(html, /Type your own answer/, "type directly into the option");
+		assert.ok(html.includes('role="radio"'), "Other row keeps the option role");
+		assert.match(html, /aria-checked="false"/, "circle starts unfilled");
+		assert.ok(html.includes('data-testid="thinking-field"'), "thinking field coexists with Other");
+		assert.match(html, /Your thinking/, "ask select-mode also gets the learner's voice");
+	});
+
+	it("phase scales the thinking field: teaching invites depth, probing stays quick", () => {
+		const teach = renderToStaticMarkup(
+			<QuestionDock
+				toolName="quiz"
+				toolCallId="t1"
+				input={quizInput as never}
+				expanded={true}
+				phase="teach"
+				onExpand={() => {}}
+				onSubmit={() => {}}
+			/>,
+		);
+		assert.ok(teach.includes("min-h-[4.5rem]"), "teach: a generous dump area");
+		const probe = renderDock({ toolName: "quiz", toolCallId: "q1", input: quizInput as never });
+		assert.ok(!probe.includes("min-h-[4.5rem]"), "probe (default): stays compact");
+		assert.ok(probe.includes("min-h-10"), "probe: one quiet row");
+	});
+
+	it("text-mode asks keep Enter-to-submit and the answer label", () => {
+		const html = renderDock({
+			toolName: "ask_user_question",
+			toolCallId: "a2",
+			input: { question: "Explain the chain rule in your own words." } as never,
+		});
+		assert.ok(html.includes('data-testid="answer-field"'), "text mode is the answer field");
+		assert.match(html, /Your answer/, "labeled as the answer");
+		assert.ok(!html.includes('data-testid="thinking-field"'), "no thinking field in text mode (v1)");
+		assert.ok(!html.includes("⌘/Ctrl"), "no dump shortcut hint — Enter already submits");
 	});
 
 	it("AnsweredCard grades quiz answers (✓/✗ + explanation)", () => {
@@ -86,6 +139,37 @@ describe("render smoke tests", () => {
 		assert.match(html, /incorrect/);
 		assert.match(html, /innermost/, "explanation renders post-answer");
 		assert.ok(html.includes("✓") && html.includes("✗"));
+	});
+
+	it("AnsweredCard renders the learner's own Other answer AS an option row", () => {
+		const answer = buildAnswer(askQD(), { other: "Fairly confident — but shaky on applications" });
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
+		assert.ok(html.includes('data-testid="answered-other"'), "the Other answer is an option row");
+		assert.match(html, /border-primary bg-accent/, "styled like its selected siblings");
+		assert.match(html, /shaky on applications/, "the typed words render");
+		// Inside the options container — same list, not a loose quote outside it.
+		assert.ok(
+			html.indexOf("Very") < html.indexOf("answered-other"),
+			"the Other row sits with the listed options",
+		);
+	});
+
+	it("AnsweredCard promotes the learner's thinking to a first-class block", () => {
+		const answer = buildAnswer(quizQD(), {
+			values: ["Venus"],
+			note: "I picked Venus because it looks brightest — but now I realize brightness isn't distance.",
+		});
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
+		assert.ok(html.includes('data-testid="your-thinking"'), "the thinking block exists");
+		assert.match(html, /Your thinking/, "labeled as the learner's voice");
+		assert.match(html, /brightness isn&#x27;t distance/, "the thinking itself renders");
+		assert.ok(!html.includes("Note:"), "no longer a muted 'Note:' footnote");
+		// The thinking sits ABOVE the verdict's explanation — the dialogue of
+		// thinking, not an afterthought.
+		assert.ok(
+			html.indexOf("your-thinking") < html.indexOf("innermost"),
+			"thinking before the explanation",
+		);
 	});
 
 	it("AnsweredCard does NOT grade ask answers", () => {
