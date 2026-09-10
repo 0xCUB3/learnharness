@@ -1,0 +1,54 @@
+/**
+ * Activity-feed tests — the dock's composition (server/observability.ts).
+ *
+ * Real stores with fixture chats/jobs, cleaned up in a top-level test.
+ * Verifies the cross-chat gathering, running-only filtering, title joins,
+ * stable oldest-first ordering, and busy-chat reporting.
+ */
+import assert from "node:assert/strict";
+import test from "node:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+import { chatStore } from "../src/store/chats.ts";
+import { jobStore } from "../src/store/jobs.ts";
+import { PATHS } from "../config.ts";
+import { activityFeed } from "../src/server/observability.ts";
+
+test("activityFeed: running jobs across ALL chats, running-only, title-joined, oldest first", () => {
+	const chatA = chatStore.createChat("feed chat A");
+	const chatB = chatStore.createChat("feed chat B");
+	try {
+		const jobA = jobStore.createJob({ kind: "research", chatId: chatA.id, toolCallId: "tc_a" });
+		const jobB = jobStore.createJob({ kind: "demo", chatId: chatB.id, toolCallId: "tc_b" });
+		const jobDone = jobStore.createJob({ kind: "research", chatId: chatA.id, toolCallId: "tc_done" });
+		jobStore.updateJob(jobDone.id, { status: "done" });
+		const jobB2 = jobStore.createJob({ kind: "research", chatId: chatB.id, toolCallId: "tc_b2" });
+		// make jobB2 the MOST recently active → should still sort AFTER jobA/jobB (oldest-first).
+		// Explicit later timestamp: the real bump can land in the same ms as creation.
+		jobStore.updateJob(jobB2.id, { activity: "second step", updatedAt: new Date(Date.now() + 10).toISOString() });
+
+		const feed = activityFeed();
+		const feedJobs = feed.jobs.filter((j) => [jobA.id, jobB.id, jobB2.id].includes(j.id));
+		assert.equal(feedJobs.length, 3); // done job filtered out
+		for (const j of feedJobs) {
+			assert.ok(j.title.length > 0, "title joined onto every job");
+			assert.equal(typeof j.chatId, "string");
+		}
+		// title join is the chat's title
+		assert.equal(feedJobs.find((j) => j.id === jobA.id)?.title, "feed chat A");
+		// oldest-first on updatedAt: jobA/jobB created before jobB2's bump
+		const order = feedJobs.map((j) => j.id);
+		assert.equal(order.indexOf(jobB2.id), order.length - 1);
+
+		// extraction runs are absent when the pipeline is idle (registry empty)
+		assert.deepEqual(feed.extractions, []);
+		// busyChats reports turn-liveness (none in flight here)
+		assert.deepEqual(feed.busyChats, []);
+	} finally {
+		fs.unlinkSync(`${PATHS.chats}/${chatA.id}.json`);
+		fs.unlinkSync(`${PATHS.chats}/${chatB.id}.json`);
+		const jobsDir = path.join(PATHS.data, "jobs");
+		for (const f of fs.readdirSync(jobsDir)) fs.unlinkSync(path.join(jobsDir, f));
+	}
+});
