@@ -21,6 +21,7 @@ import type {
 	NodeMapping,
 	PlanTree,
 	SessionCheckpoint,
+	TurnUsage,
 } from "./contracts.ts";
 
 // ─── ChatStore — the session record's home (data/chats) ─────────────────────
@@ -36,6 +37,10 @@ export interface ChatStore {
 	saveMessages(id: string, messages: UIMessage[]): void;
 	/** Persist the session plan tree (plan tools call this in execute). */
 	saveTree(id: string, tree: PlanTree): void;
+	/** Append one usage entry to the record's turn log (the money channel,
+	 * 2026-09): idempotent per messageId — a turn persisted twice (abort
+	 * replays, wake-turn retries) appends exactly once. */
+	appendTurnUsage(id: string, entry: TurnUsage): void;
 }
 
 // ─── GraphStore — the append-only evidence ledgers (data/graph) ──────────────

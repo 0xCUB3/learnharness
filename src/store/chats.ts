@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import type { ChatStore } from "../core/ports.ts";
-import type { ChatRecord, ChatSummary, PlanTree } from "../core/contracts.ts";
+import type { ChatRecord, ChatSummary, PlanTree, TurnUsage } from "../core/contracts.ts";
 import type { UIMessage } from "ai";
 import { findPendingToolCall } from "../core/pending.ts";
 import { phaseOfTree } from "../core/phases.ts";
@@ -51,7 +51,9 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, ...summary }) => ({
+			.map(({ messages, tree, turns, ...summary }) => ({
+				// turns stay out of the list payload (list = summaries; usage
+				// aggregates ride the full record, the picker never needs them).
 				...summary,
 				messageCount: messages.length,
 				// Record-derived status for the session picker: phase from the
@@ -76,6 +78,18 @@ function saveMessages(id: string, messages: UIMessage[]): void {
 	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
 }
 
+/** Append one usage entry to the record's turn log — idempotent per
+ * messageId: abort replays and wake-turn retries persist the same turn
+ * twice; the second append is a no-op. */
+function appendTurnUsage(id: string, entry: TurnUsage): void {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	record.turns = record.turns?.some((t) => t.messageId === entry.messageId)
+		? record.turns
+		: [...(record.turns ?? []), entry];
+	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+}
+
 /** Persist the session plan tree (plan tools call this in execute). */
 function saveTree(id: string, tree: PlanTree): void {
 	const record = getChat(id);
@@ -92,4 +106,5 @@ export const chatStore: ChatStore = {
 	listChats,
 	saveMessages,
 	saveTree,
+	appendTurnUsage,
 };

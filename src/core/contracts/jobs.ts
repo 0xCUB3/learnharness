@@ -27,6 +27,27 @@ export interface JobRecord {
 	/** The sub-agent's result (steer-artifact payload). */
 	result?: unknown;
 	error?: string;
+	/** Money channel (observability, 2026-09): accumulated token usage of
+	 * the sub-agent's run, written by the runner as steps complete. Cost is
+	 * inferred at read time (core/prices.ts). Absent on pre-2026-09 jobs and
+	 * until the runner's capture lands — renderers show "—", never zero. */
+	usage?: JobUsage;
+}
+
+/** A sub-agent run's accumulated usage — the same accounting shape as a
+ * chat turn (contracts/chat.ts CallUsage), flattened to one running total
+ * plus a step count. */
+export interface JobUsage {
+	/** The OpenRouter model id that ran the sub-agent. */
+	model: string;
+	/** Running totals summed over the run's model calls so far. */
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	reasoningTokens: number;
+	/** How many model calls the run has made (each bills separately). */
+	steps: number;
 }
 
 /**
