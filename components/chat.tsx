@@ -21,6 +21,8 @@ import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
+import { PlanBlock, PlanPopup } from "@/components/plan-block";
+import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import { SubAgentsPanel } from "@/components/sub-agents-panel";
@@ -176,6 +178,9 @@ export function Chat({
 			void sendMessage();
 		}
 	}, [chatId, setMessages, sendMessage, status]);
+
+	// The live plan popup (wave 4): opened by any transcript plan block.
+	const [planOpen, setPlanOpen] = useState(false);
 
 	// ── Session usage (wave-4 stats bar) ──
 	// The money channel: the record's turns log, folded client-side by
@@ -389,6 +394,16 @@ export function Chat({
 														);
 													case "step-start":
 														return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
+													case "data-plan-block":
+														// The plan in the chat (wave 4): a frozen snapshot
+														// block — rendered as carried, never re-derived.
+														return (
+															<PlanBlock
+																key={pi}
+																data={part.data as PlanBlockData}
+																onOpen={() => setPlanOpen(true)}
+															/>
+														);
 													case "tool-quiz":
 													case "tool-ask_user_question": {
 														// Pending/streaming questions live in the dock, not the
@@ -464,6 +479,7 @@ export function Chat({
 				<TreePanel messages={messages} />
 			</div>
 		</div>
+		{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
 		</JobsContext.Provider>
 		</ChatActionsContext.Provider>
 	);
