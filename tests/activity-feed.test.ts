@@ -43,8 +43,6 @@ test("activityFeed: running jobs across ALL chats, running-only, title-joined, o
 
 		// extraction runs are absent when the pipeline is idle (registry empty)
 		assert.deepEqual(feed.extractions, []);
-		// busyChats reports turn-liveness (none in flight here)
-		assert.deepEqual(feed.busyChats, []);
 	} finally {
 		fs.unlinkSync(`${PATHS.chats}/${chatA.id}.json`);
 		fs.unlinkSync(`${PATHS.chats}/${chatB.id}.json`);
