@@ -22,6 +22,17 @@
  *  strength — strength is derived at read time from topology. */
 export type EdgeType = "follows" | "supports";
 
+/** What one extraction run merged into the graph ledgers — the merger's
+ *  output, also persisted in extraction-run usage records (contracts/chat). */
+export interface EmissionStats {
+	/** New graph nodes appended. */
+	nodes: number;
+	/** New edge assertions appended. */
+	edges: number;
+	/** Ledger events rebuilt (quiz outcomes + observations). */
+	events: number;
+}
+
 /** One provenance point — message-granular (DECIDED 2026-09-02): nodes and
  *  edges record every (chat, message) where they came up, deep-linkable to
  *  the exact transcript point. */

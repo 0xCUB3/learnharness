@@ -8,5 +8,5 @@
  * this file is where the deep imports surface, so routes stay clean.
  */
 
-export { extractionStatuses, type ExtractionPhase } from "../agent/subagents/extraction.ts";
+export { abortExtraction, extractionStatuses, type ExtractionPhase, type RunningExtraction } from "../agent/subagents/extraction.ts";
 export { chatStore } from "../store/chats.ts";
