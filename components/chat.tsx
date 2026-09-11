@@ -22,6 +22,7 @@ import { Composer } from "@/components/composer";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { PlanBlock, PlanPopup } from "@/components/plan-block";
+import { PlanWindow } from "@/components/plan-window";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
@@ -506,6 +507,8 @@ export function Chat({
 			</div>
 		</div>
 		{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
+		{/* The plan's ambient presence: live, zoomed on the current node; click → popup. */}
+		<PlanWindow messages={messages} onOpen={() => setPlanOpen(true)} />
 		</JobsContext.Provider>
 		</ChatActionsContext.Provider>
 	);

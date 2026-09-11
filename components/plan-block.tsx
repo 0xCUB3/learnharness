@@ -144,23 +144,26 @@ const TEXT: Record<PlanNodeStatus, string> = {
 
 /** The diagram itself: positioned nodes + bezier edges. Pure-ish render —
  *  every input is data, so SSR render tests pin the whole thing. */
-function PlanDiagram({
+export function PlanDiagram({
 	nodes,
 	edges,
 	statusOf,
 	glowId,
 	markerId,
+	viewBoxOverride,
 }: {
 	nodes: readonly LayoutNode[];
 	edges: ReadonlyArray<{ from: string; to: string }>;
 	statusOf: (id: string) => PlanNodeStatus;
 	glowId?: string | null;
 	markerId: string;
+	/** A windowed viewBox (the plan window) instead of the full extent. */
+	viewBoxOverride?: string;
 }) {
 	const layout = useMemo(() => blockLayout(nodes, edges), [nodes, edges]);
 	return (
 		<svg
-			viewBox={`0 0 ${Math.max(layout.width, 1)} ${Math.max(layout.height, 1)}`}
+			viewBox={viewBoxOverride ?? `0 0 ${Math.max(layout.width, 1)} ${Math.max(layout.height, 1)}`}
 			className="block h-auto w-full"
 			role="img"
 			aria-label="Plan diagram"
@@ -264,7 +267,7 @@ export interface PopupMessage {
 }
 
 /** The latest plan tree in the transcript (latest tool-plan_ output). */
-function latestTree(messages: readonly PopupMessage[]): PlanTree | null {
+export function latestTree(messages: readonly PopupMessage[]): PlanTree | null {
 	for (let m = messages.length - 1; m >= 0; m--) {
 		const parts = messages[m]?.parts;
 		if (!parts) continue;
