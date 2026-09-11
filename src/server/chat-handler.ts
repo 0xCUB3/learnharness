@@ -1,12 +1,15 @@
-import { createAgentUIStreamResponse, InvalidToolInputError, NoSuchToolError, type UIMessage } from "ai";
+import { createAgentUIStreamResponse, InvalidToolInputError, NoSuchToolError, type LanguageModelUsage, type UIMessage } from "ai";
 import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { createTeacherTools } from "../agent/tools.ts";
+import { modelFor } from "../agent/models.ts";
+import { MODELS } from "../../config.ts";
 import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { stores } from "./stores.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { buildTeacherContext, persistTurn, triggerExtraction } from "./turn-service.ts";
+import type { CallUsage } from "../core/contracts.ts";
 
 /**
  * One chat turn: run the teacher agent over the client's message list and
@@ -93,6 +96,21 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		console.error(`[chat ${chatId}] write-ahead persist failed:`, err);
 	}
 
+	// MONEY CHANNEL (wave 4): one collector per request, fed by the agent's
+	// step callback. Every model call's usage lands in the chat record's
+	// append-only turns log at onFinish — idempotent per response message id,
+	// so abort replays and wake retries append exactly once.
+	const steps: CallUsage[] = [];
+	const collectUsage = (step: { usage: LanguageModelUsage }) => {
+		steps.push({
+			inputTokens: step.usage.inputTokens,
+			outputTokens: step.usage.outputTokens,
+			cacheReadTokens: step.usage.inputTokenDetails?.cacheReadTokens,
+			cacheWriteTokens: step.usage.inputTokenDetails?.cacheWriteTokens,
+			reasoningTokens: step.usage.outputTokenDetails?.reasoningTokens,
+		});
+	};
+
 	try {
 		return await createAgentUIStreamResponse({
 		agent:
@@ -106,6 +124,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 					spawn: (job, input) => void jobRunner.runJob(job.id, input),
 				}),
 				buildTeacherContext(stores.graphStore, chatId),
+				collectUsage,
 			),
 		uiMessages: outgoing,
 		// Tool-call validation failures are messages OUR schemas authored (the
@@ -121,6 +140,17 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		},
 			onFinish: ({ messages, isAborted }) => {
 				persistTurn(stores.chatStore, chatId, messages as UIMessage[], isAborted);
+				// usage log append (idempotent per response message id) — the
+				// stats bar refolds this on the client after the turn settles
+				const response = [...messages].reverse().find((m) => m.role === "assistant");
+				if (response && steps.length > 0) {
+					stores.chatStore.appendTurnUsage(chatId, {
+						messageId: response.id,
+						at: new Date().toISOString(),
+						model: MODELS.teacher.model,
+						steps,
+					});
+				}
 				triggerExtraction(stores, extraction, chatId);
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.

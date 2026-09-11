@@ -200,12 +200,47 @@ export function Chat({
 	useEffect(() => {
 		void syncTurns();
 	}, [syncTurns]);
-	// After the learner's own turn ends the log has a fresh entry — refetch.
+	// After the learner's own turn ends the log has a fresh entry — and the
+	// persisted transcript may have grown server-authored parts the live
+	// stream can't carry (plan blocks attach at persist). Adopt the record
+	// the moment the server agrees the turn is done: endTurn flips ONLY
+	// after persist, so a not-in-flight record is a complete one — the same
+	// invariant the wake-adoption poll below rides. Poll briefly (the flip
+	// trails the client's stream-end by milliseconds), then adopt once.
 	const prevStatusRef = useRef(status);
 	useEffect(() => {
-		if (prevStatusRef.current !== "ready" && status === "ready") void syncTurns();
+		if (prevStatusRef.current !== "ready" && status === "ready") {
+			// immediate: turns-only refetch — the stats bar updates even while
+			// the server's persist/endTurn lags the client by milliseconds
+			void syncTurns();
+			// deferred: adopt the full record once the server agrees the turn
+			// is done (plan blocks and any other persist-authored parts)
+			let cancelled = false;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const adopt = async (attempt: number) => {
+				if (cancelled) return;
+				try {
+					const res = await fetch(`/api/chats/${chatId}`);
+					if (res.ok) {
+						const record = (await res.json()) as { turnInFlight?: boolean };
+						if (record.turnInFlight !== true) {
+							void syncFromServer();
+							return;
+						}
+					}
+				} catch {
+					/* transient — keep polling */
+				}
+				if (attempt < 8 && !cancelled) timer = setTimeout(() => void adopt(attempt + 1), 500);
+			};
+			void adopt(0);
+			return () => {
+				cancelled = true;
+				if (timer) clearTimeout(timer);
+			};
+		}
 		prevStatusRef.current = status;
-	}, [status, syncTurns]);
+	}, [status, chatId, syncFromServer, syncTurns]);
 
 	// ── Central job observability (contracts.ts "THE ASYNC PROTOCOL" §4) ──
 	// ONE poll of /api/jobs drives every job surface (transcript dispatch

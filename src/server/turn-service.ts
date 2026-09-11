@@ -17,6 +17,7 @@
  */
 
 import type { UIMessage } from "ai";
+import { withPlanBlocks } from "../core/plan-blocks.ts";
 import { buildGraphContext } from "../core/graph-context.ts";
 import { getGraph, pendingQuizAnswers } from "../core/graph.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
@@ -76,7 +77,12 @@ export function withMessageIds(messages: UIMessage[]): UIMessage[] {
 
 export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMessage[], isAborted: boolean): void {
 	try {
-		chatStore.saveMessages(chatId, withMessageIds(messages));
+		const deduped = withMessageIds(messages);
+		// Plan-block emission (wave 4): blocks are frozen transcript content —
+		// attached here, once, at the canonical state write. The tree was
+		// saved by the plan tool during the turn; snapshots derive now.
+		const tree = chatStore.getChat(chatId)?.tree;
+		chatStore.saveMessages(chatId, withPlanBlocks(deduped, tree));
 	} catch (err) {
 		console.error(`[chat ${chatId}] persist failed:`, err, { isAborted });
 	}

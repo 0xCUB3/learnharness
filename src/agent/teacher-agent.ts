@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ToolLoopAgent, stepCountIs, type LanguageModel, type ToolSet } from "ai";
+import { ToolLoopAgent, stepCountIs, type LanguageModel, type LanguageModelUsage, type ToolSet } from "ai";
 import { PATHS } from "../../config.ts";
 import { modelFor } from "./models.ts";
 import { questionTools } from "./tools.ts";
@@ -58,7 +58,16 @@ function withGraphContext(graphContext: string | null | undefined): string {
 	return `${instructions}\n\n---\n\n${graphContext}`;
 }
 
-export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet, graphContext?: string | null) {
+export function createTeacherAgent(
+	model?: LanguageModel,
+	tools?: ToolSet,
+	graphContext?: string | null,
+	// Money channel (wave 4): the chat-handler passes a per-turn collector;
+	// every model call's usage lands in the chat record's turns log
+	// (ChatStore.appendTurnUsage). The step carries far more than usage —
+	// the narrow param keeps the seam honest about what we consume.
+	onStepFinish?: (step: { usage: LanguageModelUsage }) => void,
+) {
 	return new ToolLoopAgent({
 		// Model choice + thinking budget live in config.ts (MODELS.teacher).
 		// Reasoning tokens stream as reasoning parts into the UI's collapsible block.
@@ -74,6 +83,7 @@ export function createTeacherAgent(model?: LanguageModel, tools?: ToolSet, graph
 		// job tools resolve immediately (fire-and-forget ack). stepCountIs is
 		// just the safety net.
 		stopWhen: stepCountIs(20),
+		...(onStepFinish ? { onStepFinish } : {}),
 	});
 }
 
