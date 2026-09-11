@@ -18,6 +18,7 @@ import type {
 	JobKind,
 	JobRecord,
 	LedgerEvent,
+	ExtractionRunUsage,
 	NodeMapping,
 	PlanTree,
 	SessionCheckpoint,
@@ -41,6 +42,8 @@ export interface ChatStore {
 	 * 2026-09): idempotent per messageId — a turn persisted twice (abort
 	 * replays, wake-turn retries) appends exactly once. */
 	appendTurnUsage(id: string, entry: TurnUsage): void;
+	/** Append one extraction-run usage entry — idempotent per startedAt. */
+	appendExtractionUsage(id: string, entry: ExtractionRunUsage): void;
 }
 
 // ─── GraphStore — the append-only evidence ledgers (data/graph) ──────────────

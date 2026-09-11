@@ -13,6 +13,10 @@
  * (chat-transport); the dock is a different consumer with a different
  * shape, served here. Single sources of truth are unchanged: the job
  * store and the pipeline registry — this file only composes them.
+ *
+ * The extraction side of the dock's controls also surfaces here:
+ * abortExtraction (true mid-run cancellation, user-decided) is exported
+ * from the pipeline's module for the abort route to call.
  */
 
 import { extractionStatuses, type ExtractionPhase } from "../agent/subagents/extraction.ts";
@@ -20,8 +24,8 @@ import { chatStore } from "../store/chats.ts";
 import { listJobs } from "./jobs.ts";
 import type { JobRecord } from "../core/contracts.ts";
 
-export { extractionStatuses, type ExtractionPhase };
-export { chatStore };
+export { abortExtraction, extractionStatuses, type ExtractionPhase, type RunningExtraction } from "../agent/subagents/extraction.ts";
+export { chatStore } from "../store/chats.ts";
 
 /** A running sub-agent job, joined with its chat's title for the dock. */
 export interface ActivityJob extends JobRecord {

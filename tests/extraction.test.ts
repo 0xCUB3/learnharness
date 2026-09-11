@@ -34,7 +34,7 @@ import type {
 	SessionFindings,
 } from "../src/core/contracts.ts";
 import type { GraphStore } from "../src/core/ports.ts";
-import { createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
+import { abortExtraction, createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
@@ -193,6 +193,24 @@ function submitModel(name: string, input: unknown, onCall?: () => void): MockLan
 				usage: usage(),
 				warnings: [],
 			};
+		},
+	});
+}
+
+/** A model that hangs until its abort signal fires, then rejects —
+ *  mimicking a cancelled provider request (the abort path). Like a real
+ *  provider, an ALREADY-aborted signal rejects immediately (the abort
+ *  can win the race before doGenerate attaches its listener). */
+function hangingModel(): MockLanguageModelV4 {
+	const abortReject = (reject: (reason: Error) => void) =>
+		reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+	return new MockLanguageModelV4({
+		doGenerate: async (options): Promise<never> => {
+			await new Promise<never>((_, reject) => {
+				if (options.abortSignal?.aborted) abortReject(reject);
+				else options.abortSignal?.addEventListener("abort", () => abortReject(reject));
+			});
+			throw new Error("unreachable");
 		},
 	});
 }
@@ -376,6 +394,97 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		await pipeline.runExtraction(chatId);
 		assert.deepEqual(seen, ["extracting", "auditing"]);
 		assert.equal(extractionStatuses().length, 0, "the registry clears when the run ends");
+	});
+
+	it("captures per-stage usage live, persists the run's usage into the chat record", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const existingId = "n_existing";
+		ledgers.appendNode({
+			id: existingId,
+			name: "Derivative",
+			statement: "Derivatives measure rates of change",
+			aliases: [],
+			createdAt: "2026-08-01T00:00:00.000Z",
+			provenance: [],
+		});
+		const usageSeen: (number | undefined)[] = [];
+		const verdict: AuditResult = {
+			propositions: [{ ...FINDINGS.propositions[0]!, linkTo: existingId }],
+			edges: [],
+			attribution: { quiz: {} },
+			dropped: [{ ref: "p2", reason: "evidence not found" }],
+		};
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			// During the auditor's generate, the registry must already carry
+			// the extractor's fully accumulated live usage (2 steps × 10/5).
+			extractor: submitModel("submit_findings", FINDINGS),
+			auditor: submitModel("submit_review", verdict, () =>
+				usageSeen.push(extractionStatuses().find((r) => r.chatId === chatId)?.usage.extractor?.steps.at(-1)?.inputTokens),
+			),
+		});
+		await pipeline.runExtraction(chatId);
+
+		// Live: mid-audit the extractor's usage was fully accumulated
+		// (the mock bills 10 input / 5 output per step, flat per the SDK).
+		assert.deepEqual(usageSeen, [10]);
+
+		// Persisted: the run appended ONE usage entry to the chat's
+		// extractions log — per-stage model + steps, with merge stats.
+		const record = chatStore.getChat(chatId)!;
+		assert.equal(record.extractions?.length, 1);
+		const run = record.extractions![0]!;
+		assert.equal(run.stats?.nodes, 0); // linked, not created
+		assert.equal(run.stats?.events, 3);
+		assert.equal(run.stages.extractor.model, "mock-model-id"); // the mock's model id
+		assert.equal(run.stages.extractor.steps.length, 2); // tool-call step + text step
+		assert.deepEqual(run.stages.extractor.steps[0], {
+			inputTokens: 10,
+			outputTokens: 5,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			reasoningTokens: 0,
+		});
+		assert.equal(run.stages.auditor.steps.length, 2);
+		assert.ok(!Number.isNaN(Date.parse(run.at)));
+	});
+
+	it("aborts mid-run: cancels the model call, persists partial usage, checkpoints nothing", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: hangingModel(), // hangs until aborted — no step finishes
+			auditor: submitModel("submit_review", { propositions: [], edges: [], attribution: { quiz: {} }, dropped: [] }),
+		});
+		const runPromise = pipeline.runExtraction(chatId);
+
+		// The registry entry exists synchronously after the call (setPhase
+		// runs before the first await); abort is TRUE cancellation.
+		assert.equal(abortExtraction(chatId), true);
+		const stats = await runPromise;
+
+		// A deliberate stop, not a failure: zero emissions, no throw.
+		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 });
+		assert.equal(extractionStatuses().length, 0, "the registry clears");
+		assert.equal(ledgers.readNodes().length, 0, "nothing merged");
+		assert.equal(ledgers.readCheckpoints().length, 0, "nothing checkpointed — the next trigger re-runs");
+
+		// Partial usage still persisted (money was spent): stats absent,
+		// no completed steps in either stage.
+		const record = chatStore.getChat(chatId)!;
+		assert.equal(record.extractions?.length, 1);
+		const run = record.extractions![0]!;
+		assert.equal(run.stats, undefined);
+		assert.equal(run.stages.extractor.steps.length, 0);
+		assert.equal(run.stages.auditor.steps.length, 0);
+
+		// Aborting a non-running chat is an idempotent no-op.
+		assert.equal(abortExtraction(chatId), false);
 	});
 
 	it("is single-flight per chat — a concurrent second run is a no-op", async () => {

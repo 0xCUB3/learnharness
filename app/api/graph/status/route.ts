@@ -15,6 +15,10 @@ export async function GET() {
 		title: chatStore.getChat(run.chatId)?.title ?? run.chatId,
 		phase: run.phase,
 		startedAt: run.startedAt,
+		// Live per-stage usage (the money channel): model + per-step CallUsage,
+		// accumulated as steps bill. Cost and context-window folds are the
+		// consumer's (core/prices.ts helpers — nothing stores dollars).
+		usage: run.usage,
 	}));
 	return Response.json({ runs });
 }

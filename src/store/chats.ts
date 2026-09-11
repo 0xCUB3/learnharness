@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import type { ChatStore } from "../core/ports.ts";
-import type { ChatRecord, ChatSummary, PlanTree, TurnUsage } from "../core/contracts.ts";
+import type { ChatRecord, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
 import type { UIMessage } from "ai";
 import { findPendingToolCall } from "../core/pending.ts";
 import { phaseOfTree } from "../core/phases.ts";
@@ -51,9 +51,10 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, turns, ...summary }) => ({
-				// turns stay out of the list payload (list = summaries; usage
-				// aggregates ride the full record, the picker never needs them).
+			.map(({ messages, tree, turns, extractions, ...summary }) => ({
+				// turns and extractions stay out of the list payload (list =
+				// summaries; usage aggregates ride the full record, the picker
+				// never needs them).
 				...summary,
 				messageCount: messages.length,
 				// Record-derived status for the session picker: phase from the
@@ -90,6 +91,18 @@ function appendTurnUsage(id: string, entry: TurnUsage): void {
 	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
 }
 
+/** Append one extraction-run usage entry to the record's extractions
+ * log — idempotent per startedAt: a retry that reaches the append twice
+ * (abort replays) does not double-count spend. */
+function appendExtractionUsage(id: string, entry: ExtractionRunUsage): void {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	record.extractions = record.extractions?.some((r) => r.startedAt === entry.startedAt)
+		? record.extractions
+		: [...(record.extractions ?? []), entry];
+	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+}
+
 /** Persist the session plan tree (plan tools call this in execute). */
 function saveTree(id: string, tree: PlanTree): void {
 	const record = getChat(id);
@@ -107,4 +120,5 @@ export const chatStore: ChatStore = {
 	saveMessages,
 	saveTree,
 	appendTurnUsage,
+	appendExtractionUsage,
 };

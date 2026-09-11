@@ -42,6 +42,7 @@ import { randomBytes } from "node:crypto";
 import { isToolUIPart, type UIMessage } from "ai";
 import type {
 	AuditResult,
+	EmissionStats,
 	GraphEdge,
 	GraphNode,
 	ProvenancePoint,
@@ -107,15 +108,6 @@ const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
 	a.chatId === b.chatId && a.messageId === b.messageId;
 
 // ─── the merger (extraction pipeline stage 3 — deterministic) ────────────────
-
-export interface EmissionStats {
-	/** New graph nodes appended. */
-	nodes: number;
-	/** New edge assertions appended. */
-	edges: number;
-	/** New ledger events appended. */
-	events: number;
-}
 
 /**
  * Merge one chat's audited findings into the graph ledgers — the pipeline's
@@ -470,3 +462,6 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 
 	return { nodes, edges, sessions, nodeSessions, nodeObservations };
 }
+
+// Re-export: the contract owns the shape; legacy importers still reach it.
+export type { EmissionStats };
