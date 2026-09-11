@@ -3,6 +3,7 @@ import "katex/dist/katex.min.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
 import { TreePanelModeProvider } from "@/components/tree-panel";
+import { ActivityDock, ActivityProvider } from "@/components/activity-dock";
 
 export const metadata: Metadata = {
 	title: "Learning Harness",
@@ -15,7 +16,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 			<body className="min-h-dvh antialiased">
 			<SidebarProvider>
 				<TreePanelModeProvider>
-					<AppShell>{children}</AppShell>
+					<ActivityProvider>
+						<AppShell>{children}</AppShell>
+						{/* The reserved bottom-right corner of every view — renders
+					    nothing while no background process runs. */}
+						<ActivityDock />
+					</ActivityProvider>
 				</TreePanelModeProvider>
 			</SidebarProvider>
 		</body>
