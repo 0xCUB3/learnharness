@@ -17,12 +17,15 @@ export interface PlanToolContext {
  * WRITES the map and never tracks progress. One tool, plan_init, takes the
  * whole dependency map as a mermaid `graph TD` block:
  *
- *   - call it ONCE at the probe→teach seam (the call fires the phase divider)
- *   - statuses (done / current / upcoming) are DERIVED from check outcomes
- *     (contracts.ts derivePlanStatuses) — the teacher never declares them
+ *   - call it ONCE right after the probe concludes, to present the map (the
+ *     LEARNER'S ACCEPTANCE of the presented plan, not this call, ends
+ *     planning — docs/probe-teach-split.md §4)
+ *   - statuses (current / visited / upcoming) are DERIVED from the quiz
+ *     nodeId tags the teacher fires (contracts.ts derivePlanStatuses) — the
+ *     teacher never declares them, and there is no "done" bookkeeping
  *   - re-call it any time the map is wrong: the new block replaces the tree
- *     wholesale. Node slugs are permanent — reused ids keep their derived
- *     done status, so a mid-lesson rewrite never resets honest progress
+ *     wholesale. Node slugs are permanent — the map tracks nothing between
+ *     rewrites
  *   - checks name the node they assess (quiz nodeId, validated against the
  *     live tree at the call boundary) — that tag is the only thing statuses
  *     derive from
@@ -31,24 +34,26 @@ export interface PlanToolContext {
  * mark_done) are gone by design: restructuring is a rewrite, tracking is
  * derived. SERVER-SIDE with execute: parse → validate → persist → return
  * the FULL canonicalized tree (PlanToolResult), so the tree panel renders the
- * latest state straight from the transcript's tool outputs.
+ * latest state straight from the transcript's tool outputs (the plan
+ * window and the plan blocks).
  */
 export function planTools(ctx: PlanToolContext): ToolSet {
 	return {
 		plan_init: tool({
 			description:
-				"Write or REWRITE this session's plan map — the dependency graph the learner sees live in a side panel. " +
-				"Call once after probing, before teaching begins; re-call whenever the map is wrong (the new block replaces the old tree). " +
-				"A mermaid `graph TD` block: one node per line (`slug[Short Title]` — slugs are permanent lowercase ids), `-->` edges meaning " +
-				"'from must be understood before to'. 5–15 nodes: a map, not a syllabus — one reasoning step per node, compress. " +
-				"Every check you fire names the node it assesses via `nodeId`; where the lesson stands derives from those outcomes.",
+				"Write or REWRITE this session's plan map — the dependency graph the learner follows live in the plan window. " +
+				"Call once right after the probe concludes, to present the map; re-call whenever the map is wrong (the new block replaces the old tree). " +
+				"A mermaid graph block (any direction): one node per line (`slug[Short Title]` — slugs are permanent lowercase ids: a-z, 0-9, hyphens/underscores), " +
+				"`-->` edges meaning 'from must be understood before to' (chains fine). 5–15 nodes: a map, not a syllabus — one reasoning step per node, compress. " +
+				"Every check you fire names the node it assesses via `nodeId`; where the lesson stands derives from those tags.",
 			inputSchema: z.object({
 				mermaid: z
 					.string()
 					.min(1)
 					.describe(
-						"A mermaid `graph TD` block, e.g.:\ngraph TD\n  primitives[Number primitives] --> operators[Arithmetic operators]\n  operators --> expressions[Evaluating expressions]\n" +
-							"Node lines: `slug[Title]`. Edge lines: `slug --> slug` (from = prerequisite). No subgraphs, styles, classes, or other mermaid features.",
+						"A mermaid graph block (any direction), e.g.:\ngraph TD\n  primitives[Number primitives] --> operators[Arithmetic operators] --> expressions[Evaluating expressions]\n" +
+							"The only strict rule: ids are permanent lowercase slugs (a-z, 0-9, hyphens/underscores) — checks reference them via nodeId. " +
+							"Titles are free single-line text; `-->` means 'from = prerequisite' (chains fine); no subgraphs, styles, or classes.",
 					),
 			}),
 			execute: async ({ mermaid }): Promise<PlanToolResult> => {

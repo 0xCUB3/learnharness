@@ -1,25 +1,31 @@
 /**
- * Mermaid → PlanTree authoring format (the author-once protocol, 2026-09-03).
+ * Mermaid → PlanTree authoring format (the author-once protocol, 2026-09-03;
+ * free-form pass 2026-09-11 — the muscle-protein session post-mortem: four
+ * failed plan_init calls over ids the parser silently hated).
  *
- * The teacher writes the session map as a mermaid `graph TD` block — the
- * format models are most fluent in — and plan_init canonicalizes it into the
- * structured PlanTree. A CONSTRAINED SUBSET, parsed by hand: deterministic,
- * dependency-free, precise line-numbered errors the teacher can act on (the
- * same validate-and-retry loop as the question schemas). Not the mermaid
- * runtime — the server never renders, it only needs the graph.
+ * The teacher writes the session map as a mermaid block — the format models
+ * are most fluent in — and plan_init canonicalizes it into the structured
+ * PlanTree. Hand-parsed subset: deterministic, dependency-free, precise
+ * line-numbered errors the teacher can act on (the same validate-and-retry
+ * loop as the question schemas). Not the mermaid runtime — the server never
+ * renders, it only needs the graph.
  *
- * Accepted syntax (anything else → an error naming the line):
- *   graph TD | graph TB | flowchart TD | flowchart TB   (case-insensitive)
+ * THE ONE STRICT RULE: node ids are permanent slugs the teacher references
+ * via quiz nodeId — lowercase words (a-z, 0-9) joined by hyphens OR
+ * underscores (`chain-rule-intuition`, `mps_translation`). Everything else
+ * is as free-form as mermaid allows:
+ *   graph|flowchart TD|TB|LR|RL|BT   (direction is cosmetic — we layout
+ *                                     ourselves; case-insensitive)
  *   %% comment lines
  *   node            — bare id (title falls back to the id)
- *   id[title]       — square-bracket label
+ *   id[title]       — square-bracket label; any single-line title, a
+ *                     surrounding "…" pair is stripped
  *   id("title")     — paren label
- *   a --> b         — requires edge (from = prerequisite); bare endpoints
- *                     register as nodes; forward references are fine
- *   a[title] --> b[title]
- *
- * Node ids are permanent slugs: ^[a-z0-9]+(-[a-z0-9]+)*$ (checks reference
- * them via the quiz nodeId). Labels are single-line titles.
+ *   a --> b         — requires edge (from = prerequisite); ==>, -.-> are
+ *                     synonyms; chains a --> b --> c expand to pairs
+ *   a[title] --> b[title] — inline labels anywhere an endpoint appears
+ * Bare endpoints register as nodes; forward references are fine; duplicate
+ * edges dedupe; the first label a node gets wins.
  */
 import type { PlanEdge, PlanNode } from "@/src/core";
 
@@ -35,13 +41,18 @@ export interface PlanParseResult {
 	plan?: ParsedPlan;
 }
 
-const HEADER_RE = /^(graph|flowchart)\s+(td|tb)\s*$/i;
-const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const HEADER_RE = /^(graph|flowchart)\s+(td|tb|lr|rl|bt)\s*$/i;
+const SLUG_RE = /^[a-z0-9]+([_-][a-z0-9]+)*$/;
+/** Any arrow spelling counts as a requires-edge; chains split on it. */
+const ARROW_RE = /-->|==>|-\.->/;
 /** One edge endpoint: `id`, `id[title]`, or `id("title")`. */
-// Case-tolerant on the id: register() then enforces the lowercase slug convention
-// with a SPECIFIC message (an "UPPER" id reaches the slug check, not a generic
-// parse error — the most common authoring mistake).
-const ENDPOINT_RE = /^([A-Za-z0-9][A-Za-z0-9-]*?)\s*(?:\[([^\[\]]*)\]|\(\s*"([^"]*)"\s*\)|\(([^()]*)\))?$/;
+// The id CANDIDATE class is deliberately broad — anything but whitespace,
+// brackets, parens — so EVERY bad id (UPPER, dots, underscores…) reaches
+// register()'s SPECIFIC slug message instead of dying at the regex layer
+// with a generic parse error. The muscle-protein post-mortem: underscores
+// failed HERE, the actionable message never fired, and the teacher spent
+// four attempts hunting punctuation the parser didn't care about.
+const ENDPOINT_RE = /^([^\s()\[\]]+)\s*(?:\[([^\[\]]*)\]|\(\s*"([^"]*)"\s*\)|\(([^()]*)\))?$/;
 
 interface Endpoint {
 	id: string;
@@ -51,7 +62,15 @@ interface Endpoint {
 function parseEndpoint(text: string): Endpoint | null {
 	const m = text.trim().match(ENDPOINT_RE);
 	if (!m || !m[1]) return null;
-	return { id: m[1], label: (m[2] ?? m[3] ?? m[4] ?? "").trim() };
+	let label = (m[2] ?? m[3] ?? m[4] ?? "").trim();
+	// `id["title"]` is idiomatic mermaid — don't keep the quote pair in the title.
+	if (
+		label.length >= 2 &&
+		((label.startsWith('"') && label.endsWith('"')) || (label.startsWith("'") && label.endsWith("'")))
+	) {
+		label = label.slice(1, -1).trim();
+	}
+	return { id: m[1], label };
 }
 
 /** Parse the mermaid subset. Collects ALL problems (never just the first). */
@@ -76,7 +95,7 @@ export function parseMermaidPlan(mermaid: string): PlanParseResult {
 	const register = ({ id, label }: Endpoint, lineNo: number): void => {
 		if (!SLUG_RE.test(id)) {
 			problems.push(
-				`line ${lineNo}: node id \`${id}\` must be a lowercase slug (a-z, 0-9, hyphens — e.g. \`chain-rule-intuition\`); ids are permanent and checks reference them.`,
+				`line ${lineNo}: node id \`${id}\` must be a lowercase slug (a-z, 0-9, joined by hyphens or underscores — e.g. \`chain-rule-intuition\`); ids are permanent and checks reference them.`,
 			);
 			return;
 		}
@@ -89,32 +108,44 @@ export function parseMermaidPlan(mermaid: string): PlanParseResult {
 		const no = i + 1;
 		if (line.length === 0 || line.startsWith("%%")) continue;
 
-		const arrows = line.split("-->");
-		if (arrows.length === 2) {
-			const from = parseEndpoint(arrows[0] ?? "");
-			const to = parseEndpoint(arrows[1] ?? "");
-			if (!from || !to) {
-				problems.push(`line ${no}: can't read the edge \`${line}\` — expected \`a[title] --> b[title]\`.`);
-				continue;
+		// Edges (incl. chains): split on any arrow spelling; every segment is
+		// an endpoint, consecutive pairs become requires-edges.
+		const segments = line.split(ARROW_RE);
+		if (segments.length >= 2) {
+			const endpoints: Endpoint[] = [];
+			let unreadable = false;
+			for (const seg of segments) {
+				const ep = parseEndpoint(seg);
+				if (!ep) {
+					problems.push(
+						`line ${no}: can't read the edge \`${line}\` — expected \`a[title] --> b[title]\` (chains like \`a --> b --> c\` are fine).`,
+					);
+					unreadable = true;
+					break;
+				}
+				endpoints.push(ep);
 			}
-			register(from, no);
-			register(to, no);
-			if (from.id === to.id) {
-				problems.push(`line ${no}: self-loop \`${from.id} --> ${to.id}\` — a node can't require itself.`);
-				continue;
+			if (!unreadable) {
+				for (const ep of endpoints) register(ep, no);
+				for (let k = 0; k + 1 < endpoints.length; k++) {
+					const from = endpoints[k]!;
+					const to = endpoints[k + 1]!;
+					if (from.id === to.id) {
+						problems.push(`line ${no}: self-loop \`${from.id} --> ${to.id}\` — a node can't require itself.`);
+						continue;
+					}
+					const key = `${from.id}->${to.id}`;
+					if (!seenEdges.has(key)) {
+						seenEdges.add(key);
+						edges.push({ from: from.id, to: to.id });
+					}
+				}
 			}
-			const key = `${from.id}->${to.id}`;
-			if (!seenEdges.has(key)) {
-				seenEdges.add(key);
-				edges.push({ from: from.id, to: to.id });
-			}
-		} else if (arrows.length > 2) {
-			problems.push(`line ${no}: chained edges \`${line}\` — write one edge per line (the plan is a map, not a sentence).`);
 		} else {
 			const node = parseEndpoint(line);
 			if (!node) {
 				problems.push(
-					`line ${no}: can't parse \`${line}\` — the plan accepts node lines (\`slug[title]\` — ids are lowercase slugs: a-z, 0-9, hyphens) and requires-edges (\`a --> b\`) only; subgraphs, styles, classes, and other mermaid features are not part of the subset.`,
+					`line ${no}: can't parse \`${line}\` — ids are the strict part (lowercase slugs: a-z, 0-9, hyphens, underscores); node lines (\`slug[title]\`) and requires-edges (\`a --> b\`) are the accepted forms; subgraphs, styles, and classes are not part of the subset.`,
 				);
 				continue;
 			}

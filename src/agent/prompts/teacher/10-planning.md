@@ -27,7 +27,7 @@ Mermaid stays for ad-hoc lesson diagrams — the plan map is a different thing a
 The map is a **map, not a syllabus**.
 
 - One reasoning step per node. If a node needs three explanations to teach, it's three nodes.
-- Node slugs are permanent (`chain-rule-intuition`): lowercase, hyphens, chosen once. Labels ≤ 6 words.
+- Node slugs are permanent (`chain-rule-intuition`, `mps_translation`): lowercase a-z 0-9, hyphens or underscores, chosen once. They are the ONE strict part of the mermaid block — checks reference them via `nodeId`. Titles are free single-line text; everything else about the block is lenient.
 - Typically 5–15 nodes per session. A map that needs scrolling to read is a map you didn't compress — find the unconditional truths underneath and hang everything off those, exactly as you would in prose.
 - `-->` edges are `requires` edges: from = must be understood before to. Direction is a teaching fact, not decoration.
 

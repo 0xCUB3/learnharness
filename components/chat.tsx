@@ -233,37 +233,50 @@ export function Chat({
 		void syncTurns();
 	}, [syncTurns]);
 	// After the learner's own turn ends the log has a fresh entry — and the
-	// persisted transcript may have grown server-authored parts the live
-	// stream can't carry (plan blocks attach at persist). Adopt the record
-	// the moment the server agrees the turn is done: endTurn flips ONLY
-	// after persist, so a not-in-flight record is a complete one — the same
-	// invariant the wake-adoption poll below rides. Poll briefly (the flip
-	// trails the client's stream-end by milliseconds), then adopt once.
+	// Post-turn adoption + the HANDOFF WATCH. Two things can trail our own
+	// stream's end: (1) the server's persist/endTurn — milliseconds, and the
+	// record is only complete once not-in-flight (plan blocks attach at
+	// persist); (2) a WAKE TURN — the probe→teacher handoff fires
+	// ~0.75–1.2s later (the pump's grace), and NO jobs poll is running to
+	// notice it: probe-phase sessions have zero job traffic, so the jobs
+	// poll is switched off and the open client never learns the teacher's
+	// turn exists (the freeze the user hit 2026-09-11 — the sidebar saw
+	// busy→idle while the session sat frozen). So: adopt at the first idle
+	// read as before, then keep watching briefly — if turnInFlight flips
+	// true, hand off to the wake-adoption poll below (busy shimmer, adopt
+	// at finish).
 	const prevStatusRef = useRef(status);
 	useEffect(() => {
 		if (prevStatusRef.current !== "ready" && status === "ready") {
 			// immediate: turns-only refetch — the stats bar updates even while
 			// the server's persist/endTurn lags the client by milliseconds
 			void syncTurns();
-			// deferred: adopt the full record once the server agrees the turn
-			// is done (plan blocks and any other persist-authored parts)
 			let cancelled = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
+			let adopted = false;
+			const WATCH_ATTEMPTS = 8; // 8 × 500ms: persist lag + the ~1.2s handoff
 			const adopt = async (attempt: number) => {
 				if (cancelled) return;
 				try {
 					const res = await fetch(`/api/chats/${chatId}`);
 					if (res.ok) {
 						const record = (await res.json()) as { turnInFlight?: boolean };
-						if (record.turnInFlight !== true) {
-							void syncFromServer();
+						if (!adopted) {
+							// phase 1: wait out our own turn's persist lag, then adopt once
+							if (record.turnInFlight !== true) {
+								adopted = true;
+								void syncFromServer();
+							}
+						} else if (record.turnInFlight === true) {
+							// phase 2 (the watch): a wake turn started — the handoff.
+							setTurnInFlight(true); // → the wake-adoption poll takes over
 							return;
 						}
 					}
 				} catch {
 					/* transient — keep polling */
 				}
-				if (attempt < 8 && !cancelled) timer = setTimeout(() => void adopt(attempt + 1), 500);
+				if (attempt < WATCH_ATTEMPTS && !cancelled) timer = setTimeout(() => void adopt(attempt + 1), 500);
 			};
 			void adopt(0);
 			return () => {

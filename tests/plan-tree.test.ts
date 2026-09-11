@@ -238,15 +238,62 @@ describe("parseMermaidPlan (the constrained mermaid subset)", () => {
 		]);
 	});
 
-	it("rejects: non-slug ids, self-loops, chained edges, subgraphs, missing header, empty", () => {
+	it("rejects: non-slug ids (with the SPECIFIC message), self-loops, subgraphs, missing header, empty", () => {
+		// The muscle-protein post-mortem (2026-09-11): underscore ids died at
+		// the regex layer with a generic message, and the teacher spent four
+		// plan_init calls hunting punctuation the parser didn't care about.
+		// Now EVERY bad id reaches the slug check — the message names the id.
 		assert.ok(!parse("graph TD\n  Foo Bar[x]\n").ok, "id with a space");
 		assert.match(parse("graph TD\n  Foo Bar[x]\n").problems[0]!, /line 2.*slug/);
+		assert.match(parse("graph TD\n  mps.translation[x]\n").problems[0]!, /node id `mps.translation` must be a lowercase slug/);
+		assert.match(parse("graph TD\n  MPS[x]\n").problems[0]!, /node id `MPS` must be a lowercase slug/);
+		assert.match(
+			parse("graph TD\n  a[Alpha] --> mps.translation[Beta]\n").problems[0]!,
+			/node id `mps.translation` must be a lowercase slug/,
+			"bad id inside an edge also gets the specific message",
+		);
 		assert.ok(!parse("graph TD\n  a --> a\n").ok, "self-loop");
-		assert.ok(!parse("graph TD\n  a --> b --> c\n").ok, "chained edge");
-		assert.match(parse("graph TD\n  a --> b --> c\n").problems[0]!, /one edge per line/);
 		assert.ok(!parse("graph TD\n  subgraph cluster\n").ok, "subgraph");
 		assert.ok(!parse("digraph G\n  a\n").ok, "wrong header");
 		assert.ok(!parse("%% only a comment\n").ok, "empty plan");
+	});
+
+	it("free-form pass (2026-09-11): underscores, chains, arrow synonyms, any direction, quoted titles", () => {
+		// Underscores are first-class slug chars — kept verbatim, referenced
+		// verbatim by quiz nodeId.
+		const us = parse("graph TD\n  mps_translation[Ribosomes build protein] --> net_balance[Net balance]\n");
+		assert.ok(us.ok, "underscore ids");
+		assert.deepEqual(us.plan!.nodes, [
+			{ id: "mps_translation", title: "Ribosomes build protein" },
+			{ id: "net_balance", title: "Net balance" },
+		]);
+		// The exact shape the muscle-protein teacher wrote (attempt 1):
+		// quoted titles with colons, commas, equals signs — must just work.
+		const quoted = parse(
+			'graph TD\n  mps_translation["MPS = ribosomes building protein"] --> per_meal["Per-meal dose: ~20-40 g saturates, excess oxidized"]\n',
+		);
+		assert.ok(quoted.ok, "quoted punctuation-rich titles");
+		assert.deepEqual(quoted.plan!.nodes, [
+			{ id: "mps_translation", title: "MPS = ribosomes building protein" },
+			{ id: "per_meal", title: "Per-meal dose: ~20-40 g saturates, excess oxidized" },
+		]);
+		// Chains expand to consecutive pairs.
+		const chain = parse("graph TD\n  a[Alpha] --> b[Bee] --> c[See]\n");
+		assert.ok(chain.ok, "chained edges");
+		assert.deepEqual(chain.plan!.edges, [
+			{ from: "a", to: "b" },
+			{ from: "b", to: "c" },
+		]);
+		// Arrow synonyms ==>, -.-> mean the same as -->.
+		for (const arrow of ["==>", "-.->"]) {
+			const res = parse(`graph TD\n  a ${arrow} b\n`);
+			assert.ok(res.ok, arrow);
+			assert.deepEqual(res.plan!.edges, [{ from: "a", to: "b" }]);
+		}
+		// Any direction header (we layout ourselves).
+		for (const header of ["graph LR", "flowchart RL", "graph BT"]) {
+			assert.ok(parse(`${header}\n  a --> b\n`).ok, header);
+		}
 	});
 
 	it("the first label wins when a node line repeats (relabeling mid-block is ignored)", () => {
