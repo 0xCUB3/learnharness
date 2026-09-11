@@ -33,13 +33,15 @@
 
 import type { UIMessage } from "ai";
 import {
+	buildAbortSteer,
 	buildSubagentSteer,
 	isSubagentFailure,
 	steerDelivered,
 	type JobRecord,
-	type SubagentSteerMessage,
+	type SteerMessage,
 } from "../core/contracts.ts";
 import { findPendingToolCall } from "../core/pending.ts";
+import { fireJobAbort } from "../agent/subagents/aborts.ts";
 import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
 
@@ -50,7 +52,7 @@ export type TurnRunner = (chatId: string, messages: UIMessage[]) => Promise<numb
 export type JobRespawn = (jobId: string) => void;
 
 interface QueuedSteer {
-	steer: SubagentSteerMessage;
+	steer: SteerMessage;
 	resolve: () => void;
 	reject: (reason: Error) => void;
 }
@@ -108,7 +110,7 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function jobIdOf(steer: SubagentSteerMessage): string {
+function jobIdOf(steer: SteerMessage): string {
 	return (steer.metadata as { subagentResult: { jobId: string } }).subagentResult.jobId;
 }
 
@@ -117,7 +119,7 @@ function jobIdOf(steer: SubagentSteerMessage): string {
  * has completed (and the job status flipped); rejects when delivery fails
  * unrecoverably. Never rejects for queueing itself.
  */
-export function deliverJobResult(steer: SubagentSteerMessage): Promise<void> {
+export function deliverJobResult(steer: SteerMessage): Promise<void> {
 	return new Promise<void>((resolve, reject) => {
 		const s = state();
 		const chatId = chatIdOf(steer);
@@ -145,13 +147,13 @@ export function deliverJobResult(steer: SubagentSteerMessage): Promise<void> {
  * before firing, so a claim racing the pump converges to exactly one
  * delivery either way.
  */
-export function claimSteers(chatId: string): SubagentSteerMessage[] {
+export function claimSteers(chatId: string): SteerMessage[] {
 	const s = state();
 	const queue = s.queues.get(chatId);
 	if (!queue || queue.length === 0) return [];
 	const record = stores.chatStore.getChat(chatId);
 	if (!record) return []; // the handler validated the chat; defensive only
-	const claimed: SubagentSteerMessage[] = [];
+	const claimed: SteerMessage[] = [];
 	for (const entry of queue) {
 		const jobId = jobIdOf(entry.steer);
 		if (steerDelivered(record.messages, jobId)) {
@@ -167,7 +169,66 @@ export function claimSteers(chatId: string): SubagentSteerMessage[] {
 	return claimed;
 }
 
-function chatIdOf(steer: SubagentSteerMessage): string {
+/** Result of an abort attempt — the endpoint maps these to HTTP. */
+export interface AbortOutcome {
+	ok: boolean;
+	reason?: "not_found" | "not_running";
+}
+
+/**
+ * ABORT (2026-09 dock semantics, user-decided): real kill, error with
+ * reason, the teacher still learns. The dock's END button reaches this
+ * through POST /api/activity/abort (body {kind: "job", id: jobId}); the
+ * route is master's thin composition — this is the job-side mechanism.
+ * Four things happen, in order:
+ *
+ *   1. KILL the spend: fire the job's registered AbortController (the
+ *      runner registered it at loop start) — the in-flight model call
+ *      aborts, not just the next loop check. The runner unwinds silently
+ *      (its catch checks abortSignal.aborted; finishJob checks status).
+ *   2. DROP any queued result steer for this job (the delivering-result
+ *      phase): resolve its entry without firing the wake. If the wake
+ *      turn is ALREADY in flight (the pump shifted the entry), it's too
+ *      late — the result steer lands, and the cancellation steer dedupes
+ *      against it via steerDelivered (same jobId metadata).
+ *   3. FLIP the record to error "Aborted by learner" immediately — the
+ *      poll reflects the user's action at once (the user chose
+ *      error-with-reason over a distinct cancelled status). finalizeJob
+ *      never overwrites a non-running status, so the flip is terminal no
+ *      matter what the wake does.
+ *   4. STEER the teacher: a one-line abort note (buildAbortSteer) through
+ *      the same wake pipeline, so the teacher's promise of a result
+ *      doesn't hang silently in the lesson.
+ *
+ * The runner writes the usage folded so far in its finally (merge patch),
+ * so an aborted job's money record survives the kill.
+ */
+export function abortJob(jobId: string): AbortOutcome {
+	const job = stores.jobStore.getJob(jobId);
+	if (!job) return { ok: false, reason: "not_found" };
+	if (job.status !== "running") return { ok: false, reason: "not_running" };
+
+	fireJobAbort(jobId); // no-op when the loop already returned (delivering)
+
+	// Drop any queued steers for this job (their deliver() resolves unfired).
+	const queue = state().queues.get(job.chatId);
+	if (queue) {
+		const remaining = queue.filter((e) => jobIdOf(e.steer) !== jobId);
+		if (remaining.length === 0) state().queues.delete(job.chatId);
+		else state().queues.set(job.chatId, remaining);
+		for (const entry of queue) {
+			if (jobIdOf(entry.steer) === jobId) entry.resolve();
+		}
+	}
+
+	stores.jobStore.updateJob(jobId, { status: "error", error: "Aborted by learner", activity: "aborted" });
+	void deliverJobResult(buildAbortSteer(job)).catch(() => {
+			/* deliverJobResult marks the job error on unrecoverable failure */
+	});
+	return { ok: true };
+}
+
+function chatIdOf(steer: SteerMessage): string {
 	// The chat is resolvable from the job record; the steer's metadata
 	// carries jobId, which indexes the store.
 	const jobId = jobIdOf(steer);
@@ -285,6 +346,11 @@ function finalizeJob(jobId: string): void {
 }
 
 function failJob(jobId: string, err: Error): void {
+	// An aborted job stays aborted even when its (abort) steer
+	// delivery fails — the user's action is the terminal fact, not the
+	// delivery error. Non-running records are never overwritten here.
+	const job = stores.jobStore.getJob(jobId);
+	if (!job || job.status !== "running") return;
 	stores.jobStore.updateJob(jobId, { status: "error", error: err.message, activity: "delivery failed" });
 }
 

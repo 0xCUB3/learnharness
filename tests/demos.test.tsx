@@ -49,7 +49,7 @@ import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
 import { createJobRunner, demoModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
 import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
-import { buildSubagentSteer, isSubagentFailure, type SubagentSteerMessage } from "../src/core/contracts.ts";
+import { buildAbortSteer, buildSubagentSteer, isSubagentFailure, type SubagentSteerMessage } from "../src/core/contracts.ts";
 import type { JobRecord } from "../src/core/contracts.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -340,6 +340,18 @@ describe("steer card rendering (the delivered artifact)", () => {
 		assert.match(html, /Figure/);
 		assert.match(html, /svg\]:w-full/, "svg scales to the display area's full width");
 		assert.ok(!html.includes("Looking at the render"), "model-facing notes never render");
+	});
+
+	it("renders the abort chip for an aborted job's steer (2026-09 dock semantics)", () => {
+		const steer = buildAbortSteer({ id: "jc", kind: "research", toolCallId: "cc" });
+		assert.equal(steer.metadata.subagentResult.aborted, true);
+		assert.equal(steer.parts.length, 1, "no artifact part on an abort");
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		assert.match(html, /job-aborted-badge/);
+		assert.match(html, /research/, "the job's kind, lower-cased like the complete-badge idiom");
+		assert.match(html, /aborted by the learner/);
+		// the teacher-facing protocol text never renders for the learner
+		assert.ok(!html.includes("no brief is coming"), "no protocol glue in the chip");
 	});
 
 	it("renders a quiet Research-complete one-liner whose collapsed <details> carries the full brief", () => {
