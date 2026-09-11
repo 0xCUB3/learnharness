@@ -66,9 +66,24 @@ export function withPlanBlocks(messages: UIMessage[], tree: PlanTree | null | un
 	return messages.map((m) => {
 		if (m.role !== "assistant" || m.parts.some((p) => p.type === "data-plan-block")) return m;
 		if (!hasSuccessfulPlanInit(m)) return m;
-		return {
-			...m,
-			parts: [...m.parts, { type: "data-plan-block", id: blockId, data: snapshot(tree, messages) } satisfies PlanBlockPart],
-		};
+		// POSITION, not append: emission runs at persistTurn — after the whole
+		// turn is composed — so appending would bury the block under every
+		// teaching note and quiz of the same turn. The block renders IN FLOW
+		// immediately after the plan_init call it presents (after the LAST
+		// one if a turn carried multiple — a rewrite).
+		const idx = lastIndexOfSuccessfulPlanInit(m.parts);
+		const parts = m.parts.slice();
+		parts.splice(idx + 1, 0, { type: "data-plan-block", id: blockId, data: snapshot(tree, messages) } satisfies PlanBlockPart);
+		return { ...m, parts };
 	});
+}
+
+/** Index of the last tool-plan_init part with an ok output in this message. */
+function lastIndexOfSuccessfulPlanInit(parts: ReadonlyArray<{ type: string }>): number {
+	let idx = -1;
+	parts.forEach((p, i) => {
+		if (p.type !== "tool-plan_init") return;
+		if ((p as { output?: { ok?: unknown } }).output?.ok === true) idx = i;
+	});
+	return idx;
 }

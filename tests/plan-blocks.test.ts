@@ -29,6 +29,17 @@ const TREE: PlanTree = {
 	version: 1,
 };
 
+/** A rewrite fixture: 3 fresh nodes (x, y, z), different from TREE. */
+const TREE2: PlanTree = {
+	nodes: [
+		{ id: "x", title: "X" },
+		{ id: "y", title: "Y" },
+		{ id: "z", title: "Z" },
+	],
+	edges: [{ from: "x", to: "y" }, { from: "y", to: "z" }],
+	version: 2,
+};
+
 /** An assistant message carrying a successful plan_init with the fixture tree. */
 function planInitMessage(id: string, tree: PlanTree = TREE): UIMessage {
 	return {
@@ -39,6 +50,11 @@ function planInitMessage(id: string, tree: PlanTree = TREE): UIMessage {
 			{ type: "tool-plan_init", state: "output-available", output: { ok: true, tree } },
 		],
 	} as unknown as UIMessage;
+}
+
+/** A message built from raw parts (positional tests need exact part arrays). */
+function msg(role: string, parts: unknown[]): UIMessage {
+	return { id: `m_${Math.random().toString(36).slice(2, 8)}`, role, parts } as unknown as UIMessage;
 }
 
 function blocksOf(messages: UIMessage[]): PlanBlockPart[] {
@@ -83,6 +99,40 @@ test("withPlanBlocks: a plan REWRITE (second successful plan_init) gets its own 
 	const blocks = blocksOf(out);
 	assert.equal(blocks.length, 2, "one full block per authoring event");
 	assert.equal(blocks[1]!.data.nodes.length, 3);
+});
+
+test("withPlanBlocks: the block renders IN FLOW immediately after the plan_init part — not appended under the turn's later parts", () => {
+	// Real-world shape (user session chat_mtwgb9lj): the authoring turn
+	// carries plan_init, then presentation prose, then quiz calls — emission
+	// runs at persistTurn AFTER all of that exists.
+	const turn = msg("assistant", [
+		{ type: "step-start" },
+		{ type: "tool-plan_init", state: "output-available", output: { ok: true, tree: TREE } },
+		{ type: "step-start" },
+		{ type: "text", state: "done", text: "Here's the plan." },
+		{ type: "tool-quiz", state: "input-available", input: { question: "q?" } },
+	]);
+	const out = withPlanBlocks([turn], TREE);
+	const types = out[0]!.parts.map((p) => p.type);
+	assert.equal(types[2], "data-plan-block", "the block directly follows the plan_init part");
+	assert.equal(types.indexOf("data-plan-block"), 2);
+	assert.ok(types.indexOf("data-plan-block") < types.indexOf("text"), "block before the prose");
+	assert.ok(types.indexOf("data-plan-block") < types.indexOf("tool-quiz"), "block before the first check");
+	assert.equal(types.at(-1), "tool-quiz", "the quiz is still the turn's last part");
+});
+
+test("withPlanBlocks: with multiple plan_inits in one turn (a rewrite), the block follows the LAST one", () => {
+	const turn = msg("assistant", [
+		{ type: "tool-plan_init", state: "output-available", output: { ok: true, tree: TREE } },
+		{ type: "text", state: "done", text: "v1" },
+		{ type: "tool-plan_init", state: "output-available", output: { ok: true, tree: TREE2 } },
+		{ type: "text", state: "done", text: "v2" },
+	]);
+	const out = withPlanBlocks([turn], TREE2);
+	const types = out[0]!.parts.map((p) => p.type);
+	assert.equal(types[3], "data-plan-block", "block directly after the last successful init");
+	assert.equal(types[4], "text", "the trailing prose stays after the block");
+	assert.equal(out[0]!.parts.filter((p) => p.type === "data-plan-block").length, 1, "one block per message even on a same-turn rewrite");
 });
 
 test("withPlanBlocks: quizzes alone emit nothing (no neighborhood blocks anymore)", () => {
