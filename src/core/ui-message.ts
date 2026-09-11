@@ -1,5 +1,5 @@
 import type { UIMessage } from "ai";
-import type { DemoToolInput, ResearchToolInput, SubagentArtifactData, VisualToolInput } from "./contracts.ts";
+import type { DemoToolInput, PlanBlockData, ResearchToolInput, SubagentArtifactData, VisualToolInput } from "./contracts.ts";
 import type { AskToolInput, QuestionAnswerData, QuizToolInput } from "./question-core.ts";
 
 /**
@@ -24,6 +24,8 @@ export type TeacherUITools = {
 
 export type TeacherUIDataParts = {
 	"subagent-artifact": SubagentArtifactData;
+	/** Plan blocks (wave 4): frozen plan snapshots rendered in the chat flow. */
+	"plan-block": PlanBlockData;
 };
 
 export type TeacherUIMessage = UIMessage<unknown, TeacherUIDataParts, TeacherUITools>;
