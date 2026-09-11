@@ -31,18 +31,23 @@ import type { UIMessage } from "ai";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import {
+	accumulateJobUsage,
+	buildAbortSteer,
 	buildSubagentSteer,
 	isSubagentFailure,
 	steerDelivered,
 	type DemoResult,
+	type JobUsage,
 	type ResearchResult,
+	type SteerMessage,
 	type SubagentSteerMessage,
 	type VisualResult,
 } from "../src/core/contracts.ts";
 import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { claimSteers, deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
+import { abortJob, claimSteers, deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
+import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { persistTurn, withMessageIds } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
@@ -168,6 +173,57 @@ describe("steer helpers (contracts.ts)", () => {
 		assert.ok(data.type === "data-subagent-artifact");
 		assert.equal(data.data.kind, "research");
 		assert.deepEqual(data.data.result, research);
+	});
+
+	it("accumulateJobUsage: sums per model call; fields NO call reported stay undefined (absent is not zero)", () => {
+		let total: JobUsage | undefined = undefined;
+		total = accumulateJobUsage(total, "z-ai/glm-5.3-flash", {
+			inputTokens: 10,
+			outputTokens: 5,
+			inputTokenDetails: { cacheReadTokens: 4 },
+		});
+		assert.deepEqual(total, {
+			model: "z-ai/glm-5.3-flash",
+			inputTokens: 10,
+			outputTokens: 5,
+			cacheReadTokens: 4,
+			cacheWriteTokens: undefined,
+			reasoningTokens: undefined,
+			steps: 1,
+			lastStep: {
+				inputTokens: 10,
+				outputTokens: 5,
+				cacheReadTokens: 4,
+				cacheWriteTokens: undefined,
+				reasoningTokens: undefined,
+			},
+		}, "lastStep is the most recent call's accounting, not cumulative");
+		// a later call that reports nothing new keeps reported fields summing
+		// (unreported contributes 0) and bumps the billing step count.
+		total = accumulateJobUsage(total, "z-ai/glm-5.3-flash", { inputTokens: 20, outputTokens: 0 });
+		assert.equal(total.inputTokens, 30);
+		assert.equal(total.outputTokens, 5);
+		assert.equal(total.cacheReadTokens, 4, "unreported after reported contributes 0");
+		assert.equal(total.cacheWriteTokens, undefined, "never reported stays absent — never zero");
+		assert.equal(total.reasoningTokens, undefined);
+		assert.equal(total.steps, 2, "one step per model call, reported or not");
+		assert.deepEqual(total.lastStep, {
+			inputTokens: 20,
+			outputTokens: 0,
+			cacheReadTokens: undefined,
+			cacheWriteTokens: undefined,
+			reasoningTokens: undefined,
+		}, "lastStep always mirrors the LATEST call, never the sums");
+	});
+
+	it("buildAbortSteer: metadata-aborted, text-only (no artifact), same deterministic id space as the result steer", () => {
+		const steer = buildAbortSteer({ id: "job_c", kind: "demo", toolCallId: "call-c" });
+		assert.equal(steer.id, "steer_job_c", "same id space — steerDelivered treats either as delivered");
+		assert.equal(steer.role, "user");
+		assert.equal(steer.metadata.subagentResult.aborted, true);
+		assert.equal(steer.metadata.subagentResult.jobId, "job_c");
+		assert.equal(steer.parts.length, 1);
+		assert.ok(steer.parts[0]!.type === "text" && /aborted/.test(steer.parts[0].text));
 	});
 
 	it("isSubagentFailure: failure shapes only (empty html/svg, failure brief)", () => {
@@ -834,5 +890,194 @@ describe("prompt composition", () => {
 			assert.ok(body.length <= 8_000, `fragment ${f} is ${body.length} chars — over the 8k guard`);
 		}
 		assert.ok(composeInstructions().length <= 60_000, "composed system prompt over the 60k guard");
+	});
+});
+
+// ─── abort (2026-09 semantics: real kill, cancelled status, teacher told) ───
+
+describe("abort (src/server/jobs.ts abortJob)", () => {
+	/** A hanging model that only settles when its abort signal fires — the
+	 *  real-kill path: the in-flight call itself is killed. */
+	function hangingModel(): MockLanguageModelV4 {
+		return new MockLanguageModelV4({
+			doGenerate: ({ abortSignal }) =>
+				new Promise((_resolve, reject) => {
+					// an ALREADY-aborted signal never fires the event — real
+					// providers reject an aborted fetch at once, the mock must too
+					if (abortSignal?.aborted) {
+						reject(new DOMException("The operation was aborted", "AbortError"));
+						return;
+					}
+					abortSignal?.addEventListener("abort", () => {
+						reject(new DOMException("The operation was aborted", "AbortError"));
+					});
+				}),
+		});
+	}
+
+	/** One step (with usage) then a hang — proves usage-so-far survives the kill. */
+	function oneStepThenHangModel(): MockLanguageModelV4 {
+		let turn = 0;
+		return new MockLanguageModelV4({
+			doGenerate: ({ abortSignal }) => {
+				turn++;
+				if (turn === 1) {
+					return Promise.resolve({
+						content: [
+							{
+								type: "tool-call" as const,
+								toolCallId: "ws1",
+								toolName: "web_search",
+								input: JSON.stringify({ query: "anything" }),
+							},
+						],
+						finishReason: { unified: "tool-calls" as const, raw: "tool-calls" },
+						usage: usage(),
+						warnings: [],
+					});
+				}
+				return new Promise((_resolve, reject) => {
+					if (abortSignal?.aborted) {
+						reject(new DOMException("The operation was aborted", "AbortError"));
+						return;
+					}
+					abortSignal?.addEventListener("abort", () => {
+						reject(new DOMException("The operation was aborted", "AbortError"));
+					});
+				});
+			},
+		});
+	}
+
+	function newChatWithResearchJob(label: string, toolCallId: string): { chatId: string; jobId: string } {
+		const chat = chatStore.createChat(`Test: ${label}`);
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
+			{
+				id: "a1",
+				role: "assistant",
+				parts: [
+					{ type: "text", text: "Checking." },
+					{ type: "tool-research", toolCallId, state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." },
+				],
+			},
+		] as never);
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId });
+		trackJob(job.id);
+		return { chatId: chat.id, jobId: job.id };
+	}
+
+	it("kills the running loop: error \"Aborted by learner\" immediately, loop unwinds silently, teacher gets the abort steer", async () => {
+		const { jobId } = newChatWithResearchJob("abort running job", "call-abort1");
+		const fired: SteerMessage[] = [];
+		setTurnRunner(async (_cid, messages) => {
+			fired.push(messages[messages.length - 1] as SteerMessage);
+			return 200;
+		});
+		researchModelOverride.current = hangingModel();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: async () => {
+				throw new Error("a cancelled job must never deliver a result steer");
+			},
+		});
+		try {
+			const settled = runner.runJob(jobId, RESEARCH_INPUT);
+			await waitFor(() => jobStore.getJob(jobId)!.activity === "researching", 8000, "loop started");
+
+			const outcome = abortJob(jobId);
+			assert.ok(outcome.ok);
+			const killed = jobStore.getJob(jobId)!;
+			assert.equal(killed.status, "error", "flipped synchronously — the poll sees it at once");
+			assert.equal(killed.error, "Aborted by learner", "abort reads as an error with a reason, not a failure");
+			assert.equal(killed.activity, "aborted");
+
+			await settled; // unwinds — no hang
+			assert.equal(jobStore.getJob(jobId)!.status, "error", "the runner never overwrites the flip");
+			assert.equal(jobStore.getJob(jobId)!.error, "Aborted by learner");
+			assert.equal(jobStore.getJob(jobId)!.result, undefined, "no result on an aborted job");
+
+			await waitFor(() => fired.length > 0, 8000, "abort wake fired");
+			const last = fired[0]!;
+			assert.equal(last.metadata.subagentResult.aborted, true);
+			assert.equal(last.id, `steer_${jobId}`);
+			assert.equal(last.parts.length, 1, "text only — no artifact part");
+			// aborted is terminal: the wake completing must not flip it
+			assert.equal(jobStore.getJob(jobId)!.status, "error", "terminal after the wake");
+		} finally {
+			researchModelOverride.current = undefined;
+		}
+	});
+
+	it("the usage folded so far survives the kill (money channel outlives the abort)", async () => {
+		const restoreFetch = stubFetch();
+		try {
+			const { jobId } = newChatWithResearchJob("abort keeps usage", "call-abort2");
+			setTurnRunner(async () => 200);
+			researchModelOverride.current = oneStepThenHangModel();
+			const runner = createJobRunner({ chatStore, jobStore, deliver: async () => {} });
+			try {
+				const settled = runner.runJob(jobId, RESEARCH_INPUT);
+				await waitFor(() => (jobStore.getJob(jobId)!.usage?.steps ?? 0) === 1, 8000, "first step folded");
+				abortJob(jobId);
+				await settled;
+				const job = jobStore.getJob(jobId)!;
+				assert.equal(job.status, "error");
+			assert.equal(job.error, "Aborted by learner");
+				assert.equal(job.usage!.steps, 1, "usage-so-far persisted by the runner's finally");
+				assert.equal(job.usage!.model, "z-ai/glm-5.3-flash", "the config role's OpenRouter id");
+				assert.equal(job.usage!.inputTokens, 10);
+				assert.equal(job.usage!.outputTokens, 5);
+			} finally {
+				researchModelOverride.current = undefined;
+			}
+		} finally {
+			restoreFetch();
+		}
+	});
+
+	it("aborting a delivering job drops the queued result steer and wakes with the abort note instead", async () => {
+		const chat = chatStore.createChat("Test: abort delivering job");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] }] as never);
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-abort3" });
+		trackJob(job.id);
+		const result: ResearchResult = { brief: "Done: it works.", sources: [{ title: "s", url: "https://x.test" }] };
+		jobStore.updateJob(job.id, { result, activity: "delivering result" });
+
+		// Block the pump's idle gates so the result steer sits QUEUED, not in flight.
+		assert.ok(beginTurn(chat.id));
+		const fired: SteerMessage[] = [];
+		setTurnRunner(async (_cid, messages) => {
+			fired.push(messages[messages.length - 1] as SteerMessage);
+			return 200;
+		});
+		void deliverJobResult(buildSubagentSteer(job, result)).catch(() => {
+			/* dropped by the abort below */
+		});
+		await waitFor(() => jobStore.getJob(job.id)!.activity === "delivering result", 8000, "queued");
+
+		const outcome = abortJob(job.id);
+		assert.ok(outcome.ok);
+		assert.equal(jobStore.getJob(job.id)!.status, "error");
+		assert.equal(jobStore.getJob(job.id)!.error, "Aborted by learner");
+
+		endTurn(chat.id); // gates open — whatever is left in the queue fires
+		await waitFor(() => fired.length > 0, 8000, "wake fired");
+		assert.equal(fired.length, 1, "exactly one delivery — the result steer was dropped");
+		assert.equal(fired[0]!.metadata.subagentResult.aborted, true, "the abort steer, not the result");
+		assert.equal(jobStore.getJob(job.id)!.status, "error", "terminal after the wake");
+	});
+
+	it("outcome reasons: not_found for unknown, not_running for settled jobs", () => {
+		assert.deepEqual(abortJob("job_does_not_exist"), { ok: false, reason: "not_found" });
+		const chat = chatStore.createChat("Test: abort settled job");
+		trackChat(chat.id);
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-abort4" });
+		trackJob(job.id);
+		jobStore.updateJob(job.id, { status: "done", activity: "delivered" });
+		assert.deepEqual(abortJob(job.id), { ok: false, reason: "not_running" });
 	});
 });

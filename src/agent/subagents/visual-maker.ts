@@ -1,7 +1,7 @@
 import { generateText, tool, type LanguageModel, type ModelMessage, type ToolResultPart } from "ai";
 import { z } from "zod";
 import { modelFor } from "../models.ts";
-import type { VisualResult } from "../../core/contracts.ts";
+import type { UsageStepLike, VisualResult } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
 
 /**
@@ -37,6 +37,11 @@ export interface VisualMakerOptions {
 	maxIterations?: number;
 	/** Live activity-line callback (updates the job record). */
 	onActivity?: (line: string) => void;
+	/** Kills the run mid-model-call (2026-09 real-kill abort semantics). */
+	abortSignal?: AbortSignal;
+	/** Money channel: one call per loop iteration (generateText), folded
+	 * into JobRecord.usage. */
+	onUsage?: (usage: UsageStepLike) => void;
 }
 
 const INSTRUCTIONS = `You are a visual maker — a diagram author + renderer for precise, spatial figures. You
@@ -135,7 +140,15 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 
 	try {
 		for (let iteration = 0; iteration < maxIterations; iteration++) {
-			const result = await generateText({ model: opts.model ?? modelFor("visualMaker"), system: INSTRUCTIONS, messages, tools });
+			const result = await generateText({
+				model: opts.model ?? modelFor("visualMaker"),
+				system: INSTRUCTIONS,
+				messages,
+				tools,
+				abortSignal: opts.abortSignal,
+			});
+			// Money channel: each iteration is one model call.
+			opts.onUsage?.(result.usage);
 			messages = [...messages, ...result.response.messages];
 
 			const toolCalls = result.toolCalls;

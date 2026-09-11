@@ -1,16 +1,21 @@
 import { isToolUIPart, type LanguageModel, type UIMessage } from "ai";
 import {
+	accumulateJobUsage,
 	buildSubagentSteer,
 	type DemoResult,
 	type DemoToolInput,
 	type JobKind,
 	type JobRecord,
+	type JobUsage,
 	type ResearchResult,
 	type ResearchToolInput,
 	type SubagentSteerMessage,
+	type UsageStepLike,
 	type VisualResult,
 	type VisualToolInput,
 } from "../../core/contracts.ts";
+import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
+import { MODELS } from "../../../config.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { createResearcherAgent } from "./researcher.ts";
@@ -67,16 +72,70 @@ export interface JobRunner {
 	runJob(jobId: string, input?: ResearchToolInput | DemoToolInput | VisualToolInput): Promise<void>;
 }
 
+/** One job loop's injected machinery: the kill switch (real abort, 2026-09
+ * semantics) and the usage tap (money channel — every model call folds into
+ * JobRecord.usage as it completes). */
+interface LoopContext {
+	/** Fires when abortJob kills the run; abortSignal is passed into every
+	 * model call so the spend stops mid-call, not at the next loop check. */
+	abortSignal: AbortSignal;
+	/** Fold one model call's usage into the job record (progress write). */
+	onUsage: (step: UsageStepLike) => void;
+}
+
+/** The OpenRouter model id for a job kind — JobUsage.model. The kind→role
+ * table mirrors MODELS in config.ts (research→researcher, demo→demoBuilder,
+ * visual→visualMaker); the id is taken from config so a price-table sync
+ * re-prices jobs for free. Model overrides (tests) still bill under the
+ * configured model — usage is what is being captured, not which instance. */
+const KIND_MODEL: Record<JobKind, string> = {
+	research: MODELS.researcher.model,
+	demo: MODELS.demoBuilder.model,
+	visual: MODELS.visualMaker.model,
+};
+
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	const { chatStore, jobStore, deliver } = deps;
+
+	/** Running usage totals per live job (the loop's onUsage folds here,
+	 * then writes through the job store so the poll sees progress). */
+	const usageTotals = new Map<string, JobUsage>();
+
+	function makeLoopContext(jobId: string, kind: JobKind): LoopContext {
+		const model = KIND_MODEL[kind];
+		// Real-kill wiring (2026-09 abort semantics): the controller is what
+		// the abort endpoint fires (agent/subagents/aborts.ts registry); the
+		// signal rides into every model call of the loop.
+		const controller = new AbortController();
+		registerJobAbort(jobId, controller);
+		return {
+			abortSignal: controller.signal,
+			onUsage: (step) => {
+				const next = accumulateJobUsage(usageTotals.get(jobId), model, step);
+				usageTotals.set(jobId, next);
+				jobStore.updateJob(jobId, { usage: next }); // merge patch — status untouched
+			},
+		};
+	}
+
+	/** True while the job may still write terminal state (result, error,
+	 * steer). False once abortJob has flipped it to error ("Aborted by learner") —
+	 * the runner then unwinds silently; the abort path owns the record and
+	 * the abort steer. */
+	function stillRunning(jobId: string): boolean {
+		return jobStore.getJob(jobId)?.status === "running";
+	}
 
 	/** The kind→runner map: one sub-agent loop per job kind. */
 	// Each kind's runner narrows the union input itself (dispatch-time inputs
 	// are kind-correct by construction; transcript fallbacks are cast after).
-	const KIND_RUNNERS: Record<JobKind, (jobId: string, input?: JobToolInput) => Promise<void>> = {
-		research: (jobId, input) => runResearchJob(jobId, researchModelOverride.current, input),
-		demo: (jobId, input) => runDemoJob(jobId, demoModelOverride.current, input),
-		visual: (jobId, input) => runVisualJob(jobId, visualModelOverride.current, input),
+	const KIND_RUNNERS: Record<
+		JobKind,
+		(jobId: string, input: JobToolInput | undefined, loop: LoopContext) => Promise<void>
+	> = {
+		research: (jobId, input, loop) => runResearchJob(jobId, researchModelOverride.current, input, loop),
+		demo: (jobId, input, loop) => runDemoJob(jobId, demoModelOverride.current, input, loop),
+		visual: (jobId, input, loop) => runVisualJob(jobId, visualModelOverride.current, input, loop),
 	};
 
 	async function runJob(jobId: string, input?: JobToolInput): Promise<void> {
@@ -92,7 +151,17 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			jobStore.updateJob(jobId, { status: "error", error: `unknown kind ${job.kind}`, activity: "failed" });
 			return;
 		}
-		await run(jobId, input);
+		try {
+			await run(jobId, input, makeLoopContext(jobId, job.kind));
+		} finally {
+			unregisterJobAbort(jobId);
+			// The last usage write may have been mid-flight when the loop died;
+			// persist what was folded (the abort path patches only status, so
+			// this never resurrects an aborted job — merge patch).
+			const usage = usageTotals.get(jobId);
+			if (usage) jobStore.updateJob(jobId, { usage });
+			usageTotals.delete(jobId);
+		}
 	}
 
 	/** Resolve the job's tool input: dispatch passes it directly; only a
@@ -132,6 +201,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	async function finishJob(jobId: string, result: ResearchResult | DemoResult | VisualResult): Promise<void> {
 		const job = jobStore.getJob(jobId);
 		if (!job) return;
+		// Aborted mid-run or mid-delivery (abortJob flips the record before
+		// the loop unwinds): no result write, no steer — the abort path owns
+		// the record and queues the abort steer itself.
+		if (job.status !== "running") return;
 		jobStore.updateJob(jobId, { result, activity: "delivering result" });
 		const steer = buildSubagentSteer(job, result);
 		try {
@@ -157,7 +230,12 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 	// ─── research ───────────────────────────────────────────────────────────
 
-	async function runResearchJob(jobId: string, model?: LanguageModel, passedInput?: JobToolInput): Promise<void> {
+	async function runResearchJob(
+		jobId: string,
+		model: LanguageModel | undefined,
+		passedInput: JobToolInput | undefined,
+		loop: LoopContext,
+	): Promise<void> {
 		const ctx = jobContext(jobId);
 		if (!ctx) return;
 		const { job } = ctx;
@@ -181,6 +259,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			jobStore.updateJob(jobId, { activity: "researching" });
 			const result = await agent.generate({
 				prompt,
+				abortSignal: loop.abortSignal,
+				// Money channel: each agent step is one model call — fold its
+				// usage into the record as it completes (progress write).
+				onStepFinish: ({ usage }) => loop.onUsage(usage),
 				onToolExecutionStart: ({ toolCall }) => {
 					const input = toolCall.input as { query?: string; url?: string } | undefined;
 					if (toolCall.toolName === "web_fetch" && typeof input?.url === "string") {
@@ -195,15 +277,24 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			const research: ResearchResult = { brief, sources: parseSources(brief, fetchedUrls) };
 			await finishJob(jobId, research);
 		} catch (err) {
+			// Real-kill abort (2026-09): the abort path flipped the record and
+			// queued the abort steer — unwind silently, keep the usage
+			// folded so far (flushed by runJob's finally).
+			if (loop.abortSignal.aborted) return;
 			const reason = err instanceof Error ? err.message : String(err);
-			jobStore.updateJob(jobId, { error: reason });
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 			await finishJob(jobId, { brief: `Research failed: ${reason}`, sources: [] });
 		}
 	}
 
 	// ─── demo + visual ──────────────────────────────────────────────────────
 
-	async function runDemoJob(jobId: string, model?: LanguageModel, passedInput?: JobToolInput): Promise<void> {
+	async function runDemoJob(
+		jobId: string,
+		model: LanguageModel | undefined,
+		passedInput: JobToolInput | undefined,
+		loop: LoopContext,
+	): Promise<void> {
 		const ctx = jobContext(jobId);
 		if (!ctx) return;
 		const { job } = ctx;
@@ -218,19 +309,28 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				{ title, brief },
 				{
 					model,
+					abortSignal: loop.abortSignal,
+					onUsage: loop.onUsage,
 					onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 				},
 			);
-			if (isDemoFailure(result)) jobStore.updateJob(jobId, { error: result.notes ?? "demo build failed" });
+			if (isDemoFailure(result) && stillRunning(jobId))
+				jobStore.updateJob(jobId, { error: result.notes ?? "demo build failed" });
 			await finishJob(jobId, result);
 		} catch (err) {
+			if (loop.abortSignal.aborted) return;
 			const reason = err instanceof Error ? err.message : String(err);
-			jobStore.updateJob(jobId, { error: reason });
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 			await finishJob(jobId, { title, html: "", tested: true, notes: `FAILED: ${reason}` });
 		}
 	}
 
-	async function runVisualJob(jobId: string, model?: LanguageModel, passedInput?: JobToolInput): Promise<void> {
+	async function runVisualJob(
+		jobId: string,
+		model: LanguageModel | undefined,
+		passedInput: JobToolInput | undefined,
+		loop: LoopContext,
+	): Promise<void> {
 		const ctx = jobContext(jobId);
 		if (!ctx) return;
 		const { job } = ctx;
@@ -244,14 +344,18 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 				{ brief },
 				{
 					model,
+					abortSignal: loop.abortSignal,
+					onUsage: loop.onUsage,
 					onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 				},
 			);
-			if (isVisualFailure(result)) jobStore.updateJob(jobId, { error: result.notes ?? "visual build failed" });
+			if (isVisualFailure(result) && stillRunning(jobId))
+				jobStore.updateJob(jobId, { error: result.notes ?? "visual build failed" });
 			await finishJob(jobId, result);
 		} catch (err) {
+			if (loop.abortSignal.aborted) return;
 			const reason = err instanceof Error ? err.message : String(err);
-			jobStore.updateJob(jobId, { error: reason });
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 			await finishJob(jobId, { svg: "", notes: `FAILED: ${reason}` });
 		}
 	}
