@@ -1,7 +1,7 @@
 import { ToolLoopAgent, stepCountIs, tool, type LanguageModel, type ToolSet } from "ai";
 import { z } from "zod";
 import { modelFor } from "../models.ts";
-import type { DemoResult } from "../../core/contracts.ts";
+import type { DemoResult, UsageStepLike } from "../../core/contracts.ts";
 import { getHeadless, type DemoRunResult, type HeadlessApi } from "./headless.ts";
 
 /**
@@ -32,6 +32,10 @@ export interface DemoBuilderOptions {
 	maxSteps?: number;
 	/** Live activity-line callback (updates the job record). */
 	onActivity?: (line: string) => void;
+	/** Kills the run mid-model-call (2026-09 real-kill abort semantics). */
+	abortSignal?: AbortSignal;
+	/** Money channel: one call per agent step, folded into JobRecord.usage. */
+	onUsage?: (usage: UsageStepLike) => void;
 }
 
 const INSTRUCTIONS = `You are a demo builder — a specialist sub-agent inside a learning application. You
@@ -189,6 +193,8 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 	try {
 		const result = await agent.generate({
 			prompt,
+			abortSignal: opts.abortSignal,
+			onStepFinish: ({ usage }) => opts.onUsage?.(usage),
 			onToolExecutionStart: ({ toolCall }) => {
 				opts.onActivity?.(toolCall.toolName);
 			},

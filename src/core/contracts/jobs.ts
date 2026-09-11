@@ -7,6 +7,7 @@
  * of "ai" (safe everywhere: server, client, tests). See docs/vision.md.
  */
 import type { UIMessage } from "ai";
+import type { CallUsage } from "./chat.ts";
 
 // ─── Async sub-agent jobs (vision §2.5; plan.md Wave 0 protocol) ────────────
 
@@ -36,18 +37,64 @@ export interface JobRecord {
 
 /** A sub-agent run's accumulated usage — the same accounting shape as a
  * chat turn (contracts/chat.ts CallUsage), flattened to one running total
- * plus a step count. */
+ * plus a step count. Token fields are optional exactly like CallUsage: a
+ * field NO model call reported stays undefined — absent is not zero (the
+ * money-channel doctrine; cost renders "—", never $0). */
 export interface JobUsage {
 	/** The OpenRouter model id that ran the sub-agent. */
 	model: string;
 	/** Running totals summed over the run's model calls so far. */
-	inputTokens: number;
-	outputTokens: number;
-	cacheReadTokens: number;
-	cacheWriteTokens: number;
-	reasoningTokens: number;
+	inputTokens: number | undefined;
+	outputTokens: number | undefined;
+	cacheReadTokens: number | undefined;
+	cacheWriteTokens: number | undefined;
+	reasoningTokens: number | undefined;
 	/** How many model calls the run has made (each bills separately). */
 	steps: number;
+	/** The MOST RECENT model call's accounting (2026-09 dock contract): the
+	 * per-blob context line reads last-step input+output against the model's
+	 * CONTEXT_LIMITS — never the cumulative totals. Absent until the first
+	 * call completes; absent provider fields stay absent (never zero). */
+	lastStep?: CallUsage;
+}
+
+/** The per-model-call usage shape we fold into JobUsage — the SDK's
+ * LanguageModelUsage narrowed structurally (no runtime "ai" import: any
+ * object with these fields folds, including the real thing and test fakes). */
+export interface UsageStepLike {
+	inputTokens?: number | undefined;
+	inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number } | undefined;
+	outputTokens?: number | undefined;
+	outputTokenDetails?: { reasoningTokens?: number } | undefined;
+}
+
+/** Fold one model call's usage into the run's running total (pure). A
+ * field neither the total nor the step reported stays undefined; once
+ * reported, later unreported calls contribute 0. The `steps` counter is
+ * the billing count: one per model call, reported or not. */
+export function accumulateJobUsage(
+	total: JobUsage | undefined,
+	model: string,
+	step: UsageStepLike,
+): JobUsage {
+	const add = (a: number | undefined, b: number | undefined): number | undefined =>
+		a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
+	return {
+		model,
+		inputTokens: add(total?.inputTokens, step.inputTokens),
+		outputTokens: add(total?.outputTokens, step.outputTokens),
+		cacheReadTokens: add(total?.cacheReadTokens, step.inputTokenDetails?.cacheReadTokens),
+		cacheWriteTokens: add(total?.cacheWriteTokens, step.inputTokenDetails?.cacheWriteTokens),
+		reasoningTokens: add(total?.reasoningTokens, step.outputTokenDetails?.reasoningTokens),
+		steps: (total?.steps ?? 0) + 1,
+		lastStep: {
+			inputTokens: step.inputTokens,
+			outputTokens: step.outputTokens,
+			cacheReadTokens: step.inputTokenDetails?.cacheReadTokens,
+			cacheWriteTokens: step.inputTokenDetails?.cacheWriteTokens,
+			reasoningTokens: step.outputTokenDetails?.reasoningTokens,
+		},
+	};
 }
 
 /**
@@ -155,6 +202,11 @@ export interface SubagentResultMeta {
 	jobId: string;
 	kind: JobKind;
 	toolCallId: string;
+	/** Present only on an abort steer (2026-09 abort semantics): the
+	 * learner aborted the job (it lands as error "Aborted by learner");
+	 * the teacher is told so its promise of a result doesn't hang
+	 * silently in the lesson. */
+	aborted?: true;
 }
 
 /** The data-subagent-artifact part payload: what the UI renders. */
@@ -177,6 +229,20 @@ export interface SubagentSteerMessage extends UIMessage {
 		{ type: "data-subagent-artifact"; data: SubagentArtifactData },
 	];
 }
+
+/** The abort steer: user-role like any steer, but NO artifact part —
+ * there is no result to render, only the teacher-facing text. Shares the
+ * result steer's deterministic id space (`steer_${jobId}`): steerDelivered
+ * matches on metadata jobId, so an abort and a (racing) result steer
+ * can never BOTH deliver — exactly one wakes the teacher. */
+export interface AbortSteerMessage extends UIMessage {
+	role: "user";
+	metadata: { subagentResult: SubagentResultMeta & { aborted: true } };
+	parts: [{ type: "text"; text: string }];
+}
+
+/** Anything the wake pipeline may queue and deliver. */
+export type SteerMessage = SubagentSteerMessage | AbortSteerMessage;
 
 /** Whether a result is the failure shape (html/svg empty, failure brief). */
 export function isSubagentFailure(kind: JobKind, result: ResearchResult | DemoResult | VisualResult): boolean {
@@ -232,6 +298,32 @@ export function buildSubagentSteer(
 			{ type: "data-subagent-artifact", data: { kind: job.kind, result } },
 		],
 	};
+}
+
+/** Build the abort steer for an aborted job (pure — shared by the
+ * abort path in src/server/jobs.ts and tests). Same id space as the result
+ * steer; see AbortSteerMessage. */
+export function buildAbortSteer(
+	job: Pick<JobRecord, "id" | "kind" | "toolCallId">,
+): AbortSteerMessage {
+	return {
+		id: `steer_${job.id}`,
+		role: "user",
+		metadata: {
+			subagentResult: { jobId: job.id, kind: job.kind, toolCallId: job.toolCallId, aborted: true },
+		},
+		parts: [{ type: "text", text: abortText(job.kind) }],
+	};
+}
+
+/** What the teacher reads: one line telling it the result is not coming,
+ * how to acknowledge, and that re-dispatching is allowed. */
+function abortText(kind: JobKind): string {
+	if (kind === "research")
+		return "Research aborted — the learner aborted the research job, so no brief is coming. Acknowledge it in one line and continue teaching without it (or offer to re-dispatch it).";
+	if (kind === "demo")
+		return "The demo job was aborted by the learner — no demo is coming. Acknowledge it in one line and teach the topic in prose instead (a re-dispatch is fine if the learner wants it).";
+	return "The figure job was aborted by the learner — no figure is coming. Acknowledge it in one line and teach without it (a re-dispatch is fine if the learner wants it).";
 }
 
 /** True when the transcript already carries this job's steer (idempotent delivery). */

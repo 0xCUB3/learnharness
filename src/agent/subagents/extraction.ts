@@ -1,7 +1,15 @@
 import { ToolLoopAgent, stepCountIs, tool, type LanguageModel, type UIMessage } from "ai";
 import { z } from "zod";
 import { modelFor } from "../models.ts";
-import type { AuditResult, ChatRecord, GraphNode, SessionFindings } from "../../core/contracts.ts";
+import type {
+	AuditResult,
+	CallUsage,
+	ChatRecord,
+	ExtractionRunUsage,
+	ExtractionStageUsage,
+	GraphNode,
+	SessionFindings,
+} from "../../core/contracts.ts";
 import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
 
 /**
@@ -211,12 +219,6 @@ function createExtractor(model: LanguageModel) {
 			}),
 		},
 		stopWhen: stepCountIs(4),
-		// One line per step: a background worker's progress must be legible
-		// from the server log (§5 observability baseline).
-		onStepFinish: (step) =>
-			console.info(
-				`[extraction] extractor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
-			),
 	});
 }
 
@@ -300,10 +302,6 @@ function createAuditor(model: LanguageModel) {
 			}),
 		},
 		stopWhen: stepCountIs(4),
-		onStepFinish: (step) =>
-			console.info(
-				`[extraction] auditor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
-			),
 	});
 }
 
@@ -312,11 +310,18 @@ function createAuditor(model: LanguageModel) {
 /** The pipeline phases, in order — what the home status endpoint shows. */
 export type ExtractionPhase = "extracting" | "auditing" | "merging";
 
-/** One in-flight pipeline run. Module-level: one process, one registry. */
-interface RunningExtraction {
+/** One in-flight pipeline run. Module-level: one process, one registry.
+ *  Exported for the status payload's consumer typing (the dock). */
+export interface RunningExtraction {
 	chatId: string;
 	phase: ExtractionPhase;
 	startedAt: number;
+	/** Live per-stage usage, accumulated as steps bill (the dock's cost /
+	 *  context-window blobs read this through /api/graph/status). */
+	usage: { extractor?: ExtractionStageUsage; auditor?: ExtractionStageUsage };
+	/** True-cancellation handle (the dock's abort button): one controller per
+	 *  run, shared across phases; abort() cancels the in-flight model call. */
+	controller: AbortController;
 }
 
 const runningExtractions = new Map<string, RunningExtraction>();
@@ -324,6 +329,18 @@ const runningExtractions = new Map<string, RunningExtraction>();
 /** In-flight pipeline runs (oldest first) — the /api/graph/status payload. */
 export function extractionStatuses(): RunningExtraction[] {
 	return [...runningExtractions.values()].sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/** True cancellation of the in-flight run for a chat (the dock's abort
+ *  button): the pending model call receives the signal — the provider
+ *  cancels the request, spend stops — and the run ends like a failure:
+ *  nothing merged, nothing checkpointed, partial usage still persisted.
+ *  Returns false when no run is in flight (idempotent no-op). */
+export function abortExtraction(chatId: string): boolean {
+	const run = runningExtractions.get(chatId);
+	if (!run) return false;
+	run.controller.abort();
+	return true;
 }
 
 // ─── the pipeline ───────────────────────────────────────────────────────────
@@ -350,21 +367,62 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	const inFlight = new Set<string>();
 
 	function setPhase(chatId: string, phase: ExtractionPhase): void {
+		const prev = runningExtractions.get(chatId);
 		runningExtractions.set(chatId, {
 			chatId,
 			phase,
-			startedAt: runningExtractions.get(chatId)?.startedAt ?? Date.now(),
+			startedAt: prev?.startedAt ?? Date.now(),
+			usage: prev?.usage ?? {}, // phase changes never lose usage
+			controller: prev?.controller ?? new AbortController(),
 		});
+	}
+
+	/** Accumulate one billed step into the run's registry entry (live). */
+	function recordStep(chatId: string, stage: "extractor" | "auditor", usage: CallUsage, model: string): void {
+		const run = runningExtractions.get(chatId);
+		if (!run) return; // not running (tests driving stages directly)
+		run.usage[stage] ??= { model, steps: [] };
+		run.usage[stage]!.steps.push(usage);
+	}
+
+	/** The SDK's per-step usage, flattened to the persisted CallUsage fields
+	 *  (the money channel's capture shape, contracts/chat.ts). */
+	function callUsage(usage: {
+		inputTokens: number | undefined;
+		outputTokens: number | undefined;
+		inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
+		outputTokenDetails?: { reasoningTokens?: number };
+	}): CallUsage {
+		// Optional-chained: the SDK types the detail objects as required, but
+		// providers (and mocks) may leave them unset.
+		return {
+			inputTokens: usage.inputTokens,
+			outputTokens: usage.outputTokens,
+			cacheReadTokens: usage.inputTokenDetails?.cacheReadTokens,
+			cacheWriteTokens: usage.inputTokenDetails?.cacheWriteTokens,
+			reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
+		};
 	}
 
 	async function extract(chatId: string): Promise<SessionFindings> {
 		const record = chatStore.getChat(chatId);
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
+		const signal = runningExtractions.get(chatId)?.controller.signal;
+		signal?.throwIfAborted(); // an abort during a sync gap ends the run here
 		const view = transcriptView(record);
 		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} transcript lines)`);
 		const t0 = performance.now();
 
-		const extraction = await extractorAgent.generate({ prompt: `Transcript:\n\n${view}` });
+		const extraction = await extractorAgent.generate({
+			prompt: `Transcript:\n\n${view}`,
+			abortSignal: signal,
+			onStepFinish: (step) => {
+				recordStep(chatId, "extractor", callUsage(step.usage), step.model.modelId);
+				console.info(
+					`[extraction] extractor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
+				);
+			},
+		});
 		for (const part of extraction.content) {
 			if (part.type === "tool-result" && part.toolName === "submit_findings") {
 				console.info(`[extraction ${chatId}] extractor done in ${Math.round(performance.now() - t0)}ms`);
@@ -377,6 +435,8 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	async function audit(chatId: string, findings: SessionFindings): Promise<AuditResult> {
 		const record = chatStore.getChat(chatId);
 		if (!record) throw new Error(`Chat not found: ${chatId}`);
+		const signal = runningExtractions.get(chatId)?.controller.signal;
+		signal?.throwIfAborted(); // an abort during the extract→audit gap ends here
 		const view = transcriptView(record);
 		const graph = getGraph(graphStore);
 		console.info(
@@ -389,6 +449,13 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			prompt:
 				`Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}\n\n` +
 				`Current knowledge graph (${graph.nodes.length} nodes):\n\n${graphView(graph.nodes)}`,
+			abortSignal: signal,
+			onStepFinish: (step) => {
+				recordStep(chatId, "auditor", callUsage(step.usage), step.model.modelId);
+				console.info(
+					`[extraction] auditor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
+				);
+			},
 		});
 		let auditResult: AuditResult | null = null;
 		for (const part of review.content) {
@@ -412,6 +479,25 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		return auditResult;
 	}
 
+	/** Append the run's usage record to the chat's extractions log — success
+	 *  or failure: a failed run still spent money, and its partial usage is
+	 *  exactly what the record should show (stats absent = never merged).
+	 *  Idempotent per startedAt (the store dedupes). */
+	function persistRunUsage(chatId: string, durationMs: number, stats: EmissionStats | undefined): void {
+		const run = runningExtractions.get(chatId);
+		if (!run) return;
+		chatStore.appendExtractionUsage(chatId, {
+			startedAt: run.startedAt,
+			at: new Date().toISOString(),
+			durationMs,
+			stats,
+			stages: {
+				extractor: run.usage.extractor ?? { model: "unknown", steps: [] },
+				auditor: run.usage.auditor ?? { model: "unknown", steps: [] },
+			},
+		});
+	}
+
 	async function runExtraction(chatId: string): Promise<EmissionStats> {
 		if (inFlight.has(chatId)) return { nodes: 0, edges: 0, events: 0 };
 		inFlight.add(chatId);
@@ -426,12 +512,22 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// The merger re-reads the chat record itself — events are rebuilt
 			// from the transcript, never from stale copies.
 			const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore });
+			persistRunUsage(chatId, Math.round(performance.now() - t0), stats);
 			console.info(
 				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
 					`(${Math.round(performance.now() - t0)}ms total)`,
 			);
 			return stats;
 		} catch (err) {
+			persistRunUsage(chatId, Math.round(performance.now() - t0), undefined);
+			// Aborted (the dock's abort button): a deliberate stop, not a
+			// failure — same ledger discipline as a failure (nothing merged,
+			// nothing checkpointed, partial usage persisted), but the run
+			// reports zero emissions instead of throwing.
+			if (err instanceof Error && err.name === "AbortError") {
+				console.info(`[extraction ${chatId}] aborted (${Math.round(performance.now() - t0)}ms) — nothing merged, nothing checkpointed`);
+				return { nodes: 0, edges: 0, events: 0 };
+			}
 			// The throw travels to the caller; this line is what makes the
 			// run's log legible end-to-end (no hanging "pipeline start").
 			console.error(`[extraction ${chatId}] pipeline failed (${Math.round(performance.now() - t0)}ms):`, err);

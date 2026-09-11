@@ -9,6 +9,7 @@
 import type { UIMessage } from "ai";
 import type { Phase3 } from "../phases.ts";
 import type { PlanNodeStatus, PlanTree } from "./plan.ts";
+import type { EmissionStats } from "./graph.ts";
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────
 
@@ -32,6 +33,41 @@ export interface ChatRecord {
 	 * each entry onto its message; aggregates are folds over this log
 	 * (core/prices.ts). */
 	turns?: TurnUsage[];
+	/** Append-only background-extraction usage log (2026-09 observability):
+	 *  one entry per finished pipeline run on THIS chat — extraction is real
+	 *  spend too. Same parallel-log discipline as `turns` (nothing rides
+	 *  inside messages). Keyed by startedAt; idempotent appends. */
+	extractions?: ExtractionRunUsage[];
+}
+
+// ─── Background-extraction usage (the money channel, extraction side) ────────
+
+/** One pipeline stage's model usage — the stage's model + every step it
+ *  billed (CallUsage per agent step). Steps, not a sum: cost and context
+ *  folds happen at read time (core/prices.ts). */
+export interface ExtractionStageUsage {
+	/** The OpenRouter model id that ran this stage. */
+	model: string;
+	steps: CallUsage[];
+}
+
+/** One finished (or failed mid-flight) extraction run's usage record.
+ *  Appended to the chat's `extractions` log when the run ends — success or
+ *  failure, because money was spent either way; `stats` is present only
+ *  when the merger actually ran. */
+export interface ExtractionRunUsage {
+	/** The run's registry startedAt (ms) — the idempotency key. */
+	startedAt: number;
+	at: string;
+	durationMs: number;
+	/** What the run merged into the graph; absent when it failed first. */
+	stats?: EmissionStats;
+	/** Model usage per stage, in pipeline order (merger is deterministic —
+	 *  no model call, no entry). */
+	stages: {
+		extractor: ExtractionStageUsage;
+		auditor: ExtractionStageUsage;
+	};
 }
 
 // ─── Usage accounting (the money channel) ─────────────────────────────────────

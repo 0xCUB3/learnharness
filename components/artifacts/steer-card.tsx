@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, CircleX } from "lucide-react";
 import type { ResearchResult, SubagentArtifactData, TeacherUIMessage } from "@/src/core";
 import { isSubagentFailure } from "@/src/core";
 import { DemoOutputCard } from "@/components/artifacts/demo-card";
@@ -27,9 +27,15 @@ import { VisualOutputCard } from "@/components/artifacts/visual-card";
 export function SubagentSteerCard({ message }: { message: TeacherUIMessage }) {
 	const artifactPart = message.parts.find((p) => p.type === "data-subagent-artifact");
 	const data = artifactPart?.data as SubagentArtifactData | undefined;
+	// The abort steer (2026-09 dock semantics): no artifact part, only the
+	// metadata marker — a quiet chip, mirroring the complete-badge idiom.
 	if (!data) {
+		const meta = (
+				message.metadata as { subagentResult?: { aborted?: boolean; kind?: string } } | undefined
+			)?.subagentResult;
+		if (meta?.aborted) return <AbortedBadge kind={meta.kind ?? "job"} />;
 		return (
-			<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+				<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
 				A sub-agent finished, but its result could not be displayed.
 			</div>
 		);
@@ -46,6 +52,19 @@ export function SubagentSteerCard({ message }: { message: TeacherUIMessage }) {
 		case "visual":
 			return <VisualOutputCard output={data.result} />;
 	}
+}
+
+/** The aborted-job chip: mirrors the complete-badge one-liner — the
+ * teacher's wake turn acknowledges the abort in the lesson itself,
+ * this just marks what happened. */
+function AbortedBadge({ kind }: { kind: string }) {
+	return (
+		<div data-testid="job-aborted-badge" className="flex items-center gap-2 text-xs text-muted-foreground">
+			<CircleX className="size-3.5" />
+			<span className="font-medium uppercase tracking-wide">{kind}</span>
+			<span>aborted by the learner</span>
+		</div>
+	);
 }
 
 /** Quiet one-liner, the dispatch-settled idiom — the lesson lives in the

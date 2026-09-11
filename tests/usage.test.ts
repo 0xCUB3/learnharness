@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 import { callCost, contextWindow, jobCost, sessionCost, sumSteps, turnCost } from "../src/core/prices.ts";
-import type { CallUsage, JobRecord, TurnUsage } from "../src/core/contracts.ts";
+import type { CallUsage, ExtractionRunUsage, JobRecord, TurnUsage } from "../src/core/contracts.ts";
 
 const call = (over: Partial<CallUsage> = {}): CallUsage => ({
 	inputTokens: 0,
@@ -131,6 +131,37 @@ test("appendTurnUsage: appends, is idempotent per messageId, survives saveMessag
 	const listed = chatStore.listChats().find((c) => c.id === record.id);
 	assert.ok(listed);
 	assert.equal("turns" in listed, false);
+
+	fs.unlinkSync(`${PATHS.chats}/${record.id}.json`);
+});
+
+test("appendExtractionUsage: appends, idempotent per startedAt, not in list payload", () => {
+	const record = chatStore.createChat("extraction usage test chat");
+	const runEntry = (startedAt: number): ExtractionRunUsage => ({
+		startedAt,
+		at: "2026-09-09T00:00:00Z",
+		durationMs: 42_000,
+		stats: { nodes: 1, edges: 2, events: 3 },
+		stages: {
+			extractor: { model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 100, outputTokens: 10 })] },
+			auditor: { model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 50, outputTokens: 5 })] },
+		},
+	});
+	chatStore.appendExtractionUsage(record.id, runEntry(1));
+	chatStore.appendExtractionUsage(record.id, runEntry(1)); // same run appended twice → no-op
+	chatStore.appendExtractionUsage(record.id, runEntry(2)); // a retried run is a NEW spend
+	let reread = chatStore.getChat(record.id);
+	assert.equal(reread?.extractions?.length, 2);
+	// failed runs (stats absent) persist with usage — money was spent
+	chatStore.appendExtractionUsage(record.id, { ...runEntry(3), stats: undefined });
+	reread = chatStore.getChat(record.id);
+	assert.equal(reread?.extractions?.length, 3);
+	assert.equal(reread?.extractions?.at(-1)?.stats, undefined);
+
+	// the list payload must NOT leak the extractions log
+	const listed = chatStore.listChats().find((c) => c.id === record.id);
+	assert.ok(listed);
+	assert.equal("extractions" in listed, false);
 
 	fs.unlinkSync(`${PATHS.chats}/${record.id}.json`);
 });
