@@ -113,7 +113,7 @@ after(() => {
 describe("teacher chat flow (scripted model)", () => {
 	it("quiz tool call persists as a pending part; the answer continues the lesson", async () => {
 		const calls: string[][] = [];
-		const agent = createTeacherAgent(scriptedModel(calls));
+		const agent = createTeacherAgent(undefined, scriptedModel(calls));
 		const chat = chatStore.createChat("Test: solar system");
 		createdChats.push(chat.id);
 
@@ -200,7 +200,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// 'input-streaming', which the stream processor sets from the
 		// tool-input-start chunk. If a transport change ever stopped emitting
 		// it, the indicator would silently die — pin the protocol.
-		const agent = createTeacherAgent(scriptedModel([]));
+		const agent = createTeacherAgent(undefined, scriptedModel([]));
 		const chat = chatStore.createChat("Test: protocol pin");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
@@ -214,7 +214,7 @@ describe("teacher chat flow (scripted model)", () => {
 
 	it("persists even when the stream is aborted (resume keeps partial state)", async () => {
 		const calls: string[][] = [];
-		const agent = createTeacherAgent(scriptedModel(calls));
+		const agent = createTeacherAgent(undefined, scriptedModel(calls));
 		const chat = chatStore.createChat("Test: abort");
 		createdChats.push(chat.id);
 
@@ -283,7 +283,7 @@ describe("teacher chat flow (scripted model)", () => {
 			},
 		});
 
-		const agent = createTeacherAgent(retryModel);
+		const agent = createTeacherAgent(undefined, retryModel);
 		const chat = chatStore.createChat("Test: bad quiz retry");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
@@ -331,7 +331,7 @@ describe("chat store", () => {
 describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 	it("one turn per chat: a concurrent request is 409'd; the next one after finish is accepted", async () => {
 		const calls: string[][] = [];
-		const agent = createTeacherAgent(scriptedModel(calls));
+		const agent = createTeacherAgent(undefined, scriptedModel(calls));
 		const chat = chatStore.createChat("Test: turn guard");
 		createdChats.push(chat.id);
 
@@ -353,7 +353,7 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 
 	it("write-ahead: the learner's answer is durable BEFORE the turn finishes", async () => {
 		const calls: string[][] = [];
-		const agent = createTeacherAgent(scriptedModel(calls));
+		const agent = createTeacherAgent(undefined, scriptedModel(calls));
 		const chat = chatStore.createChat("Test: write-ahead");
 		createdChats.push(chat.id);
 
@@ -408,14 +408,14 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		// A text part with no text: fails UIMessage validation before the stream
 		// exists — the path where no onFinish will ever run.
 		const bad = [{ id: "m1", role: "user", parts: [{ type: "text" }] }];
-		const res = await handleChatRequest(post(chat.id, bad), createTeacherAgent(scriptedModel([])));
+		const res = await handleChatRequest(post(chat.id, bad), createTeacherAgent(undefined, scriptedModel([])));
 		assert.equal(res.status, 500, "turn-start failure is a 500, not a hang");
 		assert.equal(isTurnRunning(chat.id), false, "registry cleared when the stream never started");
 
 		// And the chat is NOT locked: the next (valid) turn is accepted.
 		const ok = await handleChatRequest(
 			post(chat.id, [{ id: "m1", role: "user", parts: [{ type: "text", text: "teach me" }] }]),
-			createTeacherAgent(scriptedModel([])),
+			createTeacherAgent(undefined, scriptedModel([])),
 		);
 		assert.equal(ok.status, 200);
 		await drain(ok);

@@ -124,12 +124,15 @@ export interface TurnUsage {
  * small container, the current node glowing — clearly a fragment, not the
  * whole plan. Clicking either opens the full plan in a popup. */
 export interface PlanBlockData {
-	kind: "full" | "neighborhood";
+	/** Only "full" survives (the 2026-09-11 pivot): the plan renders IN
+	 *  FLOW once, at authoring. The neighborhood fragments are retired —
+	 *  position derives live from the transcript (the persistent DAG
+	 *  window is the successor). */
+	kind: "full";
 	at: string;
 	/** The current node at snapshot time (the glow target; null = none). */
 	current: string | null;
-	/** Included nodes: all of them (full) or the one-level-up/one-level-down
-	 * neighborhood of `current` (neighborhood). Statuses are the snapshot's,
+	/** All nodes of the authored tree. Statuses are the snapshot's,
 	 * derived at emission time — the block never re-derives at render. */
 	nodes: Array<{ id: string; title: string; status: PlanNodeStatus }>;
 	edges: Array<{ from: string; to: string }>;
@@ -141,9 +144,9 @@ export interface PlanBlockData {
  *  them in listChats. Liveness (`busy`) is NOT record-derived — the API
  *  route merges it in (see ChatListItem).
  *
- *  Phase semantics (three phases, data-only): probe = no plan yet, plan =
- *  tree exists but no node occupied, teach = a node is occupied
- *  (core/phases.ts phaseOfTree).
+ *  Phase semantics (three phases, event-driven — docs/probe-teach-split.md
+ *  §4): probe ends at the concluded probe_done, plan ends at the successful
+ *  plan_init; derived from the transcript (core/phases.ts phaseAt3).
  */
 export interface ChatSummary {
 	id: string;

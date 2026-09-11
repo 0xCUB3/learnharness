@@ -4,7 +4,6 @@
  * implementing. Each takes its dependencies explicitly (storage ports, the
  * job runner) — no module here imports an adapter.
  *
- *   buildTeacherContext — graph → instructions block (the W8 read channel)
  *   persistTurn        — the canonical state write (client + agent messages)
  *   triggerExtraction  — the graph write channel: fires the extraction
  *                        pipeline (the sole graph writer) once a chat
@@ -18,27 +17,10 @@
 
 import type { UIMessage } from "ai";
 import { withPlanBlocks } from "../core/plan-blocks.ts";
-import { buildGraphContext } from "../core/graph-context.ts";
-import { getGraph, pendingQuizAnswers } from "../core/graph.ts";
+import { pendingQuizAnswers } from "../core/graph.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
 import { EXTRACTION } from "../../config.ts";
 import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
-
-/**
- * W8 (vision §1 "the graph as session context"): the learner's knowledge
- * graph rides along as part of the teacher's instructions. Built per request
- * — stateless, and self-updating as the graph grows mid-session. A read
- * failure must never take the lesson down: the block is context, not a
- * dependency.
- */
-export function buildTeacherContext(graphStore: GraphStore, chatId: string): string | null {
-	try {
-		return buildGraphContext(getGraph(graphStore));
-	} catch (err) {
-		console.error(`[chat ${chatId}] graph context build failed:`, err);
-		return null;
-	}
-}
 
 /**
  * The canonical state write: the client owns the message list between turns

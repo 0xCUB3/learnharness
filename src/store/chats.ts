@@ -14,7 +14,7 @@ import type { ChatStore } from "../core/ports.ts";
 import type { ChatRecord, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
 import type { UIMessage } from "ai";
 import { findPendingToolCall } from "../core/pending.ts";
-import { phaseOfTree } from "../core/phases.ts";
+import { phaseAt3 } from "../core/phases.ts";
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
@@ -58,10 +58,11 @@ function listChats(): ChatSummary[] {
 				...summary,
 				messageCount: messages.length,
 				// Record-derived status for the session picker: phase from the
-				// stored plan tree, pending question from the transcript's last
-			// unanswered quiz/ask part. Liveness (busy) is NOT record-derived —
-				// the API route merges it (contracts.ts ChatListItem).
-				phase: phaseOfTree(tree),
+				// transcript's explicit markers (probe_done / plan_init — the
+				// event-driven phases, docs/probe-teach-split.md §4), pending
+				// question from the last unanswered quiz/ask part. Liveness (busy)
+				// is NOT record-derived — the API route merges it (ChatListItem).
+				phase: phaseAt3(messages),
 				pendingQuestion: findPendingToolCall(messages) !== null,
 			}))
 			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

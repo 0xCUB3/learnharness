@@ -9,11 +9,10 @@
  *   components/**  →  "@/src/core"        (this barrel, ONLY)
  *   app/**         →  "@/src/core" + "@/src/server"
  *
- * Server-only core modules (core/graph.ts emission/derivation,
- * core/graph-context.ts) are pure but need storage ports passed in by a
- * server caller, so they are deliberately NOT re-exported here — the
- * server imports them directly. The storage PORT TYPES are types-only and
- * browser-safe, hence re-exported.
+ * Server-only core modules (core/graph.ts emission/derivation) are pure
+ * but need storage ports passed in by a server caller, so they are
+ * deliberately NOT re-exported here — the server imports them directly.
+ * The storage PORT TYPES are types-only and browser-safe, hence re-exported.
  */
 
 export * from "./contracts.ts";

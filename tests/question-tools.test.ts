@@ -1,17 +1,21 @@
 /**
- * questionToolsFor — the per-session question tools with dynamic plan-nodeId
- * validation (tools.ts). The grading contract is question-core's and is
- * UNTOUCHED; the For variant chains one session-relative check on top:
- * a quiz whose nodeId doesn't match a node of the CURRENT plan tree is
- * rejected at the call boundary (never reaches the learner — the SDK
- * returns the validation error to the teacher as a tool result, and it
- * retries).
+ * The agent-split question tools (docs/probe-teach-split.md §1):
+ *
+ *  - teachQuizToolFor — the TEACHER's quiz: the shared authoring contract +
+ *    the per-session plan-nodeId validation (position signal; a mismatched id
+ *    is rejected at the call boundary and returns to the agent to fix).
+ *  - createProberTools — the PROBER's quiz has NO nodeId field at all (the
+ *    schema is built from quizInputBase; the key is stripped if the model
+ *    tries anyway), plus ask + probe_done.
+ *
+ * The grading contract (question-core) is shared and untouched by both.
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import { questionTools, questionToolsFor } from "../src/agent/tools.ts";
+import { createProberTools, teachQuizToolFor } from "../src/agent/tools.ts";
+import { probeQuizInputSchema } from "../src/core/question-core.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
@@ -38,8 +42,8 @@ function newChat(title: string): string {
 const validQuiz = {
 	question: "What is 2 + 2?",
 	options: [
-		{ label: "3" },
-		{ label: "4" },
+		{ label: "3", value: "3" },
+		{ label: "4", value: "4" },
 	],
 	correctAnswer: "4",
 	explanation: "Arithmetic.",
@@ -48,9 +52,11 @@ const validQuiz = {
 interface QuizToolSpec {
 	inputSchema: { safeParse: (v: unknown) => { success: boolean; error?: { issues: Array<{ message: string }> } } };
 }
-const quizSchemaOf = (tools: Record<string, unknown>) => (tools.quiz as QuizToolSpec).inputSchema;
+/** teachQuizToolFor returns the single quiz tool; createProberTools a registry. */
+const schemaOf = (toolLike: unknown) => (toolLike as QuizToolSpec).inputSchema;
+const quizSchemaOf = (tools: Record<string, unknown>) => schemaOf(tools.quiz);
 
-describe("questionToolsFor: the dynamic plan-nodeId validation", () => {
+describe("teachQuizToolFor: the dynamic plan-nodeId validation (position signal)", () => {
 	it("accepts a nodeId that matches a node of the session's tree", () => {
 		const chatId = newChat("NodeId: valid");
 		chatStore.saveTree(chatId, {
@@ -59,11 +65,9 @@ describe("questionToolsFor: the dynamic plan-nodeId validation", () => {
 				{ id: "expressions", title: "Expressions" },
 			],
 			edges: [{ from: "arith", to: "expressions" }],
-			currentNodeId: null,
-			doneNodeIds: [],
 			version: 1,
 		});
-		const res = quizSchemaOf(questionToolsFor({ chatId, chatStore })).safeParse({
+		const res = schemaOf(teachQuizToolFor({ chatId, chatStore })).safeParse({
 			...validQuiz,
 			nodeId: "expressions",
 		});
@@ -75,11 +79,9 @@ describe("questionToolsFor: the dynamic plan-nodeId validation", () => {
 		chatStore.saveTree(chatId, {
 			nodes: [{ id: "arith", title: "Arithmetic" }],
 			edges: [],
-			currentNodeId: null,
-			doneNodeIds: [],
 			version: 1,
 		});
-		const res = quizSchemaOf(questionToolsFor({ chatId, chatStore })).safeParse({
+		const res = schemaOf(teachQuizToolFor({ chatId, chatStore })).safeParse({
 			...validQuiz,
 			nodeId: "arithmetic", // the typo — slug is 'arith'
 		});
@@ -89,23 +91,20 @@ describe("questionToolsFor: the dynamic plan-nodeId validation", () => {
 		assert.match(msg, /arith/);
 	});
 
-	it("no tree yet (probe phase): ANY nodeId is rejected — ad-hoc checks must omit it", () => {
-		const chatId = newChat("NodeId: probe");
-		const res = quizSchemaOf(questionToolsFor({ chatId, chatStore })).safeParse({
-			...validQuiz,
-			nodeId: "anything",
-		});
+	it("no tree yet: ANY nodeId is rejected — omit it for ad-hoc checks", () => {
+		const chatId = newChat("NodeId: no tree");
+		const schema = schemaOf(teachQuizToolFor({ chatId, chatStore }));
+		const res = schema.safeParse({ ...validQuiz, nodeId: "anything" });
 		assert.equal(res.success, false);
 		assert.match(res.error!.issues.at(-1)!.message, /No plan map exists yet/);
-		// …while an untagged probe check is fine
-		const plain = quizSchemaOf(questionToolsFor({ chatId, chatStore })).safeParse(validQuiz);
+		// …while an untagged ad-hoc check is fine
+		const plain = schema.safeParse(validQuiz);
 		assert.equal(plain.success, true);
 	});
 
 	it("reads the LIVE record — a plan_init mutation mid-turn is honored immediately", () => {
 		const chatId = newChat("NodeId: live record");
-		const tools = questionToolsFor({ chatId, chatStore });
-		const schema = quizSchemaOf(tools);
+		const schema = schemaOf(teachQuizToolFor({ chatId, chatStore }));
 
 		const before = schema.safeParse({ ...validQuiz, nodeId: "fresh-node" });
 		assert.equal(before.success, false, "no tree yet → rejected");
@@ -113,8 +112,6 @@ describe("questionToolsFor: the dynamic plan-nodeId validation", () => {
 		chatStore.saveTree(chatId, {
 			nodes: [{ id: "fresh-node", title: "Just initialized" }],
 			edges: [],
-			currentNodeId: null,
-			doneNodeIds: [],
 			version: 1,
 		});
 		const after = schema.safeParse({ ...validQuiz, nodeId: "fresh-node" });
@@ -123,7 +120,7 @@ describe("questionToolsFor: the dynamic plan-nodeId validation", () => {
 
 	it("the shared grading rules still chain FIRST (schema-valid ⇔ gradeable)", () => {
 		const chatId = newChat("NodeId: grading rules intact");
-		const res = quizSchemaOf(questionToolsFor({ chatId, chatStore })).safeParse({
+		const res = schemaOf(teachQuizToolFor({ chatId, chatStore })).safeParse({
 			...validQuiz,
 			correctAnswer: "42", // matches no option — question-core's rule
 			nodeId: "ghost", // also bad — BOTH problems surface
@@ -133,16 +130,22 @@ describe("questionToolsFor: the dynamic plan-nodeId validation", () => {
 		assert.match(msgs, /correctAnswer/);
 		assert.match(msgs, /matches no node/);
 	});
+});
 
-	it("the STATIC questionTools stay validator-less (the teacher-agent default path)", () => {
-		const res = quizSchemaOf(questionTools).safeParse({ ...validQuiz, nodeId: "anything" });
-		assert.equal(res.success, true, "no session context → no nodeId check");
+describe("the prober's quiz: no nodeId field at all", () => {
+	it("the probe schema accepts a plain quiz and STRIPS a smuggled nodeId", () => {
+		const plain = probeQuizInputSchema.safeParse(validQuiz);
+		assert.equal(plain.success, true);
+		const smuggled = probeQuizInputSchema.safeParse({ ...validQuiz, nodeId: "anything" });
+		assert.equal(smuggled.success, true, "the field doesn't exist — zod strips it");
+		assert.equal("nodeId" in smuggled.data, false, "stripped, not tolerated");
 	});
 
-	it("ask_user_question is untouched (never carries nodeId — it isn't a check)", () => {
-		const chatId = newChat("NodeId: ask untouched");
-		const ask = questionToolsFor({ chatId, chatStore }).ask_user_question as QuizToolSpec;
-		const res = ask.inputSchema.safeParse({ question: "Free-form?", options: [{ label: "A" }, { label: "B" }] });
-		assert.equal(res.success, true);
+	it("the prober's tool registry carries the nodeId-less quiz and probe_done only", () => {
+		const chatId = newChat("Prober: registry");
+		const tools = createProberTools({ chatId, chatStore, deliver: () => {} });
+		assert.deepEqual(Object.keys(tools).sort(), ["ask_user_question", "probe_done", "quiz"]);
+		const schema = quizSchemaOf(tools);
+		assert.equal(schema.safeParse({ ...validQuiz, nodeId: "anything" }).success, true, "no session check to fail");
 	});
 });

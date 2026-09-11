@@ -107,47 +107,59 @@ export function quizInputProblems(input: {
 	return problems;
 }
 
-export const quizInputObject = z
-	.object({
-		question: z.string().describe("The single quiz question to ask. Ask exactly one question per tool call."),
-		options: z
-			.array(optionSchema)
-			.min(2)
-			.describe(
-				"The answer options (2 or more). Options only — there is no free-text mode. " +
-					"Give each option a stable `value`; you reference the correct one by that value in correctAnswer. " +
-					"Never add your own 'I don't know' option — that choice is added for you.",
-			),
-		multiSelect: z
-			.boolean()
-			.optional()
-			.describe("Set to true when more than one option is correct and the learner must select all of them."),
-		correctAnswer: z
-			.union([z.string(), z.array(z.string())])
-			.describe(
-				"REQUIRED. The correct answer as the option value(s) — the `value` field of the option you intend. " +
-					'Single-select: a single string (e.g. "mercury"). Multi-select: an array of strings (e.g. ["belize", "niue"]); ' +
-					"the learner is only correct if their selection matches this set exactly. " +
-					"Always pass the value, not a position number — this is self-checking and prevents miscounting. " +
-					"A value that matches no option fails validation and the call is returned to you to fix.",
-			),
-		explanation: z
-			.string()
-			.describe(
-				"REQUIRED. Explanation revealed AFTER the learner answers (shown whether they got it right or wrong). " +
-					"Use it to reinforce why the correct answer is correct.",
-			),
-		details: z.string().optional().describe("Optional extra context or instructions shown under the question."),
-		nodeId: z
-			.string()
-			.optional()
-			.describe(
-				"Optional plan-tree node id this question assesses — must EXACTLY match one of this session's " +
-					"plan_init node slugs (validated at call time; a mismatched id is rejected back to you). " +
-					"Set it whenever the question targets a map node — the outcome drives the learner's live session map. " +
-					"Omit for ad-hoc checks.",
-			),
-	})
+// The SHARED quiz authoring fields — everything except `nodeId`. The probe
+// and teach agents use DIFFERENT tools under the same name (docs/probe-teach-
+// split.md §1): the prober's quiz has NO nodeId field at all (there is no
+// map to position on), the teacher's adds it (the position signal — the
+// per-session tree validation chains on top in tools.ts). Grading rules
+// are identical, single-sourced here.
+export const quizInputBase = z.object({
+	question: z.string().describe("The single quiz question to ask. Ask exactly one question per tool call."),
+	options: z
+		.array(optionSchema)
+		.min(2)
+		.describe(
+			"The answer options (2 or more). Options only — there is no free-text mode. " +
+				"Give each option a stable `value`; you reference the correct one by that value in correctAnswer. " +
+				"Never add your own 'I don't know' option — that choice is added for you.",
+		),
+	multiSelect: z
+		.boolean()
+		.optional()
+		.describe("Set to true when more than one option is correct and the learner must select all of them."),
+	correctAnswer: z
+		.union([z.string(), z.array(z.string())])
+		.describe(
+			"REQUIRED. The correct answer as the option value(s) — the `value` field of the option you intend. " +
+				'Single-select: a single string (e.g. "mercury"). Multi-select: an array of strings (e.g. ["belize", "niue"]); ' +
+				"the learner is only correct if their selection matches this set exactly. " +
+				"Always pass the value, not a position number — this is self-checking and prevents miscounting. " +
+				"A value that matches no option fails validation and the call is returned to you to fix.",
+		),
+	explanation: z
+		.string()
+		.describe(
+			"REQUIRED. Explanation revealed AFTER the learner answers (shown whether they got it right or wrong). " +
+				"Use it to reinforce why the correct answer is correct.",
+		),
+	details: z.string().optional().describe("Optional extra context or instructions shown under the question."),
+});
+
+// The TEACH-side quiz object: the shared base + the plan-position field.
+// `nodeId` means "this question is ABOUT this node" — a position signal,
+// never a completion signal (docs/probe-teach-split.md §3).
+export const quizInputObject = quizInputBase.extend({
+	nodeId: z
+		.string()
+		.optional()
+		.describe(
+			"Optional plan-tree node id this question is about — must EXACTLY match one of this session's " +
+				"plan_init node slugs (validated at call time; a mismatched id is rejected back to you). " +
+				"Tag every question that targets a map node: the lesson's position on the map derives from these tags " +
+				"(the node the latest tagged question is about is where the map stands; earlier ones count as visited). " +
+				"Omit for quick ad-hoc checks that don't target a node.",
+		),
+})
 	// The cross-field authoring contract (the Gate-3 hardening): a quiz whose
 	// correctAnswer can't be graded NEVER reaches the learner. The SDK validates
 	// client-side tool inputs against this schema at the call boundary and, on
@@ -155,16 +167,25 @@ export const quizInputObject = z
 	// the teacher retries with a fixed quiz in the same turn. Schema-valid ⇔
 	// gradeable: the rules are exactly what the grading path accepts.
 	//
-	// NOTE the split: the raw object (pre-refinement) is exported for
-	// composition — tools.ts questionToolsFor chains the per-session plan-nodeId
-	// validation (it reads the live chat record, which this core never touches)
-	// on top of this shared refinement.
+// NOTE the split: the raw objects (pre-refinement) are exported for
+// composition — tools.ts teachQuestionTools chains the per-session
+// plan-nodeId validation (it reads the live chat record, which this core
+// never touches) on top of this shared refinement, and the PROBE quiz
+// (no nodeId at all) refines quizInputBase directly.
 export const quizInputSchema = quizInputObject
 	.superRefine((input, ctx) => {
 		for (const problem of quizInputProblems(input)) {
 			ctx.addIssue({ code: "custom", message: problem });
 		}
 	});
+
+/** The PROBE-side quiz schema: the shared authoring contract, no nodeId
+ *  field at all — the session's map doesn't exist yet. */
+export const probeQuizInputSchema = quizInputBase.superRefine((input, ctx) => {
+	for (const problem of quizInputProblems(input)) {
+		ctx.addIssue({ code: "custom", message: problem });
+	}
+});
 
 export const askInputSchema = z
 	.object({

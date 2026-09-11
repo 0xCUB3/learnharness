@@ -732,7 +732,9 @@ describe("demo/visual job runners", () => {
 						}),
 					}),
 					createTeacherAgent(
+						undefined,
 						teacher,
+						undefined,
 						createTeacherTools({
 							chatId: chat.id,
 							chatStore,

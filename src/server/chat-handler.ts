@@ -1,12 +1,12 @@
 import { createAgentUIStreamResponse, InvalidToolInputError, NoSuchToolError, type LanguageModelUsage, type UIMessage } from "ai";
-import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts";
+import { createProberAgent, createTeacherAgent, type TeachingAgent } from "../agent/teacher-agent.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
-import { createTeacherTools } from "../agent/tools.ts";
-import { MODELS } from "../../config.ts";import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
+import { MODELS } from "../../config.ts";
+import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { stores } from "./stores.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
-import { buildTeacherContext, persistTurn, triggerExtraction, withMessageIds } from "./turn-service.ts";
+import { persistTurn, triggerExtraction, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
 
 /**
@@ -48,7 +48,7 @@ setTurnRunner(async (chatId, messages) => {
 });
 setJobRespawn((jobId) => void jobRunner.runJob(jobId));
 
-export async function handleChatRequest(req: Request, agent?: TeacherAgent): Promise<Response> {
+export async function handleChatRequest(req: Request, agent?: TeachingAgent): Promise<Response> {
 	let body: { chatId?: unknown; messages?: unknown };
 	try {
 		body = await req.json();
@@ -111,21 +111,38 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		});
 	};
 
-	try {
-		return await createAgentUIStreamResponse({
-		agent:
-			agent ??
-			createTeacherAgent(
-				undefined,
-				createTeacherTools({
+	// AGENT CONSTRUCTION BRANCH (docs/probe-teach-split.md §2): the transcript
+	// is the seam — a probe_done tool part (any state) means the probe is
+	// concluded: build the TEACHER (planning + the full toolset). Otherwise
+	// the session is still probing: build the PROBER (quiz/ask + probe_done).
+	// Both share this whole composition (write-ahead persist, liveness,
+	// steers, usage, extraction) — only the agent differs.
+	const teaching = outgoing.some((m) => m.parts.some((p) => p.type === "tool-probe_done"));
+	const modelId = teaching ? MODELS.teacher.model : MODELS.prober.model;
+	const constructed: TeachingAgent = teaching
+		? createTeacherAgent(
+				{
 					chatId,
 					chatStore: stores.chatStore,
 					jobStore: stores.jobStore,
 					spawn: (job, input) => void jobRunner.runJob(job.id, input),
-				}),
-				buildTeacherContext(stores.graphStore, chatId),
+				},
+				undefined,
 				collectUsage,
-			),
+			)
+		: createProberAgent(
+				{
+					chatId,
+					chatStore: stores.chatStore,
+					deliver: (steer) => void deliverJobResult(steer),
+				},
+				undefined,
+				collectUsage,
+			);
+
+	try {
+		return await createAgentUIStreamResponse({
+		agent: agent ?? constructed,
 		uiMessages: outgoing,
 		// Tool-call validation failures are messages OUR schemas authored (the
 		// quiz authoring contract, unknown tools) — safe and useful in the
@@ -152,7 +169,7 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 						id: turnUsageId,
 						messageId: response.id,
 						at: new Date().toISOString(),
-						model: MODELS.teacher.model,
+						model: modelId,
 						steps,
 					});
 				}

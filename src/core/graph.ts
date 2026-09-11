@@ -373,7 +373,8 @@ const QUIZ_EVENT_KINDS: ReadonlySet<string> = new Set(["correct", "miss", "dont-
  * colors nodes by quiz results anymore). Used by the teacher's
  * graph-as-context selection (graph-context.ts) to find diagnostic
  * hotspots; the home renderer does not consume it. Nodes with no quiz
- * events have no entry.
+ * events have no entry. (The graph-as-context consumer is shelved —
+ * docs/probe-teach-split.md §5 — but the event fact stays.)
  */
 export function latestQuizOutcomes(nodes: GraphNode[], events: LedgerEvent[]): Map<string, LedgerEventKind> {
 	const latest = new Map<string, { at: string; kind: LedgerEventKind; index: number }>();

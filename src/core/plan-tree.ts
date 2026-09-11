@@ -28,7 +28,7 @@ export class PlanTreeError extends Error {
 
 /** An empty, never-stored tree used as the seed before plan_init runs. */
 export function emptyTree(): PlanTree {
-	return { nodes: [], edges: [], currentNodeId: null, doneNodeIds: [], version: 0 };
+	return { nodes: [], edges: [], version: 0 };
 }
 
 // ─── validation helpers ──────────────────────────────────────────────────────
@@ -122,105 +122,11 @@ export function createTree(nodes: PlanNode[], edges: PlanEdge[]): PlanTree {
 		assertValidEdge(e.from, e.to, nodes, accepted);
 		accepted.push({ from: e.from, to: e.to });
 	}
-	return { nodes: nodes.map((n) => ({ ...n })), edges: accepted, currentNodeId: null, doneNodeIds: [], version: 1 };
+	return { nodes: nodes.map((n) => ({ ...n })), edges: accepted, version: 1 };
 }
 
-/** Add a node, optionally creating edges parent → new node for each id in `parents`. */
-export function addNode(tree: PlanTree, node: PlanNode, parents?: string[]): PlanTree {
-	assertValidNode(node);
-	if (tree.nodes.some((n) => n.id === node.id)) {
-		throw new PlanTreeError(`Duplicate node id "${node.id}" — a node with that id already exists in the tree.`);
-	}
-	const parentList = parents ?? [];
-	if (parentList.includes(node.id)) {
-		throw new PlanTreeError(`Node "${node.id}" can't list itself as a parent.`);
-	}
-	const newEdges: PlanEdge[] = [];
-	for (const parent of parentList) {
-		// Validates existence (including the new node itself as `to`),
-		// self-loop, duplicate (against tree edges plus the new edges being
-		// added), and acyclicity.
-		assertValidEdge(parent, node.id, [...tree.nodes, node], [...tree.edges, ...newEdges]);
-		newEdges.push({ from: parent, to: node.id });
-	}
-	return {
-		...tree,
-		nodes: [...tree.nodes, { ...node }],
-		edges: [...tree.edges, ...newEdges],
-		version: tree.version + 1,
-	};
-}
-
-/** Update a node's title and/or summary. The id must exist; ids are immutable. */
-export function updateNode(tree: PlanTree, id: string, patch: { title?: string; summary?: string }): PlanTree {
-	const index = tree.nodes.findIndex((n) => n.id === id);
-	if (index === -1) {
-		throw new PlanTreeError(`Cannot update node "${id}" — it is not in the tree.`);
-	}
-	const current = tree.nodes[index]!;
-	const next: PlanNode = { ...current };
-	if (patch.title !== undefined) next.title = patch.title;
-	if (patch.summary !== undefined) next.summary = patch.summary;
-	assertValidNode(next);
-	const nodes = tree.nodes.slice();
-	nodes[index] = next;
-	return { ...tree, nodes, version: tree.version + 1 };
-}
-
-/**
- * Remove a node and cascade: every edge touching it (both directions),
- * currentNodeId (→ null if it pointed here), and its doneNodeIds entry.
- */
-export function removeNode(tree: PlanTree, id: string): PlanTree {
-	if (!tree.nodes.some((n) => n.id === id)) {
-		throw new PlanTreeError(`Cannot remove node "${id}" — it is not in the tree.`);
-	}
-	return {
-		...tree,
-		nodes: tree.nodes.filter((n) => n.id !== id),
-		edges: tree.edges.filter((e) => e.from !== id && e.to !== id),
-		currentNodeId: tree.currentNodeId === id ? null : tree.currentNodeId,
-		doneNodeIds: tree.doneNodeIds.filter((d) => d !== id),
-		version: tree.version + 1,
-	};
-}
-
-/** Add a `requires` edge from → to. Rejects self-loops, duplicates, and cycles. */
-export function addEdge(tree: PlanTree, from: string, to: string): PlanTree {
-	assertValidEdge(from, to, tree.nodes, tree.edges);
-	return { ...tree, edges: [...tree.edges, { from, to }], version: tree.version + 1 };
-}
-
-/** Remove an existing edge. Removing a nonexistent edge is an error. */
-export function removeEdge(tree: PlanTree, from: string, to: string): PlanTree {
-	const index = tree.edges.findIndex((e) => e.from === from && e.to === to);
-	if (index === -1) {
-		throw new PlanTreeError(`Cannot remove edge "${from}" → "${to}" — no such edge exists.`);
-	}
-	return { ...tree, edges: tree.edges.filter((e) => e.from !== from || e.to !== to), version: tree.version + 1 };
-}
-
-/**
- * Set currentNodeId ("where we are"). Requires the node exists. Does NOT
- * touch doneNodeIds. Setting the already-current node is a true no-op (no
- * version bump).
- */
-export function setCurrent(tree: PlanTree, id: string): PlanTree {
-	if (!tree.nodes.some((n) => n.id === id)) {
-		throw new PlanTreeError(`Cannot set current node "${id}" — it is not in the tree.`);
-	}
-	if (tree.currentNodeId === id) return tree;
-	return { ...tree, currentNodeId: id, version: tree.version + 1 };
-}
-
-/**
- * Mark a node done. Requires the node exists; idempotent — marking an
- * already-done node is a true no-op (no version bump).
- */
-export function markDone(tree: PlanTree, id: string): PlanTree {
-	if (!tree.nodes.some((n) => n.id === id)) {
-		throw new PlanTreeError(`Cannot mark node "${id}" done — it is not in the tree.`);
-	}
-	if (tree.doneNodeIds.includes(id)) return tree;
-	return { ...tree, doneNodeIds: [...tree.doneNodeIds, id], version: tree.version + 1 };
-}
+// The per-node mutation ops (addNode/updateNode/removeNode/addEdge/removeEdge/
+// setCurrent/markDone) were deleted with the author-once protocol
+// (2026-09-03) and their dead exports removed with the 2026-09-11 pivot: the
+// tree carries structure ONLY — no progress fields exist to mutate
+// (docs/probe-teach-split.md §3). Restructuring is a plan_init rewrite.

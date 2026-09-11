@@ -110,15 +110,28 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function jobIdOf(steer: SteerMessage): string {
-	return (steer.metadata as { subagentResult: { jobId: string } }).subagentResult.jobId;
+/** The job a steer belongs to, if it is a job steer (result/abort);
+ *  probe-handoff steers have no job — null. */
+function jobIdOf(steer: SteerMessage): string | null {
+	const meta = steer.metadata as { subagentResult?: { jobId: string } };
+	return meta.subagentResult?.jobId ?? null;
 }
 
-/**
- * Hand a finished job's steer to the pipeline. Resolves when the wake turn
- * has completed (and the job status flipped); rejects when delivery fails
- * unrecoverably. Never rejects for queueing itself.
- */
+/** Finalize a delivered steer's job bookkeeping — job steers only. */
+function finalizeSteer(steer: SteerMessage): void {
+	const jobId = jobIdOf(steer);
+	if (jobId) finalizeJob(jobId);
+}
+
+/** Fail a steer's job on unrecoverable delivery failure — job steers only. */
+function failSteer(steer: SteerMessage, err: Error): void {
+	const jobId = jobIdOf(steer);
+	if (jobId) failJob(jobId, err);
+}
+
+/** Queue ANY steer (result, abort, probe handoff) through the pipeline.
+ *  Resolves when the wake turn has completed; rejects when delivery fails
+ *  unrecoverably. Never rejects for queueing itself. */
 export function deliverJobResult(steer: SteerMessage): Promise<void> {
 	return new Promise<void>((resolve, reject) => {
 		const s = state();
@@ -155,13 +168,12 @@ export function claimSteers(chatId: string): SteerMessage[] {
 	if (!record) return []; // the handler validated the chat; defensive only
 	const claimed: SteerMessage[] = [];
 	for (const entry of queue) {
-		const jobId = jobIdOf(entry.steer);
-		if (steerDelivered(record.messages, jobId)) {
+		if (steerDelivered(record.messages, entry.steer.id)) {
 			// A wake already landed it — just finish the bookkeeping.
-			finalizeJob(jobId);
+			finalizeSteer(entry.steer);
 		} else {
 			claimed.push(entry.steer);
-			finalizeJob(jobId); // delivery is now the client turn's job
+			finalizeSteer(entry.steer); // delivery is now the client turn's job
 		}
 		entry.resolve();
 	}
@@ -229,10 +241,13 @@ export function abortJob(jobId: string): AbortOutcome {
 }
 
 function chatIdOf(steer: SteerMessage): string {
+	// The probe handoff carries its chat directly (no job record exists).
+	const handoff = (steer.metadata as { probeHandoff?: { chatId: string } }).probeHandoff;
+	if (handoff) return handoff.chatId;
 	// The chat is resolvable from the job record; the steer's metadata
 	// carries jobId, which indexes the store.
 	const jobId = jobIdOf(steer);
-	const job = stores.jobStore.getJob(jobId);
+	const job = jobId ? stores.jobStore.getJob(jobId) : undefined;
 	return job?.chatId ?? "";
 }
 
@@ -253,21 +268,21 @@ async function pump(chatId: string): Promise<void> {
 				return;
 			}
 			const entry = queue[0]!;
-			const jobId = jobIdOf(entry.steer);
+		const steerId = entry.steer.id;
 
 			// Gone chat: nothing to deliver into.
 			const record = stores.chatStore.getChat(chatId);
 			if (!record) {
 				queue.shift();
-				entry.reject(new Error(`chat ${chatId} not found — cannot deliver job ${jobId}`));
+				entry.reject(new Error(`chat ${chatId} not found — cannot deliver steer ${steerId}`));
 				continue;
 			}
 
 			// Idempotent delivery: the transcript already carries this steer
 			// (a previous wake completed, or a duplicate deliver raced in).
-			if (steerDelivered(record.messages, jobId)) {
+			if (steerDelivered(record.messages, steerId)) {
 				queue.shift();
-				finalizeJob(jobId);
+				finalizeSteer(entry.steer);
 				entry.resolve();
 				continue;
 			}
@@ -280,7 +295,7 @@ async function pump(chatId: string): Promise<void> {
 			const fresh = stores.chatStore.getChat(chatId);
 			if (!fresh) {
 				queue.shift();
-				entry.reject(new Error(`chat ${chatId} not found — cannot deliver job ${jobId}`));
+				entry.reject(new Error(`chat ${chatId} not found — cannot deliver steer ${steerId}`));
 				continue;
 			}
 
@@ -289,16 +304,16 @@ async function pump(chatId: string): Promise<void> {
 			if (!s.turnRunner) {
 				queue.shift();
 				const err = new Error("wake pipeline: no turn runner wired (setTurnRunner)");
-				failJob(jobId, err);
+				failSteer(entry.steer, err);
 				entry.reject(err);
 				continue;
 			}
 
 			// A client continuation may have COALESCED this steer (claimSteers) while
 			// the gates were closed — re-check before firing: exactly one delivery.
-			if (steerDelivered(fresh.messages, jobId)) {
+			if (steerDelivered(fresh.messages, steerId)) {
 				queue.shift();
-				finalizeJob(jobId);
+				finalizeSteer(entry.steer);
 				entry.resolve();
 				continue;
 			}
@@ -306,7 +321,7 @@ async function pump(chatId: string): Promise<void> {
 			// Fire the server-side teacher turn. A 409 = a client turn raced
 			// in between idle and firing — back off and retry the same steer.
 			const status = await s.turnRunner(chatId, [...fresh.messages, entry.steer]).catch((err: unknown) => {
-				console.error(`[job ${jobId}] wake turn crashed:`, err);
+				console.error(`[steer ${steerId}] wake turn crashed:`, err);
 				return -1;
 			});
 			if (status === 409) {
@@ -317,11 +332,11 @@ async function pump(chatId: string): Promise<void> {
 
 			queue.shift();
 			if (status === 200) {
-				finalizeJob(jobId);
+				finalizeSteer(entry.steer);
 				entry.resolve();
 			} else {
 				const err = new Error(`wake turn failed with status ${status}`);
-				failJob(jobId, err);
+				failSteer(entry.steer, err);
 				entry.reject(err);
 			}
 		}

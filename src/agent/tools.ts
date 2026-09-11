@@ -1,51 +1,37 @@
 import { tool, type ToolSet } from "ai";
-import { askInputSchema, quizInputObject, quizInputProblems, quizInputSchema } from "../core/question-core.ts";
+import {
+	askInputSchema,
+	probeQuizInputSchema,
+	quizInputObject,
+	quizInputProblems,
+} from "../core/question-core.ts";
 import type { JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
+import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
 
 export { jobTools };
+export type { ProbeDoneContext } from "./tools/probe.ts";
 
 /**
- * The teacher's tools, composed per request by createTeacherTools.
+ * The agent-split tool composition (docs/probe-teach-split.md §1): the
+ * PROBER and the TEACHER are different agents with different tool sets.
+ * The question tools share a NAME but are genuinely DIFFERENT tools —
+ * the prober's quiz has NO nodeId field at all (its schema is built from
+ * quizInputBase; zod strips the key if the model tries anyway), the
+ * teacher's carries the validated position field.
  *
- * - questionTools / questionToolsFor (quiz / ask_user_question): CLIENT-SIDE
- *   tools (no `execute`). The tool call streams to the browser in
- *   `input-available` state; the learner answers in the dock; the client
- *   grades via question-core and sends the verdict with addToolOutput. The
- *   input schemas live in core/question-core (the question contract) —
- *   parameter names mirror the prompt docs exactly; keep them in sync.
- *   questionToolsFor adds the per-session plan-nodeId validation: an invalid
- *   nodeId NEVER reaches the learner — the SDK returns the validation error
- *   to the teacher as a tool result and it retries (same loop as the
- *   grading rules). It reads the LIVE record at validation time, so a
- *   plan_init earlier in the same turn already counts.
- * - planTools (src/agent/tools/plan.ts): SERVER-SIDE — the single author-once
- *   plan_init (mermaid → structured tree; re-callable rewrite). Needs the
- *   chatId closure — hence the per-request factory.
- * - jobTools (src/agent/tools/jobs.ts): SERVER-EXECUTED dispatch — the call
- *   resolves immediately with a fire-and-forget ack, the background runner
- *   does the work, and the result arrives later as a steer message
- *   (contracts.ts "THE ASYNC PROTOCOL").
+ * - Question tools (quiz / ask_user_question): CLIENT-SIDE (no `execute`).
+ *   The call streams to the browser in `input-available` state; the
+ *   learner answers in the dock; the client grades and sends the verdict
+ *   with addToolOutput. Input schemas live in core/question-core.
+ * - probe_done (src/agent/tools/probe.ts): SERVER-SIDE seam tool.
+ * - planTools (src/agent/tools/plan.ts): SERVER-SIDE — author-once
+ *   plan_init. Teacher only.
+ * - jobTools (src/agent/tools/jobs.ts): SERVER-EXECUTED dispatch. Teacher
+ *   only.
  */
-
-export const quizTool = tool({
-	// Description ported from the pi original (the learning system this app
-	// grew out of) — that one never produced invalid correctAnswer values.
-	description:
-		"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
-		"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
-		"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
-		"can show an explanation. Use it to (1) assess what the learner already understands before teaching, and " +
-		"(2) run tight practice/retrieval loops after explaining, or probe understanding whenever you're unsure " +
-		"they've got it. Options-only: single-select or multi-select, plus an automatic 'I don't know' choice so the " +
-		"learner can signal a genuine gap instead of guessing. An always-present optional note field lets the learner " +
-		"attach a free-text note to ANY answer; it reaches you only when non-empty. No free-text answers — for " +
-		"non-graded questions use ask_user_question instead. Ask exactly one question per tool call; after calling, " +
-		"end your turn and wait for the graded result.",
-	inputSchema: quizInputSchema,
-});
 
 export const askUserQuestionTool = tool({
 	description:
@@ -55,21 +41,41 @@ export const askUserQuestionTool = tool({
 	inputSchema: askInputSchema,
 });
 
-export const questionTools = {
-	quiz: quizTool,
-	ask_user_question: askUserQuestionTool,
-};
+// ─── the prober's question tools (no nodeId — no map exists yet) ─────────────
 
-/**
- * Per-session question tools: the quiz schema gains the dynamic plan-nodeId
- * validation on top of question-core's shared authoring rules (chained
- * superRefines — the grading contract is untouched). The check reads the
- * LIVE chat record, so rewrites mid-turn are honored, and with no tree yet
- * (probe phase) every nodeId is rejected — ad-hoc checks must omit it.
- * ask_user_question is untouched: it never carries nodeId (not a check).
- */
-export function questionToolsFor(ctx: Pick<PlanToolContext, "chatId" | "chatStore">): ToolSet {
-	const quizInputWithNodeValidation = quizInputObject
+export const probeQuizTool = tool({
+	description:
+		"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
+		"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
+		"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
+		"can show an explanation. Use it to locate the edge of his understanding: bracket each strand the lesson will " +
+		"depend on — something he gets right (a floor), something he gets wrong or doesn't know (a ceiling). " +
+		"Options-only: single-select or multi-select, plus an automatic 'I don't know' choice so the learner can " +
+		"signal a genuine gap instead of guessing. An always-present optional note field lets the learner attach a " +
+		"free-text note to ANY answer; it reaches you only when non-empty. No free-text answers — for non-graded " +
+		"questions use ask_user_question instead. Ask exactly one question per tool call; after calling, end your " +
+		"turn and wait for the graded result.",
+	inputSchema: probeQuizInputSchema,
+});
+
+/** The prober's tool set: probe quiz (no nodeId) + ask + probe_done. */
+export function createProberTools(ctx: ProbeDoneContext): ToolSet {
+	return {
+		quiz: probeQuizTool,
+		ask_user_question: askUserQuestionTool,
+		...probeDoneTool(ctx),
+	};
+}
+
+// ─── the teacher's question tools (quiz carries the position field) ──────────
+
+/** Build the teach-side quiz tool for one request (exported for tests): the authoring contract
+ *  + the per-session plan-nodeId validation (chained superRefines — the
+ *  grading contract is untouched). Reads the LIVE chat record, so rewrites
+ *  mid-turn are honored, and with no tree yet every nodeId is rejected.
+ *  Omitting nodeId is legal — an ad-hoc check that moves nothing. */
+export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStore">) {
+	const inputSchema = quizInputObject
 		.superRefine((input, add) => {
 			for (const problem of quizInputProblems(input)) {
 				add.addIssue({ code: "custom", message: problem });
@@ -78,29 +84,32 @@ export function questionToolsFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 		.superRefine((input, add) => {
 			if (typeof input.nodeId !== "string" || input.nodeId.length === 0) return;
 			const record = ctx.chatStore.getChat(ctx.chatId);
-			const tree = record?.tree;
-			const known = tree?.nodes.map((n) => n.id) ?? [];
+			const known = record?.tree?.nodes.map((n) => n.id) ?? [];
 			if (!known.includes(input.nodeId)) {
 				add.addIssue({
 					code: "custom",
 					message:
-					`nodeId "${input.nodeId}" matches no node in this session's plan map. ` +
+						`nodeId "${input.nodeId}" matches no node in this session's plan map. ` +
 						(known.length > 0
 							? `Copy one of your plan_init slugs exactly (${known.slice(0, 5).join(", ")}${known.length > 5 ? ", …" : ""}), or omit nodeId for an ad-hoc check.`
 							: "No plan map exists yet — omit nodeId (ad-hoc checks only until you call plan_init)."),
 				});
 			}
 		});
-
-	const quizWithNodeValidation = tool({
-		description: quizTool.description,
-		inputSchema: quizInputWithNodeValidation,
+	return tool({
+		description:
+			"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
+			"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
+			"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
+			"can show an explanation. Use it to (1) confirm a taught node actually landed, or (2) probe understanding " +
+			"whenever you're unsure. Set `nodeId` whenever the question targets a map node — the lesson's position on the " +
+			"map derives from those tags; omit it only for quick ad-hoc checks. Options-only: single-select or multi-select, " +
+			"plus an automatic 'I don't know' choice so the learner can signal a genuine gap instead of guessing. " +
+			"An always-present optional note field lets the learner attach a free-text note to ANY answer; it reaches you " +
+			"only when non-empty. No free-text answers — for non-graded questions use ask_user_question instead. " +
+			"Ask exactly one question per tool call; after calling, end your turn and wait for the graded result.",
+		inputSchema,
 	});
-
-	return {
-		quiz: quizWithNodeValidation,
-		ask_user_question: askUserQuestionTool,
-	};
 }
 
 export interface TeacherToolContext extends PlanToolContext {
@@ -114,13 +123,13 @@ export interface TeacherToolContext extends PlanToolContext {
 }
 
 /**
- * Per-request tool registry. Plan tools and question tools close over the
- * ctx (chatId + the injected ChatStore — the latter also powers the quiz
- * nodeId validation); job tools close over the job store + spawn seam.
+ * Per-request teacher tool registry: teach questions (validated nodeId) +
+ * plan tools + job tools, all closing over the ctx.
  */
 export function createTeacherTools(ctx: TeacherToolContext): ToolSet {
 	return {
-		...questionToolsFor(ctx),
+		quiz: teachQuizToolFor(ctx),
+		ask_user_question: askUserQuestionTool,
 		...planTools(ctx),
 		...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn }),
 	};

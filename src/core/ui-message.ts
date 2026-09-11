@@ -1,5 +1,13 @@
 import type { UIMessage } from "ai";
-import type { DemoToolInput, PlanBlockData, ResearchToolInput, SubagentArtifactData, VisualToolInput } from "./contracts.ts";
+import type {
+	DemoToolInput,
+	PlanBlockData,
+	ProbeDoneInput,
+	ProbeDoneResult,
+	ResearchToolInput,
+	SubagentArtifactData,
+	VisualToolInput,
+} from "./contracts.ts";
 import type { AskToolInput, QuestionAnswerData, QuizToolInput } from "./question-core.ts";
 
 /**
@@ -17,6 +25,9 @@ import type { AskToolInput, QuestionAnswerData, QuizToolInput } from "./question
 export type TeacherUITools = {
 	quiz: { input: QuizToolInput; output: QuestionAnswerData };
 	ask_user_question: { input: AskToolInput; output: QuestionAnswerData };
+	/** The prober's conclusion tool (docs/probe-teach-split.md §2): the
+	 *  input IS the learner assessment; the output confirms the handoff. */
+	probe_done: { input: ProbeDoneInput; output: ProbeDoneResult };
 	research: { input: ResearchToolInput; output: string };
 	demo: { input: DemoToolInput; output: string };
 	visual: { input: VisualToolInput; output: string };

@@ -14,9 +14,7 @@ import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
  * - kind "full": the whole DAG, BORDERLESS — no wrapping chrome, the SVG
  *   scales to the full column width (viewBox = layout extent, so the
  *   leftmost/rightmost nodes hug the edges), natural height, no cap.
- * - kind "neighborhood": the fragment in its own small container, labeled
- *   as a FRAGMENT (clearly not the whole plan), the current node glowing.
- * - Clicking either opens the full plan in a full-screen popup overlay —
+ * - Clicking opens the full plan in a full-screen popup overlay —
  *   the LIVE plan: the latest tree from the transcript with statuses
  *   derived at click time (contracts/plan.ts derivePlanStatuses). Blocks
  *   are frozen snapshots rendered exactly as carried (never re-derived);
@@ -134,12 +132,12 @@ export function wrapTitle(title: string, maxChars = 20, maxLines = 2): string[] 
 // ─── Status styling (the retired panel's color language, unchanged) ──────────
 
 const BOX: Record<PlanNodeStatus, string> = {
-	done: "fill-phase-teach/10 stroke-phase-teach/50",
+	visited: "fill-phase-teach/10 stroke-phase-teach/50",
 	current: "fill-primary/10 stroke-primary",
 	upcoming: "fill-card stroke-border",
 };
 const TEXT: Record<PlanNodeStatus, string> = {
-	done: "fill-muted-foreground text-xs",
+	visited: "fill-muted-foreground text-xs",
 	current: "fill-foreground text-xs font-medium",
 	upcoming: "fill-muted-foreground/80 text-xs",
 };
@@ -236,43 +234,25 @@ function PlanDiagram({
 
 /**
  * A persisted plan-block part, rendered as carried (snapshot statuses,
- * never re-derived). Full = borderless and column-filling; neighborhood =
- * a labeled fragment container with the current node glowing. Either
- * opens the live plan popup.
+ * never re-derived): borderless and column-filling, it opens the live plan
+ * popup. Full-only by design since the 2026-09-11 pivot (the neighborhood
+ * fragments are retired — position derives live in the popup and the
+ * future DAG window).
  */
 export function PlanBlock({ data, onOpen }: { data: PlanBlockData; onOpen: () => void }) {
 	const markerId = useId().replace(/[^a-zA-Z0-9-]/g, "");
 	const statusMap = useMemo(() => new Map(data.nodes.map((n) => [n.id, n.status] as const)), [data]);
 	const statusOf = (id: string): PlanNodeStatus => statusMap.get(id) ?? "upcoming";
-
-	if (data.kind === "full") {
-		return (
-			<button
-				type="button"
-				data-testid="plan-block-full"
-				onClick={onOpen}
-				title="Open the full plan"
-				className="block w-full text-left"
-			>
-				<PlanDiagram nodes={data.nodes} edges={data.edges} statusOf={statusOf} markerId={markerId} />
-			</button>
-		);
-	}
 	return (
-		<div data-testid="plan-block-neighborhood" className="rounded-xl border bg-card/60 p-2.5">
-			<div className="mb-1.5 px-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-				Plan fragment
-			</div>
-			<button type="button" onClick={onOpen} title="Open the full plan" className="block w-full text-left">
-				<PlanDiagram
-					nodes={data.nodes}
-					edges={data.edges}
-					statusOf={statusOf}
-					glowId={data.current}
-					markerId={markerId}
-				/>
-			</button>
-		</div>
+		<button
+			type="button"
+			data-testid="plan-block-full"
+			onClick={onOpen}
+			title="Open the full plan"
+			className="block w-full text-left"
+		>
+			<PlanDiagram nodes={data.nodes} edges={data.edges} statusOf={statusOf} markerId={markerId} />
+		</button>
 	);
 }
 

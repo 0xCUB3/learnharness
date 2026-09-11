@@ -29,39 +29,35 @@ export interface PlanEdge {
 export interface PlanTree {
 	nodes: PlanNode[];
 	edges: PlanEdge[];
-	currentNodeId: string | null;
-	doneNodeIds: string[];
 	/** Increments on every mutation — lets the UI animate/react to changes. */
 	version: number;
 }
 
+// NOTE (2026-09-11 pivot, docs/probe-teach-split.md): the tree once carried
+// `currentNodeId` / `doneNodeIds` — progress fields. They are GONE by
+// design: the tree carries structure ONLY; position and visited-ness derive
+// from the transcript at render time (derivePlanStatuses below). There is no
+// done ledger of any kind. No backwards compatibility for old records.
+
 /** Derived, never stored: status of a node for the panel (vision §2). */
-export type PlanNodeStatus = "done" | "current" | "upcoming";
+export type PlanNodeStatus = "current" | "visited" | "upcoming";
 
-export function planNodeStatus(tree: PlanTree, nodeId: string): PlanNodeStatus {
-	if (tree.currentNodeId === nodeId) return "current";
-	if (tree.doneNodeIds.includes(nodeId)) return "done";
-	return "upcoming";
-}
-
-// ─── derived statuses: the author-once protocol (2026-09-03) ─────────────────────
+// ─── derived statuses: position from CALLS, never from results ─────────────
 //
-// The teacher AUTHORS the map (plan_init, mermaid — once at the seam,
-// re-callable to rewrite) and never tracks progress: statuses derive from
-// the transcript, pure and at render time. A check names its node (quiz
-// input nodeId — validated at the call boundary against the live tree);
-// the derivation reads outcomes:
-//   done    — any check on the node that the learner PASSED (demonstration-
-//             only: "explaining is yours, done is theirs")
-//   current — the node of the last UNANSWERED check; if none, the first
-//             node in authoring order whose prerequisites are all done and
-//             that isn't done itself (forward-looking: the panel leads the
-//             lesson — during teaching it points at what's coming, and holds
-//             through the check that follows)
-//   upcoming — everything else
-// Untagged checks and nodeIds missing from the current tree are lost signal
-// (the standing doctrine); a rewritten map keeps honest progress for reused
-// slugs because the derivation matches ids against the CURRENT tree.
+// (2026-09-11 pivot — docs/probe-teach-split.md §3.) The teacher AUTHORS the
+// map (plan_init, mermaid — re-callable rewrite) and never tracks progress.
+// The quiz `nodeId` means "this question is ABOUT this node" — a position
+// signal, never a completion signal. Derivation reads CALLS only:
+//   current — the node of the most RECENT tagged quiz call (any state)
+//   visited — every node referenced by an EARLIER tagged call
+// Consequences: a node spans multiple turns/checks naturally (several
+// questions may tag the same node — the map holds still); moving to a new
+// node is the teacher's judgment the previous one is finished, regardless of
+// check outcomes (a failed check then a move-on is still visited); results
+// feed nothing; there is NO fallback current (before the first tagged check
+// nothing is current). Untagged checks are legal ad-hoc checks — they move
+// nothing. NodeIds missing from the current tree are ignored (a rewrite
+// may have dropped the node).
 
 /** Minimal structural message slice — anything with typed parts (mirrors
  * phases.ts: pure, no runtime deps, safe on server, client, and in tests). */
@@ -70,48 +66,37 @@ interface PartsCarrier {
 }
 
 export interface DerivedPlanStatuses {
+	/** The node the most recent tagged quiz call is about; null before any. */
 	current: string | null;
-	/** Node ids demonstrated by the learner (passed checks). */
-	done: ReadonlySet<string>;
+	/** Nodes referenced by earlier tagged calls — been there, monotonic. */
+	visited: ReadonlySet<string>;
 }
 
 /** Statuses of a node: the derived view the plan panel should render. */
 export function derivedNodeStatus(statuses: DerivedPlanStatuses, nodeId: string): PlanNodeStatus {
 	if (statuses.current === nodeId) return "current";
-	if (statuses.done.has(nodeId)) return "done";
+	if (statuses.visited.has(nodeId)) return "visited";
 	return "upcoming";
 }
 
 export function derivePlanStatuses(tree: PlanTree, messages: readonly PartsCarrier[]): DerivedPlanStatuses {
 	const ids = new Set(tree.nodes.map((n) => n.id));
-	const done = new Set<string>();
-	let current: string | null = null;
-
+	const runs: string[] = []; // distinct tagged nodes in call order, CONSECUTIVE
+	// duplicates collapsed (several checks on one node = one stay on it)
 	for (const m of messages) {
 		for (const part of m.parts) {
 			if (part.type !== "tool-quiz") continue;
 			const nodeId = (part.input as { nodeId?: unknown } | undefined)?.nodeId;
-			if (typeof nodeId !== "string" || !ids.has(nodeId)) continue; // untagged/unknown = lost signal
-			if (part.state === "input-available") {
-				current = nodeId; // a check is out — that's where we are
-			} else if (part.state === "output-available") {
-				if ((part.output as { correct?: unknown } | undefined)?.correct === true) done.add(nodeId);
-				// failed checks change nothing: resume teaching, re-check later
-			}
+			if (typeof nodeId !== "string" || !ids.has(nodeId)) continue; // untagged/unknown — moves nothing
+			if (runs.at(-1) !== nodeId) runs.push(nodeId);
 		}
 	}
-
-	if (current === null) {
-		// No check out: the first node (authoring order) whose prerequisites
-		// are all demonstrated and that isn't done itself — the next lesson.
-		const prereqs = new Map<string, string[]>();
-		for (const e of tree.edges) prereqs.set(e.to, [...(prereqs.get(e.to) ?? []), e.from]);
-		current =
-				tree.nodes.find(
-					(n) => !done.has(n.id) && (prereqs.get(n.id) ?? []).every((p) => done.has(p)),
-			)?.id ?? null;
-	}
-	return { current, done };
+	const current = runs.at(-1) ?? null;
+	// Visited = been there in an EARLIER stay: everything before the current
+	// run. A revisit (a→b→a) puts a in visited AND current — current wins at
+	// render (derivedNodeStatus), visited records it has been left before.
+	const visited = new Set(runs.slice(0, -1));
+	return { current, visited };
 }
 
 /**

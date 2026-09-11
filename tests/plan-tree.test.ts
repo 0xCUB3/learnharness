@@ -1,11 +1,11 @@
 /**
  * Plan-tree tests (W1) — two layers:
  *
- *  1. Pure ops (src/core/plan-tree.ts): every validation error path, cascade
- *     remove, version semantics, setCurrent/markDone behavior.
+ *  1. Pure ops (src/core/plan-tree.ts): every validation error path and
+ *     version semantics (structure only — progress derives from the
+ *     transcript, docs/probe-teach-split.md §3).
  *  2. Tool execute (src/agent/tools/plan.ts): against the REAL chat store —
- *     plan_init happy path + refusal to re-init, a mutation round-trip that
- *     persists to the record, error results on invalid ops.
+ *     plan_init happy path, the re-callable rewrite, error results.
  */
 
 import assert from "node:assert/strict";
@@ -13,18 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import { derivePlanStatuses, derivedNodeStatus, type PlanTree, type PlanToolResult } from "../src/core/contracts.ts";
-import {
-	addEdge,
-	addNode,
-	createTree,
-	emptyTree,
-	markDone,
-	PlanTreeError,
-	removeEdge,
-	removeNode,
-	setCurrent,
-	updateNode,
-} from "../src/core/plan-tree.ts";
+import { createTree, emptyTree, PlanTreeError } from "../src/core/plan-tree.ts";
 import { planTools } from "../src/agent/tools/plan.ts";
 import { parseMermaidPlan } from "../src/agent/tools/mermaid-plan.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -60,8 +49,8 @@ describe("plan-tree pure ops", () => {
 		const edges = [E("a", "b")];
 		const t = createTree(nodes, edges);
 		assert.equal(t.version, 1);
-		assert.equal(t.currentNodeId, null);
-		assert.deepEqual(t.doneNodeIds, []);
+		assert.ok(!("currentNodeId" in t), "no stored progress — structure only");
+		assert.ok(!("doneNodeIds" in t), "no done ledger of any kind");
 		assert.deepEqual(t.nodes.map((n) => n.id), ["a", "b"]);
 		assert.deepEqual(t.edges, [E("a", "b")]);
 		// Input arrays untouched (deep-copied into the tree).
@@ -93,119 +82,6 @@ describe("plan-tree pure ops", () => {
 		assertReject(() => createTree([{ id: "a", title: "" }], []), /non-empty `title`/);
 	});
 
-	it("addNode appends and increments version; parents become requires edges", () => {
-		const t = addNode(tree(["a", "b"], [["a", "b"]]), N("c", "C", "the goal"), ["a", "b"]);
-		assert.equal(t.version, 2); // createTree=1, plus this op
-		assert.deepEqual(t.nodes.map((n) => n.id), ["a", "b", "c"]);
-		assert.deepEqual(t.edges, [E("a", "b"), E("a", "c"), E("b", "c")]);
-	});
-
-	it("addNode rejects duplicate ids, unknown parents, self-parent, and cycle-creating parents", () => {
-		const base = tree(["a", "b"], [["a", "b"]]);
-		assertReject(() => addNode(base, N("a")), /already exists/);
-		assertReject(() => addNode(base, N("c"), ["ghost"]), /unknown node id "ghost"/);
-		assertReject(() => addNode(base, N("c"), ["c"]), /itself as a parent/);
-		// a→b exists; adding node x with parent b gives b→x — fine. But a NEW
-		// node whose parents would create a cycle can't happen (new nodes have no
-		// incoming edges yet) — the cycle case is covered via addEdge below.
-	});
-
-	it("updateNode patches title/summary and requires an existing node", () => {
-		let t = tree(["a"]);
-		t = updateNode(t, "a", { title: "A2" });
-		assert.equal(t.nodes[0]!.title, "A2");
-		assert.equal(t.version, 2);
-		t = updateNode(t, "a", { summary: "what it covers" });
-		assert.equal(t.nodes[0]!.summary, "what it covers");
-		assert.equal(t.nodes[0]!.title, "A2");
-		assert.equal(t.version, 3);
-		assertReject(() => updateNode(t, "ghost", { title: "x" }), /Cannot update node "ghost"/);
-	});
-
-	it("removeNode cascades: edges both directions, currentNodeId, doneNodeIds", () => {
-		// a→b→c, b current, a+b done.
-		let t = tree(["a", "b", "c"], [["a", "b"], ["b", "c"]]);
-		t = setCurrent(t, "b");
-		t = markDone(t, "a");
-		t = markDone(t, "b");
-		t = removeNode(t, "b");
-		assert.deepEqual(t.nodes.map((n) => n.id), ["a", "c"]);
-		assert.deepEqual(t.edges, []); // both edges touched b
-		assert.equal(t.currentNodeId, null); // b was current
-		assert.deepEqual(t.doneNodeIds, ["a"]); // b's done entry gone
-		assert.equal(t.version, 5);
-		assertReject(() => removeNode(t, "b"), /Cannot remove node "b"/);
-	});
-
-	it("addEdge validates: unknown endpoints, self-loop, duplicate, cycle", () => {
-		const t = tree(["a", "b", "c"], [["a", "b"]]);
-		assertReject(() => addEdge(t, "a", "ghost"), /unknown node id "ghost"/);
-		assertReject(() => addEdge(t, "ghost", "a"), /unknown node id "ghost"/);
-		assertReject(() => addEdge(t, "a", "a"), /self-loop/);
-		assertReject(() => addEdge(t, "a", "b"), /already exists/);
-		// a→b exists; b→a closes the loop.
-		assertReject(() => addEdge(t, "b", "a"), /cycle/);
-	});
-
-	it("addEdge rejects an indirect cycle (A→B→C then C→A)", () => {
-		const t = tree(["a", "b", "c"], [["a", "b"], ["b", "c"]]);
-		assertReject(() => addEdge(t, "c", "a"), /cycle/);
-		// The reverse direction is fine (c already depends on a transitively).
-		const ok = addEdge(t, "a", "c");
-		assert.deepEqual(ok.edges, [E("a", "b"), E("b", "c"), E("a", "c")]);
-		assert.equal(ok.version, 2);
-	});
-
-	it("removeEdge requires the edge to exist", () => {
-		const t = tree(["a", "b"], [["a", "b"]]);
-		const next = removeEdge(t, "a", "b");
-		assert.deepEqual(next.edges, []);
-		assert.equal(next.version, 2);
-		assertReject(() => removeEdge(next, "a", "b"), /no such edge/);
-	});
-
-	it("setCurrent requires an existing node and never touches doneNodeIds", () => {
-		let t = tree(["a", "b"]);
-		t = markDone(t, "a");
-		t = setCurrent(t, "b");
-		assert.equal(t.currentNodeId, "b");
-		assert.deepEqual(t.doneNodeIds, ["a"]); // untouched
-		assert.equal(t.version, 3);
-		assertReject(() => setCurrent(t, "ghost"), /Cannot set current node "ghost"/);
-	});
-
-	it("setCurrent on the already-current node is a true no-op (no version bump)", () => {
-		let t = tree(["a"]);
-		t = setCurrent(t, "a");
-		const version = t.version;
-		const again = setCurrent(t, "a");
-		assert.equal(again.version, version);
-		assert.equal(again, t); // same object: nothing changed
-	});
-
-	it("markDone requires an existing node and is idempotent", () => {
-		let t = tree(["a"]);
-		t = markDone(t, "a");
-		assert.deepEqual(t.doneNodeIds, ["a"]);
-		const version = t.version;
-		const again = markDone(t, "a");
-		assert.equal(again.version, version);
-		assert.equal(again, t); // same object: nothing changed
-		assertReject(() => markDone(t, "ghost"), /Cannot mark node "ghost" done/);
-	});
-
-	it("every op returns a new tree object (no mutation of the input)", () => {
-		const t = tree(["a", "b", "c"], [["a", "b"]]);
-		const snapshot = JSON.stringify(t);
-		addNode(t, N("d"), ["b"]);
-		updateNode(t, "a", { title: "X" });
-		removeNode(t, "a");
-		addEdge(t, "b", "c");
-		removeEdge(t, "a", "b");
-		setCurrent(t, "b");
-		markDone(t, "b");
-		assert.equal(JSON.stringify(t), snapshot);
-	});
 });
 
 // ─── 2. tool execute against the real store ─────────────────────────────────
@@ -379,9 +255,9 @@ describe("parseMermaidPlan (the constrained mermaid subset)", () => {
 	});
 });
 
-// ─── derived statuses (the tracking the teacher no longer does) ───────────────
+// ─── derived statuses: position from CALLS, never results (§3) ─────────────────
 
-describe("derivePlanStatuses (statuses derive from checks, never declarations)", () => {
+describe("derivePlanStatuses (the map tracks position, not completion)", () => {
 	const tree: PlanTree = {
 		nodes: [
 			{ id: "a", title: "A" },
@@ -392,73 +268,93 @@ describe("derivePlanStatuses (statuses derive from checks, never declarations)",
 			{ from: "a", to: "b" },
 			{ from: "b", to: "c" },
 		],
-		currentNodeId: null,
-		doneNodeIds: [],
 		version: 1,
 	};
 	const quizPart = (state: string, nodeId: string | undefined, correct?: boolean) => ({
 		type: "tool-quiz",
 		state,
 		input: nodeId === undefined ? {} : { nodeId },
-		output: correct === undefined ? undefined : { correct },
+		...(correct === undefined ? {} : { output: { correct } }),
 	});
 	type QuizPart = { type: string; state: string; input: unknown; output?: unknown };
 	const msg = (...parts: QuizPart[]) => ({ parts });
 
-	it("empty transcript → current = first node (authoring order, no prereqs), nothing done", () => {
+	it("empty transcript → no current, nothing visited (no fallback current)", () => {
 		const st = derivePlanStatuses(tree, []);
-		assert.equal(st.current, "a");
-		assert.equal(st.done.size, 0);
+		assert.equal(st.current, null);
+		assert.equal(st.visited.size, 0);
 	});
 
-	it("a passed check on a tags it done; current advances to the next topologically-ready node", () => {
-		const st = derivePlanStatuses(tree, [msg(quizPart("output-available", "a", true))]);
-		assert.deepEqual([...st.done], ["a"]);
-		assert.equal(st.current, "b");
+	it("current = the node of the most recent tagged CALL — regardless of state or outcome", () => {
+		const st = derivePlanStatuses(tree, [msg(quizPart("output-available", "b", false))]);
+		assert.equal(st.current, "b", "even a FAILED check positions the map: the tag is about, not completion");
+		assert.equal(st.visited.size, 0);
+		const open = derivePlanStatuses(tree, [msg(quizPart("input-available", "c"))]);
+		assert.equal(open.current, "c", "a merely ASKED question is already the position");
 	});
 
-	it("a pending check OWNS current, wherever the topo frontier is", () => {
+	it("visited = earlier tagged nodes, sticky; results feed nothing", () => {
 		const st = derivePlanStatuses(tree, [
 			msg(quizPart("output-available", "a", true)),
-			msg(quizPart("input-available", "c")), // a jump check on the sink
+			msg(quizPart("output-available", "b", true)),
 		]);
-		assert.equal(st.current, "c", "the open check is where we are");
-		assert.deepEqual([...st.done], ["a"]);
+		assert.equal(st.current, "b");
+		assert.deepEqual([...st.visited], ["a"]);
+		// a passed check never marks anything finished — only moving on does
+		const again = derivePlanStatuses(tree, [msg(quizPart("output-available", "a", true))]);
+		assert.equal(again.current, "a");
+		assert.equal(again.visited.size, 0, "one correct answer on a does not finish it");
 	});
 
-	it("a FAILED check marks nothing done (explaining is yours, done is theirs)", () => {
-		const st = derivePlanStatuses(tree, [msg(quizPart("output-available", "a", false))]);
-		assert.equal(st.done.size, 0);
-		assert.equal(st.current, "a", "frontier unmoved — resume teaching");
+	it("revisits keep both: A→B→A gives current A, visited {A,B}", () => {
+		const st = derivePlanStatuses(tree, [
+			msg(quizPart("output-available", "a", true)),
+			msg(quizPart("output-available", "b", true)),
+			msg(quizPart("input-available", "a")),
+		]);
+		assert.equal(st.current, "a");
+		assert.deepEqual([...st.visited].sort(), ["a", "b"]);
 	});
 
-	it("untagged checks and unknown nodeIds are lost signal — ignored", () => {
+	it("several checks on one node hold the map still", () => {
+		const st = derivePlanStatuses(tree, [
+			msg(quizPart("output-available", "a", true)),
+			msg(quizPart("output-available", "a", false)),
+			msg(quizPart("input-available", "a")),
+		]);
+		assert.equal(st.current, "a");
+		assert.equal(st.visited.size, 0);
+	});
+
+	it("untagged checks and unknown nodeIds are ad-hoc — they move nothing", () => {
 		const st = derivePlanStatuses(tree, [
 			msg(quizPart("output-available", undefined, true)),
 			msg(quizPart("output-available", "ghost", true)),
 		]);
-		assert.equal(st.done.size, 0);
-		assert.equal(st.current, "a");
+		assert.equal(st.current, null);
+		assert.equal(st.visited.size, 0);
 	});
 
-	it("prereqs gate the frontier: c isn't next until b is demonstrated", () => {
+	it("a rewritten map derives against the CURRENT tree — dropped slugs stop counting", () => {
+		const rewritten: PlanTree = { ...tree, nodes: [tree.nodes[0]!, tree.nodes[1]!] };
+		const st = derivePlanStatuses(rewritten, [
+			msg(quizPart("output-available", "a", true)),
+			msg(quizPart("output-available", "c", true)), // c removed by the rewrite
+		]);
+		assert.equal(st.current, "a", "the orphaned tag is ignored");
+		assert.equal(st.visited.size, 0);
+	});
+
+	it("derivedNodeStatus: current wins over visited; upcoming otherwise", () => {
 		const st = derivePlanStatuses(tree, [msg(quizPart("output-available", "a", true))]);
-		assert.equal(st.current, "b", "c requires b");
-		const st2 = derivePlanStatuses(tree, [
+		assert.equal(derivedNodeStatus(st, "a"), "current");
+		assert.equal(derivedNodeStatus(st, "b"), "upcoming");
+		const later = derivePlanStatuses(tree, [
 			msg(quizPart("output-available", "a", true)),
 			msg(quizPart("output-available", "b", true)),
 		]);
-		assert.equal(st2.current, "c");
-		assert.equal(derivedNodeStatus(st2, "a"), "done");
-		assert.equal(derivedNodeStatus(st2, "c"), "current");
-		assert.equal(derivedNodeStatus(st2, "b"), "done");
-	});
-
-	it("a rewritten map keeps honest progress for reused slugs (derivation matches the CURRENT tree)", () => {
-		const rewritten: PlanTree = { ...tree, nodes: [tree.nodes[0]!, tree.nodes[1]!] };
-		const st = derivePlanStatuses(rewritten, [msg(quizPart("output-available", "a", true))]);
-		assert.equal(st.current, "b");
-		const orphaned = derivePlanStatuses(rewritten, [msg(quizPart("output-available", "c", true))]);
-		assert.equal(orphaned.done.size, 0, "a slug removed from the rewrite stops counting");
+		assert.equal(derivedNodeStatus(later, "a"), "visited");
+		assert.equal(derivedNodeStatus(later, "b"), "current");
+		assert.equal(derivedNodeStatus(later, "c"), "upcoming");
 	});
 });

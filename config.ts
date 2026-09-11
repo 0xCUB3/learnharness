@@ -32,7 +32,9 @@ export interface ModelSpec {
 }
 
 export const MODELS = {
-	/** The teacher — streaming, lesson-facing: smart, but keep it lively. */
+	/** The prober (agent A) — edge-bracketing questions; keep it lively and adaptive. */
+	prober: { model: "z-ai/glm-5.3-flash", effort: "minimal" },
+	/** The teacher (agent B) — planning + streaming, lesson-facing: smart, but keep it lively. */
 	teacher: { model: "z-ai/glm-5.3-flash", effort: "minimal" },
 	/** Background sub-agents: fast and cheap beats deep thought. */
 	researcher: { model: "z-ai/glm-5.3-flash", effort: "minimal" },

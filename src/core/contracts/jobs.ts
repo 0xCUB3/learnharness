@@ -242,7 +242,7 @@ export interface AbortSteerMessage extends UIMessage {
 }
 
 /** Anything the wake pipeline may queue and deliver. */
-export type SteerMessage = SubagentSteerMessage | AbortSteerMessage;
+export type SteerMessage = SubagentSteerMessage | AbortSteerMessage | ProbeHandoffSteerMessage;
 
 /** Whether a result is the failure shape (html/svg empty, failure brief). */
 export function isSubagentFailure(kind: JobKind, result: ResearchResult | DemoResult | VisualResult): boolean {
@@ -326,10 +326,39 @@ function abortText(kind: JobKind): string {
 	return "The figure job was aborted by the learner — no figure is coming. Acknowledge it in one line and teach without it (a re-dispatch is fine if the learner wants it).";
 }
 
-/** True when the transcript already carries this job's steer (idempotent delivery). */
-export function steerDelivered(messages: UIMessage[], jobId: string): boolean {
-	return messages.some(
-		(m) => (m.metadata as { subagentResult?: { jobId?: string } } | undefined)?.subagentResult?.jobId === jobId,
-	);
+// ─── the probe handoff steer (the probe→teach split, docs/probe-teach-split.md §2) ──
+//
+// probe_done's execute queues this through the same wake pipeline; the
+// pump fires it once the prober's turn ends (gates + grace). It carries no
+// artifact — the assessment it references is durable in the transcript as
+// the probe_done tool part. Deterministic id per chat: exactly one
+// handoff, idempotent re-delivery.
+
+export interface ProbeHandoffSteerMessage extends UIMessage {
+	id: `steer_probe_${string}`;
+	role: "user";
+	metadata: { probeHandoff: { chatId: string } };
+	parts: [{ type: "text"; text: string }];
+}
+
+export function buildProbeHandoffSteer(chatId: string): ProbeHandoffSteerMessage {
+	return {
+		id: `steer_probe_${chatId}`,
+		role: "user",
+		metadata: { probeHandoff: { chatId } },
+		parts: [
+			{
+				type: "text",
+				text: "The probe is concluded — the learner assessment is recorded. Author the session's plan map now (call plan_init) and present it, then begin teaching.",
+			},
+		],
+	};
+}
+
+/** True when the transcript already carries this steer — idempotent
+ *  delivery for ANY steer kind: every steer id is deterministic per its
+ *  event (steer_<jobId> for jobs, steer_probe_<chatId> for the handoff). */
+export function steerDelivered(messages: UIMessage[], steerId: string): boolean {
+	return messages.some((m) => m.id === steerId);
 }
 

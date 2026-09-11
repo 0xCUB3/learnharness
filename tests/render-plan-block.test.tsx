@@ -15,7 +15,7 @@ import {
 import type { PlanBlockData, PlanTree } from "../src/core/contracts.ts";
 
 // Plan blocks: the pure layered layout, the frozen-snapshot rendering
-// (full = borderless + column-filling, neighborhood = labeled fragment
+// (full = borderless + column-filling
 // with the glowing current), and the popup's LIVE derivation.
 
 const CHAIN: PlanTree = {
@@ -28,8 +28,6 @@ const CHAIN: PlanTree = {
 		{ from: "a", to: "b" },
 		{ from: "b", to: "c" },
 	],
-	currentNodeId: null,
-	doneNodeIds: [],
 	version: 1,
 };
 
@@ -75,7 +73,7 @@ describe("plan block render", () => {
 			at: "2026-09-09T12:00:00Z",
 			current: null,
 			nodes: [
-				{ id: "a", title: "Alpha node", status: "done" },
+				{ id: "a", title: "Alpha node", status: "visited" },
 				{ id: "b", title: "Beta node", status: "upcoming" },
 			],
 			edges: [{ from: "a", to: "b" }],
@@ -90,33 +88,11 @@ describe("plan block render", () => {
 		// Two stacked nodes: 2*NODE_H + GAP_Y = 136 natural height, width = one node column.
 		assert.match(html, /viewBox="0 0 160 136"/);
 		// Snapshot statuses render as carried.
-		assert.match(html, /data-testid="plan-node-a" data-status="done"/);
+		assert.match(html, /data-testid="plan-node-a" data-status="visited"/);
 		assert.match(html, /data-testid="plan-node-b" data-status="upcoming"/);
 		assert.match(html, /Open the full plan/);
 	});
 
-	it("neighborhood block: own small container, labeled fragment, glowing current", () => {
-		const data: PlanBlockData = {
-			kind: "neighborhood",
-			at: "2026-09-09T12:00:00Z",
-			current: "mid",
-			nodes: [
-				{ id: "up", title: "Upstream", status: "done" },
-				{ id: "mid", title: "Current node", status: "current" },
-				{ id: "down", title: "Downstream", status: "upcoming" },
-			],
-			edges: [
-				{ from: "up", to: "mid" },
-			],
-		};
-		const html = renderToStaticMarkup(<PlanBlock data={data} onOpen={() => {}} />);
-		assert.match(html, /data-testid="plan-block-neighborhood"/);
-		assert.match(html, /class="[^"]*border/, "the fragment has its own container");
-		assert.match(html, /Plan fragment/);
-		// The glow: a pulsing primary halo around the current node.
-		assert.match(html, /stroke-primary\/70 animate-pulse/);
-		assert.match(html, /data-testid="plan-node-mid" data-status="current"/);
-	});
 });
 
 describe("plan popup (live derivation)", () => {
@@ -153,10 +129,10 @@ describe("plan popup (live derivation)", () => {
 		];
 	}
 
-	it("derives statuses at click time: passed → done, live check → current (glowing)", () => {
+	it("derives statuses at click time: latest tagged call → current, earlier → visited (glowing)", () => {
 		const html = renderToStaticMarkup(<PlanPopup messages={messages()} onClose={() => {}} />);
 		assert.match(html, /data-testid="plan-popup"/);
-		assert.match(html, /data-testid="plan-node-a" data-status="done"/);
+		assert.match(html, /data-testid="plan-node-a" data-status="visited"/);
 		assert.match(html, /data-testid="plan-node-b" data-status="current"/);
 		assert.match(html, /data-testid="plan-node-c" data-status="upcoming"/);
 		// The current node is the glow target.

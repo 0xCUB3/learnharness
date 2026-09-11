@@ -1,191 +1,122 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+/**
+ * plan-blocks — the INTERIM plan presentation seam (docs/probe-teach-split.md
+ * §6): the full block renders IN FLOW exactly once, attached to the
+ * assistant message carrying the successful plan_init call. The
+ * neighborhood-block machinery is retired (position derives live from
+ * derivePlanStatuses); the persistent DAG window (UI wave) succeeds this.
+ */
+import assert from "node:assert";
+import test from "node:test";
 import type { UIMessage } from "ai";
-import { neighborhood, withPlanBlocks, type PlanBlockPart } from "../src/core/plan-blocks.ts";
+import { withPlanBlocks, type PlanBlockPart } from "../src/core/plan-blocks.ts";
 import type { PlanTree } from "../src/core/contracts.ts";
 
-/** The 5-node DAG the neighborhood tests slice:
- *  A → B → C, B → D → E (B's children C,D; A's only child is B). */
-function tree(): PlanTree {
+// 5-node fixture: a → b → c, b → d, d → e.
+const TREE: PlanTree = {
+	nodes: [
+		{ id: "a", title: "A" },
+		{ id: "b", title: "B" },
+		{ id: "c", title: "C" },
+		{ id: "d", title: "D" },
+		{ id: "e", title: "E" },
+	],
+	edges: [
+		{ from: "a", to: "b" },
+		{ from: "b", to: "c" },
+		{ from: "b", to: "d" },
+		{ from: "d", to: "e" },
+	],
+	version: 1,
+};
+
+/** An assistant message carrying a successful plan_init with the fixture tree. */
+function planInitMessage(id: string, tree: PlanTree = TREE): UIMessage {
 	return {
-		nodes: [
-			{ id: "a", title: "Foundations" },
-			{ id: "b", title: "Core" },
-			{ id: "c", title: "Applied" },
-			{ id: "d", title: "Deep dive" },
-			{ id: "e", title: "Frontier" },
+		id,
+		role: "assistant",
+		parts: [
+			{ type: "text", text: "Here is the plan." },
+			{ type: "tool-plan_init", state: "output-available", output: { ok: true, tree } },
 		],
-		edges: [
-			{ from: "a", to: "b" },
-			{ from: "b", to: "c" },
-			{ from: "b", to: "d" },
-			{ from: "d", to: "e" },
-		],
-		currentNodeId: null,
-		doneNodeIds: [],
-		version: 1,
-	};
+	} as unknown as UIMessage;
 }
 
-function msg(id: string, role: "user" | "assistant", parts: UIMessage["parts"] = []): UIMessage {
-	return { id, role, parts };
+function blocksOf(messages: UIMessage[]): PlanBlockPart[] {
+	return messages.flatMap((m) => m.parts.filter((p) => p.type === "data-plan-block") as PlanBlockPart[]);
 }
 
-function blocksOf(m: UIMessage): PlanBlockPart[] {
-	return m.parts.filter((p): p is PlanBlockPart => p.type === "data-plan-block") as PlanBlockPart[];
-}
-
-function allBlocks(messages: UIMessage[]): PlanBlockPart[] {
-	return messages.flatMap((m) => blocksOf(m));
-}
-
-/** tool-plan_init part in terminal state (the authoring call succeeded). */
-function planInitPart(tree: PlanTree, ok = true) {
-	return { type: "tool-plan_init", state: "output-available", input: { mermaid: "graph TD" }, output: { ok, tree } } as unknown as UIMessage["parts"][number];
-}
-
-/** tool-quiz part tagged with a node. `answered` appends the learner's output. */
-function quizPart(nodeId: string, answered?: { correct: boolean }) {
-	const part = {
-		type: "tool-quiz",
-		state: answered ? "output-available" : "input-available",
-		input: { nodeId, question: "…", options: [] },
-		...(answered ? { output: { correct: answered.correct } } : {}),
-	} as unknown as UIMessage["parts"][number];
-	return part;
-}
-
-describe("neighborhood (pure scope)", () => {
-	it("includes current + direct parents + direct children, nothing further", () => {
-		const { nodes, edges } = neighborhood(tree(), "b");
-		assert.deepEqual(
-			nodes.map((n) => n.id).sort(),
-			["a", "b", "c", "d"],
-		);
-		assert.deepEqual(edges.map((e) => `${e.from}>${e.to}`).sort(), ["a>b", "b>c", "b>d"]);
-	});
+test("withPlanBlocks: a successful plan_init message gains ONE full block (all nodes, statuses from the transcript)", () => {
+	const out = withPlanBlocks([planInitMessage("m1")], TREE);
+	const blocks = blocksOf(out);
+	assert.equal(blocks.length, 1);
+	const data = blocks[0]!.data;
+	assert.equal(data.kind, "full");
+	assert.equal(data.current, null, "at authoring nothing is current");
+	assert.equal(data.nodes.length, 5);
+	assert.ok(data.nodes.every((n) => n.status === "upcoming"));
+	assert.equal(data.edges.length, 4);
+	// attached to the plan_init message itself
+	assert.equal(blocksOf([out[0]!]).length, 1);
 });
 
-describe("withPlanBlocks", () => {
-	it("attaches a FULL block to the assistant message with a successful plan_init", () => {
-		const t = tree();
-		const out = withPlanBlocks(
-			[msg("m1", "user", [{ type: "text", text: "teach me" } as never]), msg("m2", "assistant", [planInitPart(t)])],
-			t,
-		);
-		const blocks = allBlocks(out);
-		assert.equal(blocks.length, 1);
-		assert.equal(blocks[0]!.data.kind, "full");
-		assert.equal(blocks[0]!.data.current, "a"); // first prereq-free node
-		assert.equal(blocks[0]!.data.nodes.length, 5);
-		assert.equal(blocksOf(out[1]!).length, 1); // on the plan_init message itself
-	});
+test("withPlanBlocks: a FAILED plan_init gains nothing", () => {
+	const failed: UIMessage = {
+		id: "m1",
+		role: "assistant",
+		parts: [
+			{ type: "text", text: "oops" },
+			{ type: "tool-plan_init", state: "output-error", output: { ok: false, error: "bad" } },
+		],
+	} as unknown as UIMessage;
+	assert.equal(blocksOf(withPlanBlocks([failed], TREE)).length, 0);
+});
 
-	it("ignores a failed plan_init (ok: false)", () => {
-		const t = tree();
-		const out = withPlanBlocks([msg("m1", "user"), msg("m2", "assistant", [planInitPart(t, false)])], t);
-		assert.equal(allBlocks(out).length, 0);
-	});
+test("withPlanBlocks: idempotent — a message that already carries a block is never given another", () => {
+	const once = withPlanBlocks([planInitMessage("m1")], TREE);
+	const twice = withPlanBlocks(once, TREE);
+	assert.equal(blocksOf(twice).length, 1, "no duplicate block on persist replay");
+});
 
-	it("attaches a NEIGHBORHOOD block on the last assistant message when a check goes out", () => {
-		const t = tree();
-		const out = withPlanBlocks(
-			[
-				msg("m1", "user"),
-				msg("m2", "assistant", [quizPart("a", { correct: true })]), // a done earlier
-				msg("m3", "assistant", [quizPart("b")]), // check on b now out
-			],
-			t,
-		);
-		const blocks = allBlocks(out);
-		assert.equal(blocks.length, 1);
-		assert.equal(blocks[0]!.data.kind, "neighborhood");
-		assert.equal(blocks[0]!.data.current, "b");
-		assert.deepEqual(
-			blocks[0]!.data.nodes.map((n) => n.id).sort(),
-			["a", "b", "c", "d"], // e excluded: grandchild of b via d
-		);
-		assert.equal(blocksOf(out[2]!).length, 1); // on the LAST assistant message
-	});
+test("withPlanBlocks: a plan REWRITE (second successful plan_init) gets its own full block; the old stays frozen", () => {
+	const rewrittenTree: PlanTree = { nodes: TREE.nodes.slice(0, 3), edges: [{ from: "a", to: "b" }], version: 2 };
+	const out = withPlanBlocks([planInitMessage("m1"), planInitMessage("m2", rewrittenTree)], rewrittenTree);
+	const blocks = blocksOf(out);
+	assert.equal(blocks.length, 2, "one full block per authoring event");
+	assert.equal(blocks[1]!.data.nodes.length, 3);
+});
 
-	it("does not re-emit when the plan state has not moved", () => {
-		const t = tree();
-		const turn1 = withPlanBlocks([msg("m1", "user"), msg("m2", "assistant", [quizPart("b")])], t);
-		assert.equal(allBlocks(turn1).length, 1);
-		// next turn: plain exchange, plan untouched — the previous block IS the as-of slice
-		const turn2 = withPlanBlocks(
-			[...turn1, msg("m3", "user"), msg("m4", "assistant", [{ type: "text", text: "ok" } as never])],
-			t,
-		);
-		assert.equal(allBlocks(turn2).length, 1); // nothing new
-		assert.equal(blocksOf(turn2[3]!).length, 0);
-	});
+test("withPlanBlocks: quizzes alone emit nothing (no neighborhood blocks anymore)", () => {
+	const quizTurn: UIMessage = {
+		id: "m1",
+		role: "assistant",
+		parts: [
+			{ type: "text", text: "check" },
+			{ type: "tool-quiz", state: "output-available", input: { nodeId: "b" }, output: { correct: true } },
+		],
+	} as unknown as UIMessage;
+	assert.equal(blocksOf(withPlanBlocks([quizTurn], TREE)).length, 0);
+});
 
-	it("re-emits when a check resolves (done grows / current falls back)", () => {
-		const t = tree();
-		const asked = withPlanBlocks([msg("m1", "user"), msg("m2", "assistant", [quizPart("b")])], t);
-		// learner answers correctly: done grows, no check out → current falls to a
-		const answered = withPlanBlocks(
-			[...asked, msg("m3", "user"), msg("m4", "assistant", [{ type: "text", text: "good" } as never])].map((m) =>
-				m.id === "m2" ? { ...m, parts: m.parts.map((p) => (p.type === "tool-quiz" ? quizPart("b", { correct: true }) : p)) } : m,
-			),
-			t,
-		);
-		const blocks = allBlocks(answered);
-		assert.equal(blocks.length, 2);
-		const latest = blocks.at(-1)!.data;
-		assert.equal(latest.kind, "neighborhood");
-		assert.deepEqual(
-			latest.nodes.find((n) => n.id === "b")!.status,
-			"done",
-		);
-		assert.equal(latest.current, "a"); // b done, a never checked → first eligible
-	});
+test("withPlanBlocks: no tree / empty tree / no messages are no-ops", () => {
+	assert.equal(withPlanBlocks([planInitMessage("m1")], null).length, 1, "passthrough");
+	const emptyTree: PlanTree = { nodes: [], edges: [], version: 0 };
+	assert.equal(blocksOf(withPlanBlocks([planInitMessage("m1")], emptyTree)).length, 0);
+	assert.equal(withPlanBlocks([], TREE).length, 0);
+});
 
-	it("re-emits when a failed check resets the standing (no done growth)", () => {
-		const t = tree();
-		const asked = withPlanBlocks([msg("m1", "user"), msg("m2", "assistant", [quizPart("b")])], t);
-		// learner answers WRONG: done doesn't grow, but no check is out anymore
-		// → current falls back to the first eligible node
-		const failed = withPlanBlocks(
-			[...asked, msg("m3", "user"), msg("m4", "assistant", [{ type: "text", text: "let's review" } as never])].map((m) =>
-				m.id === "m2" ? { ...m, parts: m.parts.map((p) => (p.type === "tool-quiz" ? quizPart("b", { correct: false }) : p)) } : m,
-			),
-			t,
-		);
-		const blocks = allBlocks(failed);
-		assert.equal(blocks.length, 2);
-		const latest = blocks.at(-1)!.data;
-		assert.equal(latest.current, "a");
-		assert.equal(latest.nodes.find((n) => n.id === "b")!.status, "upcoming"); // not done
-	});
-
-	it("is idempotent when the same list is persisted twice (retry replay)", () => {
-		const t = tree();
-		const once = withPlanBlocks([msg("m1", "user"), msg("m2", "assistant", [quizPart("b")])], t);
-		const twice = withPlanBlocks(once, t);
-		assert.equal(allBlocks(twice).length, 1);
-		assert.equal(twice[1]!.parts.length, once[1]!.parts.length);
-	});
-
-	it("attaches a new FULL block on a plan rewrite, keeping the old block frozen", () => {
-		const t = tree();
-		const authored = withPlanBlocks([msg("m1", "user"), msg("m2", "assistant", [planInitPart(t)])], t);
-		const rewrite = withPlanBlocks(
-			[...authored, msg("m3", "user"), msg("m4", "assistant", [planInitPart(t)])],
-			t,
-		);
-		const blocks = allBlocks(rewrite);
-		assert.equal(blocks.length, 2);
-		assert.deepEqual(blocks.map((b) => b.data.kind), ["full", "full"]);
-		assert.equal(blocksOf(rewrite[3]!).length, 1); // new block on the NEW authoring message
-	});
-
-	it("no-ops on null/empty tree and on messages without assistant turns", () => {
-		assert.equal(withPlanBlocks([msg("m1", "user")], tree()).length, 1);
-		const empty = withPlanBlocks([msg("m1", "user"), msg("m2", "assistant")], { ...tree(), nodes: [] });
-		assert.equal(allBlocks(empty).length, 0);
-		const noTree = withPlanBlocks([msg("m1", "user"), msg("m2", "assistant")], null);
-		assert.equal(allBlocks(noTree).length, 0);
-	});
+test("withPlanBlocks: mid-lesson rewrite snapshot derives statuses from the whole transcript", () => {
+	// A tagged quiz call on node b happened before the rewrite: b is current.
+	const quizBefore: UIMessage = {
+		id: "m0",
+		role: "assistant",
+		parts: [
+			{ type: "text", text: "about b" },
+			{ type: "tool-quiz", state: "output-available", input: { nodeId: "b" }, output: { correct: true } },
+		],
+	} as unknown as UIMessage;
+	const out = withPlanBlocks([quizBefore, planInitMessage("m1")], TREE);
+	const data = blocksOf(out)[0]!.data;
+	assert.equal(data.current, "b");
+	const b = data.nodes.find((n) => n.id === "b")!;
+	assert.equal(b.status, "current");
 });

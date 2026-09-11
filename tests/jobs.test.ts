@@ -42,6 +42,8 @@ import {
 	type SteerMessage,
 	type SubagentSteerMessage,
 	type VisualResult,
+	buildProbeHandoffSteer,
+	type ProbeHandoffSteerMessage,
 } from "../src/core/contracts.ts";
 import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
@@ -237,11 +239,17 @@ describe("steer helpers (contracts.ts)", () => {
 		assert.equal(isSubagentFailure("visual", { ...visual, svg: "" }), true);
 	});
 
-	it("steerDelivered: matches on metadata.subagentResult.jobId", () => {
+	it("steerDelivered: matches on the deterministic steer id (any steer kind)", () => {
 		const steer = buildSubagentSteer({ id: "job_y", kind: "demo", toolCallId: "c" }, demo);
-		assert.equal(steerDelivered([], "job_y"), false);
-		assert.equal(steerDelivered([steer], "job_y"), true);
-		assert.equal(steerDelivered([steer], "job_z"), false);
+		assert.equal(steer.id, "steer_job_y");
+		assert.equal(steerDelivered([], steer.id), false);
+		assert.equal(steerDelivered([steer], steer.id), true);
+		assert.equal(steerDelivered([steer], "steer_job_z"), false);
+		// the probe handoff shares the id-space contract
+		const handoff = buildProbeHandoffSteer("chat_q");
+		assert.equal(handoff.id, "steer_probe_chat_q");
+		assert.equal(steerDelivered([handoff], handoff.id), true);
+		assert.equal(steerDelivered([steer], handoff.id), false);
 	});
 
 	it("failure steers tell the teacher how to recover (research/demo/visual wording)", () => {
@@ -325,7 +333,9 @@ describe("dispatch (async protocol §2)", () => {
 		const delivery = fakeDeliver();
 		const testRunner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
 		const agent = createTeacherAgent(
+			undefined,
 			researchCallingTeacher(),
+			undefined,
 			createTeacherTools({
 				chatId: chat.id,
 				chatStore,
@@ -603,6 +613,50 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 		return { chatId: chat.id, jobId: job.id, steer };
 	}
 
+	it("delivers a PROBE HANDOFF steer the same way — the teacher's wake turn", async () => {
+		const chat = chatStore.createChat("Test: probe handoff wake");
+		trackChat(chat.id);
+		// The concluded probe: a persisted probe_done part (the seam the
+		// chat-handler's construction branch keys on) and no open question.
+		chatStore.saveMessages(chat.id, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "teach me calc" }] },
+			{
+				id: "a1",
+				role: "assistant",
+				parts: [
+					{ type: "tool-probe_done", state: "output-available", output: { ok: true } },
+				],
+			},
+		] as never);
+		const handoff = buildProbeHandoffSteer(chat.id);
+		let seen: { chatId: string; lastMessage: ProbeHandoffSteerMessage } | null = null;
+		setTurnRunner(async (cid, messages) => {
+			seen = { chatId: cid, lastMessage: messages[messages.length - 1] as ProbeHandoffSteerMessage };
+			return 200;
+		});
+
+		await deliverJobResult(handoff);
+		await waitFor(() => seen !== null, 8000, "handoff wake fired");
+		assert.equal(seen!.chatId, chat.id);
+		assert.equal(seen!.lastMessage.id, `steer_probe_${chat.id}`, "the handoff is the wake turn's final input message");
+	});
+
+	it("a redelivered handoff dedupes via the transcript (idempotent by steer id)", async () => {
+		const chat = chatStore.createChat("Test: handoff idempotent");
+		trackChat(chat.id);
+		const handoff = buildProbeHandoffSteer(chat.id);
+		// The transcript already carries the steer (a previous wake completed).
+		chatStore.saveMessages(chat.id, [handoff as never]);
+		let fired = 0;
+		setTurnRunner(async () => {
+			fired++;
+			return 200;
+		});
+
+		await deliverJobResult(handoff);
+		assert.equal(fired, 0, "already delivered — the pump resolves without firing a wake");
+	});
+
 	it("delivers: fires the turn runner with the record + steer, then flips the job done", async () => {
 		const { chatId, jobId, steer } = setup();
 		let seen: { chatId: string; lastMessage: unknown } | null = null;
@@ -867,7 +921,7 @@ describe("persistTurn id hygiene", () => {
 
 describe("prompt composition", () => {
 	it("loads ONLY numeric-prefix fragments — README.md never enters the system prompt", () => {
-		const instructions = composeInstructions();
+		const instructions = composeInstructions("teacher");
 		assert.ok(!instructions.includes("Prompt fragments"), "README content must not leak");
 		assert.ok(!instructions.includes("Rules for adding a fragment"), "README content must not leak (rules)");
 		// every numeric fragment DOES compose, verbatim, after the base prompt
@@ -889,7 +943,7 @@ describe("prompt composition", () => {
 			const body = fs.readFileSync(`src/agent/prompts/${f}`, "utf-8").trim();
 			assert.ok(body.length <= 8_000, `fragment ${f} is ${body.length} chars — over the 8k guard`);
 		}
-		assert.ok(composeInstructions().length <= 60_000, "composed system prompt over the 60k guard");
+		assert.ok(composeInstructions("teacher").length <= 60_000, "composed system prompt over the 60k guard");
 	});
 });
 
@@ -1001,7 +1055,7 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 
 			await waitFor(() => fired.length > 0, 8000, "abort wake fired");
 			const last = fired[0]!;
-			assert.equal(last.metadata.subagentResult.aborted, true);
+			assert.equal((last.metadata as { subagentResult: { aborted: boolean } }).subagentResult.aborted, true);
 			assert.equal(last.id, `steer_${jobId}`);
 			assert.equal(last.parts.length, 1, "text only — no artifact part");
 			// aborted is terminal: the wake completing must not flip it
@@ -1067,7 +1121,11 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 		endTurn(chat.id); // gates open — whatever is left in the queue fires
 		await waitFor(() => fired.length > 0, 8000, "wake fired");
 		assert.equal(fired.length, 1, "exactly one delivery — the result steer was dropped");
-		assert.equal(fired[0]!.metadata.subagentResult.aborted, true, "the abort steer, not the result");
+		assert.equal(
+			(fired[0]!.metadata as { subagentResult: { aborted: boolean } }).subagentResult.aborted,
+			true,
+			"the abort steer, not the result",
+		);
 		assert.equal(jobStore.getJob(job.id)!.status, "error", "terminal after the wake");
 	});
 
