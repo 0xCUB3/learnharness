@@ -5,6 +5,7 @@ import { ActivityIcon, BotIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, W
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
 import { CONTEXT_LIMITS, jobCost } from "@/src/core";
+import { formatTokens, formatUsd } from "@/components/usage-format";
 
 /**
  * THE ACTIVITY DOCK (wave 4, vision observability): the bottom-right corner
@@ -177,18 +178,6 @@ export function formatElapsed(ms: number): string {
 	const m = Math.floor(s / 60);
 	if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
 	return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
-}
-
-/** USD for cent-scale money: >= $1 keeps two decimals, smaller keeps four. */
-export function formatUsd(c: number): string {
-	return c >= 1 ? `$${c.toFixed(2)}` : `$${c.toFixed(4)}`;
-}
-
-/** 38000 → "38k", 1234567 → "1.2M" — trimmed, never "38.0k". */
-export function formatTokens(n: number): string {
-	if (n >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
-	if (n >= 1e3) return `${+(n / 1e3).toFixed(1)}k`;
-	return String(n);
 }
 
 // ─── The dock ─────────────────────────────────────────────────────────────────

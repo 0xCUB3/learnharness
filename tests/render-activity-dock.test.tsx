@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { ActivityDock, formatElapsed, formatTokens, formatUsd, toBlobs, type ActivityFeed } from "../components/activity-dock.tsx";
+import { ActivityDock, formatElapsed, toBlobs, type ActivityFeed } from "../components/activity-dock.tsx";
+import { formatTokens, formatUsd } from "../components/usage-format.ts";
 
 // The dock's pure layer: folds, formatting, and blob order — then the SSR
 // render (blobs, "—" doctrine, the abort affordance, the narrow badge).

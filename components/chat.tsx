@@ -20,11 +20,12 @@ import { artifactRenderers } from "@/components/artifacts";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { JobsContext } from "@/components/jobs-context";
+import { StatsBar } from "@/components/stats-bar";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import { SubAgentsPanel } from "@/components/sub-agents-panel";
 import { TreePanel } from "@/components/tree-panel";
-import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TeacherUIMessage } from "@/src/core";
+import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TeacherUIMessage, TurnUsage } from "@/src/core";
 import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
 import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
 
@@ -160,7 +161,8 @@ export function Chat({
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
 		if (!res.ok) return;
-		const record = (await res.json()) as { messages?: TeacherUIMessage[] };
+		const record = (await res.json()) as { messages?: TeacherUIMessage[]; turns?: TurnUsage[] };
+		if (Array.isArray(record.turns)) setTurns(record.turns);
 		if (!Array.isArray(record.messages)) return;
 		setMessages(record.messages);
 		// setMessages does NOT fire sendAutomaticallyWhen (the SDK only checks
@@ -174,6 +176,33 @@ export function Chat({
 			void sendMessage();
 		}
 	}, [chatId, setMessages, sendMessage, status]);
+
+	// ── Session usage (wave-4 stats bar) ──
+	// The money channel: the record's turns log, folded client-side by
+	// core/prices.ts. Seeded once on mount (the page doesn't carry turns),
+	// refreshed when the local stream settles (each turn appends to the log
+	// server-side), and kept fresh by syncFromServer whenever it already
+	// fetches the record. No turns yet → the bar renders "—" everywhere.
+	const [turns, setTurns] = useState<TurnUsage[]>([]);
+	const syncTurns = useCallback(async () => {
+		try {
+			const res = await fetch(`/api/chats/${chatId}`);
+			if (!res.ok) return;
+			const record = (await res.json()) as { turns?: TurnUsage[] };
+			if (Array.isArray(record.turns)) setTurns(record.turns);
+		} catch {
+			// transient blip: stats stay on the last known figures
+		}
+	}, [chatId]);
+	useEffect(() => {
+		void syncTurns();
+	}, [syncTurns]);
+	// After the learner's own turn ends the log has a fresh entry — refetch.
+	const prevStatusRef = useRef(status);
+	useEffect(() => {
+		if (prevStatusRef.current !== "ready" && status === "ready") void syncTurns();
+		prevStatusRef.current = status;
+	}, [status, syncTurns]);
 
 	// ── Central job observability (contracts.ts "THE ASYNC PROTOCOL" §4) ──
 	// ONE poll of /api/jobs drives every job surface (transcript dispatch
@@ -400,6 +429,7 @@ export function Chat({
 							pending={pending}
 							requiresReveal={requiresReveal}
 							phase={phases.at(-1) ?? "probe"}
+							turns={turns}
 							composer={
 								<Composer
 									// Stop applies only to a LOCAL stream: a server-side turn has no
@@ -453,6 +483,7 @@ function DockOverlay({
 	pending,
 	requiresReveal,
 	phase,
+	turns,
 	composer,
 	onSubmitAnswer,
 }: {
@@ -461,6 +492,8 @@ function DockOverlay({
 	requiresReveal: boolean;
 	/** Session phase at the pending question — scales the thinking field. */
 	phase: Phase3;
+	/** The session's usage log — the stats bar beneath the composer folds it. */
+	turns: TurnUsage[];
 	composer: React.ReactNode;
 	onSubmitAnswer: (output: QuestionAnswerData) => void;
 }) {
@@ -623,6 +656,10 @@ function DockOverlay({
 							)}
 						</div>
 					</div>
+					{/* The stats row: beneath the composer/question shell, not
+					    flush to the screen bottom — static height, outside the
+					    morphing shell so it never joins a height animation. */}
+					<StatsBar turns={turns} />
 				</div>
 			</div>
 		</div>
