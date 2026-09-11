@@ -2,9 +2,11 @@
  * phases — the event-driven phase chain (docs/probe-teach-split.md §4).
  *
  * probe ends at the first CONCLUDED probe_done (output-available); planning
- * ends at the first successful plan_init (a tree with nodes). No stored-tree
- * seam: the phase is a pure fold over the transcript, so it can never stick
- * (the old currentNodeId-based phaseOfTree read a field nothing ever set).
+ * ends at the LEARNER'S plan acceptance (a data-plan-accepted part on the
+ * accept button's user message — plan_init only PRESENTS the map). No
+ * stored-tree seam: the phase is a pure fold over the transcript, so it can
+ * never stick (the old currentNodeId-based phaseOfTree read a field nothing
+ * ever set).
  */
 import assert from "node:assert";
 import test from "node:test";
@@ -32,7 +34,19 @@ function assistantTool(
 const DONE_ASSESSMENT = { assessment: { strands: [{ strand: "s", assessment: "a" }] } };
 const PLAN_OK = { ok: true, tree: { nodes: [{ id: "n1", title: "N" }], edges: [] } };
 
-test("phaseAt3: probe until a concluded probe_done; plan until a successful plan_init; teach after", () => {
+/** The accept button's user message (text + marker data part). */
+function planAccepted(): UIMessage {
+	return {
+		id: `u_accept_${Math.random().toString(36).slice(2, 6)}`,
+		role: "user",
+		parts: [
+			{ type: "text", text: "The plan is accepted — begin teaching." },
+			{ type: "data-plan-accepted", id: "pa_1", data: { at: "2026-09-11T00:00:00Z" } } as never,
+		],
+	};
+}
+
+test("phaseAt3: probe until a concluded probe_done; plan until the learner ACCEPTS; teach after", () => {
 	const probe = phaseAt3([user("teach me calculus"), assistantTool("quiz", "output-available")]);
 	assert.equal(probe, "probe", "quiz answers alone never end the probe");
 
@@ -42,19 +56,37 @@ test("phaseAt3: probe until a concluded probe_done; plan until a successful plan
 	]);
 	assert.equal(concluded, "plan", "a concluded probe_done ends the probe (planning begins)");
 
-	const plan = phaseAt3([
+	const presented = phaseAt3([
 		user("teach me"),
 		assistantTool("probe_done", "output-available", DONE_ASSESSMENT),
 		assistantTool("plan_init", "output-available", PLAN_OK),
 	]);
-	assert.equal(plan, "teach", "a successful plan_init ends planning");
+	assert.equal(presented, "plan", "a successful plan_init PRESENTS the map — planning continues until the verdict");
+
+	const accepted = phaseAt3([
+		user("teach me"),
+		assistantTool("probe_done", "output-available", DONE_ASSESSMENT),
+		assistantTool("plan_init", "output-available", PLAN_OK),
+		planAccepted(),
+	]);
+	assert.equal(accepted, "teach", "the learner's acceptance ends planning");
+
+	const declined = phaseAt3([
+		user("teach me"),
+		assistantTool("probe_done", "output-available", DONE_ASSESSMENT),
+		assistantTool("plan_init", "output-available", PLAN_OK),
+		user("revise it"),
+		assistantTool("plan_init", "output-available", PLAN_OK),
+	]);
+	assert.equal(declined, "plan", "a declined plan stays in planning until a later acceptance");
 
 	const failedPlan = phaseAt3([
 		user("teach me"),
 		assistantTool("probe_done", "output-available", DONE_ASSESSMENT),
 		assistantTool("plan_init", "output-error", { ok: false, error: "bad mermaid" }),
+		planAccepted(),
 	]);
-	assert.equal(failedPlan, "plan", "a failed plan_init does not end planning");
+	assert.equal(failedPlan, "teach", "acceptance sanctions teaching even after a failed init attempt — the verdict is his");
 });
 
 test("phaseAt3: a mere probe_done CALL (input-available, not yet concluded) keeps the probe open", () => {
@@ -73,10 +105,12 @@ test("phaseTimeline: folds messages into phase spans for the dividers", () => {
 		assistantTool("quiz", "output-available"),
 		assistantTool("probe_done", "output-available", DONE_ASSESSMENT),
 		assistantTool("plan_init", "output-available", PLAN_OK),
+		user("what does node 1 mean?"), // side question — still planning
+		planAccepted(),
 		user("go on"),
 	]);
-	assert.deepEqual(timeline satisfies Phase3[], ["probe", "probe", "plan", "teach", "teach"]);
-	assert.equal(timeline.length, 5);
+	assert.deepEqual(timeline satisfies Phase3[], ["probe", "probe", "plan", "plan", "plan", "teach", "teach"]);
+	assert.equal(timeline.length, 7);
 });
 
 test("phaseAt3: empty transcript is probe", () => {

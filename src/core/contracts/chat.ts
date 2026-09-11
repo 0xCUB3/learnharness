@@ -123,6 +123,16 @@ export interface TurnUsage {
  * block renders current node + direct parents + direct children in its own
  * small container, the current node glowing — clearly a fragment, not the
  * whole plan. Clicking either opens the full plan in a popup. */
+/** The learner's plan-acceptance marker (docs/probe-teach-split.md §4): a
+ *  data part riding the accept-click user message. It is THE plan→teach
+ *  phase seam — phaseAt3 reads it from the transcript;
+ *  convertToModelMessages drops data parts, so the teacher only sees the
+ *  message's text; the marker is for derivation and the UI. */
+export interface PlanAcceptedData {
+	/** ISO timestamp of the accept click. */
+	at: string;
+}
+
 export interface PlanBlockData {
 	/** Only "full" survives (the 2026-09-11 pivot): the plan renders IN
 	 *  FLOW once, at authoring. The neighborhood fragments are retired —

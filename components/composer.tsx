@@ -1,6 +1,6 @@
 "use client";
 
-import { CornerDownLeftIcon, SquareIcon } from "lucide-react";
+import { CheckIcon, CornerDownLeftIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -19,6 +19,7 @@ export function Composer({
 	onStop,
 	canSend,
 	autoFocus,
+	verdict,
 }: {
 	busy: boolean;
 	value: string;
@@ -27,6 +28,10 @@ export function Composer({
 	onStop: () => void;
 	canSend: boolean;
 	autoFocus?: boolean;
+	/** The plan verdict gate: while the presented plan awaits the learner's
+	 *  word, the send square becomes two stacked buttons — green accept,
+	 *  red decline. Typed text rides the verdict as his note. */
+	verdict?: { onAccept: () => void; onDecline: () => void };
 }) {
 	return (
 		<form
@@ -56,19 +61,42 @@ export function Composer({
 				rows={1}
 				className="field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
 			/>
-			<button
-				type="submit"
-				aria-label={busy ? "Stop" : "Send"}
-				disabled={!busy && !canSend}
-				className={cn(
-					"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
-					busy
-						? "bg-secondary text-foreground hover:bg-accent"
-						: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
-				)}
-			>
-				{busy ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
-			</button>
+			{verdict && !busy ? (
+				// The plan verdict (docs/probe-teach-split.md §4): accept
+				// sanctions teaching (phase plan→teach); decline sends the
+				// revision request. Enter keeps sending a plain message —
+				// side questions stay possible while the verdict pends.
+				<div className="flex shrink-0 flex-col justify-end gap-1" data-testid="plan-verdict-buttons">
+					<button
+						type="button"
+						onClick={verdict.onAccept}
+						className="flex h-[19px] items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 text-[11px] font-medium text-white transition-colors hover:bg-emerald-500"
+					>
+						<CheckIcon className="size-3" /> Accept plan
+					</button>
+					<button
+						type="button"
+						onClick={verdict.onDecline}
+						className="flex h-[19px] items-center justify-center gap-1 rounded-md bg-destructive px-3 text-[11px] font-medium text-destructive-foreground transition-colors hover:opacity-90"
+					>
+						<XIcon className="size-3" /> Decline
+					</button>
+				</div>
+			) : (
+				<button
+					type="submit"
+					aria-label={busy ? "Stop" : "Send"}
+					disabled={!busy && !canSend}
+					className={cn(
+						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
+						busy
+							? "bg-secondary text-foreground hover:bg-accent"
+							: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
+					)}
+				>
+					{busy ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
+				</button>
+			)}
 		</form>
 	);
 }

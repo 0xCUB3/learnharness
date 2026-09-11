@@ -5,10 +5,11 @@
  *
  *   probe  — until the first message containing a `tool-probe_done` part
  *            (the prober concludes; the assessment rides the tool part)
- *   plan   — probe concluded, until the first successful `plan_init`
- *            (the teacher presents the map; interim rule until the
- *            accept-plan UI lands — then acceptance becomes the seam)
- *   teach  — a plan exists
+ *   plan   — probe concluded, until the learner ACCEPTS the presented
+ *            plan (a `data-plan-accepted` part on the accept button's
+ *            user message — the explicit verdict gate; plan_init itself
+ *            is only the PRESENTATION and moves no phase)
+ *   teach  — teaching is sanctioned
  *
  * The former derived-occupancy seam (phase-of-tree via `currentNodeId`)
  * is GONE: nothing ever writes currentNodeId (the stuck-on-plan bug — a
@@ -22,19 +23,12 @@
 /** The three phases of a session, as the picker / header / dividers see them. */
 export type Phase3 = "probe" | "plan" | "teach";
 
-/** The advance-only order of phases: a session never visibly regresses. */
-const PHASE3_RANK: Record<Phase3, number> = { probe: 0, plan: 1, teach: 2 };
-
 /**
  * Minimal structural slice of a UI message for the phase scan: parts with
  * a state and (for concluded calls) an output.
  */
 export interface PhaseMessage {
 	parts: ReadonlyArray<{ type: string; state?: string; output?: unknown }>;
-}
-
-interface PlanOutput {
-	tree?: { nodes?: unknown };
 }
 
 /** The phase at `upToIndex` (inclusive; default: the last message). */
@@ -55,15 +49,15 @@ function advance(
 	if (!parts) return phase;
 	for (const part of parts) {
 		// STRICTLY SEQUENTIAL: probe → plan only via a concluded probe_done,
-		// plan → teach only via a successful plan_init. A marker out of order
-		// (e.g. a legacy plan_init with no probe) advances nothing — the chain
-		// never skips, and the rank table below only guards regressions.
+		// plan → teach only via the learner's plan acceptance
+		// (data-plan-accepted). A marker out of order advances nothing — the
+		// chain never skips. plan_init PRESENTS the map; only the verdict
+		// (the accept button's marker part) sanctions teaching.
 		if (phase === "probe" && part.type === "tool-probe_done" && part.state === "output-available") {
 			phase = "plan";
 		}
-		if (phase === "plan" && part.type === "tool-plan_init" && part.state === "output-available") {
-			const tree = (part.output as PlanOutput | undefined)?.tree;
-			if (tree && Array.isArray(tree.nodes) && tree.nodes.length > 0) phase = "teach";
+		if (phase === "plan" && part.type === "data-plan-accepted") {
+			phase = "teach";
 		}
 	}
 	return phase;

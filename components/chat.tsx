@@ -21,7 +21,7 @@ import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
-import { PlanBlock, PlanPopup } from "@/components/plan-block";
+import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanWindow } from "@/components/plan-window";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
@@ -180,6 +180,37 @@ export function Chat({
 
 	// The live plan popup (wave 4): opened by any transcript plan block.
 	const [planOpen, setPlanOpen] = useState(false);
+
+	// ── The plan verdict gate (docs/probe-teach-split.md §4) ──
+	// The plan has been presented (a tree exists) and the session still sits in
+	// the planning phase → the composer's send square becomes the stacked
+	// Accept / Decline buttons. Acceptance is the explicit plan→teach seam
+	// (a data-plan-accepted part on the message); decline asks for revision.
+	const planVerdict = useMemo(
+		() => phaseAt3(messages) === "plan" && latestTree(messages) !== null,
+		[messages],
+	);
+	const sendVerdict = useCallback(
+		(accepted: boolean) => {
+			const note = text.trim();
+			setText("");
+			if (accepted) {
+				void sendMessage({
+					parts: [
+						{ type: "text", text: note || "The plan is accepted — begin teaching." },
+						{
+							type: "data-plan-accepted",
+							id: `pa_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
+							data: { at: new Date().toISOString() },
+						},
+					],
+				});
+			} else {
+				void sendMessage({ text: note || "I'd like the plan revised before we begin." });
+			}
+		},
+		[text, sendMessage],
+	);
 
 	// ── Session usage (wave-4 stats bar) ──
 	// The money channel: the record's turns log, folded client-side by
@@ -489,6 +520,14 @@ export function Chat({
 									onSend={onSend}
 									onStop={() => stop()}
 									canSend={canSend}
+									verdict={
+										planVerdict
+											? {
+													onAccept: () => sendVerdict(true),
+													onDecline: () => sendVerdict(false),
+												}
+											: undefined
+									}
 								/>
 							}
 							onSubmitAnswer={(output) => {

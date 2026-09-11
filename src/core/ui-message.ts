@@ -1,6 +1,7 @@
 import type { UIMessage } from "ai";
 import type {
 	DemoToolInput,
+	PlanAcceptedData,
 	PlanBlockData,
 	ProbeDoneInput,
 	ProbeDoneResult,
@@ -37,6 +38,9 @@ export type TeacherUIDataParts = {
 	"subagent-artifact": SubagentArtifactData;
 	/** Plan blocks (wave 4): frozen plan snapshots rendered in the chat flow. */
 	"plan-block": PlanBlockData;
+	/** The plan-acceptance marker: the accept button's user message carries
+	 *  it — the plan→teach phase seam (docs/probe-teach-split.md §4). */
+	"plan-accepted": PlanAcceptedData;
 };
 
 export type TeacherUIMessage = UIMessage<unknown, TeacherUIDataParts, TeacherUITools>;

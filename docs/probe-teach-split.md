@@ -100,8 +100,15 @@ presents the plan → **accept** → **teach (teacher)**
 
 - The broken derived-occupancy seam (phase-of-tree via `currentNodeId`
   nothing ever sets — the stuck-on-plan bug) is **replaced, not patched**.
-- Interim rule until the accept-plan UI lands: a successful `plan_init`
-  marks plan→teach. (The accept gate is designed but deferred — §7.)
+- The verdict gate is LIVE (landed 2026-09-11, same day): presenting the
+  plan (`plan_init`) does NOT move the phase — the learner's **accept**
+  does. The composer's send square becomes two stacked buttons (green
+  Accept plan / red Decline) while the verdict pends; accept sends a user
+  message carrying a `data-plan-accepted` data part — THE plan→teach seam
+  (`phaseAt3` reads it; `convertToModelMessages` drops data parts, so the
+  teacher sees only the text). Decline asks for a revision; side questions
+  stay possible (Enter sends a plain message, phase unmoved). Mid-lesson
+  rewrites need no fresh verdict: acceptance happens once.
 - The session picker phase derives from transcript markers the same way.
 
 ## 5. No global-graph context in sessions (for now)
@@ -120,21 +127,21 @@ processes dock): always present, zoomed on the current node, auto-moving
 as the lesson advances; click → full plan (the existing popup survives as
 the expanded view). Exact layout/design is refined in the UI session.
 
-Interim until that wave: the full plan block still renders in the flow at
-plan authoring (plan presentation moment; statuses are accurate at that
-instant) and remains the popup's entry point. The neighborhood-block
+The window is LIVE (landed 2026-09-11, one day after the design): bottom-left,
+2:1 zoomed viewBox centered on the current node, clamped to the layout, click
+opens the popup. The full plan block also still renders in the flow at plan
+authoring (the presentation moment; the block sits immediately after the
+`plan_init` call) as a second popup entry point. The neighborhood-block
 machinery (frozen fragments) is retired — snapshots can't represent
 live-derived movement.
 
 ## 7. Deferred / later waves (designed, not now)
 
-- **Accept-plan UI** — when the teacher presents the plan, the composer
-  changes to a formal accept control (two send buttons: green accept-plan /
-  continue; red decline) — first `plan_init` only, never re-authorings.
-  That acceptance is the explicit planning→teach signal. Ideated in the UI
-  session.
+- ~~**Accept-plan UI**~~ — **landed 2026-09-11** (see §4): stacked
+  Accept/Decline buttons; the `data-plan-accepted` part is the seam.
 - **Assessment viewer** — the strand assessments displayed to the learner
-  as a proper card (data already durable in the transcript).
+  as a proper card (data already durable in the transcript; the plain v1
+  probe-done card renders the assessment meanwhile).
 - **Model / thinking control** — currently hardcoded per role in
   `config.ts` MODELS. The split gives natural `MODELS.prober` /
   `MODELS.teacher` entries; runtime control comes after.
