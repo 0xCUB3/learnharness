@@ -48,11 +48,13 @@ function getJob(id: string): JobRecord | null {
 	}
 }
 
-/** Merge a partial patch into the record (identity fields are immutable). */
+/** Merge a partial patch into the record (identity fields are immutable).
+ *  An explicit patch.updatedAt is honored (tests pin deterministic order);
+ *  otherwise the merge bumps it to now. */
 function updateJob(id: string, patch: JobPatch): JobRecord | null {
 	const record = getJob(id);
 	if (!record) return null;
-	const next: JobRecord = { ...record, ...patch, updatedAt: new Date().toISOString() };
+	const next: JobRecord = { ...record, ...patch, updatedAt: patch.updatedAt ?? new Date().toISOString() };
 	fs.writeFileSync(jobFile(id), JSON.stringify(next, null, "\t"), "utf-8");
 	return next;
 }

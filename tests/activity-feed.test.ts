@@ -18,12 +18,19 @@ import { activityFeed } from "../src/server/observability.ts";
 test("activityFeed: running jobs across ALL chats, running-only, title-joined, oldest first", () => {
 	const chatA = chatStore.createChat("feed chat A");
 	const chatB = chatStore.createChat("feed chat B");
+	// job ids tracked as created — the finally cleanup stays scoped to them even
+	// if the test throws mid-way (test files run as concurrent processes over
+	// the shared data/ scratch; wiping the whole jobs dir would delete other
+	// processes' live fixtures — the wave-4 flake lesson)
+	const createdJobs: string[] = [];
 	try {
 		const jobA = jobStore.createJob({ kind: "research", chatId: chatA.id, toolCallId: "tc_a" });
 		const jobB = jobStore.createJob({ kind: "demo", chatId: chatB.id, toolCallId: "tc_b" });
 		const jobDone = jobStore.createJob({ kind: "research", chatId: chatA.id, toolCallId: "tc_done" });
+		createdJobs.push(jobA.id, jobB.id, jobDone.id);
 		jobStore.updateJob(jobDone.id, { status: "done" });
 		const jobB2 = jobStore.createJob({ kind: "research", chatId: chatB.id, toolCallId: "tc_b2" });
+		createdJobs.push(jobB2.id);
 		// make jobB2 the MOST recently active → should still sort AFTER jobA/jobB (oldest-first).
 		// Explicit later timestamp: the real bump can land in the same ms as creation.
 		jobStore.updateJob(jobB2.id, { activity: "second step", updatedAt: new Date(Date.now() + 10).toISOString() });
@@ -47,6 +54,8 @@ test("activityFeed: running jobs across ALL chats, running-only, title-joined, o
 		fs.unlinkSync(`${PATHS.chats}/${chatA.id}.json`);
 		fs.unlinkSync(`${PATHS.chats}/${chatB.id}.json`);
 		const jobsDir = path.join(PATHS.data, "jobs");
-		for (const f of fs.readdirSync(jobsDir)) fs.unlinkSync(path.join(jobsDir, f));
+		for (const id of createdJobs) {
+			fs.unlinkSync(path.join(jobsDir, `${id}.json`));
+		}
 	}
 });
