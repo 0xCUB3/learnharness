@@ -26,8 +26,9 @@ import { formatTokens, formatUsd } from "@/components/usage-format";
  * in place — polling never flickers. Idle (no jobs, no extractions) renders
  * NOTHING. Narrow viewports collapse to a count badge → click opens the
  * drawer. Per blob: kind icon, elapsed, cost, context, activity line, and an
- * explicit END button (POST /api/activity/abort — the backend lands with the
- * agents stream; failures degrade to an inline "not available yet", never a
+ * explicit END button (POST /api/activity/abort — the wave-4 backend is
+ * live): 404/409 mean the process is already gone (refresh, no error);
+ * real failures degrade to an inline "Abort failed", never a
  * dead control).
  */
 
@@ -246,7 +247,19 @@ export function ActivityDock({ feed: feedProp }: { feed?: ActivityFeed }) {
 					id: blob.id,
 				}),
 			});
-			if (!res.ok) throw new Error(String(res.status));
+			if (!res.ok) {
+				// 404 not_found / 409 not_running: the process is already gone —
+				// the desired end state. Refresh and clear; nothing to report.
+				if (res.status === 404 || res.status === 409) {
+					abortRef.current.refresh();
+					set((s) => {
+						const { [blob.id]: _drop, ...rest } = s;
+						return rest;
+					});
+					return;
+				}
+				throw new Error(String(res.status));
+			}
 			abortRef.current.refresh();
 		} catch {
 			set((s) => ({ ...s, [blob.id]: "failed" }));
@@ -368,14 +381,14 @@ function ActivityBlobRow({
 				</span>
 			</button>
 			{/* The explicit END always on the blob's face (SCOPE) — the popover
-			    is for DETAIL, not the control. Until the abort backend lands, a
-			    click fails gracefully: the button locks, the popover says why. */}
+			    is for DETAIL, not the control. A failed abort locks the button and
+			    says why; a succeeded one just makes the blob vanish on refresh. */}
 			<button
 				type="button"
 				data-testid="activity-abort"
 				onClick={onAbort}
 				disabled={abortState !== undefined}
-				title={abortState === "failed" ? "Abort backend not available yet" : "End this background process"}
+				title={abortState === "failed" ? "Abort failed — try again" : "End this background process"}
 				aria-label={`End ${label} in ${blob.title}`}
 				className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
 			>
@@ -430,7 +443,7 @@ function ActivityBlobRow({
 						</a>
 					</div>
 					<div className="mt-2 text-muted-foreground/80">
-					{abortState === "failed" && "Abort not available yet"}
+					{abortState === "failed" && "Abort failed — try again"}
 					{abortState === "pending" && "Stopping…"}
 				</div>
 				</div>
