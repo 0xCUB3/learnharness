@@ -80,12 +80,13 @@ function saveMessages(id: string, messages: UIMessage[]): void {
 }
 
 /** Append one usage entry to the record's turn log — idempotent per
- * messageId: abort replays and wake-turn retries persist the same turn
- * twice; the second append is a no-op. */
+ * turn id: each REQUEST carries its own id, so a replay of the same turn's
+ * persist appends once, while continuation turns (which share a response
+ *  message id) each keep their usage. */
 function appendTurnUsage(id: string, entry: TurnUsage): void {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
-	record.turns = record.turns?.some((t) => t.messageId === entry.messageId)
+	record.turns = record.turns?.some((t) => t.id === entry.id)
 		? record.turns
 		: [...(record.turns ?? []), entry];
 	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");

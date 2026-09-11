@@ -93,8 +93,13 @@ export interface CallUsage {
  * agent steps, and each step bills separately. Capture lands at the persist
  * seam (server); cost is INFERRED at read time from core/prices.ts. */
 export interface TurnUsage {
-	/** The assistant message the turn produced — keys this entry to the
-	 * transcript (the block this turn "belongs" to). */
+	/** Unique per REQUEST (turn): one invocation of the handler — the
+	 *  idempotency key for the append-only log. Continuation turns share a
+	 *  response message id (the SDK coalesces them); keying on messageId
+	 *  would swallow their usage. */
+	id: string;
+	/** The assistant message the turn produced — provenance, keys this
+	 *  entry to the transcript (the block this turn "belongs" to). */
 	messageId: string;
 	at: string;
 	/** The OpenRouter model id that ran the turn. */

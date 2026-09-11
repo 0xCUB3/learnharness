@@ -39,8 +39,9 @@ export interface ChatStore {
 	/** Persist the session plan tree (plan tools call this in execute). */
 	saveTree(id: string, tree: PlanTree): void;
 	/** Append one usage entry to the record's turn log (the money channel,
-	 * 2026-09): idempotent per messageId — a turn persisted twice (abort
-	 * replays, wake-turn retries) appends exactly once. */
+	 * 2026-09): idempotent per turn id — each request carries its own, so
+	 * a turn persisted twice appends once while continuation turns (which
+	 * share a response message id) each keep their usage. */
 	appendTurnUsage(id: string, entry: TurnUsage): void;
 	/** Append one extraction-run usage entry — idempotent per startedAt. */
 	appendExtractionUsage(id: string, entry: ExtractionRunUsage): void;

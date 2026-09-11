@@ -3,12 +3,10 @@ import { createTeacherAgent, type TeacherAgent } from "../agent/teacher-agent.ts
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { createTeacherTools } from "../agent/tools.ts";
-import { modelFor } from "../agent/models.ts";
-import { MODELS } from "../../config.ts";
-import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
+import { MODELS } from "../../config.ts";import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { stores } from "./stores.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
-import { buildTeacherContext, persistTurn, triggerExtraction } from "./turn-service.ts";
+import { buildTeacherContext, persistTurn, triggerExtraction, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
 
 /**
@@ -98,8 +96,10 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 
 	// MONEY CHANNEL (wave 4): one collector per request, fed by the agent's
 	// step callback. Every model call's usage lands in the chat record's
-	// append-only turns log at onFinish — idempotent per response message id,
-	// so abort replays and wake retries append exactly once.
+	// append-only turns log at onFinish — idempotent per turn id, so a
+	// replayed persist appends once while continuation turns (which share a
+	// response message id — the SDK coalesces them) each keep their usage.
+	const turnUsageId = crypto.randomUUID();
 	const steps: CallUsage[] = [];
 	const collectUsage = (step: { usage: LanguageModelUsage }) => {
 		steps.push({
@@ -140,11 +140,16 @@ export async function handleChatRequest(req: Request, agent?: TeacherAgent): Pro
 		},
 			onFinish: ({ messages, isAborted }) => {
 				persistTurn(stores.chatStore, chatId, messages as UIMessage[], isAborted);
-				// usage log append (idempotent per response message id) — the
-				// stats bar refolds this on the client after the turn settles
-				const response = [...messages].reverse().find((m) => m.role === "assistant");
+				// usage log append (idempotent per turn id) — the stats bar
+				// refolds this on the client after the turn settles. messageId
+				// comes from the id-FILLED list: onFinish messages carry no ids
+				// (withMessageIds fills copies in persistTurn, not these); the
+				// re-fill here is idempotent, so the key is stable.
+				const filled = withMessageIds(messages as UIMessage[]);
+				const response = [...filled].reverse().find((m) => m.role === "assistant");
 				if (response && steps.length > 0) {
 					stores.chatStore.appendTurnUsage(chatId, {
+						id: turnUsageId,
 						messageId: response.id,
 						at: new Date().toISOString(),
 						model: MODELS.teacher.model,

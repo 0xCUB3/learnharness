@@ -15,6 +15,7 @@ function step(inputTokens: number, outputTokens: number, over: Record<string, nu
 
 function turn(over: Partial<TurnUsage> = {}): TurnUsage {
 	return {
+		id: "t1",
 		messageId: "m1",
 		at: "2026-09-09T12:00:00Z",
 		model: "z-ai/glm-5.3-flash",

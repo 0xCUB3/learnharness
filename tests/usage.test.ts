@@ -62,6 +62,7 @@ test("callCost: unknown model and absent fields are null, never zero", () => {
 
 test("turnCost sums steps; sessionCost reports unpriced turns", () => {
 	const turn: TurnUsage = {
+		id: "t1",
 		messageId: "m1",
 		at: "2026-09-09T00:00:00Z",
 		model: "z-ai/glm-5.3-flash",
@@ -69,7 +70,7 @@ test("turnCost sums steps; sessionCost reports unpriced turns", () => {
 	};
 	assert.ok(turnCost(turn) !== null);
 	const totals = sessionCost({
-		turns: [turn, { messageId: "m2", at: "x", model: "not/a-model", steps: [call({ inputTokens: 1, outputTokens: 1 })] }],
+		turns: [turn, { id: "t2", messageId: "m2", at: "x", model: "not/a-model", steps: [call({ inputTokens: 1, outputTokens: 1 })] }],
 	});
 	assert.equal(totals.unpriced, 1);
 	assert.ok(totals.cost > 0);
@@ -78,8 +79,8 @@ test("turnCost sums steps; sessionCost reports unpriced turns", () => {
 test("contextWindow: last call's footprint against the model's limit", () => {
 	const cw = contextWindow({
 		turns: [
-			{ messageId: "m1", at: "x", model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] },
-			{ messageId: "m2", at: "x", model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 90_000, outputTokens: 10_000 })] },
+			{ id: "t1", messageId: "m1", at: "x", model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] },
+			{ id: "t2", messageId: "m2", at: "x", model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 90_000, outputTokens: 10_000 })] },
 		],
 	});
 	assert.ok(cw);
@@ -108,9 +109,10 @@ test("jobCost: null without usage, computed with it", () => {
 
 // ─── the store seam ──────────────────────────────────────────────────────────
 
-test("appendTurnUsage: appends, is idempotent per messageId, survives saveMessages", () => {
+test("appendTurnUsage: appends, idempotent per turn id, continuation turns (same message) all kept, survives saveMessages", () => {
 	const record = chatStore.createChat("usage test chat");
 	const entry: TurnUsage = {
+		id: "turn_1",
 		messageId: "msg_a",
 		at: "2026-09-09T00:00:00Z",
 		model: "z-ai/glm-5.3-flash",
@@ -118,7 +120,9 @@ test("appendTurnUsage: appends, is idempotent per messageId, survives saveMessag
 	};
 	chatStore.appendTurnUsage(record.id, entry);
 	chatStore.appendTurnUsage(record.id, entry); // replay (abort/retry) → no-op
-	chatStore.appendTurnUsage(record.id, { ...entry, messageId: "msg_b" });
+	// continuation turn: SAME response message (SDK coalesces), new turn id —
+	// usage must survive, not collapse into the first entry
+	chatStore.appendTurnUsage(record.id, { ...entry, id: "turn_2" });
 	let reread = chatStore.getChat(record.id);
 	assert.equal(reread?.turns?.length, 2);
 
