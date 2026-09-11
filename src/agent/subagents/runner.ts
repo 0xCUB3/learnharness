@@ -1,7 +1,9 @@
-import { isToolUIPart, type LanguageModel, type UIMessage } from "ai";
+import { isToolUIPart, type UIMessage } from "ai";
+import type { PiEngine } from "../models.ts";
 import {
 	accumulateJobUsage,
 	buildSubagentSteer,
+	piUsageToStep,
 	type DemoResult,
 	type DemoToolInput,
 	type JobKind,
@@ -18,7 +20,7 @@ import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import { MODELS } from "../../../config.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
-import { createResearcherAgent } from "./researcher.ts";
+import { runResearcherAgent } from "./researcher.ts";
 import { runVisualMaker } from "./visual-maker.ts";
 
 /**
@@ -42,13 +44,13 @@ import { runVisualMaker } from "./visual-maker.ts";
 
 /**
  * Test seam: the spawn wiring has no injection point at the tool layer, so
- * tests swap in a MockLanguageModelV4 here to keep job tests off the network.
+ * tests swap in a scripted pi engine here to keep job tests off the network.
  * Undefined in production. (The jobs spawn through the module-level KIND
  * runners, which read these at call time.)
  */
-export const researchModelOverride: { current?: LanguageModel } = {};
-export const demoModelOverride: { current?: LanguageModel } = {};
-export const visualModelOverride: { current?: LanguageModel } = {};
+export const researchModelOverride: { current?: PiEngine } = {};
+export const demoModelOverride: { current?: PiEngine } = {};
+export const visualModelOverride: { current?: PiEngine } = {};
 
 /** The dispatch-time tool input (from src/agent/tools/jobs.ts schemas). */
 type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput;
@@ -232,7 +234,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 	async function runResearchJob(
 		jobId: string,
-		model: LanguageModel | undefined,
+		model: PiEngine | undefined,
 		passedInput: JobToolInput | undefined,
 		loop: LoopContext,
 	): Promise<void> {
@@ -253,28 +255,25 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			.join("\n\n");
 
 		const fetchedUrls: string[] = [];
-		const agent = createResearcherAgent(model);
 
 		try {
 			jobStore.updateJob(jobId, { activity: "researching" });
-			const result = await agent.generate({
-				prompt,
+			const brief = await runResearcherAgent(prompt, {
+				engine: model,
 				abortSignal: loop.abortSignal,
 				// Money channel: each agent step is one model call — fold its
 				// usage into the record as it completes (progress write).
-				onStepFinish: ({ usage }) => loop.onUsage(usage),
-				onToolExecutionStart: ({ toolCall }) => {
-					const input = toolCall.input as { query?: string; url?: string } | undefined;
-					if (toolCall.toolName === "web_fetch" && typeof input?.url === "string") {
+				onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
+				onToolStart: (toolName, args) => {
+					const input = args as { query?: string; url?: string } | undefined;
+					if (toolName === "web_fetch" && typeof input?.url === "string") {
 						fetchedUrls.push(input.url);
 					}
-					jobStore.updateJob(jobId, { activity: activityLine(toolCall.toolName, input) });
+					jobStore.updateJob(jobId, { activity: activityLine(toolName, input) });
 				},
 			});
-
-			const brief = result.text.trim();
-			if (!brief) throw new Error("the researcher produced no text");
-			const research: ResearchResult = { brief, sources: parseSources(brief, fetchedUrls) };
+			if (!brief.trim()) throw new Error("the researcher produced no text");
+			const research: ResearchResult = { brief: brief.trim(), sources: parseSources(brief.trim(), fetchedUrls) };
 			await finishJob(jobId, research);
 		} catch (err) {
 			// Real-kill abort (2026-09): the abort path flipped the record and
@@ -291,7 +290,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 	async function runDemoJob(
 		jobId: string,
-		model: LanguageModel | undefined,
+		model: PiEngine | undefined,
 		passedInput: JobToolInput | undefined,
 		loop: LoopContext,
 	): Promise<void> {
@@ -308,9 +307,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			const result = await runDemoBuilder(
 				{ title, brief },
 				{
-					model,
+					engine: model,
 					abortSignal: loop.abortSignal,
-					onUsage: loop.onUsage,
+					onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
 					onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 				},
 			);
@@ -327,7 +326,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 	async function runVisualJob(
 		jobId: string,
-		model: LanguageModel | undefined,
+		model: PiEngine | undefined,
 		passedInput: JobToolInput | undefined,
 		loop: LoopContext,
 	): Promise<void> {
@@ -343,9 +342,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			const result = await runVisualMaker(
 				{ brief },
 				{
-					model,
+					engine: model,
 					abortSignal: loop.abortSignal,
-					onUsage: loop.onUsage,
+					onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
 					onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
 				},
 			);

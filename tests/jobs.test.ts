@@ -28,8 +28,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import type { UIMessage } from "ai";
-import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
-import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import { createFauxCore, fauxAssistantMessage, fauxText, fauxToolCall, type AssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import {
 	accumulateJobUsage,
 	buildAbortSteer,
@@ -45,16 +44,18 @@ import {
 	buildProbeHandoffSteer,
 	type ProbeHandoffSteerMessage,
 } from "../src/core/contracts.ts";
-import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-agent.ts";
+import { composeInstructions, createTeacherAgent, type TeachingAgent } from "../src/agent/teacher-agent.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
+import { webTools } from "../src/agent/tools/web.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
+import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
 import { abortJob, claimSteers, deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
 import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { persistTurn, withMessageIds } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { createJobRunner, researchModelOverride } from "../src/agent/subagents/runner.ts";
-import { createResearcherAgent } from "../src/agent/subagents/researcher.ts";
+import type { PiEngine } from "../src/agent/models.ts";
 import { PATHS } from "../config.ts";
 
 const JOBS_DIR = path.join(PATHS.data, "jobs");
@@ -88,11 +89,30 @@ after(() => {
 	researchModelOverride.current = undefined;
 });
 
-function usage() {
-	return {
-		inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
-		outputTokens: { total: 5, text: 5, reasoning: 0 },
-	};
+/** A scripted pi engine (faux provider): the response queue replaces the
+ *  old doStream/doGenerate turn counters. tokenSize is set so every test
+ *  string streams as ONE delta — the SSE-body assertions ("Back with the
+ *  brief.") read contiguous text. */
+function fauxEngine(steps: FauxResponseStep[]): PiEngine {
+	const faux = createFauxCore({ tokenSize: { min: 64, max: 64 } });
+	faux.setResponses(steps);
+	return { model: faux.getModel(), streamFn: faux.streamSimple };
+}
+
+/** A scripted response factory whose model call never resolves until its
+ *  abort signal fires (a cancelled provider request); an already-aborted
+ *  signal resolves at once — the faux stream then ends the message aborted. */
+function abortableFactory(): FauxResponseStep {
+	const factory = (_context: unknown, options: { signal?: AbortSignal } | undefined) =>
+		new Promise<AssistantMessage>((resolve) => {
+			const sig = options?.signal;
+			if (sig?.aborted) {
+				resolve(fauxAssistantMessage("late"));
+				return;
+			}
+			sig?.addEventListener("abort", () => resolve(fauxAssistantMessage("late")), { once: true });
+		});
+	return factory as unknown as FauxResponseStep;
 }
 
 async function drain(res: Response): Promise<string> {
@@ -295,34 +315,14 @@ const RESEARCH_INPUT = {
 };
 
 /** A teacher that calls research (text → call), then plain text thereafter. */
-function researchCallingTeacher(): MockLanguageModelV4 {
-	let turn = 0;
-	return new MockLanguageModelV4({
-		doStream: async () => {
-			turn++;
-			const chunks: LanguageModelV4StreamPart[] =
-				turn === 1
-					? [
-							{ type: "stream-start", warnings: [] },
-							{ type: "text-start", id: "t1" },
-							{ type: "text-delta", id: "t1", delta: "Let me check the current state of the library." },
-							{ type: "text-end", id: "t1" },
-							{ type: "tool-input-start", id: "call-r1", toolName: "research" },
-							{ type: "tool-input-delta", id: "call-r1", delta: JSON.stringify(RESEARCH_INPUT) },
-							{ type: "tool-input-end", id: "call-r1" },
-							{ type: "tool-call", toolCallId: "call-r1", toolName: "research", input: JSON.stringify(RESEARCH_INPUT) },
-							{ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: usage() },
-						]
-					: [
-							{ type: "stream-start", warnings: [] },
-							{ type: "text-start", id: "t2" },
-							{ type: "text-delta", id: "t2", delta: "Back with the brief." },
-							{ type: "text-end", id: "t2" },
-							{ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage: usage() },
-						];
-			return { stream: simulateReadableStream({ chunks, initialDelayInMs: 0, chunkDelayInMs: 0 }) };
-		},
-	});
+function researchCallingTeacher(): PiEngine {
+	return fauxEngine([
+		fauxAssistantMessage(
+			[fauxText("Let me check the current state of the library."), fauxToolCall("research", RESEARCH_INPUT, { id: "call-r1" })],
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage([fauxText("Back with the brief.")]),
+	]);
 }
 
 describe("dispatch (async protocol §2)", () => {
@@ -332,17 +332,15 @@ describe("dispatch (async protocol §2)", () => {
 
 		const delivery = fakeDeliver();
 		const testRunner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
-		const agent = createTeacherAgent(
-			undefined,
-			researchCallingTeacher(),
-			undefined,
-			createTeacherTools({
-				chatId: chat.id,
-				chatStore,
-				jobStore,
-				spawn: (job, input) => void testRunner.runJob(job.id, input),
-			}),
-		);
+		const engine = researchCallingTeacher();
+		const tools = createTeacherTools({
+			chatId: chat.id,
+			chatStore,
+			jobStore,
+			spawn: (job, input) => void testRunner.runJob(job.id, input),
+		});
+		const agent = (outgoing: UIMessage[]): TeachingAgent =>
+			createTeacherAgent(undefined, { engine, tools, messages: recordToPiMessages(outgoing) });
 
 		const restoreFetch = stubFetch();
 		researchModelOverride.current = researcherModel();
@@ -394,38 +392,15 @@ sigma.js v3 is current.
 ## Sources
 - sigma.js docs (https://www.sigmajs.org/docs)`;
 
-/**
- * The researcher loop runs via agent.generate (non-streaming) — the mock
- * therefore scripts doGenerate. Turn 1: a web_search tool call; turn 2: the
- * final text brief.
- */
-function researcherModel(): MockLanguageModelV4 {
-	let turn = 0;
-	return new MockLanguageModelV4({
-		doGenerate: async () => {
-			turn++;
-			return turn === 1
-				? {
-						content: [
-							{
-								type: "tool-call" as const,
-								toolCallId: "ws1",
-								toolName: "web_search",
-								input: JSON.stringify({ query: "sigma.js latest version" }),
-							},
-						],
-						finishReason: { unified: "tool-calls" as const, raw: "tool-calls" },
-						usage: usage(),
-						warnings: [],
-					}
-				: {
-						content: [{ type: "text" as const, text: BRIEF }],
-						finishReason: { unified: "stop" as const, raw: "stop" },
-						usage: usage(),
-						warnings: [],
-					};
-		},
-	});
+/** The researcher loop's scripted engine. Turn 1: a web_search tool call;
+ *  turn 2: the final text brief. */
+function researcherModel(): PiEngine {
+	return fauxEngine([
+		fauxAssistantMessage([fauxToolCall("web_search", { query: "sigma.js latest version" }, { id: "ws1" })], {
+			stopReason: "toolUse",
+		}),
+		fauxAssistantMessage([fauxText(BRIEF)]),
+	]);
 }
 
 function stubFetch() {
@@ -516,11 +491,11 @@ describe("research runner (async protocol §3)", () => {
 
 		const delivery = fakeDeliver();
 		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
-		researchModelOverride.current = new MockLanguageModelV4({
-			doGenerate: async () => {
+		researchModelOverride.current = fauxEngine([
+			() => {
 				throw new Error("model exploded");
 			},
-		});
+		]);
 		try {
 			await runner.runJob(job.id);
 		} finally {
@@ -578,11 +553,12 @@ describe("research runner (async protocol §3)", () => {
 // ─── the researcher agent construction (model resolution seam) ──────────────
 
 describe("researcher agent", () => {
-	it("builds with the web tool set (no network touched)", () => {
-		const agent = createResearcherAgent(researcherModel());
-		assert.ok(agent.tools.web_search, "web_search available");
-		assert.ok(agent.tools.web_fetch, "web_fetch available");
-		assert.equal(Object.keys(agent.tools).length, 2, "ONLY the web tools — no question/plan tools");
+	it("runs with the web tool set (no network touched)", () => {
+		// The researcher is a runSubagent call over the webTools registry —
+		// the tool set is what the loop sees.
+		assert.ok(webTools.web_search, "web_search available");
+		assert.ok(webTools.web_fetch, "web_fetch available");
+		assert.equal(Object.keys(webTools).length, 2, "ONLY the web tools — no question/plan tools");
 		// reset any accidental global override
 		researchModelOverride.current = undefined;
 	});
@@ -950,57 +926,20 @@ describe("prompt composition", () => {
 // ─── abort (2026-09 semantics: real kill, cancelled status, teacher told) ───
 
 describe("abort (src/server/jobs.ts abortJob)", () => {
-	/** A hanging model that only settles when its abort signal fires — the
-	 *  real-kill path: the in-flight call itself is killed. */
-	function hangingModel(): MockLanguageModelV4 {
-		return new MockLanguageModelV4({
-			doGenerate: ({ abortSignal }) =>
-				new Promise((_resolve, reject) => {
-					// an ALREADY-aborted signal never fires the event — real
-					// providers reject an aborted fetch at once, the mock must too
-					if (abortSignal?.aborted) {
-						reject(new DOMException("The operation was aborted", "AbortError"));
-						return;
-					}
-					abortSignal?.addEventListener("abort", () => {
-						reject(new DOMException("The operation was aborted", "AbortError"));
-					});
-				}),
-		});
+	/** A hanging model whose call never resolves until its abort signal
+	 *  fires — the real-kill path: the in-flight call itself is killed. */
+	function hangingModel(): PiEngine {
+		return fauxEngine([abortableFactory()]);
 	}
 
-	/** One step (with usage) then a hang — proves usage-so-far survives the kill. */
-	function oneStepThenHangModel(): MockLanguageModelV4 {
-		let turn = 0;
-		return new MockLanguageModelV4({
-			doGenerate: ({ abortSignal }) => {
-				turn++;
-				if (turn === 1) {
-					return Promise.resolve({
-						content: [
-							{
-								type: "tool-call" as const,
-								toolCallId: "ws1",
-								toolName: "web_search",
-								input: JSON.stringify({ query: "anything" }),
-							},
-						],
-						finishReason: { unified: "tool-calls" as const, raw: "tool-calls" },
-						usage: usage(),
-						warnings: [],
-					});
-				}
-				return new Promise((_resolve, reject) => {
-					if (abortSignal?.aborted) {
-						reject(new DOMException("The operation was aborted", "AbortError"));
-						return;
-					}
-					abortSignal?.addEventListener("abort", () => {
-						reject(new DOMException("The operation was aborted", "AbortError"));
-					});
-				});
-			},
-		});
+	/** One step (billed) then a hang — proves usage-so-far survives the kill. */
+	function oneStepThenHangModel(): PiEngine {
+		return fauxEngine([
+			fauxAssistantMessage([fauxToolCall("web_search", { query: "anything" }, { id: "ws1" })], {
+				stopReason: "toolUse",
+			}),
+			abortableFactory(),
+		]);
 	}
 
 	function newChatWithResearchJob(label: string, toolCallId: string): { chatId: string; jobId: string } {
@@ -1082,8 +1021,10 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 			assert.equal(job.error, "Aborted by learner");
 				assert.equal(job.usage!.steps, 1, "usage-so-far persisted by the runner's finally");
 				assert.equal(job.usage!.model, "z-ai/glm-5.3-flash", "the config role's OpenRouter id");
-				assert.equal(job.usage!.inputTokens, 10);
-				assert.equal(job.usage!.outputTokens, 5);
+				// faux estimates tokens from the prompt/response text — the
+				// pinned fact is that the ONE completed step's spend survived.
+				assert.ok(job.usage!.inputTokens! > 0, "input tokens billed");
+				assert.ok(job.usage!.outputTokens! > 0, "output tokens billed");
 			} finally {
 				researchModelOverride.current = undefined;
 			}

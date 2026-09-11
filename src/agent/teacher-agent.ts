@@ -1,8 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ToolLoopAgent, stepCountIs, tool, type LanguageModel, type LanguageModelUsage, type ToolSet } from "ai";
+import { Agent } from "@earendil-works/pi-agent-core";
+import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
-import { modelFor } from "./models.ts";
+import { MODELS } from "../../config.ts";
+import { piEngineFor, thinkingLevelFor, openRouterApiKey, type PiEngine } from "./models.ts";
 import {
 	askUserQuestionTool,
 	createProberTools,
@@ -10,17 +13,20 @@ import {
 	type ProbeDoneContext,
 	type TeacherToolContext,
 } from "./tools.ts";
+import { toPiTools, type LhTool } from "./lh-tool.ts";
 import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
+import { QUESTION_TOOLS } from "../core/pending.ts";
 
 /**
  * The two teaching-side agents (docs/probe-teach-split.md): the PROBER and
- * the TEACHER. Same harness (agent loop, tool calling, streaming,
- * multi-step — the few lines ToolLoopAgent provides), same transcript, but
- * different prompts and different tool sets; the chat-handler constructs
- * one per request off the transcript's seam (probe_done = teacher).
+ * the TEACHER. Same transcript, different prompts and tool sets; the
+ * chat-handler constructs ONE per request off the transcript's seam
+ * (probe_done = teacher) — the STATELESS per-turn engine (docs/
+ * pi-engine-swap.md §2): the persisted record is the source of truth, the
+ * agent is rebuilt from it every POST and discarded at turn end.
  *
- * Models are injectable so tests can pass a MockLanguageModelV4 and drive
- * deterministic scripted lessons (see tests/chat-flow.test.ts).
+ * Engines are injectable so tests can pass a scripted faux engine and drive
+ * deterministic lessons (see tests/chat-flow.test.ts).
  *
  * System prompts are COMPOSED per agent: system-prompt.md (the shared base:
  * philosophy, accuracy, quiz construction, question tools, formatting) +
@@ -62,9 +68,81 @@ const composedInstructions: Record<AgentKind, string> = {
 
 // Money channel (wave 4): the chat-handler passes a per-turn collector;
 // every model call's usage lands in the chat record's turns log
-// (ChatStore.appendTurnUsage). The step carries far more than usage —
-// the narrow param keeps the seam honest about what we consume.
-export type StepUsageCollector = (step: { usage: LanguageModelUsage }) => void;
+// (ChatStore.appendTurnUsage). The narrow param keeps the seam honest.
+export type StepUsageCollector = (usage: Usage) => void;
+
+/** Per-request construction options (the handler wires all of these). */
+export interface AgentBuildOptions {
+	/** Model + stream function — tests inject a scripted faux engine. */
+	engine?: PiEngine;
+	/** The initial transcript, as pi messages (recordToPiMessages). */
+	messages?: AgentMessage[];
+	/** Money channel: one call per model request. */
+	onUsage?: StepUsageCollector;
+	/** Safety net (the old stepCountIs). Default 20 turns. */
+	maxTurns?: number;
+	/** Tests may pass a bare tool registry to drive deterministic flows. */
+	tools?: Record<string, LhTool<any, any>>;
+}
+
+/**
+ * The turn's stop rule (docs/pi-engine-swap.md §2):
+ * - a question tool call (quiz / ask_user_question) that RESOLVED — its
+ *   synthetic "question posed" result is not an error — ends the run: the
+ *   learner's answer arrives as the next POST. A call that FAILED authoring
+ *   validation (error result) must NOT stop the run — the model retries
+ *   within the same turn, exactly the InvalidToolInputError semantics.
+ * - the maxTurns safety net replaces stepCountIs(20).
+ */
+function makeStopper(maxTurns: number) {
+	let turns = 0;
+	return (context: {
+		message: { content: Array<{ type: string; id?: string; name?: string }> };
+		toolResults: Array<{ toolCallId: string; isError?: boolean }>;
+	}): boolean => {
+		turns++;
+		if (turns >= maxTurns) return true;
+		const called = new Set(
+			context.message.content
+				.filter((c) => c.type === "toolCall" && c.name !== undefined && (QUESTION_TOOLS as readonly string[]).includes(c.name!))
+				.map((c) => c.id!),
+		);
+		if (called.size === 0) return false;
+		// Stop only when every question call of this turn resolved cleanly.
+		for (const result of context.toolResults) {
+			if (called.has(result.toolCallId) && result.isError) return false;
+		}
+		return true;
+	};
+}
+
+function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: AgentTool<any, any>[]) {
+	const engine = opts.engine ?? piEngineFor(kind);
+	const stopper = makeStopper(opts.maxTurns ?? 20);
+	const agent = new Agent({
+		initialState: {
+			systemPrompt: composedInstructions[kind],
+			model: engine.model,
+			thinkingLevel: thinkingLevelFor(kind),
+			tools,
+			messages: opts.messages ?? [],
+		},
+		streamFn: engine.streamFn,
+		getApiKey: () => openRouterApiKey(),
+		shouldStopAfterTurn: stopper,
+	});
+	if (opts.onUsage) {
+		agent.subscribe((event: AgentEvent) => {
+			if (event.type === "message_end" && event.message.role === "assistant" && "usage" in event.message) {
+				// A cancelled call is not a billed step (partial/estimated
+				// usage on an aborted message is not money spent).
+				if (event.message.stopReason === "aborted") return;
+				opts.onUsage!(event.message.usage);
+			}
+		});
+	}
+	return agent;
+}
 
 /**
  * The PROBER (agent A): quiz (no nodeId) + ask + probe_done, lean on
@@ -73,19 +151,8 @@ export type StepUsageCollector = (step: { usage: LanguageModelUsage }) => void;
  * handoff wake (see tools/probe.ts) and is the transcript seam the
  * handler keys teacher construction on.
  */
-export function createProberAgent(ctx: ProbeDoneContext, model?: LanguageModel, onStepFinish?: StepUsageCollector) {
-	return new ToolLoopAgent({
-		// Model choice + thinking budget live in config.ts (MODELS.prober).
-		// Reasoning tokens stream as reasoning parts into the UI's collapsible block.
-		model: model ?? modelFor("prober"),
-		instructions: composedInstructions.prober,
-		tools: createProberTools(ctx),
-		// Question tools are client-side (a call ends the server turn);
-		// probe_done resolves immediately (it queues the handoff and acks).
-		// stepCountIs is just the safety net.
-		stopWhen: stepCountIs(20),
-		...(onStepFinish ? { onStepFinish } : {}),
-	});
+export function createProberAgent(ctx: ProbeDoneContext, opts: AgentBuildOptions = {}) {
+	return baseAgentOptions("prober", opts, toPiTools(createProberTools(ctx)));
 }
 
 /**
@@ -99,40 +166,27 @@ export function createTeacherAgent(
 	// wiring): without ctx the tools fall back to the validation-free
 	// question set. The handler ALWAYS passes ctx (the composition root).
 	ctx?: TeacherToolContext,
-	model?: LanguageModel,
-	onStepFinish?: StepUsageCollector,
-	// Tests may pass a bare tools set to drive deterministic flows; when
-	// present it overrides the ctx-composed registry.
-	tools?: ToolSet,
+	opts: AgentBuildOptions = {},
 ) {
-	return new ToolLoopAgent({
-		// Model choice + thinking budget live in config.ts (MODELS.teacher).
-		model: model ?? modelFor("teacher"),
-		instructions: composedInstructions.teacher,
-		// Tools are per-request (they close over the injected ctx — chat-
-		// handler passes the composition root's stores + spawn seam).
-		tools: tools ?? (ctx ? createTeacherTools(ctx) : bareQuestionTools()),
-		// Question tools are client-side (a call ends the server turn);
-		// job tools resolve immediately (fire-and-forget ack). stepCountIs is
-		// just the safety net.
-		stopWhen: stepCountIs(20),
-		...(onStepFinish ? { onStepFinish } : {}),
-	});
+	const tools = opts.tools ?? (ctx ? createTeacherTools(ctx) : bareQuestionTools());
+	return baseAgentOptions("teacher", opts, toPiTools(tools));
 }
 
 /** The validation-free teach question set (tests, bare agents): quiz with
  *  the shared authoring refinement but NO per-session nodeId check (no
  *  record to read), plus ask. */
-export function bareQuestionTools(): ToolSet {
+export function bareQuestionTools(): Record<string, LhTool<any, any>> {
 	return {
-		quiz: tool({
+		quiz: {
+			name: "quiz",
 			description: "Ask the learner a graded question.",
-			inputSchema: quizInputObject.superRefine((input, add) => {
+			clientQuestion: true,
+			schema: quizInputObject.superRefine((input, add) => {
 				for (const problem of quizInputProblems(input)) {
 					add.addIssue({ code: "custom", message: problem });
 				}
 			}),
-		}),
+		},
 		ask_user_question: askUserQuestionTool,
 	};
 }
@@ -140,3 +194,8 @@ export function bareQuestionTools(): ToolSet {
 export type ProberAgent = ReturnType<typeof createProberAgent>;
 export type TeacherAgent = ReturnType<typeof createTeacherAgent>;
 export type TeachingAgent = ProberAgent | TeacherAgent;
+
+/** The model id a role's engine resolves to (observability). */
+export function modelIdFor(kind: AgentKind): string {
+	return MODELS[kind].model;
+}

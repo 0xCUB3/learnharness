@@ -1,28 +1,38 @@
 /**
  * Scripted integration test — the full teacher loop with zero tokens:
  *
- *   learner opens chat → mock model calls `quiz` → server streams + persists
+ *   learner opens chat → faux model calls `quiz` → server streams + persists
  *   → client grades and sends the answer back as the tool output
- *   → mock model reacts → transcript persisted.
+ *   → faux model reacts → transcript persisted.
  *
  * Drives handleChatRequest directly (plain Request/Response — no Next server
- * needed) with a MockLanguageModelV4. This is the AI SDK equivalent of the
- * old pi dispatch contract test: the quiz bridge is gone, the tool part IS
- * the pending state, and the persisted transcript is the resume record.
+ * needed) with a scripted pi engine (pi-ai's faux provider, docs/
+ * pi-engine-swap.md §7): the quiz bridge is gone, the tool part IS the
+ * pending state, and the persisted transcript is the resume record.
  */
 
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
-import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import {
+	createFauxCore,
+	fauxAssistantMessage,
+	fauxText,
+	fauxThinking,
+	fauxToolCall,
+	type FauxResponseStep,
+} from "@earendil-works/pi-ai";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { isTurnRunning } from "../src/server/turn-liveness.ts";
+import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 import { findPendingToolCall } from "../src/core/pending.ts";
+import type { PiEngine } from "../src/agent/models.ts";
+import type { TeachingAgent } from "../src/agent/teacher-agent.ts";
+import type { UIMessage } from "ai";
 import { PATHS } from "../config.ts";
 
 const QUIZ_INPUT = {
@@ -36,52 +46,41 @@ const QUIZ_INPUT = {
 	explanation: "Mercury is the innermost planet.",
 };
 
-function usage() {
-	return {
-		inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
-		outputTokens: { total: 5, text: 5, reasoning: 0 },
-	};
+/** Turn 1: a bit of reasoning, then the quiz tool call. Turn 2: plain text.
+ *  Each response factory records the prompt it received (the transcript the
+ *  model saw) — the old doStream capture, engine-shaped. */
+function scriptedTeacher(steps: (calls: string[][]) => FauxResponseStep[]): {
+	engine: PiEngine;
+	calls: string[][];
+} {
+	const calls: string[][] = [];
+	const faux = createFauxCore({});
+	faux.setResponses(steps(calls));
+	return { engine: { model: faux.getModel(), streamFn: faux.streamSimple }, calls };
 }
 
-/** Turn 1: a bit of reasoning, then the quiz tool call. Turn 2: plain text. */
-function scriptedModel(calls: string[][]) {
-	let turn = 0;
-	return new MockLanguageModelV4({
-		doStream: async (options) => {
-			const promptTexts = options.prompt.map((m) => JSON.stringify(m.content));
-			calls.push(promptTexts);
-			turn++;
-			const chunks: LanguageModelV4StreamPart[] =
-				turn === 1
-					? [
-							{ type: "stream-start", warnings: [] },
-							{ type: "reasoning-start", id: "r1" },
-							{ type: "reasoning-delta", id: "r1", delta: "Probe the basics first." },
-							{ type: "reasoning-end", id: "r1" },
-							// Same shape real providers use: input streams as deltas,
-							// then the completed call. (This is what makes the client's
-							// 'Writing a question…' indicator possible.)
-							{ type: "tool-input-start", id: "call-1", toolName: "quiz" },
-							{ type: "tool-input-delta", id: "call-1", delta: JSON.stringify(QUIZ_INPUT) },
-							{ type: "tool-input-end", id: "call-1" },
-							{
-								type: "tool-call",
-								toolCallId: "call-1",
-								toolName: "quiz",
-								input: JSON.stringify(QUIZ_INPUT),
-							},
-							{ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: usage() },
-						]
-					: [
-							{ type: "stream-start", warnings: [] },
-							{ type: "text-start", id: "t1" },
-							{ type: "text-delta", id: "t1", delta: "Right — Mercury it is." },
-							{ type: "text-end", id: "t1" },
-							{ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage: usage() },
-						];
-			return { stream: simulateReadableStream({ chunks, initialDelayInMs: 0, chunkDelayInMs: 0 }) };
+/** The default two-turn lesson: probe quiz, then react to the answer. */
+function defaultLesson(calls: string[][]): FauxResponseStep[] {
+	return [
+		(context) => {
+			calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+			return fauxAssistantMessage(
+				[fauxThinking("Probe the basics first."), fauxToolCall("quiz", QUIZ_INPUT, { id: "call-1" })],
+				{ stopReason: "toolUse" },
+			);
 		},
-	});
+		(context) => {
+			calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+			return fauxAssistantMessage([fauxText("Right — Mercury it is.")]);
+		},
+	];
+}
+
+/** The handler seam (stateless per turn): each request builds a fresh agent
+ *  off the transcript it is about to run — the factory tests inject. */
+function agentFactory(engine: PiEngine) {
+	return (outgoing: UIMessage[]): TeachingAgent =>
+		createTeacherAgent(undefined, { engine, messages: recordToPiMessages(outgoing) });
 }
 
 async function drain(res: Response): Promise<string> {
@@ -112,14 +111,13 @@ after(() => {
 
 describe("teacher chat flow (scripted model)", () => {
 	it("quiz tool call persists as a pending part; the answer continues the lesson", async () => {
-		const calls: string[][] = [];
-		const agent = createTeacherAgent(undefined, scriptedModel(calls));
+		const { engine, calls } = scriptedTeacher(defaultLesson);
 		const chat = chatStore.createChat("Test: solar system");
 		createdChats.push(chat.id);
 
 		// ── Turn 1: learner opens with a topic; teacher probes with a quiz ──
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
-		await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+		await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
 
 		const saved1 = chatStore.getChat(chat.id)!;
 		assert.equal(saved1.messages.length, 2, "user message + assistant response persisted");
@@ -128,12 +126,12 @@ describe("teacher chat flow (scripted model)", () => {
 
 		const reasoningPart = assistantMsg.parts.find((p) => p.type === "reasoning");
 		assert.ok(reasoningPart && reasoningPart.type === "reasoning", "reasoning part streamed + persisted");
-		assert.match(reasoningPart.text, /Probe the basics/);
+		assert.match((reasoningPart as { text?: string }).text!, /Probe the basics/);
 
 		const quizPart = assistantMsg.parts.find((p) => p.type === "tool-quiz");
 		assert.ok(quizPart && quizPart.type === "tool-quiz", "quiz tool part persisted");
-		assert.equal(quizPart.state, "input-available", "unanswered quiz = pending state (resume record)");
-		assert.deepEqual(quizPart.input, QUIZ_INPUT);
+		assert.equal((quizPart as { state?: string }).state, "input-available", "unanswered quiz = pending state (resume record)");
+		assert.deepEqual((quizPart as { input?: unknown }).input, QUIZ_INPUT);
 
 		// The pending-question gate sees it.
 		const pending = findPendingToolCall(saved1.messages);
@@ -166,7 +164,7 @@ describe("teacher chat flow (scripted model)", () => {
 					}
 				: m,
 		);
-		await drain(await handleChatRequest(post(chat.id, messages2), agent));
+		await drain(await handleChatRequest(post(chat.id, messages2), agentFactory(engine)));
 
 		// ── The teacher reacts — as a CONTINUATION of the same assistant message
 		// (the last client message is the assistant message carrying the tool
@@ -176,14 +174,14 @@ describe("teacher chat flow (scripted model)", () => {
 		const finalParts = saved2.messages[1]!.parts;
 		const textPart = finalParts.find((p) => p.type === "text");
 		assert.ok(textPart && textPart.type === "text", "reaction text appended after the tool part");
-		assert.match(textPart.text, /Mercury it is/);
+		assert.match((textPart as { text?: string }).text!, /Mercury it is/);
 		// The answered quiz part is still there, now with its output.
 		const answeredQuiz = finalParts.find((p) => p.type === "tool-quiz");
-		assert.ok(answeredQuiz && answeredQuiz.type === "tool-quiz" && answeredQuiz.state === "output-available");
+		assert.ok(answeredQuiz && answeredQuiz.type === "tool-quiz" && (answeredQuiz as { state?: string }).state === "output-available");
 
 		// The model actually received the graded answer as a tool result.
 		assert.equal(calls.length, 2, "model saw exactly two prompts");
-		const toolResultSent = calls[1]!.some((c) => c.includes("tool-result") || c.includes("Mercury"));
+		const toolResultSent = calls[1]!.some((c) => c.includes("toolResult") || c.includes("Mercury"));
 		assert.ok(toolResultSent, "continuation prompt carries the tool result to the model");
 
 		// No pending question remains.
@@ -200,11 +198,11 @@ describe("teacher chat flow (scripted model)", () => {
 		// 'input-streaming', which the stream processor sets from the
 		// tool-input-start chunk. If a transport change ever stopped emitting
 		// it, the indicator would silently die — pin the protocol.
-		const agent = createTeacherAgent(undefined, scriptedModel([]));
+		const { engine } = scriptedTeacher(defaultLesson);
 		const chat = chatStore.createChat("Test: protocol pin");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
-		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
 		const startIdx = body.indexOf('"type":"tool-input-start"');
 		const availIdx = body.indexOf('"type":"tool-input-available"');
 		assert.ok(startIdx !== -1, "tool-input-start chunk present in the stream");
@@ -213,20 +211,19 @@ describe("teacher chat flow (scripted model)", () => {
 	});
 
 	it("persists even when the stream is aborted (resume keeps partial state)", async () => {
-		const calls: string[][] = [];
-		const agent = createTeacherAgent(undefined, scriptedModel(calls));
+		const { engine } = scriptedTeacher(defaultLesson);
 		const chat = chatStore.createChat("Test: abort");
 		createdChats.push(chat.id);
 
 		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] }]);
-		const res = await handleChatRequest(req, agent);
+		const res = await handleChatRequest(req, agentFactory(engine));
 		assert.equal(res.status, 200);
 		// Read one chunk then cancel — simulates the browser closing mid-stream.
 		const reader = res.body!.getReader();
 		await reader.read();
 		await reader.cancel();
-		// Give onFinish a tick to fire.
-		await new Promise((r) => setTimeout(r, 50));
+		// Give the aborted run a tick to settle (agent_end → onFinish).
+		await new Promise((r) => setTimeout(r, 200));
 		const saved = chatStore.getChat(chat.id)!;
 		assert.ok(saved.messages.length >= 1, "partial transcript persisted");
 	});
@@ -234,8 +231,8 @@ describe("teacher chat flow (scripted model)", () => {
 	it("an ungradeable quiz is rejected at the call boundary, the error reaches the model, and the model retries", async () => {
 		// The authoring contract (question-core superRefine): a quiz whose
 		// correctAnswer matches no option value must NEVER reach the dock —
-		// the SDK validates client-side tool inputs against the schema, marks
-		// the call invalid, and returns the validation error to the teacher as
+		// toPiTool re-runs the zod schema at the call boundary, marks the
+		// call invalid, and returns the validation error to the teacher as
 		// a tool result. The loop re-prompts the model, which retries in the
 		// same turn. This pins that whole mechanism (the live Nietzsche bug).
 		const BAD_QUIZ_INPUT = {
@@ -245,49 +242,28 @@ describe("teacher chat flow (scripted model)", () => {
 			explanation: "Genealogy diagnoses, it does not convert.",
 		};
 
-		const calls: string[][] = [];
-		let step = 0;
-		const retryModel = new MockLanguageModelV4({
-			doStream: async (options) => {
-				calls.push(options.prompt.map((m) => JSON.stringify(m.content)));
-				step++;
-				const chunks: LanguageModelV4StreamPart[] =
-					step === 1
-						? [
-								{ type: "stream-start", warnings: [] },
-								{ type: "tool-input-start", id: "call-bad", toolName: "quiz" },
-								{ type: "tool-input-delta", id: "call-bad", delta: JSON.stringify(BAD_QUIZ_INPUT) },
-								{ type: "tool-input-end", id: "call-bad" },
-								{
-										type: "tool-call",
-										toolCallId: "call-bad",
-										toolName: "quiz",
-										input: JSON.stringify(BAD_QUIZ_INPUT),
-									},
-								{ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: usage() },
-							]
-						: [
-								{ type: "stream-start", warnings: [] },
-								{ type: "tool-input-start", id: "call-good", toolName: "quiz" },
-								{ type: "tool-input-delta", id: "call-good", delta: JSON.stringify(QUIZ_INPUT) },
-								{ type: "tool-input-end", id: "call-good" },
-								{
-										type: "tool-call",
-										toolCallId: "call-good",
-										toolName: "quiz",
-										input: JSON.stringify(QUIZ_INPUT),
-									},
-								{ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: usage() },
-							];
-				return { stream: simulateReadableStream({ chunks, initialDelayInMs: 0, chunkDelayInMs: 0 }) };
+		const steps = (calls: string[][]): FauxResponseStep[] => [
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage(
+					[fauxToolCall("quiz", BAD_QUIZ_INPUT, { id: "call-bad" })],
+					{ stopReason: "toolUse" },
+				);
 			},
-		});
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage(
+					[fauxToolCall("quiz", QUIZ_INPUT, { id: "call-good" })],
+					{ stopReason: "toolUse" },
+				);
+			},
+		];
+		const { engine, calls } = scriptedTeacher(steps);
 
-		const agent = createTeacherAgent(undefined, retryModel);
 		const chat = chatStore.createChat("Test: bad quiz retry");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
-		await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+		await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
 
 		// The model was re-prompted (the error did not end the turn)…
 		assert.equal(calls.length, 2, "the invalid call triggered a second model prompt");
@@ -304,8 +280,8 @@ describe("teacher chat flow (scripted model)", () => {
 		const assistantMsg = saved.messages[1]!;
 		const quizParts = assistantMsg.parts.filter((p) => p.type === "tool-quiz");
 		const failed = quizParts.find(
-				(p) => p.type === "tool-quiz" && (p as { state?: string }).state === "output-error",
-			);
+			(p) => p.type === "tool-quiz" && (p as { state?: string }).state === "output-error",
+		);
 		assert.ok(failed, "the invalid call persisted as an error-state part");
 		assert.match(
 			String((failed as { errorText?: string }).errorText),
@@ -330,36 +306,34 @@ describe("chat store", () => {
 
 describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 	it("one turn per chat: a concurrent request is 409'd; the next one after finish is accepted", async () => {
-		const calls: string[][] = [];
-		const agent = createTeacherAgent(undefined, scriptedModel(calls));
+		const { engine } = scriptedTeacher(defaultLesson);
 		const chat = chatStore.createChat("Test: turn guard");
 		createdChats.push(chat.id);
 
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
-		const res1 = await handleChatRequest(post(chat.id, [firstUser]), agent); // NOT drained → in flight
+		const res1 = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)); // NOT drained → in flight
 		assert.equal(isTurnRunning(chat.id), true, "turn registered as in flight");
 
 		// A stale client (remount racing a live turn) tries to start a second turn.
-		const res2 = await handleChatRequest(post(chat.id, [firstUser]), agent);
+		const res2 = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine));
 		assert.equal(res2.status, 409, "concurrent turn rejected — last-writer-wins persist would clobber it");
 
 		await drain(res1); // finish → onFinish → endTurn
 		assert.equal(isTurnRunning(chat.id), false, "registry cleared at finish");
 
-		const res3 = await handleChatRequest(post(chat.id, [firstUser]), agent);
+		const res3 = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine));
 		assert.equal(res3.status, 200, "the next turn is accepted after the previous finished");
 		await drain(res3);
 	});
 
 	it("write-ahead: the learner's answer is durable BEFORE the turn finishes", async () => {
-		const calls: string[][] = [];
-		const agent = createTeacherAgent(undefined, scriptedModel(calls));
+		const { engine } = scriptedTeacher(defaultLesson);
 		const chat = chatStore.createChat("Test: write-ahead");
 		createdChats.push(chat.id);
 
 		// Turn 1: the teacher asks the quiz (pending part in the record).
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
-		await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+		await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
 		const saved1 = chatStore.getChat(chat.id)!;
 		const assistantMsg = saved1.messages[1]!;
 
@@ -384,17 +358,17 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 							p.type === "tool-quiz" ? { ...p, state: "output-available" as const, output: answer } : p,
 						),
 					}
-					: m,
+				: m,
 		);
 
 		// NOT drained: the teacher turn is streaming, but the answer is already
 		// on disk — a remount (or crash) mid-turn sees the answered quiz, never
 		// the stale pre-answer question.
-		const res = await handleChatRequest(post(chat.id, messages2), agent);
+		const res = await handleChatRequest(post(chat.id, messages2), agentFactory(engine));
 		const midTurn = chatStore.getChat(chat.id)!;
 		const midQuiz = midTurn.messages[1]!.parts.find((p) => p.type === "tool-quiz");
 		assert.ok(midQuiz && midQuiz.type === "tool-quiz");
-		assert.equal(midQuiz.state, "output-available", "write-ahead persisted the answer before finish");
+		assert.equal((midQuiz as { state?: string }).state, "output-available", "write-ahead persisted the answer before finish");
 
 		await drain(res); // finish → persist the full turn → endTurn
 		const saved2 = chatStore.getChat(chat.id)!;
@@ -405,17 +379,17 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 	it("a turn that fails to start (malformed messages) clears the registry — no lockout", async () => {
 		const chat = chatStore.createChat("Test: turn failed to start");
 		createdChats.push(chat.id);
-		// A text part with no text: fails UIMessage validation before the stream
+		// A text part with no text: fails message validation before the stream
 		// exists — the path where no onFinish will ever run.
 		const bad = [{ id: "m1", role: "user", parts: [{ type: "text" }] }];
-		const res = await handleChatRequest(post(chat.id, bad), createTeacherAgent(undefined, scriptedModel([])));
+		const res = await handleChatRequest(post(chat.id, bad), agentFactory(scriptedTeacher(defaultLesson).engine));
 		assert.equal(res.status, 500, "turn-start failure is a 500, not a hang");
 		assert.equal(isTurnRunning(chat.id), false, "registry cleared when the stream never started");
 
 		// And the chat is NOT locked: the next (valid) turn is accepted.
 		const ok = await handleChatRequest(
 			post(chat.id, [{ id: "m1", role: "user", parts: [{ type: "text", text: "teach me" }] }]),
-			createTeacherAgent(undefined, scriptedModel([])),
+			agentFactory(scriptedTeacher(defaultLesson).engine),
 		);
 		assert.equal(ok.status, 200);
 		await drain(ok);

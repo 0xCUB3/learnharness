@@ -50,10 +50,10 @@ const validQuiz = {
 };
 
 interface QuizToolSpec {
-	inputSchema: { safeParse: (v: unknown) => { success: boolean; error?: { issues: Array<{ message: string }> } } };
+	schema: { safeParse: (v: unknown) => { success: boolean; error?: { issues: Array<{ message: string }> } } };
 }
 /** teachQuizToolFor returns the single quiz tool; createProberTools a registry. */
-const schemaOf = (toolLike: unknown) => (toolLike as QuizToolSpec).inputSchema;
+const schemaOf = (toolLike: unknown) => (toolLike as QuizToolSpec).schema;
 const quizSchemaOf = (tools: Record<string, unknown>) => schemaOf(tools.quiz);
 
 describe("teachQuizToolFor: the dynamic plan-nodeId validation (position signal)", () => {

@@ -1,5 +1,5 @@
-import { tool, type ToolSet } from "ai";
 import { z } from "zod";
+import { lhTool, type LhTool } from "../lh-tool.ts";
 import type { JobRecord } from "../../core/contracts.ts";
 import type { JobStore } from "../../core/ports.ts";
 
@@ -103,21 +103,24 @@ const VISUAL_DESCRIPTION =
  * context (chatId + jobStore + the spawn seam), so concurrent chats never
  * share state. chat-handler wires it each turn; tests wire their own.
  */
-export function jobTools(ctx: JobToolContext): ToolSet {
+export function jobTools(ctx: JobToolContext): Record<string, LhTool<any, any>> {
 	return {
-		research: tool({
+		research: lhTool({
+			name: "research",
 			description: RESEARCH_DESCRIPTION,
-			inputSchema: researchInputSchema,
+			schema: researchInputSchema,
 			execute: async (input, { toolCallId }) => dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input),
 		}),
-		demo: tool({
+		demo: lhTool({
+			name: "demo",
 			description: DEMO_DESCRIPTION,
-			inputSchema: demoInputSchema,
+			schema: demoInputSchema,
 			execute: async (input, { toolCallId }) => dispatch(ctx, "demo", toolCallId, DEMO_ACK, input),
 		}),
-		visual: tool({
+		visual: lhTool({
+			name: "visual",
 			description: VISUAL_DESCRIPTION,
-			inputSchema: visualInputSchema,
+			schema: visualInputSchema,
 			execute: async (input, { toolCallId }) => dispatch(ctx, "visual", toolCallId, VISUAL_ACK, input),
 		}),
 	};

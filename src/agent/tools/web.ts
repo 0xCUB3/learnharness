@@ -1,5 +1,5 @@
-import { tool } from "ai";
 import { z } from "zod";
+import { lhTool } from "../lh-tool.ts";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
@@ -137,11 +137,12 @@ async function fetchAndExtract(url: string): Promise<string> {
 // ── tool registry ────────────────────────────────────────────────────────────
 
 export const webTools = {
-	web_search: tool({
+	web_search: lhTool({
+		name: "web_search",
 		description:
 			"Search the web via Google Custom Search. One search per call — use one call per search angle. " +
 			"Returns an array of results with title, url, and snippet.",
-		inputSchema: z.object({
+		schema: z.object({
 			query: z.string().describe("The search query (a normal search string, phrases included)"),
 			count: z.number().int().min(1).max(10).optional().describe("Number of results (default 5, max 10)"),
 		}),
@@ -161,11 +162,12 @@ export const webTools = {
 		},
 	}),
 
-	web_fetch: tool({
+	web_fetch: lhTool({
+		name: "web_fetch",
 		description:
 			"Fetch a web page and extract its readable content as markdown (Readability). " +
 			"Handles HTML pages and plain text; JS-rendered pages fall back to a reader service.",
-		inputSchema: z.object({
+		schema: z.object({
 			url: z.string().describe("The URL to fetch"),
 		}),
 		execute: async ({ url }): Promise<string> => {

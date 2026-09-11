@@ -1,4 +1,4 @@
-import { tool, type ToolSet } from "ai";
+import { lhTool, type LhTool } from "./lh-tool.ts";
 import {
 	askInputSchema,
 	probeQuizInputSchema,
@@ -33,17 +33,21 @@ export type { ProbeDoneContext } from "./tools/probe.ts";
  *   only.
  */
 
-export const askUserQuestionTool = tool({
+export const askUserQuestionTool: LhTool<any, any> = {
+	name: "ask_user_question",
+	clientQuestion: true,
 	description:
 		"Ask the learner a single question and pause until they answer. NOT graded — there is no correct answer. " +
 		"Use when requirements are ambiguous, preferences are needed, a decision would materially affect the lesson, " +
 		"or you need an open-ended response. Ask exactly one question per tool call; after calling, end your turn and wait.",
-	inputSchema: askInputSchema,
-});
+	schema: askInputSchema,
+};
 
 // ─── the prober's question tools (no nodeId — no map exists yet) ─────────────
 
-export const probeQuizTool = tool({
+export const probeQuizTool: LhTool<any, any> = {
+	name: "quiz",
+	clientQuestion: true,
 	description:
 		"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
 		"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
@@ -55,11 +59,11 @@ export const probeQuizTool = tool({
 		"free-text note to ANY answer; it reaches you only when non-empty. No free-text answers — for non-graded " +
 		"questions use ask_user_question instead. Ask exactly one question per tool call; after calling, end your " +
 		"turn and wait for the graded result.",
-	inputSchema: probeQuizInputSchema,
-});
+	schema: probeQuizInputSchema,
+};
 
 /** The prober's tool set: probe quiz (no nodeId) + ask + probe_done. */
-export function createProberTools(ctx: ProbeDoneContext): ToolSet {
+export function createProberTools(ctx: ProbeDoneContext): Record<string, LhTool<any, any>> {
 	return {
 		quiz: probeQuizTool,
 		ask_user_question: askUserQuestionTool,
@@ -96,7 +100,9 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 				});
 			}
 		});
-	return tool({
+	return lhTool({
+		name: "quiz",
+		clientQuestion: true,
 		description:
 			"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
 			"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
@@ -108,7 +114,7 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 			"An always-present optional note field lets the learner attach a free-text note to ANY answer; it reaches you " +
 			"only when non-empty. No free-text answers — for non-graded questions use ask_user_question instead. " +
 			"Ask exactly one question per tool call; after calling, end your turn and wait for the graded result.",
-		inputSchema,
+		schema: inputSchema,
 	});
 }
 
@@ -126,7 +132,7 @@ export interface TeacherToolContext extends PlanToolContext {
  * Per-request teacher tool registry: teach questions (validated nodeId) +
  * plan tools + job tools, all closing over the ctx.
  */
-export function createTeacherTools(ctx: TeacherToolContext): ToolSet {
+export function createTeacherTools(ctx: TeacherToolContext): Record<string, LhTool<any, any>> {
 	return {
 		quiz: teachQuizToolFor(ctx),
 		ask_user_question: askUserQuestionTool,

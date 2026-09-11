@@ -68,6 +68,24 @@ export interface UsageStepLike {
 	outputTokenDetails?: { reasoningTokens?: number } | undefined;
 }
 
+/** pi-ai's Usage shape (input/output/cacheRead/cacheWrite/reasoning?) →
+ * UsageStepLike. Structural — no pi import here; the engine band maps at
+ * its boundaries. */
+export function piUsageToStep(usage: {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	reasoning?: number;
+}): UsageStepLike {
+	return {
+		inputTokens: usage.input,
+		outputTokens: usage.output,
+		inputTokenDetails: { cacheReadTokens: usage.cacheRead, cacheWriteTokens: usage.cacheWrite },
+		outputTokenDetails: usage.reasoning !== undefined ? { reasoningTokens: usage.reasoning } : undefined,
+	};
+}
+
 /** Fold one model call's usage into the run's running total (pure). A
  * field neither the total nor the step reported stays undefined; once
  * reported, later unreported calls contribute 0. The `steps` counter is

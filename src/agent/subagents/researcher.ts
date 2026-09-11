@@ -1,6 +1,9 @@
-import { ToolLoopAgent, stepCountIs, type LanguageModel } from "ai";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { Usage } from "@earendil-works/pi-ai";
 import { webTools } from "../tools/web.ts";
-import { modelFor } from "../models.ts";
+import { toPiTools } from "../lh-tool.ts";
+import type { PiEngine } from "../models.ts";
+import { runSubagent } from "./pi-run.ts";
 
 /**
  * The researcher sub-agent (vision §2.5): a SEPARATE ToolLoopAgent instance
@@ -9,7 +12,7 @@ import { modelFor } from "../models.ts";
  *
  * System prompt adapted from the pi researcher agent
  * (~/.pi/agent/extensions/interactive-subagents/agents/researcher.md).
- * The model is injectable so tests run the loop with a MockLanguageModelV4.
+ * The engine is injectable so tests run the loop with a scripted faux engine.
  */
 
 const INSTRUCTIONS = `You are a research specialist. You work for a teacher agent inside a learning
@@ -57,13 +60,29 @@ Numbered findings with inline source citations:
 ## Gaps
 What couldn't be answered. Suggested next steps.`;
 
-export function createResearcherAgent(model?: LanguageModel) {
-	return new ToolLoopAgent({
-		model: model ?? modelFor("researcher"),
-		instructions: INSTRUCTIONS,
-		tools: webTools,
-		stopWhen: stepCountIs(12),
-	});
+export interface ResearcherRunOptions {
+	engine?: PiEngine;
+	abortSignal?: AbortSignal;
+	onUsage?: (usage: Usage) => void;
+	onToolStart?: (toolName: string, args: unknown) => void;
 }
 
-export type ResearcherAgent = ReturnType<typeof createResearcherAgent>;
+/**
+ * Run the researcher to completion: isolated context, web tools only, final
+ * text = the brief. The engine is injectable so tests run the loop scripted.
+ */
+export async function runResearcherAgent(prompt: string, opts: ResearcherRunOptions = {}): Promise<string> {
+	const { text } = await runSubagent(toPiTools(webTools) as AgentTool<any, any>[], {
+		role: "researcher",
+		prompt,
+		engine: opts.engine,
+		systemPrompt: INSTRUCTIONS,
+		maxTurns: 12,
+		abortSignal: opts.abortSignal,
+		onUsage: opts.onUsage,
+		onToolStart: opts.onToolStart,
+	});
+	return text;
+}
+
+export type ResearcherAgent = ReturnType<typeof runResearcherAgent>;

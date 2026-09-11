@@ -1,6 +1,9 @@
-import { ToolLoopAgent, stepCountIs, tool, type LanguageModel, type UIMessage } from "ai";
+import type { UIMessage } from "ai";
+import type { Usage } from "@earendil-works/pi-ai";
 import { z } from "zod";
-import { modelFor } from "../models.ts";
+import { lhTool, toPiTools } from "../lh-tool.ts";
+import type { PiEngine } from "../models.ts";
+import { runSubagent } from "./pi-run.ts";
 import type {
 	AuditResult,
 	CallUsage,
@@ -207,19 +210,50 @@ transcript). The auditor rejects anything unbacked. When in doubt, report; the a
 
 Your entire deliverable is ONE submit_findings call.`;
 
-function createExtractor(model: LanguageModel) {
-	return new ToolLoopAgent({
-		model,
-		instructions: EXTRACTOR_INSTRUCTIONS,
-		tools: {
-			submit_findings: tool({
+/** One extractor run: the whole deliverable is ONE zod-validated submit
+ *  call (a pi agent purely so the model can retry a schema-invalid call).
+ *  Returns the submitted findings — captured from the execute seam, which
+ *  only fires on a schema-valid call. */
+async function runExtractor(
+	engine: PiEngine | undefined,
+	prompt: string,
+	signal: AbortSignal | undefined,
+	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
+): Promise<SessionFindings> {
+	let submitted: SessionFindings | undefined;
+	const result = await runSubagent(
+		toPiTools({
+			submit_findings: lhTool({
+				name: "submit_findings",
 				description: "Submit the session findings.",
-				inputSchema: findingsSchema,
-				execute: async (findings) => findings,
+				schema: findingsSchema,
+				execute: async (findings) => {
+					submitted = findings;
+					return findings;
+				},
 			}),
+		}),
+		{
+			role: "extractor",
+			engine,
+			systemPrompt: EXTRACTOR_INSTRUCTIONS,
+			prompt,
+			maxTurns: 4,
+			abortSignal: signal,
+			onAssistantMessage: (message, step) =>
+				onStep(
+					message.usage,
+					message.model,
+					step,
+					message.stopReason,
+					message.content.filter((c) => c.type === "toolCall").map((c) => (c as { name: string }).name).join(", ") || "(none)",
+				),
+			shouldStop: (_message, toolResults) => toolResults.some((r) => r.toolName === "submit_findings" && !r.isError),
 		},
-		stopWhen: stepCountIs(4),
-	});
+	);
+	void result;
+	if (!submitted) throw new Error("the extractor never submitted findings");
+	return submitted;
 }
 
 // ─── the auditor ───────────────────────────────────────────────────────────
@@ -290,19 +324,47 @@ function graphView(nodes: GraphNode[]): string {
 	return lines.join("\n");
 }
 
-function createAuditor(model: LanguageModel) {
-	return new ToolLoopAgent({
-		model,
-		instructions: AUDITOR_INSTRUCTIONS,
-		tools: {
-			submit_review: tool({
+/** One auditor run — same single-submit shape as the extractor. */
+async function runAuditor(
+	engine: PiEngine | undefined,
+	prompt: string,
+	signal: AbortSignal | undefined,
+	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
+): Promise<AuditResult> {
+	let submitted: AuditResult | undefined;
+	const result = await runSubagent(
+		toPiTools({
+			submit_review: lhTool({
+				name: "submit_review",
 				description: "Submit the verified findings subset (with identity verdicts) + the dropped list.",
-				inputSchema: auditSchema,
-				execute: async (review) => review,
+				schema: auditSchema,
+				execute: async (review) => {
+					submitted = review;
+					return review;
+				},
 			}),
+		}),
+		{
+			role: "auditor",
+			engine,
+			systemPrompt: AUDITOR_INSTRUCTIONS,
+			prompt,
+			maxTurns: 4,
+			abortSignal: signal,
+			onAssistantMessage: (message, step) =>
+				onStep(
+					message.usage,
+					message.model,
+					step,
+					message.stopReason,
+					message.content.filter((c) => c.type === "toolCall").map((c) => (c as { name: string }).name).join(", ") || "(none)",
+				),
+			shouldStop: (_message, toolResults) => toolResults.some((r) => r.toolName === "submit_review" && !r.isError),
 		},
-		stopWhen: stepCountIs(4),
-	});
+	);
+	void result;
+	if (!submitted) throw new Error("the auditor never submitted a review");
+	return submitted;
 }
 
 // ─── the pipeline status registry ─────────────────────────────────────────────
@@ -346,10 +408,9 @@ export function abortExtraction(chatId: string): boolean {
 // ─── the pipeline ───────────────────────────────────────────────────────────
 
 export interface ExtractionModels {
-	/** The extractor's model (tests inject a MockLanguageModelV4). */
-	extractor?: LanguageModel;
-	/** The auditor's model. */
-	auditor?: LanguageModel;
+	/** Test seam: a scripted engine per stage (production uses the roles). */
+	extractor?: PiEngine;
+	auditor?: PiEngine;
 }
 
 export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {}
@@ -362,8 +423,6 @@ export interface ExtractionPipeline {
 
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
 	const { chatStore, graphStore } = deps;
-	const extractorAgent = createExtractor(deps.extractor ?? modelFor("extractor"));
-	const auditorAgent = createAuditor(deps.auditor ?? modelFor("auditor"));
 	const inFlight = new Set<string>();
 
 	function setPhase(chatId: string, phase: ExtractionPhase): void {
@@ -385,22 +444,17 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		run.usage[stage]!.steps.push(usage);
 	}
 
-	/** The SDK's per-step usage, flattened to the persisted CallUsage fields
+	/** pi's per-step usage, flattened to the persisted CallUsage fields
 	 *  (the money channel's capture shape, contracts/chat.ts). */
-	function callUsage(usage: {
-		inputTokens: number | undefined;
-		outputTokens: number | undefined;
-		inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
-		outputTokenDetails?: { reasoningTokens?: number };
-	}): CallUsage {
-		// Optional-chained: the SDK types the detail objects as required, but
-		// providers (and mocks) may leave them unset.
+	function callUsage(usage: Usage): CallUsage {
 		return {
-			inputTokens: usage.inputTokens,
-			outputTokens: usage.outputTokens,
-			cacheReadTokens: usage.inputTokenDetails?.cacheReadTokens,
-			cacheWriteTokens: usage.inputTokenDetails?.cacheWriteTokens,
-			reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
+			inputTokens: usage.input,
+			outputTokens: usage.output,
+			cacheReadTokens: usage.cacheRead,
+			cacheWriteTokens: usage.cacheWrite,
+			// Optional in pi's Usage (providers that never emit reasoning
+			// tokens leave it unset) — persisted as 0, never dropped.
+			reasoningTokens: usage.reasoning ?? 0,
 		};
 	}
 
@@ -413,23 +467,17 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} transcript lines)`);
 		const t0 = performance.now();
 
-		const extraction = await extractorAgent.generate({
-			prompt: `Transcript:\n\n${view}`,
-			abortSignal: signal,
-			onStepFinish: (step) => {
-				recordStep(chatId, "extractor", callUsage(step.usage), step.model.modelId);
-				console.info(
-					`[extraction] extractor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
-				);
+		const findings = await runExtractor(
+			deps.extractor,
+			`Transcript:\n\n${view}`,
+			signal,
+			(usage, model, step, finishReason, tools) => {
+				recordStep(chatId, "extractor", callUsage(usage), model);
+				console.info(`[extraction] extractor step ${step}: ${finishReason}, tools: ${tools}`);
 			},
-		});
-		for (const part of extraction.content) {
-			if (part.type === "tool-result" && part.toolName === "submit_findings") {
-				console.info(`[extraction ${chatId}] extractor done in ${Math.round(performance.now() - t0)}ms`);
-				return part.output as SessionFindings;
-			}
-		}
-		throw new Error("the extractor never submitted findings");
+		);
+		console.info(`[extraction ${chatId}] extractor done in ${Math.round(performance.now() - t0)}ms`);
+		return findings;
 	}
 
 	async function audit(chatId: string, findings: SessionFindings): Promise<AuditResult> {
@@ -445,25 +493,16 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		);
 		const t0 = performance.now();
 
-		const review = await auditorAgent.generate({
-			prompt:
-				`Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}\n\n` +
+		const auditResult = await runAuditor(
+			deps.auditor,
+			`Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}\n\n` +
 				`Current knowledge graph (${graph.nodes.length} nodes):\n\n${graphView(graph.nodes)}`,
-			abortSignal: signal,
-			onStepFinish: (step) => {
-				recordStep(chatId, "auditor", callUsage(step.usage), step.model.modelId);
-				console.info(
-					`[extraction] auditor step ${step.stepNumber}: ${step.finishReason}, tools: ${step.toolCalls.map((c) => c.toolName).join(", ") || "(none)"}`,
-				);
+			signal,
+			(usage, model, step, finishReason, tools) => {
+				recordStep(chatId, "auditor", callUsage(usage), model);
+				console.info(`[extraction] auditor step ${step}: ${finishReason}, tools: ${tools}`);
 			},
-		});
-		let auditResult: AuditResult | null = null;
-		for (const part of review.content) {
-			if (part.type === "tool-result" && part.toolName === "submit_review") {
-				auditResult = part.output as AuditResult;
-			}
-		}
-		if (!auditResult) throw new Error("the auditor never submitted a review");
+		);
 		if (auditResult.dropped.length > 0) {
 			console.info(
 				`[extraction ${chatId}] audit dropped ${auditResult.dropped.length}: ` +

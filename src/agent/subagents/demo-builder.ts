@@ -1,7 +1,9 @@
-import { ToolLoopAgent, stepCountIs, tool, type LanguageModel, type ToolSet } from "ai";
 import { z } from "zod";
-import { modelFor } from "../models.ts";
-import type { DemoResult, UsageStepLike } from "../../core/contracts.ts";
+import type { Usage } from "@earendil-works/pi-ai";
+import { lhTool, toPiTools, type LhTool } from "../lh-tool.ts";
+import type { PiEngine } from "../models.ts";
+import { runSubagent } from "./pi-run.ts";
+import type { DemoResult } from "../../core/contracts.ts";
 import { getHeadless, type DemoRunResult, type HeadlessApi } from "./headless.ts";
 
 /**
@@ -11,7 +13,7 @@ import { getHeadless, type DemoRunResult, type HeadlessApi } from "./headless.ts
  * fix → re-run until clean — before anything reaches the lesson.
  *
  * Shape: a ToolLoopAgent with two executable tools (write_demo / run_demo) —
- * the model is injectable (tests use MockLanguageModelV4) and the headless
+ * the engine is injectable (tests use a scripted faux engine) and the headless
  * API is injectable (tests use a fake; production uses system Chrome).
  *
  * Failure semantics (decided in the W6 brief): `tested: true` means "the
@@ -26,7 +28,8 @@ export interface DemoBuilderInput {
 }
 
 export interface DemoBuilderOptions {
-	model?: LanguageModel;
+	/** Test seam: scripted engine; production uses the demoBuilder role. */
+	engine?: PiEngine;
 	headless?: HeadlessApi;
 	/** Max agent steps (each write/run/fix is one step). Default 24 ≈ 6 cycles. */
 	maxSteps?: number;
@@ -35,7 +38,7 @@ export interface DemoBuilderOptions {
 	/** Kills the run mid-model-call (2026-09 real-kill abort semantics). */
 	abortSignal?: AbortSignal;
 	/** Money channel: one call per agent step, folded into JobRecord.usage. */
-	onUsage?: (usage: UsageStepLike) => void;
+	onUsage?: (usage: Usage) => void;
 }
 
 const INSTRUCTIONS = `You are a demo builder — a specialist sub-agent inside a learning application. You
@@ -78,13 +81,14 @@ export function createDemoBuilderTools(
 	state: BuilderState,
 	headless: HeadlessApi,
 	onActivity?: (line: string) => void,
-): ToolSet {
+): Record<string, LhTool<any, any>> {
 	return {
-		write_demo: tool({
+		write_demo: lhTool({
+			name: "write_demo",
 			description:
 				"Write the complete self-contained HTML document for the demo (overwrites any previous version). " +
 				"Always follow with run_demo to test it headlessly.",
-			inputSchema: z.object({
+			schema: z.object({
 				html: z.string().describe("The complete HTML document: <!doctype html>…</html>, all JS inline."),
 			}),
 			execute: async ({ html }) => {
@@ -94,11 +98,12 @@ export function createDemoBuilderTools(
 				return `Saved (${html.length} bytes). Now call run_demo to test it — never deliver untested.`;
 			},
 		}),
-		run_demo: tool({
+		run_demo: lhTool({
+			name: "run_demo",
 			description:
 				"Headlessly execute the current demo in Chrome and report console errors, uncaught errors, and failed requests. " +
 				"Optionally pass a probe expression to assert on page state.",
-			inputSchema: z.object({
+			schema: z.object({
 				probe: z
 					.string()
 					.optional()
@@ -174,12 +179,6 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 	}
 
 	const state: BuilderState = { html: null, testedHtml: null, lastResult: null };
-	const agent = new ToolLoopAgent({
-		model: opts.model ?? modelFor("demoBuilder"),
-		instructions: INSTRUCTIONS,
-		tools: createDemoBuilderTools(state, headless, opts.onActivity),
-		stopWhen: stepCountIs(opts.maxSteps ?? 24),
-	});
 
 	const prompt = [
 		`Demo title: ${title}`,
@@ -191,13 +190,15 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 
 	let finalText = "";
 	try {
-		const result = await agent.generate({
+		const result = await runSubagent(toPiTools(createDemoBuilderTools(state, headless, opts.onActivity)), {
+			role: "demoBuilder",
+			engine: opts.engine,
+			systemPrompt: INSTRUCTIONS,
 			prompt,
+			maxTurns: opts.maxSteps ?? 24,
 			abortSignal: opts.abortSignal,
-			onStepFinish: ({ usage }) => opts.onUsage?.(usage),
-			onToolExecutionStart: ({ toolCall }) => {
-				opts.onActivity?.(toolCall.toolName);
-			},
+			onUsage: (usage) => opts.onUsage?.(usage),
+			onToolStart: (toolName) => opts.onActivity?.(toolName),
 		});
 		finalText = result.text;
 	} catch (err) {

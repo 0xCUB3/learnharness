@@ -1,5 +1,5 @@
-import { tool, type ToolSet } from "ai";
 import { z } from "zod";
+import { lhTool, type LhTool } from "../lh-tool.ts";
 import type { ProbeDoneInput, ProbeDoneResult } from "../../core/contracts.ts";
 import type { UIMessage } from "ai";
 import { findPendingToolCall } from "../../core/pending.ts";
@@ -44,9 +44,10 @@ function probeConcluded(messages: UIMessage[]): boolean {
  * The first probe_done in the transcript is also the construction seam:
  * from that message on, every request builds the TEACHER agent.
  */
-export function probeDoneTool(ctx: ProbeDoneContext): ToolSet {
+export function probeDoneTool(ctx: ProbeDoneContext): Record<string, LhTool<any, any>> {
 	return {
-		probe_done: tool({
+		probe_done: lhTool({
+			name: "probe_done",
 			description:
 				"Conclude the probing phase and hand off to the teaching phase. Call this ONCE, when the probe is " +
 				"complete: every strand the lesson depends on is bracketed (a floor he reliably gets right AND a " +
@@ -55,7 +56,7 @@ export function probeDoneTool(ctx: ProbeDoneContext): ToolSet {
 				"(floor, ceiling, misconceptions, what to build from). It streams to the learner live and becomes " +
 				"the handoff artifact the teacher plans from. Refused while a question is still open, and after " +
 				"the probe is already concluded. After it succeeds, say your closing sentence and end your turn.",
-			inputSchema: z.object({
+			schema: z.object({
 				assessment: z
 					.object({
 						strands: z

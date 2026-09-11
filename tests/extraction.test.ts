@@ -5,7 +5,7 @@
  *
  *   transcriptView  — the compact view both LLM stages see (pure):
  *                     message-id-tagged verbatim text + quiz lines, NO tree
- *   pipeline        — MockLanguageModelV4 drives both agents: findings out,
+ *   pipeline        — scripted faux engines drive both agents: findings out,
  *                     audit verdict (with linkTo identity) in, deterministic
  *                     merge applied; failure paths checkpoint nothing;
  *                     single-flight per chat
@@ -22,8 +22,9 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
-import { MockLanguageModelV4 } from "ai/test";
+import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { UIMessage } from "ai";
+import type { PiEngine } from "../src/agent/models.ts";
 import type {
 	AuditResult,
 	GraphEdge,
@@ -42,11 +43,14 @@ import { PATHS } from "../config.ts";
 
 const createdChats: string[] = [];
 
-function usage() {
-	return {
-		inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
-		outputTokens: { total: 5, text: 5, reasoning: 0 },
-	};
+/** A scripted pi engine (faux provider, docs/pi-engine-swap.md §7): the
+ *  response queue replaces the old doGenerate turn counter. Usage is
+ *  ESTIMATED by faux from the prompt/response text (deterministic, > 0) —
+ *  the tests assert structure and positivity, not flat mock numbers. */
+function fauxEngine(steps: FauxResponseStep[]): PiEngine {
+	const faux = createFauxCore({});
+	faux.setResponses(steps);
+	return { model: faux.getModel(), streamFn: faux.streamSimple };
 }
 
 /** An in-memory GraphStore (core/ports.ts) — this suite never touches data/graph. */
@@ -163,68 +167,46 @@ const FINDINGS: SessionFindings = {
 	attribution: { quiz: { "probe-1": "p1", "check-1": "p2" } },
 };
 
-/** A model whose ONE tool call is `name` with the given input; then text.
- *  `onCall` (optional) fires at the moment of the first generate — the
- *  observation point for mid-run assertions. */
-function submitModel(name: string, input: unknown, onCall?: () => void): MockLanguageModelV4 {
-	let turn = 0;
-	return new MockLanguageModelV4({
-		doGenerate: async () => {
-			turn++;
-			if (turn === 1) {
-				onCall?.();
-				return {
-					content: [
-						{
-							type: "tool-call" as const,
-							toolCallId: `${name}-call`,
-							toolName: name,
-							input: JSON.stringify(input),
-						},
-					],
-					finishReason: { unified: "tool-calls" as const, raw: "tool-calls" },
-					usage: usage(),
-					warnings: [],
-				};
-			}
-			return {
-				content: [{ type: "text" as const, text: "submitted" }],
-				finishReason: { unified: "stop" as const, raw: "stop" },
-				usage: usage(),
-				warnings: [],
-			};
+/** An engine whose ONE response is the `name` tool call with the given
+ *  input — the whole deliverable; the pipeline stops after a clean submit
+ *  (shouldStop), so no trailing text step exists anymore. `onCall` fires at
+ *  the moment of the model call — the observation point for mid-run
+ *  assertions. */
+function submitModel(name: string, input: unknown, onCall?: () => void): PiEngine {
+	return fauxEngine([
+		(context) => {
+			onCall?.();
+			void context;
+			return fauxAssistantMessage(
+				[fauxToolCall(name, input as Record<string, unknown>, { id: `${name}-call` })],
+				{ stopReason: "toolUse" },
+			);
 		},
-	});
+	]);
 }
 
-/** A model that hangs until its abort signal fires, then rejects —
- *  mimicking a cancelled provider request (the abort path). Like a real
- *  provider, an ALREADY-aborted signal rejects immediately (the abort
- *  can win the race before doGenerate attaches its listener). */
-function hangingModel(): MockLanguageModelV4 {
-	const abortReject = (reject: (reason: Error) => void) =>
-		reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
-	return new MockLanguageModelV4({
-		doGenerate: async (options): Promise<never> => {
-			await new Promise<never>((_, reject) => {
-				if (options.abortSignal?.aborted) abortReject(reject);
-				else options.abortSignal?.addEventListener("abort", () => abortReject(reject));
-			});
-			throw new Error("unreachable");
-		},
-	});
+/** An engine whose model call never resolves until its abort signal fires
+ *  — mimicking a cancelled provider request (the abort path). Like a real
+ *  provider, an ALREADY-aborted signal resolves immediately (the abort can
+ *  win the race before the call attaches its listener); the faux stream
+ *  then sees the aborted signal and ends the message as aborted. */
+function hangingModel(): PiEngine {
+	return fauxEngine([
+		(_context, options) =>
+			new Promise((resolve) => {
+				const sig = options?.signal;
+				if (sig?.aborted) {
+					resolve(fauxAssistantMessage("late"));
+					return;
+				}
+				sig?.addEventListener("abort", () => resolve(fauxAssistantMessage("late")), { once: true });
+			}),
+	]);
 }
 
-/** A model that never calls a tool (the failure path). */
-function silentModel(): MockLanguageModelV4 {
-	return new MockLanguageModelV4({
-		doGenerate: async () => ({
-			content: [{ type: "text" as const, text: "I refuse to use tools" }],
-			finishReason: { unified: "stop" as const, raw: "stop" },
-			usage: usage(),
-			warnings: [],
-		}),
-	});
+/** An engine that never calls a tool (the failure path). */
+function silentModel(): PiEngine {
+	return fauxEngine([fauxAssistantMessage("I refuse to use tools"), fauxAssistantMessage("…")]);
 }
 
 // ─── transcriptView (pure) ───────────────────────────────────────────────────
@@ -427,9 +409,11 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		});
 		await pipeline.runExtraction(chatId);
 
-		// Live: mid-audit the extractor's usage was fully accumulated
-		// (the mock bills 10 input / 5 output per step, flat per the SDK).
-		assert.deepEqual(usageSeen, [10]);
+		// Live: mid-audit the extractor's usage was fully accumulated (faux
+		// estimates tokens from the prompt/response text — deterministic,
+		// positive, no cache).
+		assert.equal(usageSeen.length, 1);
+		assert.ok(typeof usageSeen[0] === "number" && usageSeen[0]! > 0, "the extractor's step billed input tokens");
 
 		// Persisted: the run appended ONE usage entry to the chat's
 		// extractions log — per-stage model + steps, with merge stats.
@@ -438,16 +422,14 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const run = record.extractions![0]!;
 		assert.equal(run.stats?.nodes, 0); // linked, not created
 		assert.equal(run.stats?.events, 3);
-		assert.equal(run.stages.extractor.model, "mock-model-id"); // the mock's model id
-		assert.equal(run.stages.extractor.steps.length, 2); // tool-call step + text step
-		assert.deepEqual(run.stages.extractor.steps[0], {
-			inputTokens: 10,
-			outputTokens: 5,
-			cacheReadTokens: 0,
-			cacheWriteTokens: 0,
-			reasoningTokens: 0,
-		});
-		assert.equal(run.stages.auditor.steps.length, 2);
+		assert.equal(run.stages.extractor.model, "faux-1"); // the scripted engine's model id
+		assert.equal(run.stages.extractor.steps.length, 1); // the submit call — the run STOPS after a clean submit
+		const step = run.stages.extractor.steps[0]!;
+		assert.ok(step.inputTokens! > 0 && step.outputTokens! > 0, "estimated usage captured");
+		assert.equal(step.cacheReadTokens, 0);
+		assert.equal(step.cacheWriteTokens, 0);
+		assert.equal(step.reasoningTokens, 0);
+		assert.equal(run.stages.auditor.steps.length, 1);
 		assert.ok(!Number.isNaN(Date.parse(run.at)));
 	});
 
@@ -497,18 +479,13 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			release = resolve;
 		});
 		let calls = 0;
-		const gatedExtractor = new MockLanguageModelV4({
-			doGenerate: async () => {
+		const gatedExtractor = fauxEngine([
+			async () => {
 				calls++;
 				if (calls === 1) await gate;
-				return {
-					content: [{ type: "text" as const, text: "…" }],
-					finishReason: { unified: "stop" as const, raw: "stop" },
-					usage: usage(),
-					warnings: [],
-				};
+				return fauxAssistantMessage("…");
 			},
-		});
+		]);
 
 		const pipeline = createExtractionPipeline({
 			chatStore,

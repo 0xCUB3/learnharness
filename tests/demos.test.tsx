@@ -27,8 +27,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
-import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PATHS } from "../config.ts";
 import {
@@ -54,7 +53,10 @@ import { createTeacherTools } from "../src/agent/tools.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
+import { createTeacherAgent, type TeachingAgent } from "../src/agent/teacher-agent.ts";
+import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
+import type { PiEngine } from "../src/agent/models.ts";
+import type { UIMessage } from "ai";
 
 /**
  * A fake deliver seam + a runner wired like the chat-handler's, per test:
@@ -104,37 +106,22 @@ after(() => {
 	visualModelOverride.current = undefined;
 });
 
-function usage() {
-	return {
-		inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
-		outputTokens: { total: 5, text: 5, reasoning: 0 },
-	};
-}
-
-/** A model that answers a scripted sequence of doGenerate turns (tool calls or final text). */
-function scriptedModel(turns: Array<{ toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>; text?: string }>): MockLanguageModelV4 {
-	let turn = -1;
-	return new MockLanguageModelV4({
-		doGenerate: async () => {
-			turn++;
-			const step = turns[turn];
-			if (!step) throw new Error(`scripted model exhausted after ${turns.length} turns`);
-			if (step.toolCalls) {
-				return {
-					content: step.toolCalls.map((c) => ({ type: "tool-call" as const, toolCallId: c.toolCallId, toolName: c.toolName, input: JSON.stringify(c.input) })),
-					finishReason: { unified: "tool-calls" as const, raw: "tool-calls" },
-					usage: usage(),
-					warnings: [],
-				};
-			}
-			return {
-				content: [{ type: "text" as const, text: step.text ?? "" }],
-				finishReason: { unified: "stop" as const, raw: "stop" },
-				usage: usage(),
-				warnings: [],
-			};
-		},
+/** A scripted pi engine (faux provider): the response queue replaces the old
+ *  doGenerate turn counter — one queued response per model call (tool-call
+ *  turn or final text), consumed in order. */
+function scriptedModel(turns: Array<{ toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>; text?: string }>): PiEngine {
+	const steps: FauxResponseStep[] = turns.map((step) => {
+		if (step.toolCalls) {
+			return fauxAssistantMessage(
+				step.toolCalls.map((c) => fauxToolCall(c.toolName, c.input as Record<string, unknown>, { id: c.toolCallId })),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage(step.text ?? "");
 	});
+	const faux = createFauxCore({ tokenSize: { min: 64, max: 64 } });
+	faux.setResponses(steps);
+	return { model: faux.getModel(), streamFn: faux.streamSimple };
 }
 
 // ─── fake headless ───────────────────────────────────────────────────────────
@@ -424,7 +411,7 @@ describe("demo builder (fake model + fake headless)", () => {
 
 		const result = await runDemoBuilder(
 			{ title: "Damped oscillator", brief: "A mass on a spring with a damping slider." },
-			{ model, headless, onActivity: (line) => activities.push(line) },
+			{ engine: model, headless, onActivity: (line) => activities.push(line) },
 		);
 
 		assert.equal(result.title, "Damped oscillator");
@@ -442,7 +429,7 @@ describe("demo builder (fake model + fake headless)", () => {
 			{ toolCalls: [{ toolCallId: "w1", toolName: "write_demo", input: { html: GOOD_HTML } }] },
 			{ text: "Done." },
 		]);
-		const result = await runDemoBuilder({ title: "T", brief: "b" }, { model, headless });
+		const result = await runDemoBuilder({ title: "T", brief: "b" }, { engine: model, headless });
 		assert.equal(result.html, GOOD_HTML);
 		assert.equal(result.tested, true, "tested by the final verification gate");
 		assert.equal(headless.demoRuns.length, 1, "the gate ran the demo once itself");
@@ -454,7 +441,7 @@ describe("demo builder (fake model + fake headless)", () => {
 			{ toolCalls: [{ toolCallId: "w1", toolName: "write_demo", input: { html: BROKEN_HTML } }] },
 			{ text: "It works, trust me." },
 		]);
-		const result = await runDemoBuilder({ title: "T", brief: "b" }, { model, headless });
+		const result = await runDemoBuilder({ title: "T", brief: "b" }, { engine: model, headless });
 		assert.equal(result.html, "");
 		assert.equal(result.tested, true, "the loop ran");
 		assert.match(result.notes ?? "", /^FAILED:/);
@@ -463,14 +450,14 @@ describe("demo builder (fake model + fake headless)", () => {
 
 	it("fails fast with a clear message when no Chrome is available (never skips testing)", async () => {
 		const model = scriptedModel([{ text: "should never be reached" }]);
-		const result = await runDemoBuilder({ title: "T", brief: "b" }, { model, headless: noChromeHeadless() });
+		const result = await runDemoBuilder({ title: "T", brief: "b" }, { engine: model, headless: noChromeHeadless() });
 		assert.equal(result.html, "");
 		assert.match(result.notes ?? "", /^FAILED: .*Chrome/);
 	});
 
 	it("fails when the model never writes a demo", async () => {
 		const model = scriptedModel([{ text: "I cannot build this." }]);
-		const result = await runDemoBuilder({ title: "T", brief: "b" }, { model, headless: fakeHeadless() });
+		const result = await runDemoBuilder({ title: "T", brief: "b" }, { engine: model, headless: fakeHeadless() });
 		assert.equal(result.html, "");
 		assert.match(result.notes ?? "", /^FAILED: the builder never wrote a demo/);
 	});
@@ -489,7 +476,7 @@ describe("visual maker (fake model + fake headless)", () => {
 			{ text: "A number line from -3 to 3 with the root marked at 0." },
 		]);
 		const activities: string[] = [];
-		const result = await runVisualMaker({ brief: "Number line, root at 0." }, { model, headless, onActivity: (l) => activities.push(l) });
+		const result = await runVisualMaker({ brief: "Number line, root at 0." }, { engine: model, headless, onActivity: (l) => activities.push(l) });
 
 		assert.equal(result.svg, SVG_1);
 		assert.equal(result.notes, "A number line from -3 to 3 with the root marked at 0.");
@@ -504,7 +491,7 @@ describe("visual maker (fake model + fake headless)", () => {
 			{ text: "Done." }, // premature finish — no render yet
 			{ text: "Looked at it — correct." }, // after the forced look
 		]);
-		const result = await runVisualMaker({ brief: "b" }, { model, headless });
+		const result = await runVisualMaker({ brief: "b" }, { engine: model, headless });
 		assert.equal(result.svg, SVG_1, "delivered after the forced look");
 		assert.equal(result.notes, "Looked at it — correct.");
 		assert.equal(headless.svgRenders.length, 1, "the gate rendered the svg once itself");
@@ -522,7 +509,7 @@ describe("visual maker (fake model + fake headless)", () => {
 			{ toolCalls: [{ toolCallId: "r2", toolName: "render_svg", input: {} }] },
 			{ text: "Moved the start of the line." },
 		]);
-		const result = await runVisualMaker({ brief: "b" }, { model, headless });
+		const result = await runVisualMaker({ brief: "b" }, { engine: model, headless });
 
 		assert.equal(result.svg, SVG_1.replace('<line x1="10"', '<line x1="20"'), "the edit was applied to the delivered svg");
 		assert.equal(result.notes, "Moved the start of the line.");
@@ -536,7 +523,7 @@ describe("visual maker (fake model + fake headless)", () => {
 			{ toolCalls: [{ toolCallId: "e0", toolName: "edit_svg", input: { old_text: "svg", new_text: "x" } }] },
 			{ text: "Cannot proceed." },
 		]);
-		const result = await runVisualMaker({ brief: "b" }, { model, headless });
+		const result = await runVisualMaker({ brief: "b" }, { engine: model, headless });
 		assert.equal(result.svg, "", "the failed edit produced no deliverable");
 		assert.match(result.notes ?? "", /never wrote an SVG/);
 	});
@@ -550,20 +537,20 @@ describe("visual maker (fake model + fake headless)", () => {
 			{ toolCalls: [{ toolCallId: "r2", toolName: "render_svg", input: {} }] },
 			{ text: "Fixed and verified." },
 		]);
-		const result = await runVisualMaker({ brief: "b" }, { model, headless });
+		const result = await runVisualMaker({ brief: "b" }, { engine: model, headless });
 		assert.equal(result.svg, SVG_1);
 		assert.equal(result.notes, "Fixed and verified.");
 	});
 
 	it("fails when the model never writes an svg", async () => {
 		const model = scriptedModel([{ text: "This idea is purely relational — belongs in mermaid." }]);
-		const result = await runVisualMaker({ brief: "b" }, { model, headless: fakeHeadless() });
+		const result = await runVisualMaker({ brief: "b" }, { engine: model, headless: fakeHeadless() });
 		assert.equal(result.svg, "");
 		assert.match(result.notes ?? "", /^FAILED: the maker never wrote an SVG/);
 	});
 
 	it("fails with a clear message when no Chrome is available", async () => {
-		const result = await runVisualMaker({ brief: "b" }, { model: scriptedModel([{ text: "x" }]), headless: noChromeHeadless() });
+		const result = await runVisualMaker({ brief: "b" }, { engine: scriptedModel([{ text: "x" }]), headless: noChromeHeadless() });
 		assert.equal(result.svg, "");
 		assert.match(result.notes ?? "", /^FAILED: .*Chrome/);
 	});
@@ -685,30 +672,10 @@ describe("demo/visual job runners", () => {
 		createdChats.push(chat.id);
 
 		// A teacher that calls demo on turn 1, then continues in the SAME turn.
-		let turn = 0;
-		const teacher = new MockLanguageModelV4({
-			doStream: async () => {
-				turn++;
-				const chunks: LanguageModelV4StreamPart[] =
-					turn === 1
-						? [
-								{ type: "stream-start", warnings: [] },
-								{ type: "tool-input-start", id: "call-d2", toolName: "demo" },
-								{ type: "tool-input-delta", id: "call-d2", delta: JSON.stringify(DEMO_INPUT) },
-								{ type: "tool-input-end", id: "call-d2" },
-								{ type: "tool-call", toolCallId: "call-d2", toolName: "demo", input: JSON.stringify(DEMO_INPUT) },
-								{ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: usage() },
-							]
-						: [
-								{ type: "stream-start", warnings: [] },
-								{ type: "text-start", id: "t2" },
-								{ type: "text-delta", id: "t2", delta: "Here it is." },
-								{ type: "text-end", id: "t2" },
-								{ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage: usage() },
-							];
-				return { stream: simulateReadableStream({ chunks, initialDelayInMs: 0, chunkDelayInMs: 0 }) };
-			},
-		});
+		const teacher = scriptedModel([
+			{ toolCalls: [{ toolCallId: "call-d2", toolName: "demo", input: DEMO_INPUT }] },
+			{ text: "Here it is." },
+		]);
 
 		// The overrides must be live BEFORE the request — dispatch fires the
 		// runner mid-stream, inside the tool execute.
@@ -731,17 +698,17 @@ describe("demo/visual job runners", () => {
 							messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "teach me compounding" }] }],
 						}),
 					}),
-					createTeacherAgent(
-						undefined,
-						teacher,
-						undefined,
-						createTeacherTools({
-							chatId: chat.id,
-							chatStore,
-							jobStore,
-							spawn: (job, input) => void runner.runJob(job.id, input),
+					(outgoing: UIMessage[]): TeachingAgent =>
+						createTeacherAgent(undefined, {
+							engine: teacher,
+							messages: recordToPiMessages(outgoing),
+							tools: createTeacherTools({
+								chatId: chat.id,
+								chatStore,
+								jobStore,
+								spawn: (job, input) => void runner.runJob(job.id, input),
+							}),
 						}),
-					),
 				),
 			);
 
