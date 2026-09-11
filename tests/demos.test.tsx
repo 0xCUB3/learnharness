@@ -43,7 +43,6 @@ import { SubagentSteerCard } from "../components/artifacts/steer-card.tsx";
 import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
 import { JobCard } from "../components/artifacts/job-card.tsx";
 import { JobsContext } from "../components/jobs-context.ts";
-import { SubAgentsPanel } from "../components/sub-agents-panel.tsx";
 import { demoInputSchema, jobTools, visualInputSchema } from "../src/agent/tools/jobs.ts";
 import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
@@ -381,25 +380,6 @@ describe("steer card rendering (the delivered artifact)", () => {
 	});
 });
 
-describe("sub-agents panel (sidebar observability)", () => {
-	const runningJob = (kind: "research" | "visual"): JobRecord =>
-		({ id: `j-${kind}`, kind, chatId: "c", toolCallId: "t", status: "running", activity: 'web_search: "sigma"', createdAt: new Date(Date.now() - 40000).toISOString(), updatedAt: new Date().toISOString() }) as JobRecord;
-
-	it("lists running sub-agents with kind, activity, and elapsed", () => {
-		const html = renderToStaticMarkup(<SubAgentsPanel jobs={[runningJob("research"), runningJob("visual")]} />);
-		assert.match(html, /Sub-agents/);
-		assert.match(html, /Researcher/);
-		assert.match(html, /Figure maker/);
-		assert.match(html, /web_search: (&quot;|")sigma/);
-		assert.match(html, /40s|\d+m/);
-	});
-
-	it("renders nothing when the fleet is idle (done jobs vanish)", () => {
-		const done = { ...runningJob("research"), status: "done" };
-		assert.equal(renderToStaticMarkup(<SubAgentsPanel jobs={[done as JobRecord]} />), "");
-		assert.equal(renderToStaticMarkup(<SubAgentsPanel jobs={[]} />), "");
-	});
-});
 
 describe("sanitizeSvg", () => {
 	it("strips script blocks, event handlers, and javascript: urls, keeps geometry", () => {

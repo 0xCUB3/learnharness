@@ -25,8 +25,6 @@ import { PlanBlock, PlanPopup } from "@/components/plan-block";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
-import { SubAgentsPanel } from "@/components/sub-agents-panel";
-import { TreePanel } from "@/components/tree-panel";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TeacherUIMessage, TurnUsage } from "@/src/core";
 import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
 import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
@@ -470,13 +468,6 @@ export function Chat({
 					<ConversationScrollButton />
 				</Conversation>
 				</div>
-			</div>
-			{/* Right sidebar, a full-height sibling of the middle column: the
-			    live sub-agent fleet (when running) above the plan tree — the
-			    fleet panel renders nothing while idle, so the column is all plan. */}
-			<div className="hidden shrink-0 flex-col xl:flex">
-				<SubAgentsPanel jobs={jobs} />
-				<TreePanel messages={messages} />
 			</div>
 		</div>
 		{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
