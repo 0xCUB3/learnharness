@@ -8,16 +8,21 @@ import { cn } from "@/lib/utils";
 import {
 	buildAnswer,
 	coerceCorrectAnswer,
+	emptyDockSelection,
 	normalizeOptions,
 	resolveCorrect,
 	seededRandom,
 	shuffleOptions,
+	toggleOption,
+	toggleOther,
 	type AnswerRequest,
 	type AskToolInput,
+	type DockSelection,
 	type QuestionAnswerData,
 	type QuestionData,
 	type QuestionMode,
 	type QuizToolInput,
+	type SelectMode,
 	type Phase3,
 } from "@/src/core";
 
@@ -211,42 +216,30 @@ function QuestionDockForm({
 		return q;
 	}, [toolCallId, kind, input]);
 
-	const [selected, setSelected] = useState<Set<number>>(new Set()); // 0-based indices
-	const [dontKnow, setDontKnow] = useState(false);
-	// "Other" is selected by typing into its inline input (or clicking its
-	// circle). Picking a sibling option deselects it, but the typed text
-	// survives — the learner's words are never thrown away.
-	const [otherSelected, setOtherSelected] = useState(false);
+	// The selection state machine lives in question-core (pure, tested):
+	// single-select displaces, multi-select coexists — picking the ask
+	// "Other…" row in a multi-select must never clear already-picked
+	// options, and picking an option must never clear a typed custom answer.
+	const [sel, setSel] = useState<DockSelection>(emptyDockSelection());
 	// The learner's transfer channel — thinking, never "a note".
 	const [thinking, setThinking] = useState("");
 	const [other, setOther] = useState("");
 	const [text, setText] = useState("");
+	const selectMode: SelectMode = qd.mode === "multi-select" ? "multi-select" : "single-select";
 
-	const toggle = (idx: number) => {
-		setDontKnow(false);
-		setOtherSelected(false);
-		setSelected((prev) => {
-			if (qd.mode === "multi-select") {
-				const next = new Set(prev);
-				if (next.has(idx)) next.delete(idx);
-				else next.add(idx);
-				return next;
-			}
-			return new Set([idx]);
-		});
-	};
+	const toggle = (idx: number) => setSel(toggleOption(selectMode, sel, idx));
 
 	const canSubmit =
 		qd.mode === "text"
 			? text.trim().length > 0
-			: dontKnow || (otherSelected && other.trim().length > 0) || selected.size > 0;
+			: sel.dontKnow || (sel.otherSelected && other.trim().length > 0) || sel.selected.size > 0;
 
 	const submit = () => {
 		if (!canSubmit) return;
 		const req: AnswerRequest = {
-			dontKnow,
-			values: [...selected].map((i) => qd.options[i]!.value),
-			other: otherSelected ? other : undefined,
+			dontKnow: sel.dontKnow,
+			values: [...sel.selected].map((i) => qd.options[i]!.value),
+			other: sel.otherSelected ? other : undefined,
 			text: qd.mode === "text" ? text : undefined,
 			note: qd.mode !== "text" ? thinking.trim() || undefined : undefined,
 		};
@@ -255,11 +248,7 @@ function QuestionDockForm({
 
 	// Selecting Other never clears the thinking field — two channels, the
 	// answer and the reasoning behind it, side by side.
-	const selectOther = () => {
-		setDontKnow(false);
-		setSelected(new Set());
-		setOtherSelected(true);
-	};
+	const selectOther = () => setSel(toggleOther(selectMode, sel));
 
 	return (
 		<div data-testid="question-dock">
@@ -281,7 +270,7 @@ function QuestionDockForm({
 				{qd.mode !== "text" && (
 					<div className="flex flex-col gap-2 pb-1" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
 						{qd.options.map((opt, i) => {
-							const isSel = selected.has(i);
+							const isSel = sel.selected.has(i);
 							return (
 								<button
 									key={opt.value}
@@ -318,15 +307,13 @@ function QuestionDockForm({
 						{kind === "quiz" && (
 							<button
 								type="button"
-								onClick={() => {
-									setSelected(new Set());
-									setOtherSelected(false);
-									setDontKnow((v) => !v);
-								}}
-								aria-pressed={dontKnow}
+								onClick={() =>
+									setSel((prev) => ({ ...prev, selected: new Set(), otherSelected: false, dontKnow: !prev.dontKnow }))
+								}
+								aria-pressed={sel.dontKnow}
 								className={cn(
 									"rounded-lg border border-dashed px-3 py-2 text-left text-sm text-muted-foreground transition-colors",
-									dontKnow && "border-primary text-foreground",
+									sel.dontKnow && "border-primary text-foreground",
 								)}
 							>
 								I don't know
@@ -336,24 +323,24 @@ function QuestionDockForm({
 						{kind === "ask" && (
 							<div
 								role={qd.mode === "multi-select" ? "checkbox" : "radio"}
-								aria-checked={otherSelected}
+								aria-checked={sel.otherSelected}
 								data-testid="other-option"
 								onClick={selectOther}
 								className={cn(
 									"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-									otherSelected ? "border-primary bg-accent" : "border-dashed hover:bg-accent/50",
+									sel.otherSelected ? "border-primary bg-accent" : "border-dashed hover:bg-accent/50",
 								)}
 							>
 								<span
 									className={cn(
 										"mt-0.5 flex size-4 shrink-0 items-center justify-center border",
 										qd.mode === "multi-select" ? "rounded-sm" : "rounded-full",
-										otherSelected
+										sel.otherSelected
 											? "border-primary bg-primary text-primary-foreground"
 											: "border-muted-foreground/40",
 									)}
 								>
-									{otherSelected && (
+									{sel.otherSelected && (
 										<span className={cn(qd.mode === "multi-select" ? "text-[10px]" : "size-1.5 rounded-full bg-current")}>
 											{qd.mode === "multi-select" ? "✓" : ""}
 										</span>
@@ -363,7 +350,9 @@ function QuestionDockForm({
 									value={other}
 									onChange={(e) => {
 										setOther(e.target.value);
-										if (!otherSelected) setOtherSelected(true);
+										// Typing selects the row — displacing in
+										// single-select, alongside the siblings in multi.
+										setSel((prev) => (prev.otherSelected ? prev : toggleOther(selectMode, prev)));
 									}}
 									placeholder="Type your own answer…"
 									className="w-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"

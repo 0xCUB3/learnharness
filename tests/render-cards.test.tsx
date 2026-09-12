@@ -17,6 +17,7 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { QuestionDock } from "../components/question-dock.tsx";
+import { ProbeDoneCard } from "../components/artifacts/probe-done-card.tsx";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 
@@ -101,6 +102,22 @@ describe("render smoke tests", () => {
 		assert.match(html, /aria-checked="false"/, "circle starts unfilled");
 		assert.ok(html.includes('data-testid="thinking-field"'), "thinking field coexists with Other");
 		assert.match(html, /Your thinking/, "ask select-mode also gets the learner's voice");
+	});
+
+	it("multi-select ask renders checkbox rows and the select-all hint", () => {
+		const html = renderDock({
+			toolName: "ask_user_question",
+			toolCallId: "m1",
+			input: {
+				question: "Which topics interest you?",
+				multiSelect: true,
+				options: [{ label: "Physics" }, { label: "Philosophy" }],
+			} as never,
+		});
+		assert.match(html, /select all that apply/);
+		assert.ok(html.includes('role="group"'), "checkbox group");
+		assert.ok((html.match(/role="checkbox"/g) ?? []).length >= 3, "options AND the Other row are checkboxes");
+		assert.ok(html.includes('data-testid="other-option"'), "Other is still an option row in multi-select");
 	});
 
 	it("phase scales the thinking field: teaching invites depth, probing stays quick", () => {
@@ -302,3 +319,60 @@ describe("teach-check reveal (W5 phase separation)", () => {
 	});
 });
 
+// ─── probe-done card (the malformed-assessment crash) ─────────────────────
+// The live bug: the model stringified `assessment` (a rejected input), and
+// the card's input-preview fallback trusted the shape — strands died. The
+// preview now reads only pending inputs; an errored part renders the quiet
+// retry note.
+describe("probe-done card", () => {
+	const validAssessment = {
+		strands: [
+			{ strand: "modal logic basics", assessment: "Floor: solid intuition; ceiling: notation." },
+			{ strand: "indexical 'actual'", assessment: "Genuine floor — prior exposure likely." },
+		],
+		summary: "Bracketed: teach the symbols on the intuition he has.",
+	};
+
+	it("renders the strand-by-strand assessment from the seam ack", () => {
+		const html = renderToStaticMarkup(
+			<ProbeDoneCard
+				part={{ state: "output-available", output: { ok: true, assessment: validAssessment } } as never}
+			/>,
+		);
+		assert.ok(html.includes('data-testid="probe-done-card"'));
+		assert.match(html, /modal logic basics/);
+		assert.match(html, /indexical &#x27;actual&#x27;|indexical 'actual'/);
+		assert.match(html, /Bracketed/);
+	});
+
+	it("previews the assessment from a PENDING (validated) input", () => {
+		const html = renderToStaticMarkup(
+			<ProbeDoneCard part={{ state: "input-available", input: { assessment: validAssessment } } as never} />,
+		);
+		assert.match(html, /modal logic basics/);
+	});
+
+	it("a REJECTED assessment (the stringified live shape) renders the retry note, never the garbage", () => {
+		// The exact live crash: assessment arrived as a string, zod rejected
+		// the call, the model retried — this dead part must not explode.
+		const html = renderToStaticMarkup(
+			<ProbeDoneCard
+				part={{
+					state: "output-error",
+					errorText: "Validation failed",
+					input: { assessment: "strands: [{\"strand\": ...stringified garbage" },
+				} as never}
+			/>,
+		);
+		assert.match(html, /malformed/);
+		assert.match(html, /retried/);
+		assert.ok(!html.includes("strands:"), "the rejected input never renders");
+	});
+
+	it("a mid-stream partial without strands renders the writing note, not a crash", () => {
+		const html = renderToStaticMarkup(
+			<ProbeDoneCard part={{ state: "input-streaming", input: { assessment: { summary: "…" } } } as never} />,
+		);
+		assert.match(html, /Writing the assessment/);
+	});
+});

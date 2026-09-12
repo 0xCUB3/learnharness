@@ -278,6 +278,44 @@ export interface AnswerRequest {
 	note?: string;
 }
 
+// ─── dock selection (the client state machine, pure for tests) ─────────────
+
+/** The question dock's selection state (0-based indices in display order). */
+export interface DockSelection {
+	selected: Set<number>;
+	otherSelected: boolean;
+	dontKnow: boolean;
+}
+
+export const emptyDockSelection = (): DockSelection => ({ selected: new Set(), otherSelected: false, dontKnow: false });
+
+/**
+ * Toggling a listed option. Single-select: the option becomes THE answer and
+ * displaces "Other". Multi-select: the option toggles alongside its siblings
+ * AND "Other" — selections are independent (picking options must never clear
+ * a custom answer, and picking the custom row must never clear them).
+ */
+export function toggleOption(mode: SelectMode, sel: DockSelection, idx: number): DockSelection {
+	if (mode === "multi-select") {
+		const selected = new Set(sel.selected);
+		if (selected.has(idx)) selected.delete(idx);
+		else selected.add(idx);
+		return { selected, otherSelected: sel.otherSelected, dontKnow: false };
+	}
+	return { selected: new Set([idx]), otherSelected: false, dontKnow: false };
+}
+
+/**
+ * Toggling the ask "Other…" row. Single-select: picking it makes it THE
+ * answer, displacing the listed options (the typed text always survives).
+ * Multi-select: it toggles alongside the listed selections and clears
+ * nothing.
+ */
+export function toggleOther(mode: SelectMode, sel: DockSelection): DockSelection {
+	if (mode === "multi-select") return { ...sel, otherSelected: !sel.otherSelected, dontKnow: false };
+	return { selected: new Set(), otherSelected: true, dontKnow: false };
+}
+
 export const QUESTION_ENTRY = "lh_question";
 export const QUESTION_ANSWERED_ENTRY = "lh_question_answered";
 
