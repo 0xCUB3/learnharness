@@ -1,7 +1,7 @@
 "use client";
 
 import { ClipboardCheckIcon } from "lucide-react";
-import type { ProbeDoneResult, ProbeDoneInput } from "@/src/core";
+import { parseProbeDoneInput, type ProbeDoneResult } from "@/src/core";
 
 /**
  * The probe conclusion card (docs/probe-teach-split.md §2): renders the
@@ -22,16 +22,18 @@ import type { ProbeDoneResult, ProbeDoneInput } from "@/src/core";
  * the UI wave; this card just guarantees the data is never invisible.
  */
 export function ProbeDoneCard({ part }: { part: { input?: unknown; output?: unknown; state?: unknown } }) {
-	const input = part.input as ProbeDoneInput | undefined;
 	const output = part.output as ProbeDoneResult | undefined;
 	const state = typeof part.state === "string" ? part.state : "";
 
-	const assessment =
-		output?.ok
-			? output.assessment
-			: state === "output-error"
-				? null // the rejected call — its input is unvalidated garbage
-				: (input?.assessment ?? null);
+	// Parse, don't cast (the seam rule, src/core/tool-parts.ts): the model
+	// authored this input — it is consumer-trustworthy only if the SAME
+	// schema the tool declared says so. The parse subsumes the old state
+	// reasoning and shape guards: an errored call's stringified assessment,
+	// a mid-stream partial — anything that doesn't parse falls to the
+	// fallback branch. Output stays a cast: OUR execute authored it.
+	const input = parseProbeDoneInput(part.input);
+
+	const assessment = output?.ok ? output.assessment : input?.assessment;
 	const strands = assessment && Array.isArray(assessment.strands) ? assessment.strands : null;
 
 	return (

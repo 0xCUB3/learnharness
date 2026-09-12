@@ -15,6 +15,8 @@
  * the learner's edge sits.
  */
 
+import { z } from "zod";
+
 /** One dependency strand the planned lesson will rest on. */
 export interface ProbeStrand {
 	/** Name/description of the strand (e.g. "the derivative as a limit"). */
@@ -35,6 +37,42 @@ export interface ProbeAssessment {
 export interface ProbeDoneInput {
 	assessment: ProbeAssessment;
 }
+
+// The zod schema of that input — SINGLE SOURCE OF TRUTH, lived by the tool
+// (src/agent/tools/probe.ts) and by the UI parse seam (src/core/tool-parts.ts):
+// the boundary validation and the consumer parse run literally the same
+// schema, so "schema-valid at the boundary" ⇔ "parseable by a consumer" is
+// structural, not a convention. (Live crash 2026-09-12: the model sent
+// `assessment` as a STRING; the card cast it and died on `.strands.map`.)
+export const probeDoneInputSchema = z
+	.object({
+		assessment: z
+			.object({
+				strands: z
+					.array(
+						z.object({
+							strand: z
+								.string()
+								.describe(
+									"The dependency strand (e.g. 'the derivative as a limit') — a name the plan can hang a node on.",
+								),
+							assessment: z
+								.string()
+								.describe(
+									"Where his edge sits on this strand: the floor (what he reliably gets right), the ceiling (where it runs out), " +
+										"misconceptions found, and what the lesson should build from.",
+								),
+						}),
+					)
+					.min(1)
+					.describe("Every strand the planned lesson will depend on, each with your read of his edge on it."),
+				summary: z
+					.string()
+					.optional()
+					.describe("Optional overall synthesis: his apparent goal and where the teaching should enter."),
+			})
+			.describe("The learner assessment — the probe's distilled output."),
+	}) satisfies z.ZodType<ProbeDoneInput>;
 
 /** probe_done tool output. */
 export interface ProbeDoneResult {

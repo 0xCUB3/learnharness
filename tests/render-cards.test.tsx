@@ -120,6 +120,19 @@ describe("render smoke tests", () => {
 		assert.ok(html.includes('data-testid="other-option"'), "Other is still an option row in multi-select");
 	});
 
+	it("a malformed question input renders the quiet fallback, never a crash", () => {
+		// The seam rule (tool-parts.ts): the dock PARSES the model-authored
+		// input instead of casting it — the live crash shape (options as a
+		// JSON string) must render the fallback, not die on .map.
+		const html = renderDock({
+			toolName: "quiz",
+			toolCallId: "bad",
+			input: { question: "q?", options: JSON.stringify([{ label: "a" }, { label: "b" }]) } as never,
+		});
+		assert.ok(html.includes('data-testid="malformed-question"'));
+		assert.match(html, /malformed/);
+	});
+
 	it("phase scales the thinking field: teaching invites depth, probing stays quick", () => {
 		const teach = renderToStaticMarkup(
 			<QuestionDock

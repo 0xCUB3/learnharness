@@ -1,6 +1,5 @@
-import { z } from "zod";
 import { lhTool, type LhTool } from "../lh-tool.ts";
-import type { ProbeDoneInput, ProbeDoneResult } from "../../core/contracts.ts";
+import { probeDoneInputSchema, type ProbeDoneInput, type ProbeDoneResult } from "../../core/contracts.ts";
 import type { UIMessage } from "ai";
 import { findPendingToolCall } from "../../core/pending.ts";
 import type { ChatStore } from "../../core/ports.ts";
@@ -56,30 +55,9 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, LhTool<any,
 				"(floor, ceiling, misconceptions, what to build from). It streams to the learner live and becomes " +
 				"the handoff artifact the teacher plans from. Refused while a question is still open, and after " +
 				"the probe is already concluded. After it succeeds, say your closing sentence and end your turn.",
-			schema: z.object({
-				assessment: z
-					.object({
-						strands: z
-							.array(
-								z.object({
-									strand: z.string().describe("The dependency strand (e.g. 'the derivative as a limit') — a name the plan can hang a node on."),
-									assessment: z
-										.string()
-										.describe(
-											"Where his edge sits on this strand: the floor (what he reliably gets right), the ceiling (where it runs out), " +
-												"misconceptions found, and what the lesson should build from.",
-										),
-								}),
-							)
-							.min(1)
-							.describe("Every strand the planned lesson will depend on, each with your read of his edge on it."),
-						summary: z
-							.string()
-							.optional()
-							.describe("Optional overall synthesis: his apparent goal and where the teaching should enter."),
-					})
-					.describe("The learner assessment — the probe's distilled output."),
-			}) satisfies z.ZodType<ProbeDoneInput>,
+			// The core-owned schema (contracts/probe.ts) — the SAME schema the UI
+			// parse seam (tool-parts.ts) runs, so boundary-valid ⇔ consumer-parseable.
+			schema: probeDoneInputSchema,
 			execute: async (input): Promise<ProbeDoneResult> => {
 				const record = ctx.chatStore.getChat(ctx.chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };

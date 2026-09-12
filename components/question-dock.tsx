@@ -13,6 +13,8 @@ import {
 	resolveCorrect,
 	seededRandom,
 	shuffleOptions,
+	parseAskInput,
+	parseQuizInput,
 	toggleOption,
 	toggleOther,
 	type AnswerRequest,
@@ -76,12 +78,26 @@ export function QuestionDock({
 	onSubmit,
 	phase = "probe",
 }: QuestionDockProps) {
+	// Parse, don't cast (src/core/tool-parts.ts): the model authored this
+	// input, and only the schema the tool declared vouches for its shape.
+	// The dock mounts on input-available parts (already validated at the
+	// bridge), so this is pure defense in depth — but it is STRUCTURAL now:
+	// anything that slips through renders the quiet fallback, never a
+	// crash on `.map` over model-authored bytes.
+	const parsed = toolName === "quiz" ? parseQuizInput(input) : parseAskInput(input);
+	if (!parsed) {
+		return (
+			<div data-testid="malformed-question" className="rounded-xl border border-dashed bg-card/60 p-3 text-sm text-muted-foreground">
+				This question arrived malformed — the transcript keeps the retry.
+			</div>
+		);
+	}
 	return (
 		<>
 			{!expanded && (
 				<QuestionDockBar
 					toolName={toolName}
-					question={input.question}
+					question={parsed.question}
 					onExpand={onExpand}
 					variant={reveal ? "reveal" : "collapsed"}
 				/>
@@ -90,7 +106,7 @@ export function QuestionDock({
 				<QuestionDockForm
 					toolName={toolName}
 					toolCallId={toolCallId}
-					input={input}
+					input={parsed}
 					phase={phase}
 					onSubmit={onSubmit}
 				/>
