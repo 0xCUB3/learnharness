@@ -72,3 +72,10 @@ export const LEDGER_FILES = {
 	mappings: path.join(PATHS.graph, "mappings.jsonl"),
 	sessions: path.join(PATHS.graph, "sessions.jsonl"),
 } as const;
+
+/**
+ * Notes-import bookkeeping (NOT a ledger): one JSON map, src-id → NotesSource
+ * record (contracts/graph.ts) — the file path + import time + the run's usage
+ * log. Read-modify-write like a chat file, not append-only like the ledgers.
+ */
+export const SOURCES_FILE = path.join(PATHS.graph, "sources.json");

@@ -43,11 +43,36 @@ Every node records every **(chat, message) point** where it came up; every edge 
 
 Three stages, one pipeline — the sole graph writer:
 
-- **Extractor (LLM) — session-only scope.** Sees ONLY the session transcript (tree-blind, with message ids). Reports freely, with verbatim evidence: propositions from anywhere in the session (one reasoning step each; prose counts as much as anything the teacher formalized), edges as the transcript articulates them, message-granular provenance, retroactive quiz attribution, and per proposition an **understanding level** — how strongly the learner accepted/understood it in this session, a CLOSED named-word scale (`solid` / `shaky` / `accepted` / `resisted` / `not yet engaged`; 2026-09-08: schema-enforced — exactly one word, no numbers, no justifications, which are dropped rather than stored). The levels are data for the future state model; their treatment is TBD.
+- **Extractor (LLM) — single-source scope.** Sees ONLY the source text — a session transcript (tree-blind, with message ids) or raw notes (the front door's second prompt, above). Reports freely, with verbatim evidence: propositions from anywhere in the session (one reasoning step each; prose counts as much as anything the teacher formalized), edges as the transcript articulates them, message-granular provenance, retroactive quiz attribution, and per proposition an **understanding level** — how strongly the learner accepted/understood it in this session, a CLOSED named-word scale (`solid` / `shaky` / `accepted` / `resisted` / `not yet engaged`; 2026-09-08: schema-enforced — exactly one word, no numbers, no justifications, which are dropped rather than stored). The levels are data for the future state model; their treatment is TBD.
 - **Auditor (LLM) — the global-graph scope.** Sees the extractor's output AND the existing graph. Two jobs: the faithfulness net (every candidate verified against verbatim evidence — unchanged), and the **identity judgment**: link each proposition to an existing node (recording the session's phrasing as an alias) or create it new. Conservative: duplicates over wrong merges.
 - **Merger (deterministic).** Append-only ledger writes; quiz event kinds/refs rebuilt mechanically from quiz tool parts. Every judgment is an LLM's; everything mechanical stays code.
 
 **Event ledger (amended):** quiz outcomes are rebuilt deterministically from quiz tool parts (correct / miss / don't-know, plus the learner's note). **There is no `taught` event** — no marking-things-done. The extractor's per-proposition understanding levels join the ledger as session-scoped observations (one closed-scale word per node per session). Identity is no longer exact-string matching — it is the auditor's judgment, with aliases as the phrasing record.
+
+### The format-agnostic front door — notes imports (DECIDED 2026-09-13)
+
+The same three-stage pipeline (extractor → auditor → merger) runs over **raw
+personal notes in arbitrary formats** — an Obsidian vault, plain markdown,
+anything textual. The extractor is format-blind by construction (it always
+saw rendered text, never ChatRecord JSON), so the notes path needs only a
+second extractor prompt (general-purpose extraction; the understanding word
+judges the **author's** grasp from their own commentary) and a source
+abstraction: each imported file becomes a `NotesSource` record (deterministic
+id from the path hash — re-imports are idempotent), playing the `chatId` role
+in mappings, checkpoints, and observation events.
+
+Decided edges:
+
+- **No session shaping.** Notes are never bent into teacher/learner
+  transcripts; quiz outcomes inside notes surface only via the extractor's
+  understanding observations (the deterministic quiz-event rebuild is a
+  session-pipeline feature — it needs structured quiz tool parts).
+- **Static provenance.** Imported nodes show the file path in the sessions
+  list as a static entry — never a link. Understanding-assessment levels
+  apply to personal notes as to sessions.
+- **Same single-flight registry and observability** as session runs: live
+  status, usage accounting per stage, true abort. One pipeline instance,
+  two front doors (quiz-triggered sessions; POST /api/graph/import).
 
 ### Understanding is derived (amended 2026-09-02)
 

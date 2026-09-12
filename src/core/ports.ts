@@ -24,6 +24,7 @@ import type {
 	PlanTree,
 	SessionCheckpoint,
 	TurnUsage,
+	NotesSource,
 } from "./contracts.ts";
 
 // ─── ChatStore — the session record's home (data/chats) ─────────────────────
@@ -80,6 +81,15 @@ export interface GraphStore {
 	/** Append one emission checkpoint. */
 	appendCheckpoint(checkpoint: SessionCheckpoint): void;
 	readCheckpoints(): SessionCheckpoint[];
+
+	/** Upsert one imported-notes source record (config.SOURCES_FILE — a
+	 *  JSON map, not a ledger; an upsert keeps the existing usage log). */
+	upsertSource(source: NotesSource): void;
+	/** Every notes source record, by id order-insensitive. */
+	readSources(): NotesSource[];
+	/** Append one run's usage to a source record — idempotent per
+	 *  startedAt, mirroring ChatRecord.extractions. */
+	appendSourceUsage(id: string, entry: ExtractionRunUsage): void;
 }
 
 // ─── JobStore — background sub-agent jobs (data/jobs) ─────────────────────────

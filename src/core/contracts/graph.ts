@@ -20,6 +20,8 @@
 /** Two relations only (DECIDED 2026-09-02): follows = b is derivable from a;
  *  supports = a grounds b without entailing it. No scalars, no encoded
  *  strength — strength is derived at read time from topology. */
+import type { ExtractionRunUsage } from "./chat.ts";
+
 export type EdgeType = "follows" | "supports";
 
 /** What one extraction run merged into the graph ledgers — the merger's
@@ -37,8 +39,30 @@ export interface EmissionStats {
  *  edges record every (chat, message) where they came up, deep-linkable to
  *  the exact transcript point. */
 export interface ProvenancePoint {
+	/** The chat this point anchors to — or a notes source id ("src_…"):
+	 *  imports carry no message anchors (provenance is the file itself,
+	 *  recorded through the mapping line + the source record). */
 	chatId: string;
 	messageId: string;
+}
+
+/** One imported notes file — the format-agnostic front door's bookkeeping
+ *  (DECIDED 2026-09-13): personal notes in ARBITRARY formats run through the
+ *  same extractor → auditor → merger pipeline, with the file itself as the
+ *  provenance anchor. There is no chat: the detail card shows the file path
+ *  as a STATIC entry (not a link), and understanding observations still
+ *  apply (judged from the author's own voice in the notes). The run's usage
+ *  log lives here, mirroring ChatRecord.extractions. Ids are "src_" + hash
+ *  of the file path — deterministic, so re-importing the same file re-runs
+ *  extraction against the same source id (mappings/events dedupe by it). */
+export interface NotesSource {
+	id: string;
+	filePath: string;
+	/** ISO — when this file was imported (the checkpoint's foldedAt). */
+	importedAt: string;
+	/** The run's usage log — same append-only discipline as
+	 *  ChatRecord.extractions, idempotent per startedAt. */
+	extractions?: ExtractionRunUsage[];
 }
 
 export interface GraphNode {
@@ -107,6 +131,8 @@ export interface LedgerEvent {
 	/** null = not yet attributed. */
 	nodeId: string | null;
 	kind: LedgerEventKind;
+	/** The chat that produced this evidence — or a notes source id
+	 *  ("src_…") for imported-notes observations. */
 	chatId: string;
 	at: string;
 	/** Idempotency key: the quiz part's toolCallId, or `obs:<sourceId>` for
@@ -249,6 +275,10 @@ export interface GraphSnapshot {
 	edges: GraphEdge[];
 	/** chatId → title, for every chat that touched the graph. */
 	sessions: Record<string, string>;
+	/** srcId → file path, for every IMPORTED NOTES file that touched the
+	 *  graph (the format-agnostic front door): a static provenance entry —
+	 *  the detail card shows the path as plain text, not a link. */
+	fileSources: Record<string, string>;
 	/** nodeId → chatIds that touched the node (click-through provenance). */
 	nodeSessions: Record<string, string[]>;
 	/** nodeId → chatId → that session's understanding observation (the

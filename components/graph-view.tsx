@@ -56,7 +56,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Loader2Icon, SearchIcon, WaypointsIcon } from "lucide-react";
+import { FileTextIcon, Loader2Icon, SearchIcon, UploadIcon, WaypointsIcon } from "lucide-react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
@@ -322,7 +322,9 @@ function tokenHex(cssVar: string): string {
 
 interface Selection {
 	node: GraphNode;
-	chatIds: string[];
+	/** The sources that touched this node: chat ids (deep-linkable sessions)
+	 *  and notes-source ids ("src_…" — imported files, static entries). */
+	sourceIds: string[];
 	/** Node position in container pixels (from graphToViewport at click time). */
 	anchor: { x: number; y: number };
 }
@@ -367,6 +369,26 @@ export function GraphView() {
 			cancelled = true;
 		};
 	}, [refreshTick]);
+
+	// Notes import (the format-agnostic front door): file picker → POST
+	// /api/graph/import; the runs surface in the status chips below, and the
+	// graph refetches when they finish (the runs-empty transition).
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const [importing, setImporting] = useState(false);
+	const onImportFiles = (files: FileList | null) => {
+		if (!files || files.length === 0) return;
+		setImporting(true);
+		const form = new FormData();
+		for (const file of Array.from(files)) form.append("files", file);
+		fetch("/api/graph/import", { method: "POST", body: form })
+			.then(async (res) => {
+				const body = (await res.json()) as { results: { filePath: string; ok: boolean }[] };
+				const failed = body.results.filter((r) => !r.ok);
+				if (failed.length > 0) console.error("notes import failed for:", failed);
+			})
+			.catch((err) => console.error("import failed:", err))
+			.finally(() => setImporting(false));
+	};
 
 	// Background pipeline status: poll /api/graph/status; when a run
 	// finishes (some -> none), refetch the graph.
@@ -490,7 +512,7 @@ export function GraphView() {
 					const anchor = renderer?.graphToViewport({ x: pos.x ?? 0, y: pos.y ?? 0 });
 					setSelected({
 						node: graphNode,
-						chatIds: snapshot.nodeSessions[node] ?? [],
+						sourceIds: snapshot.nodeSessions[node] ?? [],
 						anchor: anchor ?? { x: 0, y: 0 },
 					});
 				});
@@ -640,6 +662,28 @@ export function GraphView() {
 							No matching nodes.
 						</div>
 					)}
+					<div className="mt-1.5 border-t pt-1.5">
+						<input
+							ref={fileInputRef}
+							type="file"
+							multiple
+							accept=".md,.markdown,.txt"
+							className="hidden"
+							onChange={(e) => {
+								onImportFiles(e.target.files);
+								e.target.value = ""; // allow re-picking the same file
+							}}
+						/>
+						<button
+							type="button"
+							disabled={importing}
+							onClick={() => fileInputRef.current?.click()}
+							className="flex h-7 w-full items-center justify-center gap-1.5 rounded-lg border text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+						>
+							<UploadIcon className="size-3" />
+							{importing ? "Importing…" : "Import notes…"}
+						</button>
+					</div>
 				</div>
 			)}
 
@@ -670,20 +714,38 @@ export function GraphView() {
 				>
 					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
 					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
-					{selected.chatIds.length > 0 ? (
+					{selected.sourceIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>
-							{selected.chatIds.map((chatId) => {
-								// That session's understanding observation — the
+							{selected.sourceIds.map((sourceId) => {
+								// That source's understanding observation — the
 								// extractor's named-word note (confidence history).
-								const note = snapshot?.nodeObservations?.[selected.node.id]?.[chatId];
+								const note = snapshot?.nodeObservations?.[selected.node.id]?.[sourceId];
+								// An imported-notes file: a STATIC entry — the path,
+								// plain text, never a link (no session to open).
+								if (snapshot?.fileSources?.[sourceId] !== undefined) {
+									return (
+										<div key={sourceId} className="flex items-center gap-1.5">
+											<FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+											<span className="min-w-0 flex-1 truncate px-1 py-1 text-sm text-muted-foreground">
+												{snapshot.fileSources[sourceId]}
+											</span>
+											{note && (
+												<span className="max-w-28 shrink-0 truncate whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+													{note}
+												</span>
+											)}
+										</div>
+									);
+								}
+								// A real session: deep-linkable provenance.
 								return (
-									<div key={chatId} className="flex items-center gap-1.5">
+									<div key={sourceId} className="flex items-center gap-1.5">
 										<Link
-											href={`/chat/${chatId}`}
+											href={`/chat/${sourceId}`}
 											className="min-w-0 flex-1 truncate rounded-md px-2 py-1 text-sm text-foreground transition-colors hover:bg-accent"
 										>
-											{snapshot?.sessions[chatId] ?? chatId}
+											{snapshot?.sessions[sourceId] ?? sourceId}
 										</Link>
 										{/* The note is a fixed-scale word (solid/shaky/...) — the
 										    session name is the main thing; the chip is bounded so

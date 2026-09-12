@@ -10,7 +10,8 @@ import test from "node:test";
 import * as fs from "node:fs";
 
 import { chatStore } from "../src/store/chats.ts";
-import { PATHS } from "../config.ts";
+import { graphStore } from "../src/store/graph.ts";
+import { PATHS, SOURCES_FILE } from "../config.ts";
 import { callCost, contextWindow, jobCost, sessionCost, sumSteps, turnCost } from "../src/core/prices.ts";
 import type { CallUsage, ExtractionRunUsage, JobRecord, TurnUsage } from "../src/core/contracts.ts";
 
@@ -169,4 +170,41 @@ test("appendExtractionUsage: appends, idempotent per startedAt, not in list payl
 	assert.equal("extractions" in listed, false);
 
 	fs.unlinkSync(`${PATHS.chats}/${record.id}.json`);
+});
+
+test("appendSourceUsage: appends to the source record, idempotent per startedAt, upsert keeps history", () => {
+	// The real fs graphStore — sources.json backed up and restored around
+	// this test (same discipline as the chat fixture files).
+	fs.mkdirSync(PATHS.graph, { recursive: true });
+	let bak: string | undefined;
+	if (fs.existsSync(SOURCES_FILE)) bak = `${SOURCES_FILE}.w5test.bak`;
+	if (bak) fs.renameSync(SOURCES_FILE, bak);
+	try {
+		const runEntry = (startedAt: number): ExtractionRunUsage => ({
+			startedAt,
+			at: "2026-09-13T00:00:00Z",
+			durationMs: 42_000,
+			stats: { nodes: 1, edges: 2, events: 3 },
+			stages: {
+				extractor: { model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 100, outputTokens: 10 })] },
+				auditor: { model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 50, outputTokens: 5 })] },
+			},
+		});
+		const id = "src_usagetest01";
+		graphStore.upsertSource({ id, filePath: "/vault/usagetest.md", importedAt: "2026-09-13T00:00:00Z" });
+		graphStore.appendSourceUsage(id, runEntry(1));
+		graphStore.appendSourceUsage(id, runEntry(1)); // same run appended twice → no-op
+		graphStore.appendSourceUsage(id, runEntry(2)); // a retried run is a NEW spend
+		assert.equal(graphStore.readSources().find((s) => s.id === id)?.extractions?.length, 2);
+
+		// An upsert (re-import) KEEPS the usage history.
+		graphStore.upsertSource({ id, filePath: "/vault/usagetest.md", importedAt: "2026-09-14T00:00:00Z" });
+		assert.equal(graphStore.readSources().find((s) => s.id === id)?.extractions?.length, 2);
+
+		// Unknown ids are a silent no-op (nothing to bill against).
+		graphStore.appendSourceUsage("src_nope", runEntry(1));
+	} finally {
+		fs.rmSync(SOURCES_FILE, { force: true });
+		if (bak) fs.renameSync(bak, SOURCES_FILE);
+	}
 });

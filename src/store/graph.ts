@@ -15,6 +15,10 @@
  *                                      (chatId, sourceId) → graphNodeId
  *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
  *
+ * Plus config.SOURCES_FILE (sources.json): the imported-notes bookkeeping
+ * (NOT a ledger) — one JSON map, src-id → NotesSource, read-modify-write
+ * like a chat file. The format-agnostic front door (2026-09-13).
+ *
  * Implements core/ports.ts GraphStore. data/graph/* is exclusively this
  * adapter's. Reads are strict against the contracts.ts shapes (the 2026-09-02
  * graph redesign): corrupt lines are skipped, never guessed at — the ledgers
@@ -25,12 +29,14 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { LEDGER_FILES } from "../../config.ts";
+import { LEDGER_FILES, SOURCES_FILE } from "../../config.ts";
 import type {
 	GraphEdge,
 	GraphNode,
+	ExtractionRunUsage,
 	LedgerEvent,
 	LedgerEventKind,
+	NotesSource,
 	NodeMapping,
 	ProvenancePoint,
 	SessionCheckpoint,
@@ -157,4 +163,57 @@ export const graphStore: GraphStore = {
 	readCheckpoints(): SessionCheckpoint[] {
 		return readValid(LEDGER_FILES.sessions, isCheckpoint);
 	},
+
+	// ── imported-notes bookkeeping (config.SOURCES_FILE — a JSON map) ──
+
+	/** Upsert: keeps the existing record's usage log when re-importing. */
+	upsertSource(source: NotesSource): void {
+		const all = readSourceMap();
+		const prev = all[source.id];
+		all[source.id] = prev ? { ...source, extractions: prev.extractions } : source;
+		writeSourceMap(all);
+	},
+	readSources(): NotesSource[] {
+		return Object.values(readSourceMap());
+	},
+	/** Idempotent per startedAt — same discipline as chats.appendExtractionUsage. */
+	appendSourceUsage(id: string, entry: ExtractionRunUsage): void {
+		const all = readSourceMap();
+		const source = all[id];
+		if (!source) return; // no such source — nothing to bill against
+		source.extractions = source.extractions?.some((r) => r.startedAt === entry.startedAt)
+			? source.extractions
+			: [...(source.extractions ?? []), entry];
+		writeSourceMap(all);
+	},
 };
+
+/** sources.json — { id: NotesSource }. Read-modify-write, NOT append-only:
+ *  the usage log lives inside the record (like a chat's JSON file). */
+function readSourceMap(): Record<string, NotesSource> {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(SOURCES_FILE, "utf-8");
+	} catch {
+		return {};
+	}
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed)) return {};
+		const out: Record<string, NotesSource> = {};
+		for (const [id, value] of Object.entries(parsed)) {
+			if (isNotesSource(value)) out[id] = value;
+		}
+		return out;
+	} catch {
+		return {};
+	}
+}
+
+function writeSourceMap(map: Record<string, NotesSource>): void {
+	fs.mkdirSync(path.dirname(SOURCES_FILE), { recursive: true });
+	fs.writeFileSync(SOURCES_FILE, JSON.stringify(map, null, "\t"), "utf-8");
+}
+
+const isNotesSource = (v: unknown): v is NotesSource =>
+	isRecord(v) && isString(v.id) && isString(v.filePath) && isString(v.importedAt);

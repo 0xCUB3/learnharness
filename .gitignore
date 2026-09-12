@@ -7,3 +7,5 @@ data/
 .env.local
 .memory/
 SCOPE.md
+# raw real-data import sources (user directive 2026-09-13: never commit)
+real-data-extraction/

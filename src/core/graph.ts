@@ -64,6 +64,17 @@ function newGraphNodeId(): string {
 	return `n_${randomBytes(6).toString("hex")}`;
 }
 
+/** What one merge run merges FROM (the caller supplies it — the merger never
+ *  reads the chat store): a session's transcript + its `updatedAt`
+ *  checkpoint, or — for the format-agnostic notes front door (2026-09-13) —
+ *  `messages: null`: raw notes carry no tool parts, so no quiz events are
+ *  rebuilt (quiz outcomes inside notes surface only through the extractor's
+ *  understanding observations), and the checkpoint stamps the import. */
+export interface MergeSource {
+	messages: UIMessage[] | null;
+	foldedAt: string;
+}
+
 // ─── transcript scanning (shared by the merger + trigger) ─────────────────────
 
 /** A flattened, order-preserving view of every tool part in a transcript. */
@@ -126,11 +137,15 @@ const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
  * parts, nodeId from the extractor's attribution through this run's
  * mapping) plus one observation event per proposition carrying an
  * understanding note (ref `obs:<sourceId>`). No taught events, ever.
+ *
+ * `chatId` is the run's source key: a real chat, or a notes source id
+ * ("src_…") for the format-agnostic import path — same ledgers, same
+ * idempotency, one graph. The `source` parameter carries the transcript
+ * being merged (null messages = raw notes: no quiz events) and the
+ * checkpoint stamp; the merger itself is chat-store-free.
  */
-export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDeps): EmissionStats {
-	const { graphStore: ledgers, chatStore } = deps;
-	const record = chatStore.getChat(chatId);
-	if (!record) return { nodes: 0, edges: 0, events: 0 };
+export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDeps, source: MergeSource): EmissionStats {
+	const { graphStore: ledgers } = deps;
 	const stats: EmissionStats = { nodes: 0, edges: 0, events: 0 };
 
 	// 1. Resolution: this run's propositions → graph node ids. Existing
@@ -214,7 +229,7 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 	for (const event of ledgers.readEvents()) {
 		if (event.chatId === chatId && event.ref) seenRefs.add(event.ref);
 	}
-	for (const part of toolParts(record.messages)) {
+	for (const part of source.messages ? toolParts(source.messages) : []) {
 		if (part.name !== "quiz" || part.state !== "output-available") continue;
 		const event = quizEvent(part, chatId, audit, mapping, now);
 		if (event?.ref !== undefined && !seenRefs.has(event.ref)) {
@@ -241,8 +256,9 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 		stats.events++;
 	}
 
-	// 4. Checkpoint: this chat is extracted through its current updatedAt.
-	ledgers.appendCheckpoint({ chatId, foldedAt: record.updatedAt });
+	// 4. Checkpoint: this source is extracted through its foldedAt (the
+	//    chat's updatedAt, or the import time for notes).
+	ledgers.appendCheckpoint({ chatId, foldedAt: source.foldedAt });
 	return stats;
 }
 
@@ -423,20 +439,28 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		if (event.nodeId !== null) touch(event.nodeId, event.chatId);
 	}
 
-	// Titles for every chat the graph can point back at.
-	const chatIds = new Set<string>();
+	// Labels for every source the graph can point back at: real chats
+	// (title, deep-linkable) and imported notes files (path, static — the
+	// format-agnostic front door's provenance).
+	const sourceIds = new Set<string>();
 	for (const chats of nodeChats.values()) {
-		for (const id of chats) chatIds.add(id);
+		for (const id of chats) sourceIds.add(id);
 	}
 	const sessions: Record<string, string> = {};
-	for (const id of chatIds) {
+	const fileSources: Record<string, string> = {};
+	for (const id of sourceIds) {
 		const chat = deps.chatStore.getChat(id);
-		if (chat) sessions[id] = chat.title;
+		if (chat) {
+			sessions[id] = chat.title;
+			continue;
+		}
+		const source = deps.graphStore.readSources().find((s) => s.id === id);
+		if (source) fileSources[id] = source.filePath;
 	}
 
 	const nodeSessions: Record<string, string[]> = {};
 	for (const [nodeId, chats] of nodeChats) {
-		const ids = [...chats].filter((id) => sessions[id] !== undefined);
+		const ids = [...chats].filter((id) => sessions[id] !== undefined || fileSources[id] !== undefined);
 		if (ids.length > 0) nodeSessions[nodeId] = ids;
 	}
 
@@ -461,7 +485,7 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		(nodeObservations[nodeId] ??= {})[chatId] = note;
 	}
 
-	return { nodes, edges, sessions, nodeSessions, nodeObservations };
+	return { nodes, edges, sessions, fileSources, nodeSessions, nodeObservations };
 }
 
 // Re-export: the contract owns the shape; legacy importers still reach it.

@@ -27,10 +27,12 @@ import type { UIMessage } from "ai";
 import type { PiEngine } from "../src/agent/models.ts";
 import type {
 	AuditResult,
+	ExtractionRunUsage,
 	GraphEdge,
 	GraphNode,
 	LedgerEvent,
 	NodeMapping,
+	NotesSource,
 	SessionCheckpoint,
 	SessionFindings,
 } from "../src/core/contracts.ts";
@@ -60,6 +62,7 @@ function memoryLedgers() {
 	const events: LedgerEvent[] = [];
 	const mappings: NodeMapping[] = [];
 	const checkpoints: SessionCheckpoint[] = [];
+	const sources = new Map<string, NotesSource>();
 	return {
 		appendNode: (n: GraphNode) => void nodes.push(n),
 		readNodes: () => nodes.map((n) => ({ ...n })),
@@ -71,6 +74,19 @@ function memoryLedgers() {
 		readMappings: () => mappings.map((m) => ({ ...m })),
 		appendCheckpoint: (c: SessionCheckpoint) => void checkpoints.push(c),
 		readCheckpoints: () => checkpoints.map((c) => ({ ...c })),
+		upsertSource: (s: NotesSource) => {
+			// Mirrors the real store: an upsert KEEPS the existing usage log.
+			const prev = sources.get(s.id);
+			sources.set(s.id, { ...s, extractions: [...(prev?.extractions ?? [])] });
+		},
+		readSources: () => [...sources.values()].map((s) => ({ ...s, extractions: [...(s.extractions ?? [])] })),
+		appendSourceUsage: (id: string, entry: ExtractionRunUsage) => {
+			const source = sources.get(id);
+			if (!source) return;
+			if (!source.extractions?.some((r) => r.startedAt === entry.startedAt)) {
+				source.extractions = [...(source.extractions ?? []), entry];
+			}
+		},
 	} satisfies GraphStore;
 }
 
@@ -511,5 +527,125 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			auditor: silentModel(),
 		});
 		await assert.rejects(pipeline.runExtraction("chat_does_not_exist"), /Chat not found/);
+	});
+});
+
+// ── the notes front door (format-agnostic import) ────────────────────────────
+
+/** Raw personal notes — arbitrary format, no session, no message ids. */
+const NOTES_TEXT = `> [!quote] YOU
+> teach me vim
+
+> [!abstract] PI
+> Vim always starts in Normal mode — keys are commands, not text.`;
+
+/** What the notes-mode extractor submits: same shapes minus attribution,
+ *  and messages always empty (the file is the provenance). */
+const NOTES_FINDINGS = {
+	propositions: [
+		{
+			id: "p1",
+			name: "Vim normal mode",
+			statement: "Vim starts in Normal mode, where keys are commands.",
+			aliases: [],
+			messages: [],
+			evidence: ["Vim always starts in Normal mode — keys are commands, not text."],
+			understanding: "solid",
+		},
+	],
+	edges: [],
+} as const;
+
+const NOTES_VERDICT = {
+	propositions: [NOTES_FINDINGS.propositions[0]],
+	edges: [],
+	dropped: [],
+} as const;
+
+describe("the notes front door (importNotes — format-agnostic)", () => {
+	it("imports raw notes end to end: source record, file-scoped provenance, no quiz events", async () => {
+		const ledgers = memoryLedgers();
+		const seen: { kind?: string; label?: string }[] = [];
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", NOTES_FINDINGS),
+			// During the auditor's call the registry must show the notes run.
+			auditor: submitModel("submit_review", NOTES_VERDICT, () => {
+				const run = extractionStatuses().find((r) => r.chatId.startsWith("src_"));
+				seen.push({ kind: run?.kind, label: run?.label });
+			}),
+		});
+		const stats = await pipeline.importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
+
+		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 1 });
+		// The run surfaced as a NOTES run labeled with the file path.
+		assert.deepEqual(seen, [{ kind: "notes", label: "/vault/learn vim.md" }]);
+		assert.equal(extractionStatuses().length, 0, "the registry clears when the run ends");
+
+		// The source record: deterministic src id, the file path, the usage log.
+		const source = ledgers.readSources()[0]!;
+		assert.match(source.id, /^src_/);
+		assert.equal(source.filePath, "/vault/learn vim.md");
+		assert.ok(Date.parse(source.importedAt));
+		assert.equal(source.extractions?.length, 1, "the run's usage persisted into the source record");
+		assert.equal(source.extractions![0]!.stats?.nodes, 1);
+		assert.ok(source.extractions![0]!.stages.extractor.steps.length > 0, "faux usage captured");
+
+		// File-scoped provenance: the mapping line carries the source id;
+		// the node carries NO message anchors.
+		const node = ledgers.readNodes()[0]!;
+		assert.equal(node.statement, "Vim starts in Normal mode, where keys are commands.");
+		assert.deepEqual(node.provenance, []);
+		assert.deepEqual(ledgers.readMappings(), [{ chatId: source.id, sourceId: "p1", graphNodeId: node.id }]);
+
+		// One observation event, zero quiz events — outcomes inside notes
+		// surface only through understanding observations (user-decided).
+		const events = ledgers.readEvents();
+		assert.deepEqual(
+			events.map((e) => [e.kind, e.chatId, e.ref, e.note]),
+			[["observation", source.id, "obs:p1", "solid"]],
+		);
+		// The checkpoint stamps the import.
+		assert.equal(ledgers.readCheckpoints()[0]!.chatId, source.id);
+	});
+
+	it("re-importing the same file is idempotent: same source identity, refs dedupe, usage history grows", async () => {
+		const ledgers = memoryLedgers();
+		const mk = () =>
+			createExtractionPipeline({
+				chatStore,
+				graphStore: ledgers,
+				extractor: submitModel("submit_findings", NOTES_FINDINGS),
+				auditor: submitModel("submit_review", NOTES_VERDICT),
+			});
+		const first = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
+		assert.deepEqual(first, { nodes: 1, edges: 0, events: 1 });
+
+		const second = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
+		assert.deepEqual(second, { nodes: 0, edges: 0, events: 0 }, "the same source id dedupes everything");
+
+		assert.equal(ledgers.readSources().length, 1, "one source identity — the path hashes to the same id");
+		assert.equal(ledgers.readSources()[0]!.extractions?.length, 2, "both runs billed their usage");
+		assert.equal(ledgers.readNodes().length, 1, "no duplicate node");
+	});
+
+	it("aborts like a chat run: true cancellation, nothing merged, partial usage in the source record", async () => {
+		const ledgers = memoryLedgers();
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: hangingModel(),
+			auditor: submitModel("submit_review", NOTES_VERDICT),
+		});
+		const runPromise = pipeline.importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
+
+		const srcId = extractionStatuses().find((r) => r.chatId.startsWith("src_"))!.chatId;
+		assert.equal(abortExtraction(srcId), true);
+		assert.deepEqual(await runPromise, { nodes: 0, edges: 0, events: 0 });
+		assert.equal(ledgers.readNodes().length, 0, "nothing merged");
+		assert.equal(ledgers.readCheckpoints().length, 0, "nothing checkpointed");
+		assert.equal(ledgers.readSources()[0]!.extractions?.length, 1, "partial usage still persisted");
+		assert.equal(ledgers.readSources()[0]!.extractions![0]!.stats, undefined, "never merged → no stats");
 	});
 });
