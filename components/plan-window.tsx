@@ -82,7 +82,7 @@ export function PlanWindow({ messages, onOpen }: { messages: readonly PopupMessa
 			title="Open the full plan"
 			className="fixed bottom-3 left-3 z-30 hidden w-80 flex-col gap-1 rounded-xl border bg-card/95 p-2 text-left shadow-lg backdrop-blur sm:flex"
 		>
-			<div className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+			<div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				<WaypointsIcon className="size-3.5 text-primary" />
 				The plan
 				<span className="ml-auto min-w-0 truncate font-normal normal-case" title={currentTitle ?? undefined}>

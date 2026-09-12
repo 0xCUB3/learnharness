@@ -294,7 +294,7 @@ export function ActivityDock({ feed: feedProp }: { feed?: ActivityFeed }) {
 				narrow && "max-h-[60dvh] overflow-y-auto",
 			)}
 		>
-			<div className="flex items-center gap-2 px-1 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+			<div className="flex items-center gap-2 px-1 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				<ActivityIcon className="size-3.5" />
 				Background activity
 				<span className="ml-auto tabular-nums" data-testid="activity-total-cost" title="Total running cost (inferred)">

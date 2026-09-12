@@ -253,7 +253,7 @@ function SessionsSidebar() {
 				</button>
 
 				<div className="mx-3 mb-1 flex items-center gap-2">
-					<span className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Sessions</span>
+					<span className="text-xxs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
 					<span className="relative flex-1">
 						<Input
 							data-testid="session-search"

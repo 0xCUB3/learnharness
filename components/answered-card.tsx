@@ -89,7 +89,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 
 			{answer.note && (
 				<div data-testid="your-thinking" className="mt-3 border-l-2 border-primary/40 pl-3">
-					<span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+					<span className="mb-0.5 block text-xxs font-medium uppercase tracking-wide text-muted-foreground">
 						Your thinking
 					</span>
 					<span className="block whitespace-pre-wrap text-sm text-foreground/90">{answer.note}</span>

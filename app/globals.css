@@ -88,6 +88,8 @@
 	--font-title: "lh-cmu", serif;
 	/* The modular type ladder — each size carries its own line-height.
 	   Component sizes must pull from this ladder. */
+	--text-xxs: 10px;
+	--text-xxs--line-height: 1.4;
 	--text-xs: 11px;
 	--text-xs--line-height: 1.4;
 	--text-sm: 12.5px;
