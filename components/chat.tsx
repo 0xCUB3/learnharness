@@ -530,7 +530,7 @@ export function Chat({
 										{m.role === "user" ? (
 											// User text renders plain: the model's LaTeX pipeline is not
 											// applied to learner-authored text ($ stays $, no surprises).
-											<div className="whitespace-pre-wrap">
+											<div className="lh-prose whitespace-pre-wrap">
 												{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
 											</div>
 										) : (
