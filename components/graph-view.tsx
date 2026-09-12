@@ -52,20 +52,55 @@
  * viewport position (flipping above near the bottom edge); any camera move
  * (pan/zoom) dismisses it. The `requires` edges render as arrows pointing
  * prerequisite → dependent.
+ *
+ * Rendering settings (2026-09-13): a gear in the search panel reveals three
+ * sliders — node size, edge width, arrowhead length — persisted per browser
+ * (localStorage) and applied by REBUILDING ONLY THE RENDERER: the layout
+ * effect (graph + forceAtlas2) is untouched by settings, and the camera
+ * position carries across rebuilds, so tweaking a slider never re-fits or
+ * re-lays-out the view. The arrowhead is a program option (head px =
+ * thickness × lengthToThicknessRatio × 2), solved from the two settings.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { FileTextIcon, Loader2Icon, SearchIcon, UploadIcon, WaypointsIcon } from "lucide-react";
+import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
 import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
 
 /** The uniform node look (no state classes — WebGL wants hex, not oklch):
- *  the accent color + the old "known" size, until the state model lands. */
+ *  the accent color, until the state model lands. */
 const NODE_COLOR_TOKEN = "--primary";
-const NODE_SIZE = 8;
+
+// ---- Render settings (the settings-panel controls) ------------------------
+//
+// Three basic controls (user-decided 2026-09-13): node disc size, edge line
+// width, and arrowhead length (px). The arrowhead program couples head size
+// to thickness via lengthToThicknessRatio — the renderer derives the ratio
+// from the two settings, so the controls stay independent. Defaults reflect
+// the pre-panel look (edge 1px + its stock 5px head) except nodeSize, which
+// dropped 8 → 6 for dense graphs (user: "nodes are quite large"). Persisted
+// per browser in localStorage.
+
+interface RenderSettings {
+	nodeSize: number;
+	edgeWidth: number;
+	arrowLength: number;
+}
+const DEFAULT_RENDER_SETTINGS: RenderSettings = { nodeSize: 6, edgeWidth: 1, arrowLength: 5 };
+const RENDER_SETTINGS_KEY = "graph-render-settings";
+const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
+/** Defensively merge stored settings (stale/partial/corrupt → defaults). */
+function sanitizeRenderSettings(raw: unknown): RenderSettings {
+	const r = raw as Partial<RenderSettings> | null;
+	return {
+		nodeSize: clamp(Number(r?.nodeSize ?? DEFAULT_RENDER_SETTINGS.nodeSize), 2, 14),
+		edgeWidth: clamp(Number(r?.edgeWidth ?? DEFAULT_RENDER_SETTINGS.edgeWidth), 0.5, 4),
+		arrowLength: clamp(Number(r?.arrowLength ?? DEFAULT_RENDER_SETTINGS.arrowLength), 2, 15),
+	};
+}
 
 /**
  * Pure filter predicate for the search panel: a node is visible when the
@@ -329,19 +364,80 @@ interface Selection {
 	anchor: { x: number; y: number };
 }
 
+/** One labeled range row for the rendering-settings panel. */
+function SettingSlider({
+	label,
+	min,
+	max,
+	step,
+	value,
+	onChange,
+}: {
+	label: string;
+	min: number;
+	max: number;
+	step: number;
+	value: number;
+	onChange: (v: number) => void;
+}) {
+	return (
+		<label className="flex flex-col gap-1">
+			<span className="flex items-center justify-between text-[11px] text-muted-foreground">
+				{label}
+				<span className="tabular-nums">{value}</span>
+			</span>
+			<input
+				type="range"
+				min={min}
+				max={max}
+				step={step}
+				value={value}
+				onChange={(e) => onChange(Number(e.target.value))}
+				className="h-1.5 w-full accent-primary"
+			/>
+		</label>
+	);
+}
+
 export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
-	// Search panel state: the query text.
+	// Search panel state: the query text + the settings section toggle.
 	const [query, setQuery] = useState("");
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	// Render settings (node size / edge width / arrowhead): loaded from
+	// localStorage AFTER mount (an initial-state read would mismatch the
+	// server-rendered HTML), saved on every change.
+	const [settings, setSettings] = useState<RenderSettings>(DEFAULT_RENDER_SETTINGS);
+	useEffect(() => {
+		try {
+			const stored = localStorage.getItem(RENDER_SETTINGS_KEY);
+			if (stored) setSettings(sanitizeRenderSettings(JSON.parse(stored)));
+		} catch {
+			// corrupt storage → defaults, never crash the view
+		}
+	}, []);
+	useEffect(() => {
+		try {
+			localStorage.setItem(RENDER_SETTINGS_KEY, JSON.stringify(settings));
+		} catch {
+			// storage full/blocked → in-memory settings still work
+		}
+	}, [settings]);
+
 	// The sigma instance and its graphology graph live inside the mount
-	// effect; refs expose them to the filters effect, and `rendererEpoch`
-	// re-triggers it when a new renderer is constructed.
+	// effects (data: graph+layout; render: renderer); refs expose them to
+	// the filters effect, and `rendererEpoch` re-triggers it when a new
+	// renderer is constructed. `cameraRef` carries the camera position
+	// across renderer rebuilds (settings changes must never re-fit the
+	// view), and `hoverStateRef` lets the layout effect's hover repainter
+	// reach the CURRENT renderer's drawers.
 	const rendererRef = useRef<import("sigma").default | null>(null);
 	const graphRef = useRef<Graph | null>(null);
 	const [rendererEpoch, setRendererEpoch] = useState(0);
+	const cameraRef = useRef<{ x: number; y: number; ratio: number; angle: number } | null>(null);
 
 	// The id set that survives the current search — consumed by the sigma
 	// reducers and the "no matches" hint.
@@ -414,20 +510,13 @@ export function GraphView() {
 		};
 	}, []);
 
-	// Build the graphology graph, lay it out once, mount sigma.
+	// Build the graphology graph and lay it out ONCE per snapshot: seeded
+	// start positions, one synchronous forceAtlas2 pass, then freeze. The
+	// renderer is a SEPARATE effect — render settings change only the
+	// renderer; the layout (positions live in this graph instance) is
+	// never recomputed for a settings tweak.
 	useEffect(() => {
 		if (!snapshot || snapshot.nodes.length === 0) return;
-		const container = containerRef.current;
-		if (!container) return;
-
-		const edgeColor = tokenHex("--ring");
-		const labelColor = tokenHex("--muted-foreground");
-		const hoverTextColor = tokenHex("--foreground");
-		const nodeColor = tokenHex(NODE_COLOR_TOKEN);
-		// Mutable hover-transition state: 0 = resting, 1 = fully hovered.
-		const hover: HoverState = { fade: 0, repaint: null };
-		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, hoverTextColor, hover);
-
 		const graph = new Graph();
 		for (const node of snapshot.nodes) {
 			// Seeded start positions (FA2 requires non-zero x/y) keep the
@@ -435,8 +524,8 @@ export function GraphView() {
 			const rand = seededRandom(node.id);
 			graph.addNode(node.id, {
 				label: node.name,
-				size: NODE_SIZE,
-				color: nodeColor,
+				size: DEFAULT_RENDER_SETTINGS.nodeSize,
+				color: tokenHex(NODE_COLOR_TOKEN),
 				x: (rand() - 0.5) * 100,
 				y: (rand() - 0.5) * 100,
 			});
@@ -445,18 +534,56 @@ export function GraphView() {
 			// Snapshot edges are already merged by (from,to,type); the guard
 			// is just belt-and-braces for the simple graphology graph.
 			if (!graph.hasEdge(edge.from, edge.to)) {
-				graph.addEdge(edge.from, edge.to, { type: "arrow", color: edgeColor, size: 1 });
+				graph.addEdge(edge.from, edge.to, {
+					type: "arrow",
+					color: tokenHex("--ring"),
+					size: DEFAULT_RENDER_SETTINGS.edgeWidth,
+				});
 			}
 		}
 
 		// Run-then-freeze: one synchronous pass, writes x/y, then done.
 		// Barnes-Hut comes on automatically above ~500 nodes (the vision's
 		// first escalation rung — see scripts/bench-graph.ts for the numbers).
-		const settings = {
+		const layoutSettings = {
 			...forceAtlas2.inferSettings(graph),
 			...(graph.order > 500 ? { barnesHutOptimize: true } : {}),
 		};
-		forceAtlas2.assign(graph, { iterations: 100, settings });
+		forceAtlas2.assign(graph, { iterations: 100, settings: layoutSettings });
+
+		// The render effect (declared next) builds its Sigma over THIS
+		// instance in the same commit; on snapshot change it re-runs too
+		// (snapshot is in its deps) and picks the new graph up.
+		graphRef.current = graph;
+		return () => {
+			graphRef.current = null;
+		};
+	}, [snapshot]);
+
+	// Mount sigma over the laid-out graph. Re-runs when the snapshot changes
+	// (new graph) or the (deferred) render settings change — nothing else.
+	// Sizes are stamped onto the graph here, and the arrowhead geometry is
+	// a PROGRAM option (head px = thickness × lengthToThicknessRatio × 2),
+	// so both flow through a renderer rebuild while the layout and the
+	// camera position (carried via cameraRef) stay put.
+	const deferredSettings = useDeferredValue(settings);
+	useEffect(() => {
+		if (!snapshot || snapshot.nodes.length === 0) return;
+		const container = containerRef.current;
+		const graph = graphRef.current;
+		if (!container || !graph) return;
+
+		const s = deferredSettings;
+		// Stamp the size-controlled attributes (idempotent; the old renderer
+		// died in cleanup — this graph is renderer-less right now).
+		graph.updateEachNodeAttributes((_node, attrs) => ({ ...attrs, size: s.nodeSize }));
+		graph.updateEachEdgeAttributes((_edge, attrs) => ({ ...attrs, size: s.edgeWidth }));
+
+		const labelColor = tokenHex("--muted-foreground");
+		const hoverTextColor = tokenHex("--foreground");
+		// Mutable hover-transition state: 0 = resting, 1 = fully hovered.
+		const hover: HoverState = { fade: 0, repaint: null };
+		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, hoverTextColor, hover);
 
 		let killed = false;
 		let renderer: import("sigma").default | null = null;
@@ -466,8 +593,17 @@ export function GraphView() {
 		// Both sigma and its rendering package touch WebGL globals at module
 		// scope, so both load dynamically (SSR-safe; the effect is browser-only).
 		void Promise.all([import("sigma"), import("sigma/rendering")]).then(
-			([{ default: Sigma }, { NodeCircleProgram }]) => {
+			([{ default: Sigma }, { NodeCircleProgram, createEdgeArrowProgram }]) => {
 				if (killed) return;
+				// The arrowhead program with our ratios: solve
+				// lengthToThicknessRatio for the desired head length
+				// (head px = thickness × ratio × 2), keeping the stock head
+				// SHAPE (wideness = 0.8 × length, as the 2.5/2 defaults).
+				const thicknessRatio = s.arrowLength / (2 * s.edgeWidth);
+				const arrowProgram = createEdgeArrowProgram({
+					lengthToThicknessRatio: thicknessRatio,
+					widenessToThicknessRatio: thicknessRatio * 0.8,
+				});
 				// Padded picking (see PICKING_VERTEX_SHADER): the visible disc is
 				// pixel-identical to the stock circle program; the PICKABLE disc
 				// gains PICKING_PAD_PX of radius, so the whole hover halo is
@@ -484,6 +620,7 @@ export function GraphView() {
 				};
 				renderer = new Sigma(graph, container, {
 					nodeProgramClasses: { circle: PaddedNodeCircleProgram },
+					edgeProgramClasses: { arrow: arrowProgram },
 					defaultEdgeType: "arrow",
 					// All labels appear/disappear together: no per-node size gating
 					// (threshold 0) and NO sigma label-grid declutter (density →
@@ -505,6 +642,9 @@ export function GraphView() {
 				graphRef.current = graph;
 				rendererRef.current = renderer;
 				setRendererEpoch((e) => e + 1);
+				// A renderer rebuild (settings tweak) must never re-fit the
+				// view: restore the carried camera position, if any.
+				if (cameraRef.current) renderer.getCamera().setState(cameraRef.current);
 				renderer.on("clickNode", ({ node }) => {
 					const graphNode = snapshot.nodes.find((n) => n.id === node);
 					if (!graphNode) return;
@@ -574,11 +714,13 @@ export function GraphView() {
 		return () => {
 			killed = true;
 			if (hoverAnimId !== null) cancelAnimationFrame(hoverAnimId);
+			// Carry the camera across rebuilds — a settings tweak keeps the
+			// user's pan/zoom (and the detail-card anchors stay valid).
+			if (renderer) cameraRef.current = renderer.getCamera().getState();
 			rendererRef.current = null;
-			graphRef.current = null;
 			renderer?.kill();
 		};
-	}, [snapshot]);
+	}, [snapshot, deferredSettings]);
 
 	// Filtering through sigma's official reducers: hidden nodes drop out of
 	// rendering, picking, hover, AND labels; edges drop when either endpoint
@@ -654,9 +796,45 @@ export function GraphView() {
 							onChange={(e) => setQuery(e.target.value)}
 							placeholder="Search nodes…"
 							spellCheck={false}
-							className="h-8 w-full rounded-lg border bg-background pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+							className="h-8 w-full rounded-lg border bg-background pl-8 pr-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
 						/>
+						<button
+							type="button"
+							title="Rendering settings"
+							onClick={() => setSettingsOpen((o) => !o)}
+							className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						>
+							<SettingsIcon className="size-3.5" />
+						</button>
 					</div>
+					{settingsOpen && (
+						<div className="mt-1.5 flex flex-col gap-2 border-t pt-1.5">
+							<SettingSlider
+								label="Node size"
+								min={2}
+								max={14}
+								step={1}
+								value={settings.nodeSize}
+								onChange={(v) => setSettings((cur) => ({ ...cur, nodeSize: v }))}
+							/>
+							<SettingSlider
+								label="Edge width"
+								min={0.5}
+								max={4}
+								step={0.5}
+								value={settings.edgeWidth}
+								onChange={(v) => setSettings((cur) => ({ ...cur, edgeWidth: v }))}
+							/>
+							<SettingSlider
+								label="Arrowhead size"
+								min={2}
+								max={15}
+								step={1}
+								value={settings.arrowLength}
+								onChange={(v) => setSettings((cur) => ({ ...cur, arrowLength: v }))}
+							/>
+						</div>
+					)}
 					{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
 						<div className="mt-1.5 border-t px-1.5 pt-1.5 text-[11px] text-muted-foreground">
 							No matching nodes.
