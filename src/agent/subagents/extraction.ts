@@ -167,7 +167,9 @@ const findingsSchema = z.object({
 		.describe("Every distinct proposition the session touched — true statements, misconception-free."),
 	edges: z
 		.array(edgeSchema)
-		.describe("Relations between propositions: follows (derivable) / supports (grounds without entailing)."),
+		.describe("Relations between propositions: follows (derivable) / supports (grounds without entailing). Pass [] when there are none — never omit the field.")
+		.default([]), // weak models omit required-but-empty arrays; omission means "none"
+
 	attribution: z
 		.object({
 			quiz: z
@@ -176,7 +178,8 @@ const findingsSchema = z.object({
 					"toolCallId of EVERY quiz line → the proposition id it was really testing. Attribute RETROACTIVELY — the whole transcript is visible; map each quiz to the proposition it tests (often articulated elsewhere in the session). null when genuinely unattributable.",
 				),
 		})
-		.describe("Quiz attribution — your only event judgment."),
+		.describe("Quiz attribution — your only event judgment. Pass { quiz: {} } when the session has no quiz lines — never omit the field.")
+		.default({ quiz: {} }), // weak models omit empty objects too
 });
 
 const NOTES_EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE source —
@@ -214,6 +217,9 @@ There is no quiz attribution for notes — the source has no quiz events, and th
 
 Evidence discipline: every quote must appear VERBATIM in the source. The auditor rejects anything unbacked. When in
 doubt, report; the auditor decides.
+
+Include EVERY top-level field of the call even when empty — "edges": [] when there are no relations. NEVER omit
+a field because it is empty.
 
 Your entire deliverable is ONE submit_findings call.`;
 
@@ -258,6 +264,9 @@ quiz outcomes carry that the learner believed the wrong version.
 
 Evidence discipline: every quote must appear VERBATIM in the transcript view (a QUIZ line counts as the
 transcript). The auditor rejects anything unbacked. When in doubt, report; the auditor decides.
+
+Include EVERY top-level field of the call even when empty — "edges": [], "attribution": { quiz: {} } when there
+are no quizzes. NEVER omit a field because it is empty.
 
 Your entire deliverable is ONE submit_findings call.`;
 
@@ -377,7 +386,8 @@ const auditSchema = findingsSchema.extend({
 				reason: z.string(),
 			}),
 		)
-		.describe("Everything you dropped, with the reason — the audit trail."),
+		.describe("Everything you dropped, with the reason — the audit trail. Pass [] when you dropped nothing — never omit the field.")
+		.default([]), // same weak-model tolerance as findings.edges
 });
 
 // The notes front door's shapes: everything session findings have, minus
@@ -424,7 +434,10 @@ Also drop propositions not referenced by anything else ONLY if they have no othe
 well-evidenced proposition is still knowledge.
 
 Never invent new candidates. Your entire deliverable is ONE submit_review call containing the verified findings
-(the same shapes you received, with linkTo added) plus the dropped list.`;
+(the same shapes you received, with linkTo added) plus the dropped list.
+
+Include EVERY top-level field of the call even when empty — "edges": [], "dropped": []. NEVER omit a field
+because it is empty.`;
 
 /** The current graph, compact — the auditor's identity context. */
 function graphView(nodes: GraphNode[]): string {

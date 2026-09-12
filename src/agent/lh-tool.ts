@@ -66,7 +66,10 @@ export function toPiTool(def: LhTool<any, any>): AgentTool<any, any> {
 		name: def.name,
 		label: def.name,
 		description: def.description,
-		parameters: z.toJSONSchema(def.schema as z.ZodType) as never,
+		// io: "input" — the declaration describes what the MODEL must send,
+		// so .default() fields are optional in the schema (omission = the
+		// default); required-empty arrays are a known weak-model trap.
+		parameters: z.toJSONSchema(def.schema as z.ZodType, { io: "input" }) as never,
 		// Question tools opt into SEQUENTIAL execution: pi runs the whole
 		// batch in call order when any called tool opts in, so the
 		// tool-input-available chunks arrive in the model's call order — the
@@ -110,6 +113,9 @@ export function piToolDeclarations(registry: Record<string, LhTool<any, any>>) {
 		name,
 		label: name,
 		description: def.description,
-		parameters: z.toJSONSchema(def.schema as z.ZodType) as never,
+		// io: "input" — the declaration describes what the MODEL must send,
+		// so .default() fields are optional in the schema (omission = the
+		// default); required-empty arrays are a known weak-model trap.
+		parameters: z.toJSONSchema(def.schema as z.ZodType, { io: "input" }) as never,
 	}));
 }
