@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { contextWindow, sessionCost, turnCost, type TurnUsage } from "@/src/core";
+import { contextWindow, sessionCost, turnCost, type ChatSettings, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, prettyModel } from "@/components/usage-format";
+import { ModelControl } from "@/components/model-picker";
 
 /**
  * The below-composer stats bar (wave 4 observability): the session's
@@ -14,11 +15,23 @@ import { formatTokens, formatUsd, prettyModel } from "@/components/usage-format"
  * — no cost math lives here. Absent data renders "—", never zero (the
  * doctrine): no turns yet → every figure is "—"; turns the price table
  * can't price count as unpriced, shown in the popover, never folded into a
- * fake $0. The RIGHT side is a PLACEHOLDER for the model + thinking-level
- * control (later work, with its contract changes): display-only for now,
- * model read from the last turn's usage.
+ * fake $0. The RIGHT side is the model + thinking control (components/
+ * model-picker.tsx): one controller for the conversation agents, backed by
+ * pi-ai's catalog; the buttons show the EFFECTIVE model (the record's
+ * settings, else config's pin), while the left-side figures still fold the
+ * turn log's actual billed models.
  */
-export function StatsBar({ turns }: { turns: TurnUsage[] }) {
+export function StatsBar({
+	turns,
+	chatId,
+	settings,
+	onSettingsSaved,
+}: {
+	turns: TurnUsage[];
+	chatId: string;
+	settings?: ChatSettings;
+	onSettingsSaved: (settings: ChatSettings) => void;
+}) {
 	const [open, setOpen] = useState(false);
 	const ctx = contextWindow({ turns });
 	const { cost, unpriced } = sessionCost({ turns });
@@ -47,15 +60,15 @@ export function StatsBar({ turns }: { turns: TurnUsage[] }) {
 				<span aria-hidden>·</span>
 				<span data-testid="stats-cost">{costLabel}</span>
 			</button>
-			{/* Model + thinking level — a placeholder for the coming control
-			    (contract changes land with it); display-only today. */}
-			<div className="flex items-center gap-1.5" data-testid="stats-model-chip">
-				<span data-testid="stats-model">{lastModel ? prettyModel(lastModel) : "—"}</span>
-				<span aria-hidden>·</span>
-				<span data-testid="stats-thinking" title="Thinking level control lands soon">
-					Thinking —
-				</span>
-			</div>
+			{/* The model + thinking control — one controller for the conversation
+			    agents (prober/teacher); the record's `turns` above still folds
+			    the ACTUAL models billed, regardless of what the picker says. */}
+			<ModelControl
+				chatId={chatId}
+				settings={settings}
+				onSaved={onSettingsSaved}
+				fallbackModelId={lastModel}
+			/>
 
 			{open && (
 				<div

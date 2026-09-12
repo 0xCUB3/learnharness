@@ -26,3 +26,4 @@ export * from "./math-delims.ts";
 export * from "./ui-message.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
+export * from "./fuzzy.ts";

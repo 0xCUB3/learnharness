@@ -1,4 +1,5 @@
 import {
+	clampThinkingLevel,
 	createModels,
 	type Api,
 	type Model,
@@ -8,6 +9,7 @@ import {
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { MODELS, type ModelRole } from "../../config.ts";
+import type { ChatSettings } from "../core/contracts/chat.ts";
 
 /**
  * The one engine factory every agent's model comes from (the pi-ai swap,
@@ -25,14 +27,17 @@ import { MODELS, type ModelRole } from "../../config.ts";
 export interface PiEngine {
 	model: Model<Api>;
 	streamFn: StreamFunction;
+	/** The resolved (config-or-settings, CLAMPED) thinking level —
+	 *  observability + tests; the streamFn pins it anyway. */
+	level?: ThinkingLevel;
 }
 
 export type { ThinkingLevel };
 
-/** config's effort scale maps 1:1 onto pi's thinking levels (none→off). */
+/** The role's config thinking level (config's scale IS pi's since the
+ * model-control wave — no mapping needed). */
 export function thinkingLevelFor(role: ModelRole): ThinkingLevel {
-	const effort = MODELS[role].effort as string;
-	return effort === "none" ? "off" : (effort as ThinkingLevel);
+	return MODELS[role].effort;
 }
 
 let collection: ReturnType<typeof createModels> | undefined;
@@ -51,18 +56,29 @@ export function openRouterApiKey(): string | undefined {
 	return process.env.OPENROUTER_API_KEY || undefined;
 }
 
-/** The production engine for one agent role (config.ts MODELS). */
-export function piEngineFor(role: ModelRole): PiEngine {
+/** The production engine for one agent role. `settings` is the chat's
+ * model-control override (prober/teacher only — sub-agent callers pass
+ * nothing and get config.ts's pin): any absent field falls back to the
+ * config spec, and the thinking level is CLAMPED to the model's supported
+ * list (pi's thinkingLevelMap — e.g. GLM-5.3-flash accepts low|high|max),
+ * so a settings change between models can never send an invalid level. */
+export function piEngineFor(role: ModelRole, settings?: ChatSettings): PiEngine {
 	const models: Models = piModels();
 	const spec = MODELS[role];
-	const model = models.getModel("openrouter", spec.model);
-	if (!model) throw new Error(`OpenRouter catalog has no model ${spec.model} (role ${role})`);
-	const level = thinkingLevelFor(role);
+	const modelId = settings?.model?.id ?? spec.model;
+	const providerId = settings?.model?.provider ?? "openrouter";
+	const model = models.getModel(providerId, modelId);
+	if (!model) {
+		throw new Error(`${providerId} catalog has no model ${modelId} (role ${role})`);
+	}
+	const requested = settings?.thinkingLevel ?? thinkingLevelFor(role);
+	const level = clampThinkingLevel(model, requested);
 	return {
 		model,
+		level,
 		// bound streamSimple: the agent loop forwards state.thinkingLevel as
-		// `reasoning` (undefined = off on pi-ai's scale); pin the role's level
-		// so a bare engine can never drift.
+		// `reasoning` (undefined = off on pi-ai's scale); the clamp above keeps
+		// the pin honest even when config or settings drift off the map.
 		streamFn: (requestModel, context, options) =>
 			models.streamSimple(requestModel, context, {
 				...options,

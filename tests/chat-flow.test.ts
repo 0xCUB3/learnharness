@@ -422,6 +422,20 @@ describe("chat store", () => {
 		assert.equal(loaded.messages.length, 1);
 		assert.equal(loaded.title, "Store test");
 	});
+
+	it("persist the per-chat model settings (replace-whole, no updatedAt churn)", async () => {
+		const chat = chatStore.createChat("Settings test");
+		createdChats.push(chat.id);
+		const before = chatStore.getChat(chat.id)!.updatedAt;
+		chatStore.saveSettings(chat.id, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "high" });
+		const saved = chatStore.getChat(chat.id)!;
+		assert.deepEqual(saved.settings, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "high" });
+		assert.equal(saved.updatedAt, before, "a picker write is not conversation activity");
+		// replace-whole: a settings-less write clears the override (an empty
+		// object persists — every field absent = config defaults)
+		chatStore.saveSettings(chat.id, {});
+		assert.deepEqual(chatStore.getChat(chat.id)!.settings, {});
+	});
 });
 
 describe("mid-turn navigation (turn liveness + write-ahead)", () => {

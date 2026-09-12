@@ -1,9 +1,10 @@
 import type { UIMessage } from "ai";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createProberAgent, createTeacherAgent, type TeachingAgent } from "../agent/teacher-agent.ts";
+import { piEngineFor } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
-import { MODELS } from "../../config.ts";
+import type { ModelRole } from "../../config.ts";
 import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { createPiTurnResponse } from "./pi/ui-stream.ts";
@@ -147,7 +148,13 @@ export async function handleChatRequest(
 	// Both share this whole composition (write-ahead persist, liveness,
 	// steers, usage, extraction) — only the agent differs.
 	const teaching = outgoing.some((m) => m.parts.some((p) => p.type === "tool-probe_done"));
-	const modelId = teaching ? MODELS.teacher.model : MODELS.prober.model;
+	const role: ModelRole = teaching ? "teacher" : "prober";
+	// The chat's model-control settings (prober/teacher only — one controller
+	// for the conversation agents; piEngineFor falls back to config on absent
+	// fields and clamps the thinking level to the model's supported list).
+	const settings = stores.chatStore.getChat(chatId)?.settings;
+	const engine = piEngineFor(role, settings);
+	const modelId = engine.model.id;
 	// Tests inject a factory: the agent is stateless per turn (docs/
 	// pi-engine-swap.md §2), so each request builds a fresh one off the
 	// transcript — the factory mirrors that seam exactly.
@@ -161,7 +168,7 @@ export async function handleChatRequest(
 						jobStore: stores.jobStore,
 						spawn: (job, input) => void jobRunner.runJob(job.id, input),
 					},
-					{ messages: recordToPiMessages(outgoing), onUsage: collectUsage },
+					{ engine, messages: recordToPiMessages(outgoing), onUsage: collectUsage },
 				)
 			: createProberAgent(
 					{
@@ -169,7 +176,7 @@ export async function handleChatRequest(
 						chatStore: stores.chatStore,
 						deliver: (steer) => void deliverJobResult(steer),
 					},
-					{ messages: recordToPiMessages(outgoing), onUsage: collectUsage },
+					{ engine, messages: recordToPiMessages(outgoing), onUsage: collectUsage },
 				);
 
 	// A test-injected agent gets no usage collector (tests assert the

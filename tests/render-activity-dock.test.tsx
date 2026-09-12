@@ -57,8 +57,9 @@ describe("activity dock pure layer", () => {
 			},
 		});
 		const blob = toBlobs({ jobs: [priced], extractions: [] })[0]!;
-		// (10000-5000)/1e6*0.15 + 5000/1e6*0.03 + 1000/1e6*0.5 = 0.0014
-		assert.ok(blob.cost !== null && blob.cost > 0.0013 && blob.cost < 0.0015);
+		// (10000-5000)/1e6*0.075 + 5000/1e6*0.015 + 1000/1e6*0.25 = 0.0007
+		// (pi-ai catalog prices)
+		assert.ok(blob.cost !== null && blob.cost > 0.0006 && blob.cost < 0.0008);
 		const absent = toBlobs({ jobs: [job()], extractions: [] })[0]!;
 		assert.equal(absent.cost, null);
 	});
@@ -78,7 +79,7 @@ describe("activity dock pure layer", () => {
 		});
 		const blob = toBlobs({ jobs: [withLast], extractions: [] })[0]!;
 		assert.equal(blob.context?.used, 92_000);
-		assert.equal(blob.context?.limit, 1310720);
+		assert.equal(blob.context?.limit, 1048576);
 		// No lastStep yet (capture pending) → "—", even though usage exists.
 		const stripped = toBlobs({ jobs: [job({ usage: { ...base } })], extractions: [] })[0]!;
 		assert.equal(stripped.context, null);
@@ -167,7 +168,7 @@ describe("activity dock render", () => {
 				}}
 			/>,
 		);
-		// two identical priced jobs → 2 × $0.002 = $0.0040 total
-		assert.match(html, /activity-total-cost[^>]*>\$0\.0040</);
+		// two identical priced jobs → 2 × $0.001 = $0.0020 total (pi prices)
+		assert.match(html, /activity-total-cost[^>]*>\$0\.0020</);
 	});
 });

@@ -21,6 +21,7 @@ import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
+import type { ChatSettings } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanWindow } from "@/components/plan-window";
 import type { PlanBlockData } from "@/src/core";
@@ -85,6 +86,7 @@ export function Chat({
 	initialMessages,
 	initialPrompt,
 	initiallyInFlight,
+	initialSettings,
 }: {
 	chatId: string;
 	title: string;
@@ -93,6 +95,8 @@ export function Chat({
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
 	initiallyInFlight?: boolean;
+	/** The record's per-chat model/thinking settings (the picker's seed). */
+	initialSettings?: ChatSettings;
 }) {
 	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop } =
 		useChat<TeacherUIMessage>({
@@ -250,6 +254,9 @@ export function Chat({
 	// server-side), and kept fresh by syncFromServer whenever it already
 	// fetches the record. No turns yet → the bar renders "—" everywhere.
 	const [turns, setTurns] = useState<TurnUsage[]>([]);
+	// The per-chat model control state (model-picker writes via PUT; the
+	// record is the source of truth, lifted here so the stats bar re-renders).
+	const [settings, setSettings] = useState<ChatSettings | undefined>(initialSettings);
 	const syncTurns = useCallback(async () => {
 		try {
 			const res = await fetch(`/api/chats/${chatId}`);
@@ -582,6 +589,9 @@ export function Chat({
 
 						<DockOverlay
 							pending={pending}
+							chatId={chatId}
+							settings={settings}
+							onSettingsSaved={setSettings}
 							requiresReveal={requiresReveal}
 							phase={phases.at(-1) ?? "probe"}
 							turns={turns}
@@ -645,6 +655,9 @@ function DockOverlay({
 	turns,
 	composer,
 	onSubmitAnswer,
+	chatId,
+	settings,
+	onSettingsSaved,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
@@ -655,6 +668,10 @@ function DockOverlay({
 	turns: TurnUsage[];
 	composer: React.ReactNode;
 	onSubmitAnswer: (output: QuestionAnswerData) => void;
+	/** The model control's pass-through (the stats bar hosts it). */
+	chatId: string;
+	settings?: ChatSettings;
+	onSettingsSaved: (settings: ChatSettings) => void;
 }) {
 	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
 	// Teach-phase mount (session reload with a pending check): the dock starts
@@ -818,7 +835,12 @@ function DockOverlay({
 					{/* The stats row: beneath the composer/question shell, not
 					    flush to the screen bottom — static height, outside the
 					    morphing shell so it never joins a height animation. */}
-					<StatsBar turns={turns} />
+					<StatsBar
+						turns={turns}
+						chatId={chatId}
+						settings={settings}
+						onSettingsSaved={onSettingsSaved}
+					/>
 				</div>
 			</div>
 		</div>

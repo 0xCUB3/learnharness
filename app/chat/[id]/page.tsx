@@ -25,6 +25,7 @@ export default async function ChatPage({
 			// A teacher turn that outlived its client: the remounted view must
 			// attach (busy shimmer + poll), never resurrect the stale record.
 			initiallyInFlight={isTurnRunning(chat.id)}
+			initialSettings={chat.settings}
 		/>
 	);
 }

@@ -41,8 +41,9 @@ test("sumSteps folds steps; absent stays absent until a value appears", () => {
 test("callCost: glm-5.3-flash math — fresh input, cached read, output", () => {
 	const cost = callCost(call({ inputTokens: 100_000, outputTokens: 20_000, cacheReadTokens: 10_000 }), "z-ai/glm-5.3-flash");
 	assert.ok(cost !== null);
-	// fresh 90k @ $0.15/M + cached 10k @ $0.03/M + output 20k @ $0.50/M
-	assert.ok(Math.abs(cost! - (0.0135 + 0.0003 + 0.01)) < 1e-9);
+	// fresh 90k @ $0.075/M + cached 10k @ $0.015/M + output 20k @ $0.25/M
+	// (pi-ai catalog prices — regenerated tables, scripts/sync-pricing)
+	assert.ok(Math.abs(cost! - (0.00675 + 0.00015 + 0.005)) < 1e-9);
 });
 
 test("callCost: cache writes bill at the cacheWrite rate", () => {
@@ -86,7 +87,7 @@ test("contextWindow: last call's footprint against the model's limit", () => {
 	assert.ok(cw);
 	assert.equal(cw.model, "z-ai/glm-5.3-flash");
 	assert.equal(cw.usedTokens, 100_000);
-	assert.equal(cw.limit, 1_310_720);
+	assert.equal(cw.limit, 1_048_576);
 	assert.equal(contextWindow({ turns: [] }), null);
 });
 

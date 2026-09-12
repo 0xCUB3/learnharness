@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import type { ChatStore } from "../core/ports.ts";
-import type { ChatRecord, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
+import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
 import type { UIMessage } from "ai";
 import { findPendingToolCall } from "../core/pending.ts";
 import { phaseAt3 } from "../core/phases.ts";
@@ -105,6 +105,17 @@ function appendExtractionUsage(id: string, entry: ExtractionRunUsage): void {
 	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
 }
 
+/** Persist the per-chat model/thinking settings — replace-whole (the
+ * picker sends the complete object; absent = config defaults). */
+function saveSettings(id: string, settings: ChatSettings): void {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	// Like saveTree: a settings tweak is not conversation activity, so it
+	// deliberately does NOT bump updatedAt (sidebar order must not churn).
+	record.settings = settings;
+	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+}
+
 /** Persist the session plan tree (plan tools call this in execute). */
 function saveTree(id: string, tree: PlanTree): void {
 	const record = getChat(id);
@@ -121,6 +132,7 @@ export const chatStore: ChatStore = {
 	listChats,
 	saveMessages,
 	saveTree,
+	saveSettings,
 	appendTurnUsage,
 	appendExtractionUsage,
 };

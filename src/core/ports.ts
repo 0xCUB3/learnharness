@@ -12,6 +12,7 @@
 import type { UIMessage } from "ai";
 import type {
 	ChatRecord,
+	ChatSettings,
 	ChatSummary,
 	GraphEdge,
 	GraphNode,
@@ -45,6 +46,9 @@ export interface ChatStore {
 	appendTurnUsage(id: string, entry: TurnUsage): void;
 	/** Append one extraction-run usage entry — idempotent per startedAt. */
 	appendExtractionUsage(id: string, entry: ExtractionRunUsage): void;
+	/** Persist the per-chat model/thinking settings (the model control).
+	 *  Replace-whole: the picker sends the complete settings object. */
+	saveSettings(id: string, settings: ChatSettings): void;
 }
 
 // ─── GraphStore — the append-only evidence ledgers (data/graph) ──────────────

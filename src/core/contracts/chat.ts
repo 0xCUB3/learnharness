@@ -7,6 +7,7 @@
  * of "ai" (safe everywhere: server, client, tests). See docs/vision.md.
  */
 import type { UIMessage } from "ai";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Phase3 } from "../phases.ts";
 import type { PlanNodeStatus, PlanTree } from "./plan.ts";
 import type { EmissionStats } from "./graph.ts";
@@ -38,6 +39,25 @@ export interface ChatRecord {
 	 *  spend too. Same parallel-log discipline as `turns` (nothing rides
 	 *  inside messages). Keyed by startedAt; idempotent appends. */
 	extractions?: ExtractionRunUsage[];
+	/** Per-chat model/thinking overrides for the conversation agents. */
+	settings?: ChatSettings;
+}
+
+/** The conversation agents' runtime model choice (model-control wave,
+ *  2026-09-12): a per-chat override of config.ts's pinned prober/teacher
+ *  spec. Absent fields fall back to config; written by the model picker
+ *  (PUT /api/chats/[id]/settings) and read at turn composition — the
+ *  agents are stateless per turn, so a change takes effect on the next
+ *  turn by construction. Background sub-agents are NEVER overridden
+ *  (config-pinned: they're infrastructure, not conversation). */
+export interface ChatSettings {
+	/** pi-ai catalog coordinates: the provider that owns the model. Only
+	 *  "openrouter" is configured today; the field exists so a second
+	 *  provider needs no schema change. */
+	model?: { provider: string; id: string };
+	/** pi thinking level — must be in the chosen model's supported list
+	 *  (getSupportedThinkingLevels; enforced by the settings route). */
+	thinkingLevel?: ThinkingLevel;
 }
 
 // ─── Background-extraction usage (the money channel, extraction side) ────────
@@ -191,6 +211,10 @@ export interface ChatSummary {
 	phase: Phase3;
 	/** An unanswered quiz/ask question is waiting for the learner. */
 	pendingQuestion: boolean;
+	/** The record's model-control settings — rides the list payload via the
+	 *  summary spread (the picker never needs it from here; the full record
+	 *  is its source). */
+	settings?: ChatSettings;
 }
 
 /** The sidebar's session row: a summary + live liveness. The chats list
