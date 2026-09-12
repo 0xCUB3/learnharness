@@ -1,6 +1,5 @@
 "use client";
 
-import { CheckIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
@@ -51,7 +50,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 							<div
 								key={opt.index}
 								className={cn(
-									"flex items-start gap-2 rounded-lg border px-3 py-1.5",
+									"flex items-center gap-2 rounded-lg border px-3 py-1.5",
 									sel && key && "border-green-500/60 bg-green-500/10",
 									sel && !key && isQuiz && "border-red-500/60 bg-red-500/10",
 									sel && !isQuiz && "border-primary bg-accent",
@@ -59,19 +58,33 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 								)}
 							>
 								{isQuiz && (
-									// SVG icons, not glyphs — exactly one text-size box (size-4),
-									// vertically centered in the flex row (owner).
+									// Hand-rolled SVG in the ✓/✗ GLYPH look (thick rounded strokes —
+									// owner prefers that shape but as vectors, round 5). Sized like
+									// the row text, centered (row is items-center).
 									<span
 										aria-hidden
+										data-mark={sel && key ? "check" : sel && !key ? "x" : !sel && key ? "check" : undefined}
 										className={cn(
-											"flex size-4 shrink-0 items-center justify-center",
+											"flex shrink-0 items-center",
 											sel && key && "text-green-500",
 											sel && !key && "text-red-500",
 											!sel && key && "text-green-500",
 										)}
 									>
-										{key && <CheckIcon className="size-4" strokeWidth={2.5} />}
-										{sel && !key && <XIcon className="size-4" strokeWidth={2.5} />}
+										{(sel && key) || (!sel && key) ? (
+											<svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor"
+												strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+												<path d="M3 8.5 L6.5 12 L13 4.5" />
+											</svg>
+										) : (
+											sel &&
+											!key && (
+												<svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor"
+													strokeWidth={3} strokeLinecap="round">
+													<path d="M4 4 L12 12 M12 4 L4 12" />
+												</svg>
+											)
+										)}
 									</span>
 								)}
 								<span className={cn(!sel && "text-muted-foreground")}>
@@ -86,7 +99,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 					{answer.other && (
 						<div
 							data-testid="answered-other"
-							className="flex items-start gap-2 rounded-lg border border-primary bg-accent px-3 py-1.5"
+							className="flex items-center gap-2 rounded-lg border border-primary bg-accent px-3 py-1.5"
 						>
 							<span>“{answer.other}”</span>
 						</div>

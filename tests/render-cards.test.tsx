@@ -168,8 +168,8 @@ describe("render smoke tests", () => {
 		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
 		assert.match(html, /incorrect/);
 		assert.match(html, /innermost/, "explanation renders post-answer");
-		// Vector marks (lucide SVG) — not glyphs — sized like the row text (owner).
-		assert.ok(html.includes("lucide-check") && html.includes("lucide-x"));
+		// Glyph-shaped SVG marks (owner preference) — pinned via data-mark.
+		assert.ok(html.includes('data-mark="check"') && html.includes('data-mark="x"'));
 	});
 
 	it("AnsweredCard renders the learner's own Other answer AS an option row", () => {
@@ -214,7 +214,7 @@ describe("render smoke tests", () => {
 		};
 		const answer = buildAnswer(qd, { values: ["Somewhat"] });
 		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
-		assert.ok(!html.includes("incorrect") && !html.includes("lucide-x"), "ask answers never get quiz grading UI");
+		assert.ok(!html.includes("incorrect") && !html.includes('data-mark="x"'), "ask answers never get quiz grading UI");
 		assert.match(html, /Somewhat/);
 	});
 
