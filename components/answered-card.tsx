@@ -1,5 +1,6 @@
 "use client";
 
+import { GlyphMark } from "@/components/ui/glyph-mark";
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
@@ -58,9 +59,8 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 								)}
 							>
 								{isQuiz && (
-									// Hand-rolled SVG in the ✓/✗ GLYPH look (thick rounded strokes —
-									// owner prefers that shape but as vectors, round 5). Sized like
-									// the row text, centered (row is items-center).
+									// Zapf-Dingbats-derived SVG outlines — the exact LaTeX \ding{51}/
+									// \ding{55} hand-drawn shapes (owner, round 6); see ui/glyph-mark.
 									<span
 										aria-hidden
 										data-mark={sel && key ? "check" : sel && !key ? "x" : !sel && key ? "check" : undefined}
@@ -71,20 +71,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 											!sel && key && "text-green-500",
 										)}
 									>
-										{(sel && key) || (!sel && key) ? (
-											<svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor"
-												strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
-												<path d="M3 8.5 L6.5 12 L13 4.5" />
-											</svg>
-										) : (
-											sel &&
-											!key && (
-												<svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor"
-													strokeWidth={3} strokeLinecap="round">
-													<path d="M4 4 L12 12 M12 4 L4 12" />
-												</svg>
-											)
-										)}
+										{(key || sel) && <GlyphMark kind={key ? "check" : "x"} className="size-4" />}
 									</span>
 								)}
 								<span className={cn(!sel && "text-muted-foreground")}>
