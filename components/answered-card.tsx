@@ -71,7 +71,9 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 											!sel && key && "text-green-500",
 										)}
 									>
-										{(key || sel) && <GlyphMark kind={key ? "check" : "x"} className="size-4" />}
+										{/* Owner round 8: a touch smaller than the text (size-4→size-3.5,
+											   ≈14px vs the 16.5px row) while centered. */}
+										{(key || sel) && <GlyphMark kind={key ? "check" : "x"} className="size-3.5" />}
 									</span>
 								)}
 								<span className={cn(!sel && "text-muted-foreground")}>
