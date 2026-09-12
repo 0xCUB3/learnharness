@@ -106,8 +106,11 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				</div>
 			)}
 
+			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper
+			    than the option box edges (owner, round 3). Sides flush with everything
+			    else; py-2 stays for vertical air. */}
 			{isQuiz && answer.explanation && (
-				<div className="mt-3 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
 					<span className="font-medium text-foreground">Why: </span>
 					{/* The markdown wrapper must go truly inline — a block <p> after the
 								   "Why:" label created the oversized leading gap (owner's fix list). */}
