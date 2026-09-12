@@ -32,7 +32,14 @@ import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divid
 import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
-const COLUMN = "mx-auto w-full max-w-3xl px-4";
+/**
+ * Width tokens (wave-5 reskin, owner decision): the teaching PROSE spans the
+ * full session width with a thin px-6 margin; the composer/question DOCK is
+ * deliberately narrower (~46rem centered) per the reference. Same ELEMENT,
+ * same place — width polish only.
+ */
+const COLUMN = "mx-auto w-full max-w-none px-6";
+const DOCK = "mx-auto w-full max-w-[46rem] px-4";
 
 /**
  * Server-sync channel for artifact renderers: the CENTRAL jobs poll in Chat
@@ -813,7 +820,7 @@ function DockOverlay({
 		<div className="pointer-events-none sticky bottom-0 mt-auto">
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 			<div className="bg-background pb-4">
-				<div className={COLUMN}>
+				<div className={DOCK}>
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
 							{pending ? (
