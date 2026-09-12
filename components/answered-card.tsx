@@ -1,5 +1,6 @@
 "use client";
 
+import { CheckIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
@@ -58,20 +59,19 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 								)}
 							>
 								{isQuiz && (
+									// SVG icons, not glyphs — exactly one text-size box (size-4),
+									// vertically centered in the flex row (owner).
 									<span
 										aria-hidden
 										className={cn(
-											// Same visual size as the row text, vertically centered,
-											// colored like the verdict chips (owner).
-											"flex size-4 shrink-0 items-center justify-center text-sm font-semibold leading-none",
+											"flex size-4 shrink-0 items-center justify-center",
 											sel && key && "text-green-500",
 											sel && !key && "text-red-500",
 											!sel && key && "text-green-500",
 										)}
 									>
-										{sel && key && "✓"}
-										{sel && !key && "✗"}
-										{!sel && key && "✓"}
+										{key && <CheckIcon className="size-4" strokeWidth={2.5} />}
+										{sel && !key && <XIcon className="size-4" strokeWidth={2.5} />}
 									</span>
 								)}
 								<span className={cn(!sel && "text-muted-foreground")}>
@@ -94,7 +94,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				</div>
 			)}
 
-			{answer.text && <div className="font-prose mt-2 whitespace-pre-wrap text-sm">“{answer.text}”</div>}
+			{answer.text && <div className="lh-prose mt-2 whitespace-pre-wrap">“{answer.text}”</div>}
 			{answer.dontKnow && isQuiz && <div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>}
 
 			{answer.note && (
@@ -102,7 +102,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 					<span className="mb-0.5 block text-xxs font-medium uppercase tracking-wide text-muted-foreground">
 						Your thinking
 					</span>
-					<span className="font-prose block whitespace-pre-wrap text-sm text-foreground/90">{answer.note}</span>
+					<span className="lh-prose block whitespace-pre-wrap text-foreground/90">{answer.note}</span>
 				</div>
 			)}
 
