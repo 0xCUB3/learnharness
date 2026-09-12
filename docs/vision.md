@@ -53,6 +53,21 @@ Three stages, one pipeline — the sole graph writer:
 
 Known vs. understood, event ledger as source of truth, derived state recomputed on read — carried over from the design doc in spirit. The state model itself is now an explicit design discussion: **node states should be session-independent and computed from the depth and strength of dependencies** (the `follows`/`supports` topology) plus quiz events and understanding notes. That redesign is pending ideation; the transitional five-class derivation (taught / known / missed / don't-know / candidate) was **removed** (2026-09-08) — the graph view renders state-neutral nodes until the state model is designed. The anchored calibration rubric stays parked until real data.
 
+### Clusters — regions of the world model (DECIDED 2026-09-13, ideation)
+
+When the graph fills up, the canvas needs a readable at-a-glance structure: **clusters** — objective regions of the world model (domains like "Lacanian psychoanalysis" or "photosynthesis"), discovered by **community detection** on the `follows`/`supports` edges. A community = nodes linked to each other far more than to the rest (modularity). Everything about them is **entirely inferred from the graph data** — the extraction/audit pipeline never knows clusters exist.
+
+- **Algorithm: Louvain (modularity maximization), seeded for determinism.** In-stack via graphology's ecosystem, near-linear, scales far beyond our sizes. Determinism gives reproducibility (same graph → same clusters); the seed/graphology choice also keeps the upgrade path open: Louvain's dendrogram contains **hierarchy** — "math ⊃ differential calculus ⊃ chain rule" is one level down — deliberately NOT built now (multi-scale clusters stay parked). Dismissed: Leiden (better resolution guarantees, no JS port), Infomap (heuristic-strong, heavier, weaker JS support), Girvan–Newman (O(n³)), label propagation (unstable), spectral (needs k handed in).
+- **Structure, not layout.** Clusters are a pure function of the *edges*, never of the visual layout. The force-directed layout already places structurally-close nodes together, so cluster hulls will look contiguous — but cluster identity must not inherit the layout's seed dependence and drift.
+- **Derived, cached, auto-updated.** Clusters recompute when the ledger changes, cached against a graph version stamp — same doctrine as states and strengths: derived never stored, nothing hand-maintained.
+- **Size-gated meaning.** Only communities ≥ ~3 nodes render as clusters (threshold tunable on real data) — a visible blob always means "a real domain"; lone nodes and tiny communities stay plain.
+- **Naming: one cheap LLM call per new/changed cluster** — a single call (no agent loop) with the members' names + statements, producing a short domain label. Never part of extraction; a separate, cached seam.
+- **Labeling persistence — the core-survival rule.** Each labeling record (append-only, like everything we persist) stores the label AND the member set it was produced with (the **core**). A recomputed community **keeps** its label while ≥ half its members are from that core; when under half are, it **relabels** with all current nodes (a new record is appended — old records stay as history: an audit trail of how the domains were named over time). Single successor: on splits/merges the strongest-overlap community inherits, the others get fresh labelings; a core with no ≥50% successor simply has no living heir. Cluster color keys to the labeling record — color survives exactly as long as the label does.
+- **Rendering: glow blobs behind everything.** A dashed boundary encloses the cluster's hull; the fill is blurred, low-opacity, and sits *behind* the whole graph (edges and nodes float above it, so the blur naturally fogs the inter-cluster space). Per-cluster stable hue. **Cluster labels are inverse-gated** against the existing camera-ratio span: zoomed out = **domain view** (cluster labels on, node labels off), zoomed in = **proposition view** (node labels on, cluster labels faded) — one symmetric transition between the two views of one canvas.
+- **Boundary geometry: computed at draw time, never stored** — a pure function of the member positions. This is the constraint that keeps future physics/moving nodes (likely not implemented soon) from invalidating anything: convex hull + padding + rounded corners is cheap per-frame; organic metaball hulls are the same family. Secondary until then.
+- **Inter-cluster edges stay visible.** Bridges between domains are meaningful (Nietzsche's will-to-power *follows* Schopenhauer's will) — one of the most informative reads of the clustered view, not clutter.
+- **Honest risk: sparsity.** Community detection wants density contrast, and the current real graph is thin — the 2k-node synthetic benchmark (open question 1) is the *primary* validation of clustering quality, not just of layout/render speed.
+
 ### Rendering (DECIDED — research report 2026-08-22)
 
 - **Library: sigma.js v3 + graphology + graphology-layout-forceatlas2.** ~40 KB gzipped all-in — half of vis-network, a third of cytoscape, far below react-force-graph (~250 KB deps) and cosmos.gl (luma.gl stack).
@@ -73,7 +88,7 @@ Every session starts with the learner's knowledge graph as base context for the 
 
 ### Home page
 
-The graph view replaces the current placeholder. v1: all nodes from all sessions, node color/shape by state class (the current five classes are transitional — see "Understanding is derived"), pan/zoom, labels at zoom. Clicking a node → the exact (session, message) points where it came up (message-granular provenance, deep-linked). Everything richer (frontier glow, rot map, blast radius) comes after the state model exists.
+The graph view replaces the current placeholder. v1: all nodes from all sessions, pan/zoom, labels at zoom, state-neutral nodes (see "Understanding is derived"), and — once implemented — cluster glow-blobs with dashed hulls behind the graph, domain↔proposition as the two zoom-gated views (see "Clusters"). Clicking a node → the exact (session, message) points where it came up (message-granular provenance, deep-linked). Everything richer (frontier glow, rot map, blast radius) comes after the state model exists.
 
 ---
 
@@ -213,6 +228,8 @@ The teacher's context window and attention are precious — it has the lesson to
 4. Home-graph v1 interactions beyond pan/zoom (node click → session list? — presumed cheap yes).
 5. Grain mismatch frequency (`subsumes`-style relations) — per original doc, measured by data, not pre-solved.
 6. Aggregation semantics for understanding (min / mean / two-level) — fit on real data, per original doc.
+7. Cluster visual details — boundary aesthetic (convex vs. organic hull), label placement/typography, palette — decide during visual testing with real blobs (§1 Clusters; theory DECIDED 2026-09-13).
+8. Cluster size threshold (~3) — tune on the synthetic benchmark + real data (§1 Clusters).
 
 ---
 
