@@ -459,7 +459,7 @@ export function Chat({
 				    when it disappears and slide the title + chip up. */}
 				<header className="flex h-10 items-center gap-3 px-3">
 					<SidebarToggle />
-					<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
+					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
 				</header>
 

@@ -36,7 +36,7 @@ export function PhaseChip({ phase }: { phase: Phase3 }) {
 			data-testid="phase-chip"
 			data-phase={phase}
 			title={`Session phase: ${CHIP_LABEL[phase]}`}
-			className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+			className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
 		>
 			<span className={cn("size-1.5 rounded-full", PHASE_DOT[phase])} aria-hidden />
 			{CHIP_LABEL[phase]}
@@ -71,7 +71,7 @@ export function PhaseDivider({ phase, nodeCount }: { phase: Phase3; nodeCount?: 
 			<span className={cn("h-0 flex-1 border-t-2 border-dotted", DIVIDER_RULE[phase])} aria-hidden />
 			<span
 				className={cn(
-					"rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wide",
+					"rounded-full border px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide",
 					DIVIDER_TEXT[phase],
 				)}
 			>
