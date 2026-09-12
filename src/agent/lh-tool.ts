@@ -67,6 +67,12 @@ export function toPiTool(def: LhTool<any, any>): AgentTool<any, any> {
 		label: def.name,
 		description: def.description,
 		parameters: z.toJSONSchema(def.schema as z.ZodType) as never,
+		// Question tools opt into SEQUENTIAL execution: pi runs the whole
+		// batch in call order when any called tool opts in, so the
+		// tool-input-available chunks arrive in the model's call order — the
+		// dock's subject can never flip mid-turn between two parallel
+		// questions. Question executes are instant; no latency is lost.
+		executionMode: def.clientQuestion ? "sequential" : "parallel",
 		execute: async (toolCallId, args) => {
 			// The authoring check: structural JSON Schema validation already
 			// ran in the loop's prepare step; this re-run adds the refinements

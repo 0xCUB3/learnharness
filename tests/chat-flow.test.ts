@@ -355,6 +355,62 @@ describe("teacher chat flow (scripted model)", () => {
 		const pending = findPendingToolCall(saved.messages);
 		assert.equal(pending?.toolCallId, "call-clean", "the retried quiz is the pending one");
 	});
+
+	it("parallel quiz calls are asked, saved, and answered in the model's call order", async () => {
+		// The live modal-realism observation: the teacher batched two quizzes
+		// in one turn, and the dock showed the SECOND one first (the backward
+		// part scan), so the interaction order was reversed vs the record.
+		// Pins: (A) findPendingToolCall picks the FIRST unanswered question in
+		// part order; (B) question tools execute sequentially, so their
+		// tool-input-available chunks arrive in call order on the wire.
+		const QUIZ_A = { ...QUIZ_INPUT, question: "Quiz A: which planet is closest to the sun?" };
+		const QUIZ_B = { ...QUIZ_INPUT, question: "Quiz B: which planet is largest?" };
+
+		const { engine } = scriptedTeacher(() => [
+			() =>
+				fauxAssistantMessage(
+					[fauxToolCall("quiz", QUIZ_A, { id: "call-a" }), fauxToolCall("quiz", QUIZ_B, { id: "call-b" })],
+					{ stopReason: "toolUse" },
+			),
+		]);
+
+		const chat = chatStore.createChat("Test: parallel quizzes");
+		createdChats.push(chat.id);
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me twice" }] };
+		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+
+		// (B) wire determinism: the batches' input-available chunks in call order.
+		const availA = body.indexOf('"type":"tool-input-available","toolCallId":"call-a"');
+		const availB = body.indexOf('"type":"tool-input-available","toolCallId":"call-b"');
+		assert.ok(availA !== -1 && availB !== -1, "both quizzes became available");
+		assert.ok(availA < availB, "call A's input became available before call B's (sequential execution)");
+
+		// Saved in call order.
+		const saved = chatStore.getChat(chat.id)!;
+		const quizIds = saved.messages[1]!.parts
+			.filter((p) => p.type === "tool-quiz")
+			.map((p) => (p as { toolCallId: string }).toolCallId);
+		assert.deepEqual(quizIds, ["call-a", "call-b"], "parts persisted in call order");
+
+		// (A) the dock serializes answering in the same order: A first, then B.
+		const pending = findPendingToolCall(saved.messages);
+		assert.equal(pending?.toolCallId, "call-a", "the FIRST asked question is the dock subject");
+		// …the learner answers A (client-side grading seam — state flip only here)…
+		const answered = saved.messages.map((m) =>
+			(m as { id?: string }).id === saved.messages[1]!.id
+				? {
+						...m,
+						parts: (m as { parts: unknown[] }).parts.map((p) =>
+							(p as { toolCallId?: string }).toolCallId === "call-a"
+								? { ...(p as object), state: "output-available", output: { correct: true } }
+								: p,
+						),
+					}
+					: m,
+		);
+		const next = findPendingToolCall(answered as UIMessage[]);
+		assert.equal(next?.toolCallId, "call-b", "the SECOND question becomes the dock subject only after the first is answered");
+	});
 });
 
 describe("chat store", () => {

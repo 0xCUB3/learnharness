@@ -5,6 +5,13 @@ import { isToolUIPart, type UIMessage } from "ai";
  * blocks the composer — one question at a time, mirroring the teacher's
  * prompt contract. Derived client state; the server enforces nothing.
  *
+ * Scan order: MESSAGES newest-first (a later turn's live question supersedes
+ * an older dangling one), but PARTS forward within a message — the model's
+ * FIRST unanswered question is the dock subject. Parallel question calls
+ * (pi executes them in one batch) are thus answered in the same order they
+ * were asked, saved, and rendered as cards; a backward part scan reversed
+ * that order (the live modal-realism observation).
+ *
  * Job tool parts (research/demo/visual) never pend client-side — the async
  * protocol resolves them server-side with an immediate ack (see
  * contracts/jobs.ts "THE ASYNC PROTOCOL"), so job tools are NOT returned
@@ -26,7 +33,7 @@ export const JOB_TOOLS = ["research", "demo", "visual"] as const;
 function findPending(messages: UIMessage[], names: readonly string[]): PendingToolCall | null {
 	for (let m = messages.length - 1; m >= 0; m--) {
 		const msg = messages[m]!;
-		for (let p = msg.parts.length - 1; p >= 0; p--) {
+		for (let p = 0; p < msg.parts.length; p++) {
 			const part = msg.parts[p]!;
 			if (isToolUIPart(part) && part.state === "input-available") {
 				const tool = part.type.slice("tool-".length);
