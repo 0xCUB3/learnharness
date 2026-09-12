@@ -263,7 +263,25 @@ describe("teacher chat flow (scripted model)", () => {
 		const chat = chatStore.createChat("Test: bad quiz retry");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
-		await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+
+		// WIRE pin (the live modal-realism crash): the invalid call must NEVER
+		// become input-available — the dock mounts on input-available parts and
+		// crashed on a malformed quiz before tool-input-error could replace it.
+		// The SDK gated this with InvalidToolInputError; the bridge gates it on
+		// clean tool_execution_end.
+		assert.ok(
+			!body.includes('"type":"tool-input-available","toolCallId":"call-bad"'),
+			"the invalid call never reached input-available on the wire",
+		);
+		assert.ok(
+			body.includes('"type":"tool-input-error","toolCallId":"call-bad"'),
+			"the invalid call surfaced as tool-input-error",
+		);
+		assert.ok(
+			body.includes('"type":"tool-input-available","toolCallId":"call-good"'),
+			"the valid retry DID become input-available",
+		);
 
 		// The model was re-prompted (the error did not end the turn)…
 		assert.equal(calls.length, 2, "the invalid call triggered a second model prompt");
@@ -290,6 +308,52 @@ describe("teacher chat flow (scripted model)", () => {
 		const pending = findPendingToolCall(saved.messages);
 		assert.equal(pending?.toolCallId, "call-good", "the RETRIED quiz is the pending one");
 		assert.deepEqual(pending?.input, QUIZ_INPUT);
+	});
+
+	it("a structurally invalid quiz (the live double-encoded options string) never reaches the dock and retries clean", async () => {
+		// The exact live modal-realism crash shape: GLM occasionally serializes
+		// a nested array as a JSON STRING inside the arguments. The structural
+		// layer (JSON Schema: options must be array) rejects the call at the
+		// boundary — it must surface as tool-input-error, never as a pending
+		// question, and the model's retry must become the pending quiz.
+		const STRINGY_QUIZ_INPUT = {
+			question: "Lewis's indexical analysis of 'actual' — which is it?",
+			options: JSON.stringify([
+				{ label: "Like 'I'", value: "indexical" },
+			{ label: "Like a title", value: "unique" },
+			]), // ← the bug: a string, not an array
+			correctAnswer: "indexical",
+			explanation: "Indexical: every world is actual to its own inhabitants.",
+		};
+
+		const steps: FauxResponseStep[] = [
+			() => fauxAssistantMessage([fauxToolCall("quiz", STRINGY_QUIZ_INPUT, { id: "call-stringy" })], { stopReason: "toolUse" }),
+			() => fauxAssistantMessage([fauxToolCall("quiz", QUIZ_INPUT, { id: "call-clean" })], { stopReason: "toolUse" }),
+		];
+		const { engine } = scriptedTeacher(() => steps);
+
+		const chat = chatStore.createChat("Test: string options");
+		createdChats.push(chat.id);
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
+		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+
+		assert.ok(
+				!body.includes('"type":"tool-input-available","toolCallId":"call-stringy"'),
+				"the structurally invalid quiz never became input-available on the wire",
+			);
+		assert.ok(
+				body.includes('"type":"tool-input-error","toolCallId":"call-stringy"'),
+				"the invalid quiz surfaced as tool-input-error",
+			);
+
+		const saved = chatStore.getChat(chat.id)!;
+		const failed = saved.messages[1]!.parts.find(
+				(p) => (p as { toolCallId?: string }).toolCallId === "call-stringy",
+			);
+		assert.equal((failed as { state?: string }).state, "output-error", "persisted as an error part");
+		assert.match(String((failed as { errorText?: string }).errorText), /options/);
+		const pending = findPendingToolCall(saved.messages);
+		assert.equal(pending?.toolCallId, "call-clean", "the retried quiz is the pending one");
 	});
 });
 

@@ -17,9 +17,12 @@ import { QUESTION_TOOLS } from "../../core/pending.ts";
  *   NEVER tool-output-available (the client throws on an output for a call it
  *   owns). The synthetic "question posed" result lives in memory only; the
  *   record's part stays output-less until the learner answers.
- * - Errored calls (authoring validation) surface as tool-input-error — the
- *   exact part shape the SDK produced for InvalidToolInputError (the
- *   output-error state the chat flow asserts).
+ * - tool-input-available is emitted ONLY after the call cleared validation
+ *   at the boundary (clean tool_execution_end) — the SDK's
+ *   InvalidToolInputError gating. An invalid call surfaces as
+ *   tool-input-error instead and NEVER becomes input-available, so a
+ *   malformed question can never mount the dock (the live modal-realism
+ *   crash: GLM double-encoded `options` as a JSON string).
  * - The persisted message is assembled from the SAME parts the client
  *   assembles (the processUIMessageStream shapes), so every downstream
  *   consumer (phases, plan blocks, pending, extraction) is unchanged.
@@ -239,17 +242,12 @@ export function createPiTurnResponse(spec: PiTurnSpec): Response {
 							case "toolcall_end": {
 								const toolCall = streamEvent.toolCall;
 								toolInputs.set(toolCall.id, { toolName: toolCall.name, input: toolCall.arguments });
+								// Input stays input-streaming here: it only becomes available
+							// once the call clears validation at the execution boundary
+								// (tool_execution_end) — an invalid input must never reach
+								// input-available, where the dock would mount on it.
 								const part = newToolParts.get(toolCall.id);
-								if (part) {
-									part.state = "input-available";
-									part.input = toolCall.arguments;
-								}
-								send({
-									type: "tool-input-available",
-									toolCallId: toolCall.id,
-									toolName: toolCall.name,
-									input: toolCall.arguments,
-								});
+								if (part) part.input = toolCall.arguments;
 								break;
 							}
 						}
@@ -274,12 +272,20 @@ export function createPiTurnResponse(spec: PiTurnSpec): Response {
 								input,
 								errorText,
 							});
-						} else if ((QUESTION_TOOLS as readonly string[]).includes(toolName)) {
-							// Client-owned: the answer arrives via addToolOutput;
-							// the synthetic placeholder result never reaches wire
-							// or record.
-							break;
 						} else {
+							// Validation cleared: only NOW does the input become available
+							// to the client (the InvalidToolInputError gating the SDK owned).
+							if (part) {
+								part.state = "input-available";
+								part.input = input;
+							}
+							send({ type: "tool-input-available", toolCallId: event.toolCallId, toolName, input });
+							if ((QUESTION_TOOLS as readonly string[]).includes(toolName)) {
+								// Client-owned: the answer arrives via addToolOutput;
+								// the synthetic placeholder result never reaches wire
+								// or record.
+								break;
+							}
 							const output = (event.result as { details?: unknown } | undefined)?.details;
 							if (part) {
 								part.state = "output-available";
