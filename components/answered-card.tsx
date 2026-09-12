@@ -58,7 +58,17 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 								)}
 							>
 								{isQuiz && (
-									<span className="w-4 shrink-0">
+									<span
+										aria-hidden
+										className={cn(
+											// Same visual size as the row text, vertically centered,
+											// colored like the verdict chips (owner).
+											"flex size-4 shrink-0 items-center justify-center text-sm font-semibold leading-none",
+											sel && key && "text-green-500",
+											sel && !key && "text-red-500",
+											!sel && key && "text-green-500",
+										)}
+									>
 										{sel && key && "✓"}
 										{sel && !key && "✗"}
 										{!sel && key && "✓"}
@@ -84,7 +94,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				</div>
 			)}
 
-			{answer.text && <div className="mt-2 whitespace-pre-wrap text-sm">“{answer.text}”</div>}
+			{answer.text && <div className="font-prose mt-2 whitespace-pre-wrap text-sm">“{answer.text}”</div>}
 			{answer.dontKnow && isQuiz && <div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>}
 
 			{answer.note && (
@@ -92,14 +102,16 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 					<span className="mb-0.5 block text-xxs font-medium uppercase tracking-wide text-muted-foreground">
 						Your thinking
 					</span>
-					<span className="block whitespace-pre-wrap text-sm text-foreground/90">{answer.note}</span>
+					<span className="font-prose block whitespace-pre-wrap text-sm text-foreground/90">{answer.note}</span>
 				</div>
 			)}
 
 			{isQuiz && answer.explanation && (
 				<div className="mt-3 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
 					<span className="font-medium text-foreground">Why: </span>
-					<MessageResponse className="inline">{answer.explanation}</MessageResponse>
+					{/* The markdown wrapper must go truly inline — a block <p> after the
+								   "Why:" label created the oversized leading gap (owner's fix list). */}
+								<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
 				</div>
 			)}
 		</div>

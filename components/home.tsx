@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { SidebarToggle } from "@/components/sidebar";
+import { StatsBar } from "@/components/stats-bar";
+import type { ChatSettings, TurnUsage } from "@/src/core";
 
 /**
  * Home — the knowledge graph is the main view (placeholder until the graph
@@ -15,6 +17,10 @@ export function Home() {
 	const router = useRouter();
 	const [topic, setTopic] = useState("");
 	const [busy, setBusy] = useState(false);
+	// The model+thinking selection made pre-chat — lifted from the StatsBar's
+	// ModelControl, carried to the chat POST then PUT-on-create (the model
+	// picker defers its save when chatId is empty; see components/model-picker).
+	const [settings, setSettings] = useState<ChatSettings | undefined>(undefined);
 
 	const start = async () => {
 		const t = topic.trim();
@@ -27,6 +33,14 @@ export function Home() {
 				body: JSON.stringify({ title: t }),
 			});
 			const { id } = (await res.json()) as { id: string };
+			if (settings) {
+				// Best-effort persist — the selection was made pre-chat.
+				await fetch(`/api/chats/${id}/settings`, {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(settings),
+				}).catch(() => {});
+			}
 			router.push(`/chat/${id}?prompt=${encodeURIComponent(t)}`);
 		} catch {
 			setBusy(false);
@@ -46,7 +60,9 @@ export function Home() {
 
 			{/* New session — same floating blob as the chat composer. */}
 			<div className="pb-4">
-				<div className="mx-auto w-full max-w-3xl px-4">
+				{/* Matches chat.tsx's DOCK geometry (max-w-[46rem] px-4) so nothing
+			    shifts when a session starts (owner). */}
+			<div className="mx-auto w-full max-w-[46rem] px-4">
 					<form
 						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
 					onSubmit={(e) => {
@@ -77,6 +93,15 @@ export function Home() {
 						<CornerDownLeftIcon className="size-5" />
 						</button>
 					</form>
+					{/* Same as the chat view's under-composer stats bar (owner) — no
+					    session yet, so money/context fold as "—"; the model +
+					    thinking control still works (deferred save). */}
+					<StatsBar
+						turns={[] as TurnUsage[]}
+						chatId=""
+						settings={settings}
+						onSettingsSaved={setSettings}
+					/>
 				</div>
 			</div>
 		</div>

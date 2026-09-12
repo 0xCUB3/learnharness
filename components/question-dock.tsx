@@ -387,7 +387,7 @@ function QuestionDockForm({
 										setSel((prev) => (prev.otherSelected ? prev : toggleOther(selectMode, prev)));
 									}}
 									placeholder="Type your own answer…"
-									className="w-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+									className="font-prose w-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
 									onClick={(e) => e.stopPropagation()}
 								/>
 							</div>
@@ -429,7 +429,7 @@ function QuestionDockForm({
 							}}
 							placeholder="Type your answer…"
 							rows={1}
-							className="field-sizing-content max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
+							className="field-sizing-content font-prose max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
 						/>
 					) : (
 						<textarea
@@ -446,7 +446,7 @@ function QuestionDockForm({
 							placeholder="Why this answer? What are you unsure about? Say as much as you like — the teacher reads all of this."
 							rows={1}
 							className={cn(
-								"field-sizing-content max-h-48 w-full resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground/70",
+								"field-sizing-content font-prose max-h-48 w-full resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground/70",
 								// Phase-scaled prominence: teaching invites depth,
 								// probing stays quick.
 								phase === "teach" ? "min-h-[4.5rem]" : "min-h-10",

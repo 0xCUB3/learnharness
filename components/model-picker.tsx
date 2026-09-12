@@ -117,6 +117,13 @@ export function ModelControl({
 	const save = useCallback(
 		async (next: ChatSettings) => {
 			setError(null);
+			// Home view (pre-chat): defer — the selection rides along on the
+			// chat POST and is PUT after creation (onSaved is still lifted).
+			if (!chatId) {
+				onSaved(next);
+				setOpen(null);
+				return;
+			}
 			try {
 				const res = await fetch(`/api/chats/${chatId}/settings`, {
 					method: "PUT",

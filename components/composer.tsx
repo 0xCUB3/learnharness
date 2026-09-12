@@ -59,7 +59,7 @@ export function Composer({
 				placeholder="Ask, answer, or steer the lesson…"
 				autoFocus={autoFocus}
 				rows={1}
-				className="field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
+				className="field-sizing-content font-prose max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
 			/>
 			{verdict && !busy ? (
 				// The plan verdict (docs/probe-teach-split.md §4): accept
