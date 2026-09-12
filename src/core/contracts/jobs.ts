@@ -256,7 +256,10 @@ export interface SubagentSteerMessage extends UIMessage {
 export interface AbortSteerMessage extends UIMessage {
 	role: "user";
 	metadata: { subagentResult: SubagentResultMeta & { aborted: true } };
-	parts: [{ type: "text"; text: string }];
+	parts: [
+		{ type: "text"; text: string },
+		{ type: "data-subagent-aborted"; data: SubagentResultMeta & { aborted: true } },
+	];
 }
 
 /** Anything the wake pipeline may queue and deliver. */
@@ -324,13 +327,17 @@ export function buildSubagentSteer(
 export function buildAbortSteer(
 	job: Pick<JobRecord, "id" | "kind" | "toolCallId">,
 ): AbortSteerMessage {
+	const meta = { jobId: job.id, kind: job.kind, toolCallId: job.toolCallId, aborted: true } as const;
 	return {
 		id: `steer_${job.id}`,
 		role: "user",
-		metadata: {
-			subagentResult: { jobId: job.id, kind: job.kind, toolCallId: job.toolCallId, aborted: true },
-		},
-		parts: [{ type: "text", text: abortText(job.kind) }],
+		metadata: { subagentResult: meta },
+		parts: [
+			{ type: "text", text: abortText(job.kind) },
+			// The message-type marker (the custom-message scheme): the UI
+			// renders the abort badge off this part, not off metadata.
+			{ type: "data-subagent-aborted", data: meta },
+		],
 	};
 }
 
@@ -356,7 +363,12 @@ export interface ProbeHandoffSteerMessage extends UIMessage {
 	id: `steer_probe_${string}`;
 	role: "user";
 	metadata: { probeHandoff: { chatId: string } };
-	parts: [{ type: "text"; text: string }];
+	/** The custom-message scheme (2026-09-12): NO text part — the wake is
+	 *  scaffolding, not speech. The model-facing instruction is owned by the
+	 *  adapter (record-adapter.ts flattens this part to HANDOFF_TEXT in
+	 *  core/contracts/chat.ts); the UI renders the quiet system line off the
+	 *  part. Nothing human-looking is persisted, ever. */
+	parts: [{ type: "data-probe-handoff"; data: { chatId: string } }];
 }
 
 export function buildProbeHandoffSteer(chatId: string): ProbeHandoffSteerMessage {
@@ -364,12 +376,7 @@ export function buildProbeHandoffSteer(chatId: string): ProbeHandoffSteerMessage
 		id: `steer_probe_${chatId}`,
 		role: "user",
 		metadata: { probeHandoff: { chatId } },
-		parts: [
-			{
-				type: "text",
-				text: "The probe is concluded — the learner assessment is recorded. Author the session's plan map now (call plan_init) and present it, then begin teaching.",
-			},
-		],
+		parts: [{ type: "data-probe-handoff", data: { chatId } }],
 	};
 }
 

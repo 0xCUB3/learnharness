@@ -328,16 +328,20 @@ describe("steer card rendering (the delivered artifact)", () => {
 		assert.ok(!html.includes("Looking at the render"), "model-facing notes never render");
 	});
 
-	it("renders the abort chip for an aborted job's steer (2026-09 dock semantics)", () => {
+	it("renders the abort chip for an aborted job's steer (2026-09 dock semantics; the message type is the marker PART)", () => {
 		const steer = buildAbortSteer({ id: "jc", kind: "research", toolCallId: "cc" });
 		assert.equal(steer.metadata.subagentResult.aborted, true);
-		assert.equal(steer.parts.length, 1, "no artifact part on an abort");
+		assert.equal(steer.parts.length, 2, "text (teacher-facing) + the data-subagent-aborted marker part");
 		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
 		assert.match(html, /job-aborted-badge/);
 		assert.match(html, /research/, "the job's kind, lower-cased like the complete-badge idiom");
 		assert.match(html, /aborted by the learner/);
 		// the teacher-facing protocol text never renders for the learner
 		assert.ok(!html.includes("no brief is coming"), "no protocol glue in the chip");
+		// the badge renders off the PART, not metadata (the custom-message scheme)
+		const noMeta = { ...steer, metadata: {} } as typeof steer;
+		const htmlNoMeta = renderToStaticMarkup(<SubagentSteerCard message={noMeta as never} />);
+		assert.match(htmlNoMeta, /job-aborted-badge/, "metadata is pump mechanics, never the render seam");
 	});
 
 	it("renders a quiet Research-complete one-liner whose collapsed <details> carries the full brief", () => {

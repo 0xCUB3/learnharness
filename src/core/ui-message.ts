@@ -1,12 +1,13 @@
 import type { UIMessage } from "ai";
 import type {
 	DemoToolInput,
-	PlanAcceptedData,
+	PlanVerdictData,
 	PlanBlockData,
 	ProbeDoneInput,
 	ProbeDoneResult,
 	ResearchToolInput,
 	SubagentArtifactData,
+	SubagentResultMeta,
 	VisualToolInput,
 } from "./contracts.ts";
 import type { AskToolInput, QuestionAnswerData, QuizToolInput } from "./question-core.ts";
@@ -38,9 +39,15 @@ export type TeacherUIDataParts = {
 	"subagent-artifact": SubagentArtifactData;
 	/** Plan blocks (wave 4): frozen plan snapshots rendered in the chat flow. */
 	"plan-block": PlanBlockData;
-	/** The plan-acceptance marker: the accept button's user message carries
-	 *  it — the plan→teach phase seam (docs/probe-teach-split.md §4). */
-	"plan-accepted": PlanAcceptedData;
+	/** The learner's plan verdict (accept/decline): its own user message,
+	 *  carrying ONLY this part — the plan→teach phase seam (docs/probe-
+	 *  teach-split.md §4, the custom-message scheme 2026-09-12). */
+	verdict: PlanVerdictData;
+	/** The probe→teach handoff wake: the wake pipeline's steer message,
+	 *  carrying ONLY this part (the model-facing text lives in the adapter). */
+	"probe-handoff": { chatId: string };
+	/** The abort steer's message-type marker (the abort badge renders off it). */
+	"subagent-aborted": SubagentResultMeta & { aborted: true };
 };
 
 export type TeacherUIMessage = UIMessage<unknown, TeacherUIDataParts, TeacherUITools>;

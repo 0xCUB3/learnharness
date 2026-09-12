@@ -2,7 +2,7 @@
  * phases — the event-driven phase chain (docs/probe-teach-split.md §4).
  *
  * probe ends at the first CONCLUDED probe_done (output-available); planning
- * ends at the LEARNER'S plan acceptance (a data-plan-accepted part on the
+ * ends at the LEARNER'S plan acceptance (a data-verdict part with accepted:true
  * accept button's user message — plan_init only PRESENTS the map). No
  * stored-tree seam: the phase is a pure fold over the transcript, so it can
  * never stick (the old currentNodeId-based phaseOfTree read a field nothing
@@ -34,16 +34,22 @@ function assistantTool(
 const DONE_ASSESSMENT = { assessment: { strands: [{ strand: "s", assessment: "a" }] } };
 const PLAN_OK = { ok: true, tree: { nodes: [{ id: "n1", title: "N" }], edges: [] } };
 
-/** The accept button's user message (text + marker data part). */
-function planAccepted(): UIMessage {
+/** The verdict button's user message (the custom-message scheme): its own
+ *  message carrying ONLY the data-verdict marker part — no human-authored
+ *  text; the model-facing wording is the adapter's (record-adapter.ts). */
+function verdict(accepted: boolean): UIMessage {
 	return {
-		id: `u_accept_${Math.random().toString(36).slice(2, 6)}`,
+		id: `u_verdict_${Math.random().toString(36).slice(2, 6)}`,
 		role: "user",
 		parts: [
-			{ type: "text", text: "The plan is accepted — begin teaching." },
-			{ type: "data-plan-accepted", id: "pa_1", data: { at: "2026-09-11T00:00:00Z" } } as never,
+			{ type: "data-verdict", id: "vd_1", data: { accepted, at: "2026-09-12T00:00:00Z" } } as never,
 		],
 	};
+}
+
+/** The accept button's message. */
+function planAccepted(): UIMessage {
+	return verdict(true);
 }
 
 test("phaseAt3: probe until a concluded probe_done; plan until the learner ACCEPTS; teach after", () => {
@@ -75,10 +81,10 @@ test("phaseAt3: probe until a concluded probe_done; plan until the learner ACCEP
 		user("teach me"),
 		assistantTool("probe_done", "output-available", DONE_ASSESSMENT),
 		assistantTool("plan_init", "output-available", PLAN_OK),
-		user("revise it"),
+		verdict(false),
 		assistantTool("plan_init", "output-available", PLAN_OK),
 	]);
-	assert.equal(declined, "plan", "a declined plan stays in planning until a later acceptance");
+	assert.equal(declined, "plan", "a DECLINED verdict is a real event but stays in planning until a later acceptance");
 
 	const failedPlan = phaseAt3([
 		user("teach me"),
@@ -87,6 +93,22 @@ test("phaseAt3: probe until a concluded probe_done; plan until the learner ACCEP
 		planAccepted(),
 	]);
 	assert.equal(failedPlan, "teach", "acceptance sanctions teaching even after a failed init attempt — the verdict is his");
+});
+
+test("phaseAt3: the verdict marker is explicit — anonymous learner text never sanctions teaching", () => {
+	const plainText = phaseAt3([
+		user("teach me"),
+		assistantTool("probe_done", "output-available", DONE_ASSESSMENT),
+		assistantTool("plan_init", "output-available", PLAN_OK),
+		user("The plan is accepted — begin teaching."), // words alone, no marker
+	]);
+	assert.equal(plainText, "plan", "only the data-verdict part is the seam — text can never fake it");
+
+	const acceptOutOfOrder = phaseAt3([
+		user("teach me"),
+		verdict(true), // before any probe_done: out of order, advances nothing
+	]);
+	assert.equal(acceptOutOfOrder, "probe", "the chain never skips");
 });
 
 test("phaseAt3: a mere probe_done CALL (input-available, not yet concluded) keeps the probe open", () => {

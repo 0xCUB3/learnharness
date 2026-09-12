@@ -238,14 +238,19 @@ describe("steer helpers (contracts.ts)", () => {
 		}, "lastStep always mirrors the LATEST call, never the sums");
 	});
 
-	it("buildAbortSteer: metadata-aborted, text-only (no artifact), same deterministic id space as the result steer", () => {
+	it("buildAbortSteer: teacher-facing text + the data-subagent-aborted marker part (the message type), same deterministic id space as the result steer", () => {
 		const steer = buildAbortSteer({ id: "job_c", kind: "demo", toolCallId: "call-c" });
 		assert.equal(steer.id, "steer_job_c", "same id space — steerDelivered treats either as delivered");
 		assert.equal(steer.role, "user");
 		assert.equal(steer.metadata.subagentResult.aborted, true);
 		assert.equal(steer.metadata.subagentResult.jobId, "job_c");
-		assert.equal(steer.parts.length, 1);
+		assert.equal(steer.parts.length, 2);
 		assert.ok(steer.parts[0]!.type === "text" && /aborted/.test(steer.parts[0].text));
+		// The marker PART is the message type (the custom-message scheme): the
+		// UI renders the abort badge off it — metadata stays for pump mechanics.
+		const marker = steer.parts[1]!;
+		assert.equal(marker.type, "data-subagent-aborted");
+		assert.deepEqual(marker.data, { jobId: "job_c", kind: "demo", toolCallId: "call-c", aborted: true });
 	});
 
 	it("isSubagentFailure: failure shapes only (empty html/svg, failure brief)", () => {
@@ -996,7 +1001,8 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 			const last = fired[0]!;
 			assert.equal((last.metadata as { subagentResult: { aborted: boolean } }).subagentResult.aborted, true);
 			assert.equal(last.id, `steer_${jobId}`);
-			assert.equal(last.parts.length, 1, "text only — no artifact part");
+			assert.equal(last.parts.length, 2, "teacher-facing text + the data-subagent-aborted marker part — no artifact");
+			assert.equal(last.parts[1]!.type, "data-subagent-aborted");
 			// aborted is terminal: the wake completing must not flip it
 			assert.equal(jobStore.getJob(jobId)!.status, "error", "terminal after the wake");
 		} finally {

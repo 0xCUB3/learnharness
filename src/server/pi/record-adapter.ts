@@ -1,6 +1,7 @@
 import type { UIMessage } from "ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
+import { HANDOFF_TEXT, verdictText } from "../../core/contracts/chat.ts";
 
 /**
  * The record → pi-ai transcript adapter (docs/pi-engine-swap.md §4). The
@@ -8,9 +9,15 @@ import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-wor
  * fresh agent from it (the stateless per-turn decision). This replaces the
  * SDK's convertToModelMessages with an owned, explicit mapping:
  *
- * - user text parts → UserMessage text content; data parts are dropped
- *   (the plan-accept seam rides its text twin — the client always sends
- *   "The plan is accepted — begin teaching." alongside the marker).
+ * - user text parts → UserMessage text content.
+ * - SYSTEM DATA PARTS (the custom-message scheme, 2026-09-12): the wake and
+ *   verdict messages carry ONLY a marker part — no human text exists to
+ *   drop, so the ADAPTER flattens them: data-verdict → verdictText(),
+ *   data-probe-handoff → HANDOFF_TEXT (core/contracts/chat.ts owns both —
+ *   single source, so the model-facing wording can't drift from the seam).
+ *   Other data parts (artifacts, plan blocks) are dropped as before: they
+ *   are UI history; the steer briefs ride their text twin (payload, not
+ *   boilerplate — those texts are content the sub-agent produced).
  * - assistant text/reasoning/tool parts → one AssistantMessage whose
  *   content blocks mirror the part order; tool parts become ToolCall
  *   blocks (output-error parts keep their rawInput).
@@ -46,6 +53,18 @@ function zeroUsage() {
 	};
 }
 
+/** The model-facing text of a marker-only user message, or null when the
+ *  message has no model face at all (UI-only data parts). */
+function systemTextOf(parts: ReadonlyArray<{ type: string; data?: unknown }>): string | null {
+	for (const part of parts) {
+		if (part.type === "data-verdict") {
+			return verdictText((part.data as { accepted?: unknown } | undefined)?.accepted === true);
+		}
+		if (part.type === "data-probe-handoff") return HANDOFF_TEXT;
+	}
+	return null;
+}
+
 export function recordToPiMessages(messages: UIMessage[]): Message[] {
 	const out: AgentMessage[] = [];
 
@@ -55,7 +74,15 @@ export function recordToPiMessages(messages: UIMessage[]): Message[] {
 				.filter((p) => p.type === "text")
 				.map((p) => textOf(p as { text?: string }))
 				.filter((t) => t.length > 0);
-			if (texts.length === 0) continue; // pure data-part marker, no text
+			// The custom-message scheme: a marker-only message (verdict,
+			// handoff) flattens to its canonical model-facing text — the
+			// wording lives in the adapter's reach (core contracts), never
+			// authored as fake human speech in the transcript.
+			if (texts.length === 0) {
+				const flat = systemTextOf(message.parts);
+				if (flat === null) continue; // pure UI data part, no model face
+				texts.push(flat);
+			}
 			out.push({
 				role: "user",
 				content: texts.map((text) => ({ type: "text" as const, text })),

@@ -27,13 +27,14 @@ import { VisualOutputCard } from "@/components/artifacts/visual-card";
 export function SubagentSteerCard({ message }: { message: TeacherUIMessage }) {
 	const artifactPart = message.parts.find((p) => p.type === "data-subagent-artifact");
 	const data = artifactPart?.data as SubagentArtifactData | undefined;
-	// The abort steer (2026-09 dock semantics): no artifact part, only the
-	// metadata marker — a quiet chip, mirroring the complete-badge idiom.
+	// The abort steer (2026-09 dock semantics): its message-type part is
+	// data-subagent-aborted (the custom-message scheme — the part, not
+	// metadata, is the marker) — a quiet chip, mirroring the complete-badge.
 	if (!data) {
-		const meta = (
-				message.metadata as { subagentResult?: { aborted?: boolean; kind?: string } } | undefined
-			)?.subagentResult;
-		if (meta?.aborted) return <AbortedBadge kind={meta.kind ?? "job"} />;
+		const aborted = message.parts.find((p) => p.type === "data-subagent-aborted") as
+			| { data?: { kind?: string } }
+			| undefined;
+		if (aborted?.data) return <AbortedBadge kind={aborted.data.kind ?? "job"} />;
 		return (
 				<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
 				A sub-agent finished, but its result could not be displayed.

@@ -123,15 +123,38 @@ export interface TurnUsage {
  * block renders current node + direct parents + direct children in its own
  * small container, the current node glowing — clearly a fragment, not the
  * whole plan. Clicking either opens the full plan in a popup. */
-/** The learner's plan-acceptance marker (docs/probe-teach-split.md §4): a
- *  data part riding the accept-click user message. It is THE plan→teach
- *  phase seam — phaseAt3 reads it from the transcript;
- *  convertToModelMessages drops data parts, so the teacher only sees the
- *  message's text; the marker is for derivation and the UI. */
-export interface PlanAcceptedData {
-	/** ISO timestamp of the accept click. */
+/** The learner's plan verdict (docs/probe-teach-split.md §4): a data part
+ *  riding its own user message — the ONLY thing on that message. It is THE
+ *  plan→teach phase seam (phaseAt3 reads accepted from the transcript), and
+ *  both verdicts are real transcript events: accept sanctions teaching,
+ *  decline asks for revision. The part is the message TYPE (the "custom
+ *  message" scheme, 2026-09-12): the message carries no human-authored text,
+ *  the model-facing wording is owned by the adapter (record-adapter.ts
+ *  flattens it to VERDICT_TEXT below), and the UI renders the verdict
+ *  marker — never a user bubble. A learner who also typed a note sends the
+ *  note as its own real user message first; the verdict message follows. */
+export interface PlanVerdictData {
+	/** true = accept (sanction to teach); false = decline (revise the plan). */
+	accepted: boolean;
+	/** ISO timestamp of the click. */
 	at: string;
 }
+
+/** The model-facing text of a verdict message — single-sourced here so the
+ *  adapter, the tests, and reality can't drift apart. */
+export function verdictText(accepted: boolean): string {
+	return accepted
+		? "The learner accepted the plan — begin teaching."
+		: "The learner would like the plan revised before teaching begins.";
+}
+
+/** The model-facing text of the probe→teach handoff wake (the custom-message
+ *  scheme): the wake message carries only the data-probe-handoff part, and
+ *  the adapter flattens it to THIS. Single-sourced so the prober's seam, the
+ *  tests, and reality can't drift apart. */
+export const HANDOFF_TEXT =
+	"The probe is concluded — the learner assessment is recorded. " +
+	"Author the session's plan map now (call plan_init) and present it, then begin teaching.";
 
 export interface PlanBlockData {
 	/** Only "full" survives (the 2026-09-11 pivot): the plan renders IN

@@ -52,6 +52,20 @@ const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayout
 
 /** A wake-pipeline steer message: user-role delivery whose metadata marks it
  * as a sub-agent result — rendered as an artifact card, never a bubble. */
+/** The quiet system line (custom-message scheme rendering): centered, muted,
+ *  small — the transcript's voice for events that are not speech (wake
+ *  scaffolding, the learner's plan verdict). */
+function SystemLine({ children, testId }: { children: React.ReactNode; testId?: string }) {
+	return (
+		<div
+			data-testid={testId}
+			className="flex items-center justify-center gap-1.5 py-1 text-xs text-muted-foreground"
+		>
+			{children}
+		</div>
+	);
+}
+
 function isSubagentSteer(m: TeacherUIMessage): boolean {
 	return (m.metadata as { subagentResult?: unknown } | undefined)?.subagentResult != null;
 }
@@ -194,22 +208,39 @@ export function Chat({
 		(accepted: boolean) => {
 			const note = text.trim();
 			setText("");
-			if (accepted) {
-				void sendMessage({
-					parts: [
-						{ type: "text", text: note || "The plan is accepted — begin teaching." },
-						{
-							type: "data-plan-accepted",
-							id: `pa_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
-							data: { at: new Date().toISOString() },
-						},
-					],
+			// TWO REAL MESSAGES, ONE TURN (the custom-message scheme, user-decided
+			// 2026-09-12): a typed note is the learner's own user message, and the
+			// verdict is its own custom message — marker part ONLY, no human-
+			// authored text (the model-facing wording lives in the adapter:
+			// record-adapter flattens it; nothing fake is persisted as speech).
+			// setMessages + sendMessage() (no args) fires ONE request carrying
+			// both — the same single-turn mechanism syncFromServer already uses,
+			// so no 409 dance and no double teacher turn.
+			const stamp = Date.now().toString(36);
+			const rnd = crypto.randomUUID().slice(0, 8);
+			const appended: TeacherUIMessage[] = [];
+			if (note) {
+				appended.push({
+					id: `msg_${stamp}_${rnd}`,
+					role: "user",
+					parts: [{ type: "text", text: note }],
 				});
-			} else {
-				void sendMessage({ text: note || "I'd like the plan revised before we begin." });
 			}
+			appended.push({
+				id: `verdict_${stamp}_${rnd}`,
+				role: "user",
+				parts: [
+					{
+						type: "data-verdict",
+						id: `vd_${stamp}_${rnd}`,
+						data: { accepted, at: new Date().toISOString() },
+					},
+				],
+			});
+			setMessages([...messages, ...appended]);
+			void sendMessage();
 		},
-		[text, sendMessage],
+		[text, messages, setMessages, sendMessage],
 	);
 
 	// ── Session usage (wave-4 stats bar) ──
@@ -444,7 +475,38 @@ export function Chat({
 									// PROTOCOL" §4). Key fallback: legacy transcripts (pre id-hygiene)
 									// can still hold empty ids — the index keeps keys unique for them.
 									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} />
-								) : (
+								) : m.role === "user" && m.parts.some((p) => p.type === "data-probe-handoff") ? (
+								// The probe→teach handoff wake (custom-message scheme): quiet
+								// system line, never a user bubble — the wake is scaffolding,
+								// the "Planning" divider marks the seam, and the model-facing
+								// instruction lives in the adapter.
+								<SystemLine key={m.id || `m-${mi}`} testId="probe-handoff">
+									Preparing your plan…
+								</SystemLine>
+							) : m.role === "user" && m.parts.some((p) => p.type === "data-verdict") ? (
+								// The learner's plan verdict (custom-message scheme): its own
+								// message, the quiet marker — the accept is the phase seam, a
+								// decline asks for revision. Never a user bubble: the model-
+								// facing wording is the adapter's, and this is the learner's
+								// ACT, not their words (a typed note, if any, rendered above
+								// as its own real message).
+								<SystemLine
+									key={m.id || `m-${mi}`}
+									testId={
+										(m.parts.find((p) => p.type === "data-verdict") as
+											| { data?: { accepted?: boolean } }
+											| undefined)?.data?.accepted
+											? "verdict-accepted"
+											: "verdict-declined"
+									}
+								>
+									{(m.parts.find((p) => p.type === "data-verdict") as
+										| { data?: { accepted?: boolean } }
+										| undefined)?.data?.accepted
+										? "✓ Plan accepted"
+										: "↻ Plan revision requested"}
+								</SystemLine>
+							) : (
 									<Fragment key={m.id || `m-${mi}`}>
 									{mi > 0 && phases[mi] !== phases[mi - 1] && (
 										<PhaseDivider phase={phases[mi]!} nodeCount={planNodeCount(m)} />

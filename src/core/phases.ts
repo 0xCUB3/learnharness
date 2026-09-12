@@ -6,9 +6,10 @@
  *   probe  — until the first message containing a `tool-probe_done` part
  *            (the prober concludes; the assessment rides the tool part)
  *   plan   — probe concluded, until the learner ACCEPTS the presented
- *            plan (a `data-plan-accepted` part on the accept button's
- *            user message — the explicit verdict gate; plan_init itself
- *            is only the PRESENTATION and moves no phase)
+ *            plan (a `data-verdict` part with accepted:true on the verdict
+ *            button's own user message — the explicit verdict gate;
+ *            plan_init itself is only the PRESENTATION and moves no
+ *            phase; a declined verdict stays in plan)
  *   teach  — teaching is sanctioned
  *
  * The former derived-occupancy seam (phase-of-tree via `currentNodeId`)
@@ -49,14 +50,18 @@ function advance(
 	if (!parts) return phase;
 	for (const part of parts) {
 		// STRICTLY SEQUENTIAL: probe → plan only via a concluded probe_done,
-		// plan → teach only via the learner's plan acceptance
-		// (data-plan-accepted). A marker out of order advances nothing — the
+		// plan → teach only via the learner's plan acceptance (data-verdict
+		// with accepted:true). A marker out of order advances nothing — the
 		// chain never skips. plan_init PRESENTS the map; only the verdict
-		// (the accept button's marker part) sanctions teaching.
+		// sanctions teaching (a decline stays in plan).
 		if (phase === "probe" && part.type === "tool-probe_done" && part.state === "output-available") {
 			phase = "plan";
 		}
-		if (phase === "plan" && part.type === "data-plan-accepted") {
+		if (
+			phase === "plan" &&
+			part.type === "data-verdict" &&
+			(part as { data?: { accepted?: unknown } }).data?.accepted === true
+		) {
 			phase = "teach";
 		}
 	}
