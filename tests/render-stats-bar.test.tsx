@@ -35,8 +35,11 @@ describe("stats bar", () => {
 		assert.match(html, /data-testid="stats-context">—</);
 		assert.match(html, /data-testid="stats-cost">—</);
 		// no turns, no settings, catalog not loaded → both control labels "—"
-		assert.match(html, /data-testid="stats-model"[^>]*><span>—<\/span>/);
+		assert.match(html, /data-testid="stats-model"[^>]*>\s*<span[^>]*>—<\/span>/);
 		assert.match(html, /Thinking —</);
+		// the control reads as a button: pill border + dropdown chevron
+		assert.match(html, /data-testid="stats-model"[^>]*rounded-full[^>]*>/);
+		assert.match(html, /▾/);
 	});
 
 	it("folds context + cost from the turns log (core/prices, no local math)", () => {
@@ -51,7 +54,7 @@ describe("stats bar", () => {
 		assert.match(html, /data-testid="stats-cost">\$0\.0020</);
 		// model button label falls back to the last turn's actual model
 		// (the catalog + settings are what drive it once loaded)
-		assert.match(html, /data-testid="stats-model"[^>]*><span>Glm 5\.3 Flash<\/span>/);
+		assert.match(html, /data-testid="stats-model"[^>]*>\s*<span[^>]*>Glm 5\.3 Flash<\/span>/);
 	});
 
 	it("shows — for cost when every turn is unpriceable, never a fake $0", () => {

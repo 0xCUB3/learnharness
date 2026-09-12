@@ -157,9 +157,10 @@ export function ModelControl({
 				}}
 				aria-expanded={open === "model"}
 				title="Conversation model — applies next turn"
-				className="flex items-center gap-1 transition-colors hover:text-foreground"
+				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
 			>
-				<span>{effectiveId ? prettyModel(effectiveId) : "—"}</span>
+				<span className="text-card-foreground">{effectiveId ? prettyModel(effectiveId) : "—"}</span>
+				<span aria-hidden className="text-[9px] text-muted-foreground">▾</span>
 			</button>
 			<span aria-hidden>·</span>
 			<button
@@ -171,11 +172,12 @@ export function ModelControl({
 				}}
 				aria-expanded={open === "thinking"}
 				title="Thinking level — applies next turn"
-				className="flex items-center gap-1 transition-colors hover:text-foreground"
+				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
 			>
-				<span>
+				<span className="text-card-foreground">
 					{effectiveLevel === undefined ? "Thinking —" : `Thinking: ${LEVEL_LABEL[effectiveLevel] ?? effectiveLevel}`}
 				</span>
+				<span aria-hidden className="text-[9px] text-muted-foreground">▾</span>
 			</button>
 
 			{open === "model" && (

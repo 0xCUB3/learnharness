@@ -44,7 +44,11 @@ export function StatsBar({
 	return (
 		<div
 			data-testid="stats-bar"
-			className="relative flex items-center justify-between gap-3 px-3 pt-1 text-[10px] text-muted-foreground"
+			// pointer-events-auto: the sticky composer wrapper is pointer-events-none
+			// (so its transparent gradient area never blocks scrolling) — this row
+			// must re-enable events or every control on it is dead (the model-
+			// control wave caught this live: buttons rendered, clicks never landed).
+			className="pointer-events-auto relative flex items-center justify-between gap-3 px-3 pt-1.5 text-[11px] text-muted-foreground"
 		>
 			<button
 				type="button"
