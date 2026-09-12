@@ -248,7 +248,7 @@ function SessionsSidebar() {
 					className="mx-3 mb-1 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 				>
 					<PlusIcon className="size-3" />
-					+ New session
+					New session
 					<span className="sr-only">create a new session</span>
 				</button>
 

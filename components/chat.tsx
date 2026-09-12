@@ -464,10 +464,16 @@ export function Chat({
 				{/* h-10, not py-2: the toggle (a size-9 icon button) renders only
 				    while the sidebar is CLOSED — an auto-height row would collapse
 				    when it disappears and slide the title + chip up. */}
-				<header className="flex h-10 items-center gap-3 px-3">
+				<header className="relative flex h-10 items-center gap-3 px-3">
 					<SidebarToggle />
 					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
+					{/* Soft top fade (owner): the scroller edge under the header eases
+					    in exactly like the dock gradient at the bottom. */}
+					<div
+						aria-hidden
+						className="pointer-events-none absolute inset-x-0 top-full z-10 h-5 bg-gradient-to-b from-background to-transparent"
+					/>
 				</header>
 
 				<div className="relative flex min-h-0 flex-1">

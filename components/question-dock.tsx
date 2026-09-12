@@ -284,7 +284,7 @@ function QuestionDockForm({
 				)}
 
 				{qd.mode !== "text" && (
-					<div className="flex flex-col gap-2 pb-1" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
+					<div className="flex flex-col gap-2 pb-2" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
 						{qd.options.map((opt, i) => {
 							const isSel = sel.selected.has(i);
 							return (
@@ -314,7 +314,11 @@ function QuestionDockForm({
 									</span>
 									<span>
 										<MessageResponse>{opt.label}</MessageResponse>
-										{opt.description && <span className="block text-xs text-muted-foreground">{opt.description}</span>}
+										{opt.description && (
+											// Option subtext renders in Source Sans 3 (owner's mockup);
+											// the "I don't know" copy stays JetBrains Mono.
+											<span className="lh-prose block text-xs text-muted-foreground">{opt.description}</span>
+										)}
 									</span>
 								</button>
 							);
@@ -328,11 +332,23 @@ function QuestionDockForm({
 								}
 								aria-pressed={sel.dontKnow}
 								className={cn(
-									"rounded-lg border border-dashed px-3 py-2 text-left text-sm text-muted-foreground transition-colors",
-									sel.dontKnow && "border-primary text-foreground",
+									// Option-row layout + radio circle (owner); the dashed
+									// outline stays — this is the deliberate non-answer.
+									"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm transition-colors",
+									sel.dontKnow ? "border-primary text-foreground" : "text-muted-foreground",
 								)}
 							>
-								I don't know
+								<span
+									className={cn(
+										"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+										sel.dontKnow
+											? "border-primary bg-primary text-primary-foreground"
+											: "border-muted-foreground/40",
+									)}
+								>
+									{sel.dontKnow && <span className="size-1.5 rounded-full bg-current" />}
+								</span>
+								<span>I don't know</span>
 							</button>
 						)}
 
