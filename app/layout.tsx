@@ -17,8 +17,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
 	return (
-		<html lang="en" className="dark">
-			<body className={`${ui.variable} ${prose.variable} min-h-dvh antialiased`}>
+		<html lang="en" className={`dark ${ui.variable} ${prose.variable}`}>
+			<body className="min-h-dvh antialiased">
 			<SidebarProvider>
 									<ActivityProvider>
 						<AppShell>{children}</AppShell>
