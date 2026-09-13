@@ -16,7 +16,7 @@ import type {
 	SessionFindings,
 } from "../../core/contracts.ts";
 import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
-import { settleGraphLayout } from "../../core/layout.ts";
+import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { refreshClusterLabels } from "./cluster-namer.ts";
 
 /**

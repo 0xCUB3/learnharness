@@ -46,6 +46,9 @@ type SimLink = SimulationLinkDatum<LayoutNode>;
 export interface SimOptions {
 	/** Link spring rest length (world units). */
 	linkDistance?: number;
+	/** Link spring stiffness MULTIPLIER (1 = d3's default
+	 *  1/min(degree) stiffness). */
+	linkStrength?: number;
 	/** Many-body repulsion strength (negative). */
 	chargeStrength?: number;
 	/** Center-of-mass gravity: pulls loose components inward. Weak —
@@ -54,6 +57,18 @@ export interface SimOptions {
 	/** Alpha decay per tick — higher = snappier settle. The merge settle
 	 *  uses d3's default 0.0228 (~300 ticks); the live sim passes ~0.05. */
 	alphaDecay?: number;
+	/** Velocity damping per tick (d3 default 0.4). Higher = more friction. */
+	velocityDecay?: number;
+	/** Cluster centroid pull (the "virtual node" without the node):
+	 *  members of each cluster accelerate toward their own cluster's
+	 *  centroid. Two O(n) passes per tick — cheaper than a real virtual
+	 *  node (which would need one extra link spring per member plus a
+	 *  maintained position). Strength 0 or absent = force off.
+	 *  Callers supply the partition (Louvain output shape). */
+	clusterPull?: {
+		clusters: ReadonlyArray<{ members: ReadonlyArray<string> }>;
+		strength: number;
+	};
 }
 
 /** Link input: edges are undirected for layout purposes. */
@@ -62,8 +77,8 @@ export interface LayoutEdge {
 	to: string;
 }
 
-const LINK_DISTANCE = 40;
-const CHARGE_STRENGTH = -120;
+export const LINK_DISTANCE = 40;
+export const CHARGE_STRENGTH = -120;
 /** Per-tick anchor re-blend: fraction of an anchored node's displacement
  *  from its previous position that SURVIVES each tick. 0.85 = gentle
  *  evolution where forces are strong, stillness where they are not —
@@ -81,6 +96,10 @@ const BOOTSTRAP_GRAVITY = 0.2;
 /** Exported: the live sim reuses this so its rest state matches the
  *  server settle's equilibrium (one engine, one rest). */
 export const INCREMENTAL_GRAVITY = 0.12;
+/** Exported: default cluster-centroid pull strength (tuned by replay —
+ *  compact enough to read as blobs, weak enough that cluster shape is
+ *  still the edge network's). */
+export const CLUSTER_PULL_STRENGTH = 0.15;
 
 /**
  * The one force set. Returns a STOPPED simulation — callers drive it
@@ -93,6 +112,15 @@ export function createGraphSimulation(
 	edges: ReadonlyArray<LayoutEdge>,
 	options: SimOptions = {},
 ): Simulation<LayoutNode, SimLink> {
+	// Link stiffness: d3's default is 1/min(deg) (degree-scaled springs).
+	// linkStrength multiplies it, so 1 = unchanged default behavior.
+	const degree = new Map<string, number>();
+	for (const e of edges) {
+		degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+		degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+	}
+	const linkStrength = options.linkStrength ?? 1;
+
 	const sim = forceSimulation<LayoutNode, SimLink>(nodes)
 		.force(
 			"link",
@@ -100,16 +128,59 @@ export function createGraphSimulation(
 				edges.map((e) => ({ source: e.from, target: e.to })),
 			)
 				.id((d) => d.id)
-				.distance(options.linkDistance ?? LINK_DISTANCE),
+				.distance(options.linkDistance ?? LINK_DISTANCE)
+				.strength(
+					(l) =>
+						(linkStrength * 1) /
+						Math.min(degree.get((l.source as LayoutNode).id) ?? 1, degree.get((l.target as LayoutNode).id) ?? 1),
+				),
 		)
 		.force("charge", forceManyBody<LayoutNode>().strength(options.chargeStrength ?? CHARGE_STRENGTH))
 		.alphaDecay(options.alphaDecay ?? 0.0228)
+		.velocityDecay(options.velocityDecay ?? 0.4)
 		.stop();
 
 	const g = options.gravity;
 	if (g) {
 		sim.force("x", forceX<LayoutNode>(g.x).strength(g.strength));
 		sim.force("y", forceY<LayoutNode>(g.y).strength(g.strength));
+	}
+
+	// Cluster centroid pull: the membership index is resolved ONCE (nodes
+	// don't change clusters mid-sim); each tick is two allocation-free
+	// O(n) passes (sum, then pull). Singletons (<2 members) skip themselves.
+	const cp = options.clusterPull;
+	if (cp && cp.strength > 0 && cp.clusters.length > 0) {
+		const clusterIdx = new Map<string, number>();
+		cp.clusters.forEach((c, i) => {
+			for (const id of c.members) clusterIdx.set(id, i);
+		});
+		const nodeCluster = nodes.map((n) => clusterIdx.get(n.id) ?? -1);
+		const k = cp.clusters.length;
+		const sumX = new Float64Array(k);
+		const sumY = new Float64Array(k);
+		const cnt = new Float64Array(k);
+		const strength = cp.strength;
+		sim.force("clusterPull", (alpha: number) => {
+			sumX.fill(0);
+			sumY.fill(0);
+			cnt.fill(0);
+			for (let i = 0; i < nodes.length; i++) {
+				const ci = nodeCluster[i]!;
+				if (ci < 0) continue;
+				const n = nodes[i]!;
+				sumX[ci] = sumX[ci]! + (n.x ?? 0);
+				sumY[ci] = sumY[ci]! + (n.y ?? 0);
+				cnt[ci] = cnt[ci]! + 1;
+			}
+			for (let i = 0; i < nodes.length; i++) {
+				const ci = nodeCluster[i]!;
+				if (ci < 0 || (cnt[ci] ?? 0) < 2) continue;
+				const n = nodes[i]!;
+				n.vx = (n.vx ?? 0) + (sumX[ci]! / cnt[ci]! - (n.x ?? 0)) * strength * alpha;
+				n.vy = (n.vy ?? 0) + (sumY[ci]! / cnt[ci]! - (n.y ?? 0)) * strength * alpha;
+			}
+		});
 	}
 	return sim;
 }
@@ -122,6 +193,12 @@ export interface IncrementalLayoutOptions {
 	/** Center-of-mass gravity strength override (tuning/A-B experiments;
 	 *  defaults to the internal bootstrap/incremental constants). */
 	gravityStrength?: number;
+	/** Cluster partition (Louvain output shape). Supplied by callers so
+	 *  this module stays louvain-free (the browser bundle must not carry
+	 *  graphology-louvain); absent = no cluster pull. */
+	clusters?: ReadonlyArray<{ members: ReadonlyArray<string> }>;
+	/** Cluster centroid pull strength (default CLUSTER_PULL_STRENGTH). */
+	clusterPullStrength?: number;
 }
 
 /**
@@ -253,6 +330,9 @@ export function incrementalLayout(
 			y: cy,
 			strength: options.gravityStrength ?? (hasCore ? INCREMENTAL_GRAVITY : BOOTSTRAP_GRAVITY),
 		},
+		clusterPull: options.clusters
+			? { clusters: options.clusters, strength: options.clusterPullStrength ?? CLUSTER_PULL_STRENGTH }
+			: undefined,
 	});
 	const byId = new Map(simNodes.map((n) => [n.id, n]));
 	for (let i = 0; i < ticks; i++) {
@@ -274,32 +354,4 @@ export function incrementalLayout(
 	const out = new Map<string, Position>();
 	for (const n of simNodes) out.set(n.id, { x: n.x ?? 0, y: n.y ?? 0 });
 	return out;
-}
-
-/**
- * The merge-time settle: recompute the resting layout from the CURRENT
- * graph + the positions ledger, and replace the ledger. Called by the
- * extraction pipeline after every merge (the sole writer) and by the
- * positions-commit endpoint when the graph grew under a live-physics
- * commit (client positions become the anchor set). Synchronous — it must
- * finish before the next /api/graph fetch reflects the change.
- */
-export function settleGraphLayout(graphStore: {
-	readNodes(): GraphNode[];
-	readEdges(): GraphEdge[];
-	readPositions(): Record<string, Position>;
-	writePositions(positions: Record<string, Position>): void;
-}): void {
-	const nodes = graphStore.readNodes();
-	if (nodes.length === 0) return;
-	// Node LINES may repeat an id (link-appends) — dedupe, first defines.
-	const seen = new Set<string>();
-	const unique = nodes.filter((n) => {
-		if (seen.has(n.id)) return false;
-		seen.add(n.id);
-		return true;
-	});
-	const previous = new Map(Object.entries(graphStore.readPositions()));
-	const next = incrementalLayout(unique, graphStore.readEdges(), previous);
-	graphStore.writePositions(Object.fromEntries(next));
 }

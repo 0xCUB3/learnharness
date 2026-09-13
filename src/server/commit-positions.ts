@@ -12,7 +12,7 @@
  */
 import type { Position } from "../core/contracts.ts";
 import { getGraph } from "../core/graph.ts";
-import { settleGraphLayout } from "../core/layout.ts";
+import { settleGraphLayout } from "../core/layout-settle.ts";
 import { stores } from "./stores.ts";
 
 /** Max |x| or |y| accepted — NaN/Infinity clamp here, absurd too. */

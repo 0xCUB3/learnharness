@@ -10,6 +10,7 @@
  *   npx tsx scripts/replay-layout.ts
  */
 import { graphStore } from "../src/store/graph.ts";
+import { detectCommunities } from "../src/core/clusters.ts";
 import { incrementalLayout } from "../src/core/layout.ts";
 import type { GraphNode, NodeMapping, Position } from "../src/core/contracts.ts";
 
@@ -69,11 +70,11 @@ function main() {
 		const activeEdges = edges.filter((e) => delivered.has(e.from) && delivered.has(e.to));
 
 		const before = new Map(positions);
-		positions = incrementalLayout(
-			nodes.filter((n) => delivered.has(n.id)),
-			activeEdges,
-			positions,
-		);
+		const batchNodes = nodes.filter((n) => delivered.has(n.id));
+		positions = incrementalLayout(batchNodes, activeEdges, positions, {
+			// The same partition the real settle would see for this batch.
+			clusters: detectCommunities(batchNodes, activeEdges).communities,
+		});
 		for (const [id, prev] of before) {
 			const now = positions.get(id)!;
 			const shift = Math.hypot(prev.x - now.x, prev.y - now.y);

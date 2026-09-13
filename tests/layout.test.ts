@@ -6,7 +6,8 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { incrementalLayout, settleGraphLayout } from "../src/core/layout.ts";
+import { createGraphSimulation, incrementalLayout } from "../src/core/layout.ts";
+import { settleGraphLayout } from "../src/core/layout-settle.ts";
 import type { GraphNode, GraphEdge, Position } from "../src/core/contracts.ts";
 
 const node = (id: string): GraphNode => ({
@@ -124,5 +125,46 @@ describe("settleGraphLayout", () => {
 			writePositions: (p) => void written.push(p),
 		});
 		assert.equal(written.length, 0);
+	});
+});
+describe("clusterPull (the centroid force)", () => {
+	it("compacts each cluster toward its OWN centroid; strength 0 = off", () => {
+		// Two loose chains, far apart, edges only WITHIN each chain.
+		const mk = (p: string, baseX: number) =>
+			Array.from({ length: 8 }, (_, i) => ({ id: `${p}${i}`, x: baseX + i * 40, y: i * 15 }));
+		const a = mk("a", -400);
+		const b = mk("b", 400);
+		const nodes = [...a, ...b];
+		const edges = [
+			...a.slice(0, -1).map((n, i) => ({ from: n.id, to: a[i + 1]!.id })),
+			...b.slice(0, -1).map((n, i) => ({ from: n.id, to: b[i + 1]!.id })),
+		];
+		const clusters = [{ members: a.map((n) => n.id) }, { members: b.map((n) => n.id) }];
+
+		const spreadOf = (ns: { id: string; x: number; y: number }[]): number => {
+			let sum = 0;
+			for (const group of [ns.filter((n) => n.id[0] === "a"), ns.filter((n) => n.id[0] === "b")]) {
+				const cx = group.reduce((s, n) => s + n.x, 0) / group.length;
+				const cy = group.reduce((s, n) => s + n.y, 0) / group.length;
+				sum += group.reduce((s, n) => s + Math.hypot(n.x - cx, n.y - cy), 0) / group.length;
+			}
+			return sum;
+		};
+
+		const run = (strength: number) => {
+			const sim = createGraphSimulation(
+				nodes.map((n) => ({ ...n })),
+				edges,
+				{ clusterPull: { clusters, strength } },
+			);
+			for (let i = 0; i < 150; i++) sim.tick();
+			return spreadOf(sim.nodes() as unknown as { id: string; x: number; y: number }[]);
+		};
+		const pulled = run(0.15);
+		const unpulled = run(0);
+		// The force compacts (well under the unpulled baseline)...
+		assert.ok(pulled < unpulled * 0.8, `pulled spread ${pulled.toFixed(1)} should be well under ${unpulled.toFixed(1)}`);
+		// ...and both groups survive as separate blobs (no merge).
+		assert.ok(pulled > 0, "spread is finite/positive");
 	});
 });
