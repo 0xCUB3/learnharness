@@ -95,7 +95,7 @@ When the graph fills up, the canvas needs a readable at-a-glance structure: **cl
 
 ### Rendering (DECIDED — research report 2026-08-22)
 
-**Render settings (2026-09-13):** three basic controls in the graph view — node size, edge width, arrowhead length — persisted per browser. Settings changes rebuild only the renderer: layout positions and the camera never move. (Edge-length / spacing controls deliberately parked until a cluster-aware spacing design exists.)
+**Render settings (2026-09-13):** four basic controls in the graph view — node size, edge width, arrowhead length, and **the zoom-level control** (the label-visibility threshold; 1× = fit zoom) — persisted per browser. The zoom control is deliberately THE single zoom knob: cluster labels (below) will gate inversely on it over the same fade span. Settings changes rebuild only the renderer: layout positions and the camera never move. (Edge-length / spacing controls deliberately parked until a cluster-aware spacing design exists.)
 
 - **Library: sigma.js v3 + graphology + graphology-layout-forceatlas2.** ~40 KB gzipped all-in — half of vis-network, a third of cytoscape, far below react-force-graph (~250 KB deps) and cosmos.gl (luma.gl stack).
 - **Layout: synchronous run-then-freeze.** `forceAtlas2.assign(graph, { iterations: 100, settings: inferSettings(graph) })` runs once, writes x/y, and no animation loop ever starts — near-zero idle CPU (sigma only redraws on camera/graph events). <150 ms at hundreds of nodes; at ~2k enable `barnesHutOptimize`, then the bundled Web Worker, then server-cached positions — in that order, only if latency bites.

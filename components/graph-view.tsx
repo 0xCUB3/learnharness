@@ -53,8 +53,9 @@
  * (pan/zoom) dismisses it. The `requires` edges render as arrows pointing
  * prerequisite → dependent.
  *
- * Rendering settings (2026-09-13): a gear in the search panel reveals three
- * sliders — node size, edge width, arrowhead length — persisted per browser
+ * Rendering settings (2026-09-13): a gear in the search panel reveals four
+ * sliders — node size, edge width, arrowhead length, and THE zoom-level
+ * control (label visibility threshold; 1× = fit zoom) — persisted per browser
  * (localStorage) and applied by REBUILDING ONLY THE RENDERER: the layout
  * effect (graph + forceAtlas2) is untouched by settings, and the camera
  * position carries across rebuilds, so tweaking a slider never re-fits or
@@ -88,8 +89,17 @@ interface RenderSettings {
 	nodeSize: number;
 	edgeWidth: number;
 	arrowLength: number;
+	/**
+	 * The single zoom-level control (camera ratio at/below which node labels
+	 * appear; 1 = fit zoom, higher = labels visible further zoomed out). It
+	 * will ALSO drive cluster labels (vision §1, DECIDED 2026-09-13) —
+	 * inversely: cluster/domain labels fade in over the same span as node
+	 * labels fade out — so the two never coexist. Kept in the persisted
+	 * settings for exactly that reuse.
+	 */
+	labelZoom: number;
 }
-const DEFAULT_RENDER_SETTINGS: RenderSettings = { nodeSize: 6, edgeWidth: 1, arrowLength: 5 };
+const DEFAULT_RENDER_SETTINGS: RenderSettings = { nodeSize: 6, edgeWidth: 1, arrowLength: 5, labelZoom: 1 };
 const RENDER_SETTINGS_KEY = "graph-render-settings";
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 /** Defensively merge stored settings (stale/partial/corrupt → defaults). */
@@ -99,6 +109,7 @@ function sanitizeRenderSettings(raw: unknown): RenderSettings {
 		nodeSize: clamp(Number(r?.nodeSize ?? DEFAULT_RENDER_SETTINGS.nodeSize), 2, 14),
 		edgeWidth: clamp(Number(r?.edgeWidth ?? DEFAULT_RENDER_SETTINGS.edgeWidth), 0.5, 4),
 		arrowLength: clamp(Number(r?.arrowLength ?? DEFAULT_RENDER_SETTINGS.arrowLength), 2, 15),
+		labelZoom: clamp(Number(r?.labelZoom ?? DEFAULT_RENDER_SETTINGS.labelZoom), 0.5, 4),
 	};
 }
 
@@ -123,8 +134,6 @@ export function isNodeVisible(node: Pick<GraphNode, "name" | "statement">, query
 const LABEL_MAX_WIDTH = 170; // px — wraps long names instead of a wide strip
 const LABEL_GAP = 6; // px between node edge and first label line
 const LABEL_LINE_HEIGHT = 1.3;
-/** Camera ratio at/below which ALL labels appear at once (1 = fit zoom). */
-const LABELS_CAMERA_RATIO = 1;
 /** Zoom span (camera-ratio units) over which labels fade out together. */
 const LABELS_FADE_SPAN = 0.5;
 
@@ -371,6 +380,7 @@ function SettingSlider({
 	max,
 	step,
 	value,
+	display,
 	onChange,
 }: {
 	label: string;
@@ -378,13 +388,15 @@ function SettingSlider({
 	max: number;
 	step: number;
 	value: number;
+	/** Value display override (e.g. "1.5×" for zoom) — defaults to the raw number. */
+	display?: string;
 	onChange: (v: number) => void;
 }) {
 	return (
 		<label className="flex flex-col gap-1">
 			<span className="flex items-center justify-between text-[11px] text-muted-foreground">
 				{label}
-				<span className="tabular-nums">{value}</span>
+				<span className="tabular-nums">{display ?? value}</span>
 			</span>
 			<input
 				type="range"
@@ -666,8 +678,8 @@ export function GraphView() {
 				const labelsCanvas = renderer.getCanvases().labels;
 				let labelsRendering: boolean | null = null;
 				const syncRenderLabels = (ratio: number) => {
-					// 0 at fit zoom → 1 at the end of the fade span
-					const fade = (ratio - LABELS_CAMERA_RATIO) / LABELS_FADE_SPAN;
+					// 0 at the labelZoom threshold → 1 at the end of the fade span
+					const fade = (ratio - s.labelZoom) / LABELS_FADE_SPAN;
 					const alpha = Math.min(Math.max(1 - fade, 0), 1);
 					const shouldRender = alpha > 0;
 					if (shouldRender !== labelsRendering) {
@@ -832,6 +844,15 @@ export function GraphView() {
 								step={1}
 								value={settings.arrowLength}
 								onChange={(v) => setSettings((cur) => ({ ...cur, arrowLength: v }))}
+							/>
+							<SettingSlider
+								label="Labels until zoom"
+								min={0.5}
+								max={4}
+								step={0.25}
+								value={settings.labelZoom}
+								display={`${settings.labelZoom}×`}
+								onChange={(v) => setSettings((cur) => ({ ...cur, labelZoom: v }))}
 							/>
 						</div>
 					)}
