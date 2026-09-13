@@ -64,13 +64,13 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
-import Graph from "graphology";
-import forceAtlas2 from "graphology-layout-forceatlas2";
-import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/core";
 import {
+	DEFAULT_PHYSICS_TUNING,
 	DEFAULT_REGION_TUNING,
 	GraphCanvasRenderer,
 	type GraphRenderSettings,
+	type PhysicsTuning,
 	type RegionTuning,
 } from "./graph-canvas.ts";
 import {
@@ -231,6 +231,10 @@ export function GraphView() {
 	// render settings, which live on the server). Number inputs so any
 	// value can be tried quickly.
 	const [regionTuning, setRegionTuning] = useState<RegionTuning>(DEFAULT_REGION_TUNING);
+	// Live-sim physics controls: session state, never persisted. Changes
+	// rebuild the renderer's sim from the current node positions — the
+	// same engine the server settle runs, so the feel IS the physics.
+	const [physicsTuning, setPhysicsTuning] = useState<PhysicsTuning>(DEFAULT_PHYSICS_TUNING);
 	// Render settings: SERVER-persisted (data/render-settings.json via
 	// /api/graph/render-settings). Loaded once after mount; every user
 	// change saves back, debounced. Defaults render until the load
@@ -387,36 +391,11 @@ export function GraphView() {
 				};
 			}
 		}
-		const graph = new Graph();
-		for (const node of snapshot.nodes) {
-			// Seeded start positions (FA2 requires non-zero x/y) keep the
-			// frozen layout stable for a given node set across remounts.
-			const rand = seededRandom(node.id);
-			graph.addNode(node.id, {
-				x: (rand() - 0.5) * 100,
-				y: (rand() - 0.5) * 100,
-			});
-		}
-		for (const edge of snapshot.edges) {
-			// Snapshot edges are already merged by (from,to,type); the guard
-			// is just belt-and-braces for the simple graphology graph.
-			if (!graph.hasEdge(edge.from, edge.to)) {
-				graph.addEdge(edge.from, edge.to);
-			}
-		}
-
-		// Run-then-freeze: one synchronous pass, writes x/y, then done.
-		// Barnes-Hut comes on automatically above ~500 nodes (the vision's
-		// first escalation rung — see scripts/bench-graph.ts for the numbers).
-		const layoutSettings = {
-			...forceAtlas2.inferSettings(graph),
-			...(graph.order > 500 ? { barnesHutOptimize: true } : {}),
-		};
-		forceAtlas2.assign(graph, { iterations: 100, settings: layoutSettings });
-
-		const positions = new Map<string, { x: number; y: number }>();
-		graph.forEachNode((id, attrs) => positions.set(id, { x: attrs.x, y: attrs.y }));
-		posRef.current = positions;
+		// Bootstrap fallback: the ledger is absent (fresh graph) — run
+		// the SAME engine the server settle uses (d3-force via
+		// incrementalLayout, seeded deterministic) and freeze the result.
+		// Deterministic for a given node set across remounts.
+		posRef.current = incrementalLayout(snapshot.nodes, snapshot.edges, new Map());
 		return () => {
 			posRef.current = null;
 		};
@@ -508,6 +487,12 @@ export function GraphView() {
 	useEffect(() => {
 		rendererRef.current?.setRegionTuning(regionTuning);
 	}, [regionTuning]);
+
+	// Feed #5 — physics tuning: rebuilds the live sim in place (drag pins
+	// survive; a mid-settle change re-anneals, the honest response).
+	useEffect(() => {
+		rendererRef.current?.setPhysicsTuning(physicsTuning);
+	}, [physicsTuning]);
 
 	// Position the detail card: below the clicked node, flipped above near
 	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
@@ -670,6 +655,51 @@ export function GraphView() {
 								value={regionTuning.edgeAlpha}
 								step={0.05}
 								onChange={(v) => setRegionTuning((t) => ({ ...t, edgeAlpha: v }))}
+							/>
+						</div>
+						{/* Physics (user-facing): the live sim's forces. Every value feeds
+						    the SAME engine the server settle runs (createGraphSimulation);
+						    changing one rebuilds the sim from the current positions —
+						    drag mid-settle re-anneals, pins survive. Session-only. */}
+						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
+							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+								Physics
+							</span>
+							<NumberField
+								label="Node repulsion"
+								value={physicsTuning.chargeStrength}
+								step={10}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, chargeStrength: v }))}
+							/>
+							<NumberField
+								label="Edge attraction"
+								value={physicsTuning.linkStrength}
+								step={0.25}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, linkStrength: v }))}
+							/>
+							<NumberField
+								label="Edge length"
+								value={physicsTuning.linkDistance}
+								step={5}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, linkDistance: v }))}
+							/>
+							<NumberField
+								label="Central pull"
+								value={physicsTuning.gravity}
+								step={0.01}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, gravity: v }))}
+							/>
+							<NumberField
+								label="Cluster pull"
+								value={physicsTuning.clusterPull}
+								step={0.05}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, clusterPull: v }))}
+							/>
+							<NumberField
+								label="Friction"
+								value={physicsTuning.velocityDecay}
+								step={0.05}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, velocityDecay: v }))}
 							/>
 						</div>
 						</div>

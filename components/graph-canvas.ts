@@ -55,8 +55,11 @@ import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zo
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import { clusterHue, type Pt } from "./cluster-geometry.ts";
 import {
+	CHARGE_STRENGTH,
+	CLUSTER_PULL_STRENGTH,
 	createGraphSimulation,
 	INCREMENTAL_GRAVITY,
+	LINK_DISTANCE,
 	type GraphRenderSettings,
 	type LayoutNode,
 	type Position,
@@ -193,6 +196,51 @@ export function sanitizeRegionTuning(input: Partial<RegionTuning> | null | undef
 		blur: Math.min(Math.max(num(input?.blur, d.blur), 0), 40),
 		bitmap: Math.round(Math.min(Math.max(num(input?.bitmap, d.bitmap), 128), 1024)),
 		edgeAlpha: Math.min(Math.max(num(input?.edgeAlpha, d.edgeAlpha), 0.02), 1),
+	};
+}
+
+/** User-facing live-sim physics controls (2026-09-13, user request):
+ *  every value feeds createGraphSimulation — the SAME engine the server
+ *  settle runs — so tuning the feel changes exactly what a drag relaxes
+ *  toward. Session state, never persisted. The cluster pull is the
+ *  "virtual node" realized as a centroid force (O(n)/tick, measured
+ *  indistinguishable from off). */
+export interface PhysicsTuning {
+	/** Node repulsion (d3 charge, negative = push apart). */
+	chargeStrength: number;
+	/** Edge attraction: link-spring stiffness multiplier (1 = d3 default). */
+	linkStrength: number;
+	/** Link spring rest length (world units). */
+	linkDistance: number;
+	/** Central pull toward the graph centroid. */
+	gravity: number;
+	/** Per-cluster pull toward the cluster centroid. */
+	clusterPull: number;
+	/** Per-tick velocity damping (d3 default 0.4). */
+	velocityDecay: number;
+}
+
+export const DEFAULT_PHYSICS_TUNING: PhysicsTuning = {
+	chargeStrength: CHARGE_STRENGTH,
+	linkStrength: 1,
+	linkDistance: LINK_DISTANCE,
+	gravity: INCREMENTAL_GRAVITY,
+	clusterPull: CLUSTER_PULL_STRENGTH,
+	velocityDecay: 0.4,
+};
+
+/** Clamp anything into a usable tuning (number inputs can be empty/NaN). */
+export function sanitizePhysicsTuning(input: Partial<PhysicsTuning> | null | undefined): PhysicsTuning {
+	const d = DEFAULT_PHYSICS_TUNING;
+	const num = (v: unknown, fallback: number): number =>
+		typeof v === "number" && Number.isFinite(v) ? v : fallback;
+	return {
+		chargeStrength: Math.min(Math.max(num(input?.chargeStrength, d.chargeStrength), -1000), -10),
+		linkStrength: Math.min(Math.max(num(input?.linkStrength, d.linkStrength), 0), 5),
+		linkDistance: Math.min(Math.max(num(input?.linkDistance, d.linkDistance), 1), 300),
+		gravity: Math.min(Math.max(num(input?.gravity, d.gravity), 0), 1),
+		clusterPull: Math.min(Math.max(num(input?.clusterPull, d.clusterPull), 0), 2),
+		velocityDecay: Math.min(Math.max(num(input?.velocityDecay, d.velocityDecay), 0), 0.99),
 	};
 }
 
@@ -504,6 +552,9 @@ export class GraphCanvasRenderer {
 	/** Region labels: cluster centroid + hue, computed at splat build. */
 	private regionMeta: { label: string | null; cx: number; cy: number; hue: number }[] = [];
 	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
+	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
+	/** Gravity center for the live sim (graph bbox centroid at setData). */
+	private simCenter: Pt = { x: 0, y: 0 };
 	private regionBuiltVersion = -1;
 	private frameCount = 0; // draw counter for the live-sim splat throttle
 	private labelLines = new Map<string, string[]>();
@@ -590,18 +641,8 @@ export class GraphCanvasRenderer {
 		this.simActive = false;
 		this.dragId = null;
 		this.simMoved = false;
-		if (data.nodes.length > 0) {
-			const cx = (minX + maxX) / 2;
-			const cy = (minY + maxY) / 2;
-			this.sim = createGraphSimulation(data.nodes, data.edges, {
-				gravity: { x: cx, y: cy, strength: INCREMENTAL_GRAVITY },
-				alphaDecay: LIVE_ALPHA_DECAY,
-			});
-			this.simById = new Map(data.nodes.map((n) => [n.id, n as LayoutNode]));
-		} else {
-			this.sim = null;
-			this.simById = new Map();
-		}
+		this.simCenter = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+		this.buildSim();
 		this.geoVersion++; // new data → rebuild world geometry
 		this.markDirty();
 	}
@@ -618,6 +659,17 @@ export class GraphCanvasRenderer {
 	setRegionTuning(input: Partial<RegionTuning>): void {
 		this.regionTuning = sanitizeRegionTuning(input);
 		this.regionBuiltVersion = -2; // never equals geoVersion → rebuild
+		this.markDirty();
+	}
+
+	/** Live-sim physics controls: rebuilds the sim from the CURRENT
+	 *  node positions (same node objects — x/y and any drag pin fx/fy
+	 *  survive; velocities restart clean, which reads as "re-relax with
+	 *  the new feel"). A mid-settle change re-anneals, which is the
+	 *  honest response to new physics. */
+	setPhysicsTuning(input: Partial<PhysicsTuning>): void {
+		this.physicsTuning = sanitizePhysicsTuning(input);
+		this.buildSim();
 		this.markDirty();
 	}
 
@@ -1011,6 +1063,30 @@ export class GraphCanvasRenderer {
 			if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
 		}
 		ctx.font = prevFont;
+	}
+
+	/** (Re)create the live sim from data.nodes at their current
+	 *  positions + the current physics tuning. Called by setData and
+	 *  setPhysicsTuning. */
+	private buildSim(): void {
+		const data = this.data;
+		if (!data || data.nodes.length === 0) {
+			this.sim = null;
+			this.simById = new Map();
+			return;
+		}
+		const t = this.physicsTuning;
+		this.sim = createGraphSimulation(data.nodes, data.edges, {
+			gravity: { x: this.simCenter.x, y: this.simCenter.y, strength: t.gravity },
+			alphaDecay: LIVE_ALPHA_DECAY,
+			velocityDecay: t.velocityDecay,
+			chargeStrength: t.chargeStrength,
+			linkStrength: t.linkStrength,
+			linkDistance: t.linkDistance,
+			clusterPull:
+				data.clusters.length > 0 ? { clusters: data.clusters, strength: t.clusterPull } : undefined,
+		});
+		this.simById = new Map(data.nodes.map((n) => [n.id, n as LayoutNode]));
 	}
 
 	/** Rasterize cluster regions into the low-res world-space bitmap.

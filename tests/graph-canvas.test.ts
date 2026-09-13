@@ -17,8 +17,10 @@ import {
 	fitTransform,
 	labelAlpha,
 	pickNearest,
+	sanitizePhysicsTuning,
 	sanitizeRegionTuning,
 	zoomRatioOf,
+	DEFAULT_PHYSICS_TUNING,
 	DEFAULT_REGION_TUNING,
 	LABELS_FADE_SPAN,
 } from "../components/graph-canvas.ts";
@@ -192,5 +194,31 @@ describe("boxBlurRound (premultiplied region blur)", () => {
 		const b = new Float32Array(8);
 		boxBlurRound(a, tmp, b, 1, 2, 0);
 		assert.deepEqual([...b], [1, 2, 3, 4, 5, 6, 7, 8]);
+	});
+});
+
+describe("sanitizePhysicsTuning (physics controls)", () => {
+	test("defaults survive untouched; partial input keeps the rest", () => {
+		assert.deepEqual(sanitizePhysicsTuning(undefined), DEFAULT_PHYSICS_TUNING);
+		const half = sanitizePhysicsTuning({ clusterPull: 0.6 });
+		assert.equal(half.clusterPull, 0.6);
+		assert.equal(half.chargeStrength, DEFAULT_PHYSICS_TUNING.chargeStrength);
+	});
+
+	test("garbage clamps: NaN falls back, out-of-range clamps", () => {
+		const t = sanitizePhysicsTuning({
+			chargeStrength: Number.NaN,
+			linkStrength: 99,
+			linkDistance: -5,
+			gravity: 7,
+			clusterPull: -1,
+			velocityDecay: 3,
+		});
+		assert.equal(t.chargeStrength, DEFAULT_PHYSICS_TUNING.chargeStrength);
+		assert.equal(t.linkStrength, 5);
+		assert.equal(t.linkDistance, 1);
+		assert.equal(t.gravity, 1);
+		assert.equal(t.clusterPull, 0);
+		assert.equal(t.velocityDecay, 0.99);
 	});
 });
