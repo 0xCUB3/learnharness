@@ -99,7 +99,7 @@ interface RenderSettings {
 	 */
 	labelZoom: number;
 }
-const DEFAULT_RENDER_SETTINGS: RenderSettings = { nodeSize: 6, edgeWidth: 1, arrowLength: 5, labelZoom: 1 };
+const DEFAULT_RENDER_SETTINGS: RenderSettings = { nodeSize: 6, edgeWidth: 1, arrowLength: 5, labelZoom: 0.5 };
 const RENDER_SETTINGS_KEY = "graph-render-settings";
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 /** Defensively merge stored settings (stale/partial/corrupt → defaults). */
@@ -109,7 +109,7 @@ function sanitizeRenderSettings(raw: unknown): RenderSettings {
 		nodeSize: clamp(Number(r?.nodeSize ?? DEFAULT_RENDER_SETTINGS.nodeSize), 2, 14),
 		edgeWidth: clamp(Number(r?.edgeWidth ?? DEFAULT_RENDER_SETTINGS.edgeWidth), 0.5, 4),
 		arrowLength: clamp(Number(r?.arrowLength ?? DEFAULT_RENDER_SETTINGS.arrowLength), 2, 15),
-		labelZoom: clamp(Number(r?.labelZoom ?? DEFAULT_RENDER_SETTINGS.labelZoom), 0.5, 4),
+		labelZoom: clamp(Number(r?.labelZoom ?? DEFAULT_RENDER_SETTINGS.labelZoom), 0.25, 4),
 	};
 }
 
@@ -847,7 +847,7 @@ export function GraphView() {
 							/>
 							<SettingSlider
 								label="Labels until zoom"
-								min={0.5}
+								min={0.25}
 								max={4}
 								step={0.25}
 								value={settings.labelZoom}
