@@ -68,7 +68,7 @@ export function offsetPolygon(points: Pt[], pad: number): Pt[] {
 }
 
 /** Path through the polygon with rounded corners (arcTo). */
-export function traceRoundedPath(ctx: CanvasRenderingContext2D, points: Pt[], radius: number): void {
+export function traceRoundedPath(ctx: CanvasRenderingContext2D | Path2D, points: Pt[], radius: number): void {
 	const first = points[0]!;
 	ctx.moveTo(first.x, first.y);
 	for (let i = 1; i <= points.length; i++) {

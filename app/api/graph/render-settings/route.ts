@@ -12,7 +12,7 @@
  * Every body is passed through sanitizeRenderSettings (src/core) before
  * touching disk: garbage clamps or falls back to defaults, never throws.
  */
-import { readRenderSettings, writeRenderSettings } from "@/src/store/render-settings.ts";
+import { readRenderSettings, writeRenderSettings } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 

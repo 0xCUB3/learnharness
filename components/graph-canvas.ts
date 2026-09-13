@@ -53,7 +53,7 @@
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { clusterHue, convexHull, offsetPolygon, traceRoundedPath, type Pt } from "./cluster-geometry.ts";
-import type { GraphRenderSettings } from "../src/core/render-settings.ts";
+import type { GraphRenderSettings } from "@/src/core";
 
 export type { GraphRenderSettings };
 
@@ -120,7 +120,7 @@ export const LABELS_FADE_SPAN = 0.5;
 const GLOW_PAD = 9; // px the halo extends beyond the node disc (constant)
 const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
 const HOVER_FADE_MS = 180; // hover halo opacity fade length
-const ZOOM_EASE_MS = 120; // wheel-zoom glide: exponential-ease time constant
+const ZOOM_EASE_MS = 45; // wheel-zoom glide: exponential-ease time constant (~250ms per notch)
 
 /** Extra pickable radius (px) beyond the disc — the whole halo is
  *  hit-testable (the old flicker fix, minus the picking shader). */
@@ -139,8 +139,12 @@ const HULL_FILL_LAYERS = [
 ] as const;
 const HULL_STROKE_PAD = 14;
 const HULL_CORNER_RADIUS = 9;
-const HULL_DASH = [7, 7] as const;
 const REGION_LABEL_SIZE = 18;
+
+/** All "px" constants above are screen px AT FIT ZOOM. The renderer scales
+ *  them into world units (÷ kFit) once per geometry build; camera zoom then
+ *  scales nodes/labels/arrowheads with the graph (Obsidian-style), while
+ *  edge widths and hull borders stay viewer-relative hairlines (÷ k). */
 
 const clamp01 = (v: number) => Math.min(Math.max(v, 0), 1);
 
@@ -265,31 +269,33 @@ function wrapLabel(context: CanvasRenderingContext2D, text: string, maxWidth: nu
 	return lines;
 }
 
-/** The wrapped node name, centered below the node — identical geometry at
- *  rest and on hover, so hover only changes the color, nothing jumps. */
-function drawName(
+/** World-unit sizes for the label pass, derived once per geometry build. */
+interface WorldSizes {
+	nodeR: number; // node disc radius, world units
+	glowOuter: number; // hover halo outer radius, world units
+	labelSize: number; // node label font, world units
+	labelGap: number; // node edge → first label line, world units
+}
+
+/** The pre-wrapped node name, centered below the node in WORLD units —
+ *  identical geometry at rest and on hover, so hover only changes the
+ *  color, nothing jumps. Lines are wrapped once per geometry build, never
+ *  per frame. */
+function drawNameLines(
 	context: CanvasRenderingContext2D,
 	x: number,
 	y: number,
-	size: number,
-	labelSize: number,
-	label: string,
-	font: string,
+	lines: string[],
+	world: WorldSizes,
 	color: string,
 ): void {
-	context.save();
-	context.font = `${LABEL_WEIGHT} ${labelSize}px ${font}`;
-	// Wrap width scales with the font so bigger labels wrap at the same
-	// word count, not earlier.
-	const lines = wrapLabel(context, label, LABEL_MAX_WIDTH * (labelSize / LABEL_SIZE));
 	context.fillStyle = color;
 	context.textAlign = "center";
 	context.textBaseline = "top";
-	const firstTop = y + size + LABEL_GAP;
+	const firstTop = y + world.nodeR + world.labelGap;
 	for (let i = 0; i < lines.length; i++) {
-		context.fillText(lines[i]!, x, firstTop + i * labelSize * LABEL_LINE_HEIGHT);
+		context.fillText(lines[i]!, x, firstTop + i * world.labelSize * LABEL_LINE_HEIGHT);
 	}
-	context.restore();
 }
 
 // ─── The renderer ───────────────────────────────────────────────────────────
@@ -316,6 +322,11 @@ export class GraphCanvasRenderer {
 
 	private frameId: number | null = null;
 	private dirty = true;
+	/** True while tick() runs: markDirty inside the loop (d3's zoom event
+	 *  fires from advanceZoom) must NOT schedule — the loop schedules
+	 *  itself below. Un-guarded, each glide frame leaked an extra queued
+	 *  tick and draws multiplied per displayed frame (20fps zoom bug). */
+	private inTick = false;
 
 	// Hover transition: fade 0 = resting, 1 = fully hovered; the animating
 	// flag keeps the loop scheduled until the fade settles (then rAF stops).
@@ -333,6 +344,27 @@ export class GraphCanvasRenderer {
 
 	private resizeObserver: ResizeObserver;
 	private downPos: Pt | null = null;
+
+	// ── Cached world geometry ─────────────────────────────────────────────
+	// Everything above is drawn per frame; everything below is derived from
+	// data+visibility+settings+kFit and rebuilt ONLY when one of those
+	// changes (geoVersion). Camera moves just re-rasterize the same paths.
+	private geoVersion = 0; // bump = geometry inputs changed
+	private builtVersion = -1; // version the cache was built at
+	private nodesPath: Path2D | null = null;
+	private shaftsPath: Path2D = new Path2D();
+	private headsPath: Path2D = new Path2D();
+	private hullShapes: {
+		fill: Path2D[];
+		stroke: Path2D;
+		label: string | null;
+		cx: number; // world centroid
+		cy: number;
+		hue: number;
+	}[] = [];
+	private labelLines = new Map<string, string[]>();
+	private worldLabelFont = "";
+	private world: WorldSizes = { nodeR: 0, glowOuter: 0, labelSize: 0, labelGap: 0 };
 
 	constructor(canvas: HTMLCanvasElement, callbacks: RendererCallbacks) {
 		this.canvas = canvas;
@@ -372,7 +404,10 @@ export class GraphCanvasRenderer {
 				// so a resize changes it even though the camera persists.
 				const w = this.canvas.clientWidth;
 				const h = this.canvas.clientHeight;
-				if (w >= 10 && h >= 10) this.kFit = fitTransform(this.worldBBox, w, h, 40).k;
+				if (w >= 10 && h >= 10) {
+					this.kFit = fitTransform(this.worldBBox, w, h, 40).k;
+					this.geoVersion++; // resize redefines the fit-zoom scale
+				}
 			}
 			// Redraw SYNCHRONOUSLY: syncSize may have reallocated the backing
 			// store (which clears the canvas), and during live window resizes
@@ -401,16 +436,19 @@ export class GraphCanvasRenderer {
 		}
 		this.worldBBox = { minX, maxX, minY, maxY };
 		if (!this.hasFit && data.nodes.length > 0) this.fit();
+		this.geoVersion++; // new data → rebuild world geometry
 		this.markDirty();
 	}
 
 	setSettings(settings: GraphRenderSettings): void {
 		this.settings = settings;
+		this.geoVersion++; // sizes/wrap width changed → rebuild geometry
 		this.markDirty();
 	}
 
 	setVisible(visible: ReadonlySet<string> | null): void {
 		this.visible = visible;
+		this.geoVersion++; // member visibility changes hulls + paths
 		this.markDirty();
 	}
 
@@ -424,6 +462,7 @@ export class GraphCanvasRenderer {
 		const t = fitTransform(this.worldBBox, w, h, 40);
 		this.kFit = t.k;
 		this.hasFit = true;
+		this.geoVersion++; // kFit defines the world-unit scale
 		select(this.canvas).call(
 			this.zoomBehavior.transform,
 			zoomIdentity.translate(t.x, t.y).scale(t.k),
@@ -498,7 +537,9 @@ export class GraphCanvasRenderer {
 		if (!this.data || !this.settings) return null;
 		// Screen positions, filtered to visible nodes.
 		const { x: tx, y: ty, k } = this.transform;
-		const maxDist = this.settings.nodeSize + PICKING_PAD;
+		// Discs scale with the camera now: their screen radius is
+		// nodeSize × k/kFit; the halo pad stays a constant screen pad.
+		const maxDist = this.settings.nodeSize * (k / this.kFit) + PICKING_PAD;
 		const projected: { id: string; x: number; y: number }[] = [];
 		for (const n of this.data.nodes) {
 			if (this.visible && !this.visible.has(n.id)) continue;
@@ -523,7 +564,7 @@ export class GraphCanvasRenderer {
 
 	private markDirty(): void {
 		this.dirty = true;
-		if (this.frameId === null) {
+		if (this.frameId === null && !this.inTick) {
 			this.frameId = requestAnimationFrame(() => {
 				this.frameId = null;
 				this.tick();
@@ -532,16 +573,21 @@ export class GraphCanvasRenderer {
 	}
 
 	private tick(): void {
-		const now = performance.now();
-		// Clamp the dt: a long idle gap must not teleport the ease forward.
-		const dt = Math.min(Math.max(now - this.lastTickAt, 8), 100);
-		this.lastTickAt = now;
-		const hoverAnim = this.advanceHover();
-		const zoomAnim = this.advanceZoom(dt);
-		this.draw();
-		// Keep frames coming ONLY while an animation is in motion (hover
-		// fade or zoom glide); an idle graph schedules no rAF at all.
-		this.animating = hoverAnim || zoomAnim;
+		this.inTick = true;
+		try {
+			const now = performance.now();
+			// Clamp the dt: a long idle gap must not teleport the ease forward.
+			const dt = Math.min(Math.max(now - this.lastTickAt, 8), 100);
+			this.lastTickAt = now;
+			const hoverAnim = this.advanceHover();
+			const zoomAnim = this.advanceZoom(dt);
+			this.draw();
+			// Keep frames coming ONLY while an animation is in motion (hover
+			// fade or zoom glide); an idle graph schedules no rAF at all.
+			this.animating = hoverAnim || zoomAnim;
+		} finally {
+			this.inTick = false;
+		}
 		if (this.animating) {
 			this.frameId = requestAnimationFrame(() => {
 				this.frameId = null;
@@ -568,7 +614,7 @@ export class GraphCanvasRenderer {
 		const blend = 1 - Math.exp(-dt / ZOOM_EASE_MS);
 		let k = t.k + (target.k - t.k) * blend;
 		let done = false;
-		if (Math.abs(target.k - k) / target.k < 0.001) {
+		if (Math.abs(target.k - k) / target.k < 0.002) {
 			k = target.k;
 			done = true;
 		}
@@ -600,7 +646,100 @@ export class GraphCanvasRenderer {
 		this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 	}
 
-	/** THE draw function: every layer, one frame, one camera. */
+	/** Derive ALL world geometry from data + visibility + settings + kFit.
+	 *  Runs only when geoVersion moves — never per frame, never per camera
+	 *  change. Zoom/pan pay zero geometry math, only rasterization. */
+	private buildGeometry(): void {
+		this.builtVersion = this.geoVersion;
+		const data = this.data;
+		const settings = this.settings;
+		if (!data || !settings) return;
+
+		// Screen px at fit zoom → world units.
+		const s = 1 / this.kFit;
+		const nodeR = settings.nodeSize * s;
+		this.world = {
+			nodeR,
+			glowOuter: (settings.nodeSize + GLOW_PAD) * s,
+			labelSize: settings.labelSize * s,
+			labelGap: LABEL_GAP * s,
+		};
+		this.worldLabelFont = `${LABEL_WEIGHT} ${settings.labelSize * s}px ${data.fontFamily}`;
+		const arrowLen = settings.arrowLength * s;
+		const visible = this.visible;
+		const isVisible = (id: string) => !visible || visible.has(id);
+
+		// Node discs: one Path2D, one fill() per frame.
+		const nodesPath = new Path2D();
+		for (const n of data.nodes) {
+			if (!isVisible(n.id)) continue;
+			nodesPath.moveTo(n.x + nodeR, n.y);
+			nodesPath.arc(n.x, n.y, nodeR, 0, Math.PI * 2);
+		}
+		this.nodesPath = nodesPath;
+
+		// Edge shafts + arrowheads: tip lands on the target disc edge.
+		const shafts = new Path2D();
+		const heads = new Path2D();
+		for (const e of data.edges) {
+			if (!isVisible(e.from) || !isVisible(e.to)) continue;
+			const a = this.nodeById.get(e.from);
+			const b = this.nodeById.get(e.to);
+			if (!a || !b) continue;
+			const g = arrowGeometry(a, b, nodeR, nodeR, arrowLen);
+			if (!g) continue;
+			shafts.moveTo(g.shaftFrom.x, g.shaftFrom.y);
+			shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
+			heads.moveTo(g.tip.x, g.tip.y);
+			heads.lineTo(g.left.x, g.left.y);
+			heads.lineTo(g.right.x, g.right.y);
+			heads.closePath();
+		}
+		this.shaftsPath = shafts;
+		this.headsPath = heads;
+
+		// Cluster hulls: convex hull of member positions (world = raw data
+		// coordinates — no projection at all), three offset fill layers,
+		// and a SOLID boundary path.
+		this.hullShapes = [];
+		for (const cluster of data.clusters) {
+			const pts: Pt[] = [];
+			for (const id of cluster.members) {
+				if (!isVisible(id)) continue;
+				const n = this.nodeById.get(id);
+				if (n) pts.push({ x: n.x, y: n.y });
+			}
+			const hull = convexHull(pts);
+			if (hull.length < 3) continue;
+			const fills = HULL_FILL_LAYERS.map(([pad]) => {
+				const path = new Path2D();
+				traceRoundedPath(path, offsetPolygon(hull, pad * s), HULL_CORNER_RADIUS * s);
+				return path;
+			});
+			const stroke = new Path2D();
+			traceRoundedPath(stroke, offsetPolygon(hull, HULL_STROKE_PAD * s), HULL_CORNER_RADIUS * s);
+			const cx = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
+			const cy = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+			this.hullShapes.push({ fill: fills, stroke, label: cluster.label || null, cx, cy, hue: clusterHue(cluster.id) });
+		}
+
+		// Label wrapping: measureText once per node per geometry build,
+		// never per frame. Wrap width keeps the bigger-label/bigger-wrap
+		// behavior from the sigma era.
+		this.labelLines = new Map();
+		const ctx = this.ctx;
+		const prevFont = ctx.font;
+		ctx.font = this.worldLabelFont;
+		const maxW = LABEL_MAX_WIDTH * (settings.labelSize / LABEL_SIZE) * s;
+		for (const n of data.nodes) {
+			if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
+		}
+		ctx.font = prevFont;
+	}
+
+	/** THE draw function: every layer, one frame, one camera. All drawing
+	 *  happens in WORLD coordinates under the camera transform; nothing is
+	 *  recomputed per frame except layer styling. */
 	private draw(): void {
 		this.dirty = false;
 		const data = this.data;
@@ -608,146 +747,105 @@ export class GraphCanvasRenderer {
 		if (!data || !settings) return;
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
-		this.ctx.clearRect(0, 0, w, h);
+		const dpr = window.devicePixelRatio || 1;
+		const ctx = this.ctx;
+
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		ctx.clearRect(0, 0, w, h);
+
+		if (this.builtVersion !== this.geoVersion) this.buildGeometry();
+		if (!this.nodesPath) return;
 
 		const { x: tx, y: ty, k } = this.transform;
-		const nodeById = new Map<string, CanvasNode>();
+		// THE camera: one transform, then everything is world coordinates.
+		ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
+
 		const ratio = zoomRatioOf(this.kFit, k);
 		const nodeAlpha = labelAlpha(ratio, settings.labelZoom);
 		const regionAlpha = 1 - nodeAlpha;
+		const { nodeR, glowOuter } = this.world;
 
-		// Screen positions for every VISIBLE node (one pass), plus the
-		// byId lookup so the label/hover passes never go O(n^2).
-		const pos = new Map<string, Pt>();
-		for (const n of data.nodes) {
-			if (this.visible && !this.visible.has(n.id)) continue;
-			pos.set(n.id, { x: n.x * k + tx, y: n.y * k + ty });
-			nodeById.set(n.id, n);
+		// 1–2. Cluster hulls: cached world paths — soft layered fills, then
+		// a SOLID viewer-relative hairline border (dashes dropped for now).
+		for (const hs of this.hullShapes) {
+			for (let i = 0; i < hs.fill.length; i++) {
+				ctx.fillStyle = `hsla(${hs.hue}, 65%, 60%, ${HULL_FILL_LAYERS[i]![1]})`;
+				ctx.fill(hs.fill[i]!);
+			}
+			ctx.strokeStyle = `hsla(${hs.hue}, 65%, 62%, 0.5)`;
+			ctx.lineWidth = 1.5 / k; // constant screen px
+			ctx.stroke(hs.stroke);
 		}
 
-		// 1–2. Cluster hulls: soft layered fills, then the dashed boundary.
-		for (const cluster of data.clusters) {
-			const pts: Pt[] = [];
-			for (const id of cluster.members) {
-				const p = pos.get(id);
-				if (p) pts.push(p);
-			}
-			const hull = convexHull(pts);
-			if (hull.length < 3) continue;
-			const hue = clusterHue(cluster.id);
-			for (const [pad, alpha] of HULL_FILL_LAYERS) {
-				this.ctx.beginPath();
-				traceRoundedPath(this.ctx, offsetPolygon(hull, pad), HULL_CORNER_RADIUS);
-				this.ctx.fillStyle = `hsla(${hue}, 65%, 60%, ${alpha})`;
-				this.ctx.fill();
-			}
-			this.ctx.beginPath();
-			traceRoundedPath(this.ctx, offsetPolygon(hull, HULL_STROKE_PAD), HULL_CORNER_RADIUS);
-			this.ctx.setLineDash([...HULL_DASH]);
-			this.ctx.strokeStyle = `hsla(${hue}, 65%, 62%, 0.5)`;
-			this.ctx.lineWidth = 1.5;
-			this.ctx.stroke();
-			this.ctx.setLineDash([]);
-		}
-
-		// 3. Edges: shaft + arrowhead (tip lands on the target disc edge).
+		// 3. Edges: shafts + arrowheads from cached paths; width constant on
+		// screen (÷ k), geometry in world units (scales with the graph).
 		if (settings.edgeWidth > 0) {
-			this.ctx.strokeStyle = data.colors.edge;
-			this.ctx.fillStyle = data.colors.edge;
-			this.ctx.lineWidth = settings.edgeWidth;
-			this.ctx.lineCap = "round";
-			for (const e of data.edges) {
-				const from = pos.get(e.from);
-				const to = pos.get(e.to);
-				if (!from || !to) continue; // edge drops when either endpoint is hidden
-				const g = arrowGeometry(from, to, settings.nodeSize, settings.nodeSize, settings.arrowLength);
-				if (!g) continue;
-				this.ctx.beginPath();
-				this.ctx.moveTo(g.shaftFrom.x, g.shaftFrom.y);
-				this.ctx.lineTo(g.shaftTo.x, g.shaftTo.y);
-				this.ctx.stroke();
-				this.ctx.beginPath();
-				this.ctx.moveTo(g.tip.x, g.tip.y);
-				this.ctx.lineTo(g.left.x, g.left.y);
-				this.ctx.lineTo(g.right.x, g.right.y);
-				this.ctx.closePath();
-				this.ctx.fill();
-			}
+			ctx.strokeStyle = data.colors.edge;
+			ctx.fillStyle = data.colors.edge;
+			ctx.lineWidth = settings.edgeWidth / k;
+			ctx.lineCap = "round";
+			ctx.stroke(this.shaftsPath);
+			ctx.fill(this.headsPath);
 		}
 
-		// 4. Nodes: plain discs.
-		this.ctx.fillStyle = data.colors.node;
-		for (const [, p] of pos) {
-			this.ctx.beginPath();
-			this.ctx.arc(p.x, p.y, settings.nodeSize, 0, Math.PI * 2);
-			this.ctx.fill();
-		}
+		// 4. Nodes: one cached Path2D, one fill.
+		ctx.fillStyle = data.colors.node;
+		ctx.fill(this.nodesPath);
 
-		// 5. Cluster region labels — inverse-gated on THE zoom control:
-		// they fade in over the exact span node labels fade out. Drawn
-		// above the nodes, below the node labels (the old layer order).
+		// 5. Cluster region labels — inverse-gated on THE zoom control.
+		// Viewer-relative by design (UI, not graph content): drawn at the
+		// world centroid with a font of REGION_LABEL_SIZE / k, which is a
+		// constant 18px on screen at any zoom.
 		if (settings.clusterLabels && regionAlpha > 0.01) {
-			this.ctx.save();
-			this.ctx.globalAlpha = regionAlpha;
-			this.ctx.font = `${LABEL_WEIGHT} ${REGION_LABEL_SIZE}px ${data.fontFamily}`;
-			this.ctx.textAlign = "center";
-			this.ctx.textBaseline = "middle";
-			for (const cluster of data.clusters) {
-				if (!cluster.label) continue;
-				const pts: Pt[] = [];
-				for (const id of cluster.members) {
-					const p = pos.get(id);
-					if (p) pts.push(p);
-				}
-				if (pts.length === 0) continue;
-				const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
-				const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
-				const hue = clusterHue(cluster.id);
-				this.ctx.fillStyle = `hsla(${hue}, 55%, 78%, 0.85)`;
-				this.ctx.fillText(cluster.label, cx, cy);
+			ctx.save();
+			ctx.globalAlpha = regionAlpha;
+			ctx.font = `${LABEL_WEIGHT} ${REGION_LABEL_SIZE / k}px ${data.fontFamily}`;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "middle";
+			for (const hs of this.hullShapes) {
+				if (!hs.label) continue;
+				ctx.fillStyle = `hsla(${hs.hue}, 55%, 78%, 0.85)`;
+				ctx.fillText(hs.label, hs.cx, hs.cy);
 			}
-			this.ctx.restore();
+			ctx.restore();
 		}
 
-		// 6. Node labels — one global gate, faded together (no per-node pop).
+		// 6. Node labels — one global gate, faded together. World-scaled
+		// with the graph (they grow as you zoom in, Obsidian-style).
 		if (nodeAlpha > 0.01) {
-			this.ctx.save();
-			this.ctx.globalAlpha = nodeAlpha;
-			for (const [id, p] of pos) {
-				const n = nodeById.get(id);
-				if (n)
-					drawName(
-						this.ctx, p.x, p.y, settings.nodeSize, settings.labelSize, n.label,
-						data.fontFamily, data.colors.label,
-					);
+			ctx.save();
+			ctx.globalAlpha = nodeAlpha;
+			ctx.font = this.worldLabelFont;
+			for (const [id, lines] of this.labelLines) {
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				drawNameLines(ctx, n.x, n.y, lines, this.world, data.colors.label);
 			}
-			this.ctx.restore();
+			ctx.restore();
 		}
 
 		// 7. Hover glow (topmost): halo in the node's color + the brightened
-		//  name, both on the SAME fade factor. Shows even when labels are
-		//  zoomed out (hover is its own affordance, not a label).
+		// name, both on the SAME fade factor. World units like everything
+		// else. Shows even when labels are zoomed out (hover is its own
+		// affordance, not a label).
 		if (this.hoverId && this.hoverFade > 0.02) {
-			const p = pos.get(this.hoverId);
-			const n = p ? nodeById.get(this.hoverId) : null;
-			if (p && n) {
-				const inner = settings.nodeSize;
-				const outer = settings.nodeSize + GLOW_PAD;
-				const glow = this.ctx.createRadialGradient(p.x, p.y, inner, p.x, p.y, outer);
+			const n = this.visible && !this.visible.has(this.hoverId)
+				? null // filtered out by search — no glow on hidden nodes
+				: this.nodeById.get(this.hoverId);
+			if (n) {
+				const glow = ctx.createRadialGradient(n.x, n.y, nodeR, n.x, n.y, glowOuter);
 				glow.addColorStop(0, rgbaFromHex(data.colors.node, GLOW_ALPHA * this.hoverFade));
 				glow.addColorStop(1, rgbaFromHex(data.colors.node, 0));
-				this.ctx.fillStyle = glow;
-				this.ctx.beginPath();
-				this.ctx.arc(p.x, p.y, outer, 0, Math.PI * 2);
-				this.ctx.arc(p.x, p.y, inner, 0, Math.PI * 2, true);
-				this.ctx.fill("evenodd");
-				this.ctx.save();
-				this.ctx.globalAlpha = this.hoverFade;
-				drawName(
-					this.ctx, p.x, p.y, settings.nodeSize, settings.labelSize, n.label,
-					data.fontFamily, data.colors.hoverText,
-				);
-				this.ctx.restore();
+				ctx.fillStyle = glow;
+				ctx.beginPath();
+				ctx.arc(n.x, n.y, glowOuter, 0, Math.PI * 2);
+				ctx.arc(n.x, n.y, nodeR, 0, Math.PI * 2, true);
+				ctx.fill("evenodd");
+				ctx.save();
+				ctx.globalAlpha = this.hoverFade;
+				ctx.font = this.worldLabelFont;
+				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, data.colors.hoverText);
+				ctx.restore();
 			}
 		}
 	}

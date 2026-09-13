@@ -17,6 +17,7 @@
 
 export * from "./contracts.ts";
 export * from "./ports.ts";
+export * from "./render-settings.ts";
 
 export * from "./question-core.ts";
 export * from "./clusters.ts";

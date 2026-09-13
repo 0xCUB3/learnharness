@@ -74,7 +74,7 @@ import {
 	labelZoomToSlider,
 	sanitizeRenderSettings,
 	sliderToLabelZoom,
-} from "../src/core/render-settings.ts";
+} from "@/src/core";
 
 /** The uniform node look (no state classes — canvas wants hex, not oklch):
  *  the accent color, until the state model lands. */
