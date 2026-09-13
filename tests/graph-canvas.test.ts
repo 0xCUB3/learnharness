@@ -1,0 +1,139 @@
+/**
+ * Pure-helper tests for the hand-rolled canvas renderer
+ * (components/graph-canvas.ts). The renderer class itself is DOM-bound
+ * (canvas, rAF, ResizeObserver) and is verified live in the browser; the
+ * math it runs on every frame must be exact, so it is pinned here.
+ *
+ * The camera-ratio convention is the load-bearing contract with the
+ * persisted settings: sigma's ratio (1 = fit, SMALLER = zoomed in) is kept
+ * verbatim so stored labelZoom values survive the renderer swap.
+ */
+
+import assert from "node:assert/strict";
+import { describe, it as test } from "node:test";
+import {
+	arrowGeometry,
+	fitTransform,
+	labelAlpha,
+	pickNearest,
+	zoomRatioOf,
+	LABELS_FADE_SPAN,
+} from "../components/graph-canvas.ts";
+
+describe("zoomRatioOf (the sigma-compatible camera ratio)", () => {
+	test("1 at fit zoom, smaller when zoomed in, larger when zoomed out", () => {
+		assert.equal(zoomRatioOf(2, 2), 1); // at fit
+		assert.equal(zoomRatioOf(2, 4), 0.5); // zoomed in 2x -> ratio halves
+		assert.equal(zoomRatioOf(2, 1), 2); // zoomed out 2x -> ratio doubles
+	});
+});
+
+describe("labelAlpha (the single zoom gate)", () => {
+	test("fully visible at/below the threshold, faded out after the span", () => {
+		assert.equal(labelAlpha(0.5, 0.5), 1); // at the threshold
+		assert.equal(labelAlpha(0.25, 0.5), 1); // zoomed further in: stays 1
+		assert.equal(labelAlpha(0.75, 0.5), 0.5); // mid-fade
+		assert.equal(labelAlpha(1.0, 0.5), 0); // one span out: gone
+		assert.equal(labelAlpha(2.0, 0.5), 0); // far out: clamped
+	});
+
+	test("node labels and cluster labels cross-fade over the exact same span", () => {
+		// The renderer draws cluster labels at 1 - labelAlpha; the two must
+		// always sum to 1 within the fade and never coexist at full opacity.
+		for (const ratio of [0, 0.25, 0.5, 0.6, 0.75, 0.9, 1, 2, 4]) {
+			const node = labelAlpha(ratio, 0.5);
+			const cluster = 1 - node;
+			assert.ok(node + cluster > 0.999 && node + cluster < 1.001, `sum at ratio ${ratio}`);
+			assert.ok(node <= 1 && cluster <= 1, `clamped at ratio ${ratio}`);
+		}
+	});
+
+	test("the span constant is unchanged from the sigma era (stored settings depend on it)", () => {
+		assert.equal(LABELS_FADE_SPAN, 0.5);
+	});
+});
+
+describe("fitTransform", () => {
+	test("centers the bbox and respects padding", () => {
+		// A 100x50 graph in a 500x300 viewport, 40px padding:
+		// available 420x220 -> k = min(4.2, 4.4) = 4.2
+		const t = fitTransform({ minX: -50, maxX: 50, minY: -25, maxY: 25 }, 500, 300, 40);
+		assert.ok(Math.abs(t.k - 4.2) < 1e-9, `k=${t.k}`);
+		assert.ok(Math.abs(t.x - 250) < 1e-9, `x=${t.x}`); // centered
+		assert.ok(Math.abs(t.y - 150) < 1e-9, `y=${t.y}`);
+		// World center maps to viewport center:
+		assert.ok(Math.abs(0 * t.k + t.x - 250) < 1e-9);
+	});
+
+	test("never returns a non-positive scale for degenerate bboxes", () => {
+		const t = fitTransform({ minX: 5, maxX: 5, minY: 5, maxY: 5 }, 100, 100, 10);
+		assert.ok(t.k > 0 && Number.isFinite(t.k));
+	});
+});
+
+describe("arrowGeometry", () => {
+	test("the tip lands exactly on the target disc edge", () => {
+		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 6, 5);
+		assert.ok(g, "non-degenerate edge");
+		assert.ok(Math.abs(g!.tip.x - 94) < 1e-9 && Math.abs(g!.tip.y) < 1e-9);
+	});
+
+	test("the shaft starts outside the source disc", () => {
+		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 6, 5)!;
+		assert.ok(Math.abs(g.shaftFrom.x - 6) < 1e-9 && Math.abs(g.shaftFrom.y) < 1e-9);
+		// Shaft ends at the head base; head is drawn from base to tip.
+		assert.ok(Math.abs(g.shaftTo.x - 89) < 1e-9);
+	});
+
+	test("the head triangle is symmetric around the shaft axis (0.8x wideness)", () => {
+		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 6, 5)!;
+		// halfW = 0.4 x headLength = 2; both base corners share x, mirrored y.
+		assert.ok(Math.abs(Math.abs(g.left.y) - 2) < 1e-9 && Math.abs(Math.abs(g.right.y) - 2) < 1e-9);
+		assert.ok(Math.abs(g.left.y + g.right.y) < 1e-9); // mirror
+		assert.ok(Math.abs(g.left.x - g.right.x) < 1e-9);
+	});
+
+	test("works at arbitrary angles (diagonal stays normalized)", () => {
+		const a = { x: 0, y: 0 };
+		const b = { x: 60, y: 80 }; // len 100, dir (0.6, 0.8)
+		const g = arrowGeometry(a, b, 10, 10, 8)!;
+		assert.ok(Math.abs(g.tip.x - (60 - 0.6 * 10)) < 1e-9 && Math.abs(g.tip.y - (80 - 0.8 * 10)) < 1e-9);
+	});
+
+	test("null for coincident endpoints (never a NaN arrow)", () => {
+		assert.equal(arrowGeometry({ x: 5, y: 5 }, { x: 5, y: 5 }, 6, 6, 5), null);
+	});
+});
+
+describe("pickNearest (distance-check picking)", () => {
+	const nodes = [
+		{ id: "a", x: 10, y: 10 },
+		{ id: "b", x: 50, y: 50 },
+		{ id: "c", x: 90, y: 10 },
+	];
+
+	test("picks the nearest node within the pad", () => {
+		assert.equal(pickNearest(nodes, 12, 12, 16)?.id, "a");
+		assert.equal(pickNearest(nodes, 48, 52, 16)?.id, "b");
+		assert.equal(pickNearest(nodes, 88, 8, 16)?.id, "c");
+	});
+
+	test("the picking pad extends the hitbox beyond the disc", () => {
+		// 20px away, only reachable because the pad covers it.
+		assert.equal(pickNearest(nodes, 28, 18, 25)?.id, "a");
+		// Beyond the pad: nothing.
+		assert.equal(pickNearest(nodes, 30, 40, 3), null);
+	});
+
+	test("ties resolve deterministically (first scanned wins)", () => {
+		const pair = [
+			{ id: "first", x: 0, y: 0 },
+			{ id: "second", x: 10, y: 0 },
+		];
+		assert.equal(pickNearest(pair, 5, 0, 10)?.id, "first");
+	});
+
+	test("empty node list picks nothing", () => {
+		assert.equal(pickNearest([], 0, 0, 100), null);
+	});
+});
