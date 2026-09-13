@@ -16,6 +16,15 @@
  * sigma's defaults:
  *   - defaultDrawNodeLabel: plain wrapped text, centered below the node,
  *     word-wrapped at a max line width — no truncation, no one-line sprawl.
+ * Cluster hulls (vision §1) live on TWO custom canvas layers around
+ * sigma's own stack: a hull layer behind everything (blurred low-opacity
+ * fill + dashed boundary per cluster, stable hue from the cluster id)
+ * and a region-label layer above nodes but below node labels (the label
+ * at the centroid, inverse-gated on THE zoom control — node labels fade
+ * out over the span as cluster labels fade in, so they never coexist).
+ * Geometry is a pure function of member positions at draw time: every
+ * afterRender re-derives hulls through the current camera, so pan/zoom
+ * can never invalidate it.
  *   - defaultDrawNodeHover: NO background box (sigma's default is a
  *     hardcoded white one). Instead the hovered node gets a soft glow
  *     halo in the node's color at a constant radius, flush with the
@@ -411,6 +420,75 @@ function SettingSlider({
 	);
 }
 
+// ─── cluster hulls (vision §1, DECIDED 2026-09-13) ────────────────────────────
+// Boundary geometry is a PURE FUNCTION OF POSITIONS AT DRAW TIME: every
+// redraw re-derives the hull from current member positions mapped through
+// the camera, so pan/zoom/relayout can never invalidate it. No metaballs
+// in v1 — convex hull + outward offset + rounded corners; revisit when
+// regions want concave fidelity.
+
+/** Stable hue per cluster id (content-hash): the region keeps its color
+ *  across reshuffles because the id only changes when the members do. */
+function clusterHue(id: string): number {
+	let h = 0;
+	for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) % 360;
+	return h;
+}
+
+type Pt = { x: number; y: number };
+
+/** Convex hull (Andrew monotone chain), viewport pixels. */
+function convexHull(points: Pt[]): Pt[] {
+	if (points.length < 3) return points;
+	const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+	const cross = (o: Pt, a: Pt, b: Pt) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+	const lower: Pt[] = [];
+	for (const p of pts) {
+		while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0) lower.pop();
+		lower.push(p);
+	}
+	const upper: Pt[] = [];
+	for (let i = pts.length - 1; i >= 0; i--) {
+		const p = pts[i]!;
+		while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0) upper.pop();
+		upper.push(p);
+	}
+	upper.pop();
+	lower.pop();
+	return [...lower, ...upper];
+}
+
+/** Outward edge normal of segment a→b (screen coords: y grows down). */
+function outwardNormal(a: Pt, b: Pt): Pt {
+	const dx = b.x - a.x;
+	const dy = b.y - a.y;
+	const len = Math.hypot(dx, dy) || 1;
+	return { x: -dy / len, y: dx / len };
+}
+
+/** Offset a convex polygon outward by `pad` px (per-vertex normal sum). */
+function offsetPolygon(points: Pt[], pad: number): Pt[] {
+	return points.map((p, i) => {
+		const prev = points[(i - 1 + points.length) % points.length]!;
+		const next = points[(i + 1) % points.length]!;
+		const n1 = outwardNormal(prev, p);
+		const n2 = outwardNormal(p, next);
+		return { x: p.x + (n1.x + n2.x) * pad, y: p.y + (n1.y + n2.y) * pad };
+	});
+}
+
+/** Path through the polygon with rounded corners (arcTo). */
+function traceRoundedPath(ctx: CanvasRenderingContext2D, points: Pt[], radius: number): void {
+	const first = points[0]!;
+	ctx.moveTo(first.x, first.y);
+	for (let i = 1; i <= points.length; i++) {
+		const corner = points[i % points.length]!;
+		const next = points[(i + 1) % points.length]!;
+		ctx.arcTo(corner.x, corner.y, next.x, next.y, radius);
+	}
+	ctx.closePath();
+}
+
 export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const cardRef = useRef<HTMLDivElement | null>(null);
@@ -599,6 +677,10 @@ export function GraphView() {
 
 		let killed = false;
 		let renderer: import("sigma").default | null = null;
+		// The custom cluster layers (hull + region label canvases) — created
+		// inside the dynamic-import callback, removed in this effect's cleanup.
+		let clusterCanvas: HTMLCanvasElement | null = null;
+		let clusterLabelCanvas: HTMLCanvasElement | null = null;
 		// rAF id of the hover fade transition — the ONLY animation (see the
 		// file header). Lives out here so the effect cleanup can cancel it.
 		let hoverAnimId: number | null = null;
@@ -657,6 +739,91 @@ export function GraphView() {
 				// A renderer rebuild (settings tweak) must never re-fit the
 				// view: restore the carried camera position, if any.
 				if (cameraRef.current) renderer.getCamera().setState(cameraRef.current);
+
+				// ── Cluster hulls (vision §1): two custom canvas layers around
+				// sigma's own stack (DOM order: edges, nodes, [labels], edgeLabels,
+				// labels, ...). The HULL layer sits behind everything; the region
+				// LABEL layer sits above nodes but below node labels — the two
+				// label systems are inverse-gated on the same zoom control, so
+				// they never coexist (see syncRenderLabels below).
+				const sigmaCanvases = renderer.getCanvases();
+				// Local consts so the draw closure below stays narrowed.
+				const hullCanvas = (clusterCanvas = document.createElement("canvas"));
+				hullCanvas.style.position = "absolute";
+				container.insertBefore(hullCanvas, container.firstChild ?? null);
+				const regionCanvas = (clusterLabelCanvas = document.createElement("canvas"));
+				regionCanvas.style.position = "absolute";
+				// Actual DOM order (sigma v3): edges, edgeLabels, nodes, labels, …
+				// so "before labels" = above nodes, below node labels — the two
+				// label systems are inverse-gated and never coexist anyway.
+				sigmaCanvases.labels?.parentNode?.insertBefore(regionCanvas, sigmaCanvases.labels);
+				// All hull geometry is derived per draw — positions through the
+				// CURRENT camera — so any pan/zoom/render stays correct.
+				const drawClusters = () => {
+					const r = renderer;
+					if (!r || snapshot.clusters.length === 0) return;
+					const ref = sigmaCanvases.nodes;
+					if (!ref) return;
+					const cssW = ref.clientWidth;
+					const cssH = ref.clientHeight;
+					if (cssW === 0 || cssH === 0) return;
+					const dpr = ref.width / cssW;
+					const hullCtx = hullCanvas.getContext("2d");
+					const labelCtx = regionCanvas.getContext("2d");
+					if (!hullCtx || !labelCtx) return;
+					for (const canvas of [hullCanvas, regionCanvas]) {
+						if (canvas.width !== ref.width || canvas.height !== ref.height) {
+							canvas.width = ref.width;
+							canvas.height = ref.height;
+						}
+						canvas.style.width = ref.style.width || `${cssW}px`;
+						canvas.style.height = ref.style.height || `${cssH}px`;
+					}
+					hullCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+					labelCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+					hullCtx.clearRect(0, 0, cssW, cssH);
+					labelCtx.clearRect(0, 0, cssW, cssH);
+					labelCtx.textAlign = "center";
+					labelCtx.textBaseline = "middle";
+					labelCtx.font = `500 18px ${getComputedStyle(document.body).fontFamily}`;
+					for (const cluster of snapshot.clusters) {
+						const pts: Pt[] = [];
+						for (const id of cluster.members) {
+							if (!graph.hasNode(id)) continue;
+							const a = graph.getNodeAttributes(id);
+							const vp = r.graphToViewport({ x: a.x ?? 0, y: a.y ?? 0 });
+							if (vp) pts.push(vp);
+						}
+						const hull = convexHull(pts);
+						if (hull.length < 3) continue;
+						const hue = clusterHue(cluster.id);
+						// Blurred low-opacity fill + dashed boundary stroke.
+						const outer = offsetPolygon(hull, 14);
+						hullCtx.beginPath();
+						traceRoundedPath(hullCtx, outer, 9);
+						// ctx.filter degrades to flat fill where unsupported.
+						try {
+							hullCtx.filter = "blur(12px)";
+						} catch {
+							/* older browsers: skip the blur */
+						}
+						hullCtx.fillStyle = `hsla(${hue}, 65%, 60%, 0.08)`;
+						hullCtx.fill();
+						hullCtx.filter = "none";
+						hullCtx.setLineDash([7, 7]);
+						hullCtx.strokeStyle = `hsla(${hue}, 65%, 62%, 0.5)`;
+						hullCtx.lineWidth = 1.5;
+						hullCtx.stroke();
+						hullCtx.setLineDash([]);
+						// The region label at the centroid (inverse-gated layer).
+						if (!cluster.label) continue;
+						const centroid = hull.reduce((acc, p) => ({ x: acc.x + p.x / hull.length, y: acc.y + p.y / hull.length }), { x: 0, y: 0 });
+						labelCtx.fillStyle = `hsla(${hue}, 55%, 78%, 0.85)`;
+						labelCtx.fillText(cluster.label, centroid.x, centroid.y);
+					}
+				};
+				renderer.on("afterRender", drawClusters);
+
 				renderer.on("clickNode", ({ node }) => {
 					const graphNode = snapshot.nodes.find((n) => n.id === node);
 					if (!graphNode) return;
@@ -687,6 +854,9 @@ export function GraphView() {
 						renderer?.setSetting("renderLabels", shouldRender);
 					}
 					if (labelsCanvas) labelsCanvas.style.opacity = alpha.toFixed(3);
+					// The inverse gate (vision §1): cluster labels fade in over
+					// the exact span node labels fade out — THE one zoom control.
+					regionCanvas.style.opacity = (1 - alpha).toFixed(3);
 				};
 				syncRenderLabels(renderer.getCamera().getState().ratio);
 				renderer.getCamera().on("updated", (state) => {
@@ -731,6 +901,10 @@ export function GraphView() {
 			if (renderer) cameraRef.current = renderer.getCamera().getState();
 			rendererRef.current = null;
 			renderer?.kill();
+			// The custom cluster layers are ours — sigma's kill() removes only
+			// its own canvases.
+			clusterCanvas?.remove();
+			clusterLabelCanvas?.remove();
 		};
 	}, [snapshot, deferredSettings]);
 
