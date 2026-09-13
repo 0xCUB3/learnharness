@@ -112,13 +112,13 @@ export interface RendererCallbacks {
 const LABEL_SIZE = 12; // px — the default label size (settings.labelSize scales it)
 const LABEL_WEIGHT = "500";
 const LABEL_MAX_WIDTH = 170; // px — wraps long names instead of a wide strip
-const LABEL_GAP = 6; // px between node edge and first label line
+const LABEL_GAP = 2; // px between node edge and first label line (was 6 — user: way too far)
 const LABEL_LINE_HEIGHT = 1.3;
 /** Zoom span (camera-ratio units) over which labels fade together. */
 export const LABELS_FADE_SPAN = 0.5;
 
-const GLOW_PAD = 6; // px the halo extends beyond the node disc (constant)
-const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
+const GLOW_SCALE = 1.7; // halo outer radius = node radius x this (proportional, like blurring a copy of the disc)
+const GLOW_ALPHA = 0.3; // halo opacity at the disc edge, fading outward
 const HOVER_FADE_MS = 180; // hover halo opacity fade length
 const ZOOM_EASE_MS = 45; // wheel-zoom glide: exponential-ease time constant (~250ms per notch)
 
@@ -327,6 +327,11 @@ export class GraphCanvasRenderer {
 	// Hover transition: fade 0 = resting, 1 = fully hovered; the animating
 	// flag keeps the loop scheduled until the fade settles (then rAF stops).
 	private hoverId: string | null = null;
+	/** The node the glow is drawn on. OUTLIVES hoverId on hover-out so the
+	 *  fade has something to draw (hoverId nulls instantly; without this
+	 *  the glow popped off in one frame instead of fading). Cleared when
+	 *  the outgoing fade completes. */
+	private hoverNode: CanvasNode | null = null;
 	private hoverFade = 0;
 	private hoverFrom = 0;
 	private hoverTarget = 0;
@@ -548,6 +553,9 @@ export class GraphCanvasRenderer {
 	private setHover(nodeId: string | null): void {
 		if (nodeId === this.hoverId && this.hoverTarget === (nodeId ? 1 : 0)) return;
 		this.hoverId = nodeId;
+		// Hover-out deliberately KEEPS hoverNode: the glow must fade out
+		// from the last hovered node, not vanish with the id.
+		if (nodeId) this.hoverNode = this.nodeById.get(nodeId) ?? null;
 		// Rebase the animation from the CURRENT fade: rapid hover toggles
 		// glide instead of snapping (ported from the sigma-era behavior).
 		this.hoverFrom = this.hoverFade;
@@ -596,6 +604,8 @@ export class GraphCanvasRenderer {
 		if (this.hoverFade === this.hoverTarget) return false;
 		const t = Math.min((performance.now() - this.hoverStart) / HOVER_FADE_MS, 1);
 		this.hoverFade = this.hoverFrom + (this.hoverTarget - this.hoverFrom) * t;
+		// Outgoing fade finished — release the glow node.
+		if (this.hoverTarget === 0 && this.hoverFade === 0) this.hoverNode = null;
 		return t < 1;
 	}
 
@@ -655,7 +665,7 @@ export class GraphCanvasRenderer {
 		const nodeR = settings.nodeSize * s;
 		this.world = {
 			nodeR,
-			glowOuter: (settings.nodeSize + GLOW_PAD) * s,
+			glowOuter: nodeR * GLOW_SCALE,
 			labelSize: settings.labelSize * s,
 			labelGap: LABEL_GAP * s,
 		};
@@ -813,10 +823,10 @@ export class GraphCanvasRenderer {
 		// name, both on the SAME fade factor. World units like everything
 		// else. Shows even when labels are zoomed out (hover is its own
 		// affordance, not a label).
-		if (this.hoverId && this.hoverFade > 0.02) {
-			const n = this.visible && !this.visible.has(this.hoverId)
+		if (this.hoverNode && this.hoverFade > 0.02) {
+			const n = this.visible && !this.visible.has(this.hoverNode.id)
 				? null // filtered out by search — no glow on hidden nodes
-				: this.nodeById.get(this.hoverId);
+				: this.hoverNode;
 			if (n) {
 				const glow = ctx.createRadialGradient(n.x, n.y, nodeR, n.x, n.y, glowOuter);
 				glow.addColorStop(0, rgbaFromHex(data.colors.node, GLOW_ALPHA * this.hoverFade));

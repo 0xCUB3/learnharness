@@ -69,11 +69,17 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import {
+	ARROW_LENGTH_RANGE,
 	DEFAULT_RENDER_SETTINGS,
+	EDGE_WIDTH_RANGE,
+	LABEL_SIZE_RANGE,
+	LABEL_ZOOM_MAX,
+	LABEL_ZOOM_MIN,
+	NODE_SIZE_RANGE,
+	fromSliderPosition,
 	labelZoomDisplay,
-	labelZoomToSlider,
 	sanitizeRenderSettings,
-	sliderToLabelZoom,
+	toSliderPosition,
 } from "@/src/core";
 
 /** The uniform node look (no state classes — canvas wants hex, not oklch):
@@ -133,6 +139,11 @@ interface Selection {
 }
 
 /** One labeled range row for the rendering-settings panel. */
+/** Compact size display for the log sliders: "2", "1.6", "0.75". */
+function sizeDisplay(v: number): string {
+	return `${v >= 1 ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100}`;
+}
+
 function SettingSlider({
 	label,
 	min,
@@ -498,50 +509,58 @@ export function GraphView() {
 					</div>
 					{settingsOpen && (
 						<div className="mt-1.5 flex flex-col gap-2 border-t pt-1.5">
+							{/* All sliders: log-scaled 0-100, step 5, so every
+							    DEFAULT sits at 50 (src/core/render-settings.ts). */}
 							<SettingSlider
 								label="Node size"
-								min={1}
-								max={14}
-								step={0.5}
-								value={settings.nodeSize}
-								onChange={(v) => changeSettings((cur) => ({ ...cur, nodeSize: v }))}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.nodeSize, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max)}
+								display={sizeDisplay(settings.nodeSize)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, nodeSize: fromSliderPosition(p, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max) }))}
 							/>
 							<SettingSlider
 								label="Edge width"
-								min={0.25}
-								max={4}
-								step={0.25}
-								value={settings.edgeWidth}
-								onChange={(v) => changeSettings((cur) => ({ ...cur, edgeWidth: v }))}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.edgeWidth, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max)}
+								display={sizeDisplay(settings.edgeWidth)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, edgeWidth: fromSliderPosition(p, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max) }))}
 							/>
 							<SettingSlider
 								label="Arrowhead size"
-								min={1}
-								max={15}
-								step={0.5}
-								value={settings.arrowLength}
-								onChange={(v) => changeSettings((cur) => ({ ...cur, arrowLength: v }))}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.arrowLength, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max)}
+								display={sizeDisplay(settings.arrowLength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, arrowLength: fromSliderPosition(p, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max) }))}
 							/>
 							<SettingSlider
 								label="Label size"
-								min={1}
-								max={24}
-								step={0.5}
-								value={settings.labelSize}
-								onChange={(v) => changeSettings((cur) => ({ ...cur, labelSize: v }))}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.labelSize, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max)}
+								display={sizeDisplay(settings.labelSize)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, labelSize: fromSliderPosition(p, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max) }))}
 							/>
-							{/* Log-scaled: the useful band (0.25–0.5 in camera-ratio
-							    units) sits mid-slider; displayed units normalize the
-							    default (0.5) to "1×". Slider position ↔ labelZoom via
-							    src/core/render-settings.ts. */}
+							{/* Displayed units normalize the default (0.5) to "1×". */}
 							<SettingSlider
 								label="Labels until zoom"
 								min={0}
-								max={1000}
+								max={100}
 								step={5}
-								value={labelZoomToSlider(settings.labelZoom)}
+								value={toSliderPosition(settings.labelZoom, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX)}
 								display={labelZoomDisplay(settings.labelZoom)}
-								onChange={(v) => changeSettings((cur) => ({ ...cur, labelZoom: sliderToLabelZoom(v) }))}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, labelZoom: fromSliderPosition(p, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX) }))}
 							/>
 							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
 								<span>Cluster labels</span>

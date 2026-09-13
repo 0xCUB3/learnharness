@@ -8,13 +8,17 @@
 import assert from "node:assert/strict";
 import { describe, it as test } from "node:test";
 import {
+	ARROW_LENGTH_RANGE,
 	DEFAULT_RENDER_SETTINGS,
+	EDGE_WIDTH_RANGE,
+	LABEL_SIZE_RANGE,
 	LABEL_ZOOM_MAX,
 	LABEL_ZOOM_MIN,
+	NODE_SIZE_RANGE,
+	fromSliderPosition,
 	labelZoomDisplay,
-	labelZoomToSlider,
 	sanitizeRenderSettings,
-	sliderToLabelZoom,
+	toSliderPosition,
 } from "../src/core/render-settings.ts";
 
 describe("sanitizeRenderSettings", () => {
@@ -26,8 +30,8 @@ describe("sanitizeRenderSettings", () => {
 	});
 
 	test("partial input → defaults fill the gaps", () => {
-		const s = sanitizeRenderSettings({ nodeSize: 9 });
-		assert.equal(s.nodeSize, 9);
+		const s = sanitizeRenderSettings({ nodeSize: 6 });
+		assert.equal(s.nodeSize, 6);
 		assert.equal(s.edgeWidth, DEFAULT_RENDER_SETTINGS.edgeWidth);
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize);
 		assert.equal(s.labelZoom, DEFAULT_RENDER_SETTINGS.labelZoom);
@@ -43,24 +47,24 @@ describe("sanitizeRenderSettings", () => {
 			labelSize: "big" as unknown as number,
 			clusterLabels: "yes" as unknown as boolean,
 		});
-		assert.equal(s.nodeSize, 14); // clamped to max
-		assert.equal(s.edgeWidth, 0.25); // clamped to min
-		assert.equal(s.arrowLength, 1);
+		assert.equal(s.nodeSize, NODE_SIZE_RANGE.max); // clamped to max
+		assert.equal(s.edgeWidth, EDGE_WIDTH_RANGE.min); // clamped to min
+		assert.equal(s.arrowLength, ARROW_LENGTH_RANGE.min);
 		assert.equal(s.labelZoom, LABEL_ZOOM_MAX);
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize); // NaN-safe reset
 		assert.equal(s.clusterLabels, DEFAULT_RENDER_SETTINGS.clusterLabels);
 	});
 
-	test("the widened low ends accept small sizes", () => {
-		const s = sanitizeRenderSettings({ nodeSize: 1, edgeWidth: 0.25, arrowLength: 1, labelSize: 3 });
+	test("the low ends accept small sizes (log-slider floors)", () => {
+		const s = sanitizeRenderSettings({ nodeSize: 0.5, edgeWidth: 0.25, arrowLength: 0.5, labelSize: 0.5 });
 		assert.deepEqual(
 			{ nodeSize: s.nodeSize, edgeWidth: s.edgeWidth, arrowLength: s.arrowLength, labelSize: s.labelSize },
-			{ nodeSize: 1, edgeWidth: 0.25, arrowLength: 1, labelSize: 3 },
+			{ nodeSize: 0.5, edgeWidth: 0.25, arrowLength: 0.5, labelSize: 0.5 },
 		);
 	});
 
 	test("a fully valid object passes through unchanged", () => {
-		const valid = { nodeSize: 8, edgeWidth: 2, arrowLength: 7, labelZoom: 0.25, labelSize: 16, clusterLabels: false };
+		const valid = { nodeSize: 4, edgeWidth: 2, arrowLength: 3, labelZoom: 0.25, labelSize: 4, clusterLabels: false };
 		assert.deepEqual(sanitizeRenderSettings(valid), valid);
 	});
 
@@ -72,30 +76,36 @@ describe("sanitizeRenderSettings", () => {
 	});
 });
 
-describe("label-zoom slider mapping (log scale)", () => {
-	test("the default (0.5) sits dead-center at position 500", () => {
-		assert.equal(Math.round(labelZoomToSlider(DEFAULT_RENDER_SETTINGS.labelZoom)), 500);
+describe("slider mapping (log scale, default-centered)", () => {
+	const RANGES: [string, number, number, number][] = [
+		["nodeSize", NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max, DEFAULT_RENDER_SETTINGS.nodeSize],
+		["edgeWidth", EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max, DEFAULT_RENDER_SETTINGS.edgeWidth],
+		["arrowLength", ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max, DEFAULT_RENDER_SETTINGS.arrowLength],
+		["labelSize", LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max, DEFAULT_RENDER_SETTINGS.labelSize],
+		["labelZoom", LABEL_ZOOM_MIN, LABEL_ZOOM_MAX, DEFAULT_RENDER_SETTINGS.labelZoom],
+	];
+
+	test("every default sits dead-center at position 50", () => {
+		for (const [name, min, max, dflt] of RANGES)
+			assert.equal(Math.round(toSliderPosition(dflt, min, max)), 50, name);
 	});
 
-	test("the useful band sits mid-slider, not crammed at the left", () => {
-		// 0.25 → a third of the way in; the old linear 0.25–4 slider had it at 0%.
-		const p025 = labelZoomToSlider(0.25);
-		assert.ok(p025 > 250 && p025 < 400, `0.25 at ${p025}`);
-		assert.ok(labelZoomToSlider(0.5) > p025, "monotonic in labelZoom");
-	});
-
-	test("round-trips both directions across the whole range", () => {
-		for (const lz of [LABEL_ZOOM_MIN, 0.0625, 0.1, 0.25, 0.5, 1, 2, LABEL_ZOOM_MAX]) {
-			const back = sliderToLabelZoom(labelZoomToSlider(lz));
-			assert.ok(Math.abs(back - lz) < 1e-9, `${lz} -> ${back}`);
-			const fwd = labelZoomToSlider(sliderToLabelZoom(labelZoomToSlider(lz)));
-			assert.ok(Math.abs(fwd - labelZoomToSlider(lz)) < 1e-9);
+	test("round-trips both directions across the whole span", () => {
+		for (const [name, min, max] of RANGES) {
+			for (let p = 0; p <= 100; p += 5) {
+				const v = fromSliderPosition(p, min, max);
+				assert.ok(Math.abs(toSliderPosition(v, min, max) - p) < 1e-9, `${name} @ ${p}`);
+			}
 		}
 	});
 
-	test("slider extremes map to the range ends", () => {
-		assert.equal(Math.round(sliderToLabelZoom(0) * 1e6) / 1e6, LABEL_ZOOM_MIN);
-		assert.ok(Math.abs(sliderToLabelZoom(1000) - LABEL_ZOOM_MAX) < 1e-9);
+	test("slider extremes map to the range ends and clamp beyond", () => {
+		for (const [name, min, max] of RANGES) {
+			assert.equal(fromSliderPosition(0, min, max), min, name);
+			assert.ok(Math.abs(fromSliderPosition(100, min, max) - max) < 1e-9, name); // exp/log float noise
+			assert.equal(toSliderPosition(min * 0.1, min, max), 0, name); // clamps
+			assert.equal(toSliderPosition(max * 10, min, max), 100, name);
+		}
 	});
 
 	test("display units normalize the default to 1", () => {

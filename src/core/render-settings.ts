@@ -1,6 +1,6 @@
 /**
  * Graph render settings: the shape, the defaults, the sanitizer, and the
- * label-zoom slider mapping — shared by the client (components/graph-canvas.ts,
+ * slider mapping (log-scaled, default-centered) — shared by the client (components/graph-canvas.ts,
  * graph-view.tsx), the server store (src/store/render-settings.ts, which
  * persists them to data/render-settings.json), and the API route.
  *
@@ -56,42 +56,46 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 		return clamp(n, min, max);
 	};
 	return {
-		nodeSize: num(r.nodeSize, DEFAULT_RENDER_SETTINGS.nodeSize, 1, 14),
-		edgeWidth: num(r.edgeWidth, DEFAULT_RENDER_SETTINGS.edgeWidth, 0.25, 4),
-		arrowLength: num(r.arrowLength, DEFAULT_RENDER_SETTINGS.arrowLength, 1, 15),
+		nodeSize: num(r.nodeSize, DEFAULT_RENDER_SETTINGS.nodeSize, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max),
+		edgeWidth: num(r.edgeWidth, DEFAULT_RENDER_SETTINGS.edgeWidth, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max),
+		arrowLength: num(r.arrowLength, DEFAULT_RENDER_SETTINGS.arrowLength, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max),
 		// Range matches the log slider's span [LABEL_ZOOM_MIN, LABEL_ZOOM_MAX].
-		labelZoom: num(r.labelZoom, DEFAULT_RENDER_SETTINGS.labelZoom, 0.0625, 4),
-		labelSize: num(r.labelSize, DEFAULT_RENDER_SETTINGS.labelSize, 1, 24),
+		labelZoom: num(r.labelZoom, DEFAULT_RENDER_SETTINGS.labelZoom, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX),
+		labelSize: num(r.labelSize, DEFAULT_RENDER_SETTINGS.labelSize, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max),
 		clusterLabels:
 			typeof r.clusterLabels === "boolean" ? r.clusterLabels : DEFAULT_RENDER_SETTINGS.clusterLabels,
 	};
 }
 
-// ─── The "Labels until zoom" slider mapping ──────────────────────────────────
+// ─── The slider mapping ────────────────────────────────────────────────────────
 //
-// The slider is LOG-scaled over the labelZoom range so the useful band
-// (0.25–0.5) sits mid-slider instead of crammed at the far left of a linear
-// 0.25–4 track. Display units are normalized to the default: labelZoom 0.5
-// shows as "1×", 0.25 as "0.5×" — the default reads as 1, per spec.
+// EVERY slider is log-scaled over its setting's range with the DEFAULT at
+// position 50 (dead center), per the user's spec: centered defaults, coarse
+// steps (the UI steps by 5 → 21 stops), no fine-grained linear tracks.
+// Ranges are chosen so each default is the geometric mean of its ends.
 
+export const NODE_SIZE_RANGE = { min: 0.5, max: 8 } as const;
+export const EDGE_WIDTH_RANGE = { min: 0.25, max: 4 } as const;
+export const ARROW_LENGTH_RANGE = { min: 0.5, max: 8 } as const;
+export const LABEL_SIZE_RANGE = { min: 0.5, max: 8 } as const;
 export const LABEL_ZOOM_MIN = 0.0625; // slider far left: labels only very deep in
 export const LABEL_ZOOM_MAX = 4; // slider far right: labels visible at fit zoom
 
-/** labelZoom → slider position [0, 1000] (log scale). 0.5 lands at 500. */
-export function labelZoomToSlider(labelZoom: number): number {
-	const clamped = clamp(labelZoom, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX);
-	const logSpan = Math.log(LABEL_ZOOM_MAX / LABEL_ZOOM_MIN);
-	return (1000 * Math.log(clamped / LABEL_ZOOM_MIN)) / logSpan;
+/** Setting value → slider position [0, 100] (log scale, default at 50). */
+export function toSliderPosition(value: number, min: number, max: number): number {
+	const v = clamp(value, min, max);
+	const logSpan = Math.log(max / min);
+	return (100 * Math.log(v / min)) / logSpan;
 }
 
-/** Slider position [0, 1000] → labelZoom (inverse of labelZoomToSlider). */
-export function sliderToLabelZoom(position: number): number {
-	const p = clamp(position, 0, 1000) / 1000;
-	const logSpan = Math.log(LABEL_ZOOM_MAX / LABEL_ZOOM_MIN);
-	return LABEL_ZOOM_MIN * Math.exp(p * logSpan);
+/** Slider position [0, 100] → setting value (inverse of toSliderPosition). */
+export function fromSliderPosition(position: number, min: number, max: number): number {
+	const p = clamp(position, 0, 100) / 100;
+	const logSpan = Math.log(max / min);
+	return min * Math.exp(p * logSpan);
 }
 
-/** Display units: normalized so the default (0.5) reads as 1. */
+/** Display units for labelZoom: normalized so the default (0.5) reads as 1. */
 export function labelZoomDisplay(labelZoom: number): string {
 	const v = Math.round((labelZoom / DEFAULT_RENDER_SETTINGS.labelZoom) * 100) / 100;
 	return `${v}×`;
