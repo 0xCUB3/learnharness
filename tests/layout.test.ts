@@ -270,4 +270,46 @@ describe("depthAnchor force", () => {
 		const child = next.get("child")!;
 		assert.ok(child.y < old.y - 40, `child rises above its premises (child=${child.y.toFixed(1)}, old=${old.y.toFixed(1)})`);
 	});
+
+	it("orphans are exempt from depth anchoring — regular forces govern them (ORPHAN RULE)", () => {
+		// A premise→conclusion chain plus an unconnected loner. Gravity's
+		// center is FAR from the baseline, so the two are distinguishable:
+		// a depth-stamped orphan would sit on the baseline; an exempt one
+		// follows gravity instead.
+		const ns = [
+			{ id: "base", x: 0, y: 0 },
+			{ id: "derived", x: 10, y: 0 },
+			{ id: "loner", x: 0, y: 0 },
+		];
+		const sim = createGraphSimulation(ns, [{ from: "base", to: "derived" }], {
+			gravity: { x: 0, y: 500, strength: 0.1 },
+			depthAnchor: { mode: "vertical", strength: 1.5, spacing: 120, center: { x: 0, y: 0 } },
+		});
+		for (let i = 0; i < 400; i++) sim.tick();
+		const byId = new Map(sim.nodes().map((n) => [n.id, n]));
+		assert.ok(Math.abs(byId.get("base")!.y!) < 40, "structured base sits on the baseline");
+		assert.ok(byId.get("derived")!.y! < -60, "derived rises a level");
+		const lonerY = byId.get("loner")!.y!;
+		assert.ok(lonerY > 250, `the orphan follows gravity, not the baseline (y=${lonerY.toFixed(0)})`);
+		assert.ok(Math.abs(lonerY - 500) < 120, `the orphan converges on gravity's center (y=${lonerY.toFixed(0)})`);
+	});
+
+	it("radial: orphans are exempt — they gather at the center, not on the base ring", () => {
+		const ns = [
+			{ id: "base", x: 0, y: 0 },
+			{ id: "mid", x: 10, y: 0 },
+			{ id: "loner", x: 300, y: 300 },
+		];
+		const sim = createGraphSimulation(ns, [{ from: "base", to: "mid" }], {
+			gravity: { x: 0, y: 0, strength: 0.1 },
+			depthAnchor: { mode: "radial", strength: 1.5, spacing: 80, baseRadius: 150, center: { x: 0, y: 0 } },
+		});
+		for (let i = 0; i < 400; i++) sim.tick();
+		const r = (id: string) => {
+			const n = sim.nodes().find((x) => x.id === id)!;
+			return Math.hypot(n.x!, n.y!);
+		};
+		assert.ok(Math.abs(r("base") - 150) < 40, `base sits on the base ring (r=${r("base").toFixed(0)})`);
+		assert.ok(r("loner") < 60, `the orphan follows gravity to the center, not the ring (r=${r("loner").toFixed(0)})`);
+	});
 });

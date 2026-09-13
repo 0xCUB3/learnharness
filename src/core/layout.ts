@@ -262,11 +262,53 @@ export function createGraphSimulation(
 	// y axis, so gravity goes x-only (it would fight the level lines); in
 	// radial mode a center pull is purely radial and would fight the
 	// rings, so it is dropped entirely (rings already bound the radius).
+	// Depth mode projections (DECIDED 2026-09-13), with the ORPHAN RULE
+	// (user-decided, same day): a node with no edges at all has no
+	// dependency structure — depth is a property of inference chains, so
+	// stamping unconnected propositions onto the baseline / base ring
+	// assigns them meaning they don't have. Orphans are exempt from the
+	// depth force and keep the REGULAR view's forces instead (full center
+	// gravity + full cluster pull, unprojected).
 	const mode = options.depthAnchor?.mode ?? "off";
+	let orphan: Uint8Array | null = null;
+	if (mode !== "off") {
+		const connected = new Set<string>();
+		const valid = new Set(nodes.map((n) => n.id));
+		for (const e of edges) {
+			// Self-loops and dangling endpoints are not a structure (same
+			// guards as inferenceDepths).
+			if (e.from === e.to || !valid.has(e.from) || !valid.has(e.to)) continue;
+			connected.add(e.from);
+			connected.add(e.to);
+		}
+		orphan = new Uint8Array(nodes.length);
+		nodes.forEach((n, i) => {
+			if (!connected.has(n.id)) orphan![i] = 1;
+		});
+	}
 	const g = options.gravity;
-	if (g && mode !== "radial") {
+	if (g && mode === "off") {
 		sim.force("x", forceX<LayoutNode>(g.x).strength(g.strength));
-		if (mode !== "vertical") sim.force("y", forceY<LayoutNode>(g.y).strength(g.strength));
+		sim.force("y", forceY<LayoutNode>(g.y).strength(g.strength));
+	} else if (g) {
+		// Mode-projected gravity, EXACTLY d3's forceX/forceY math (restoring
+		// force × strength × alpha): structured nodes get x-only in vertical
+		// mode (the depth force owns y) and none in radial mode (the rings
+		// own the radius); ORPHANS get the full regular-view pull in every
+		// mode.
+		const orphanMask = orphan!;
+		sim.force("gravity", (alpha: number) => {
+			for (let i = 0; i < nodes.length; i++) {
+				const n = nodes[i]!;
+				if (orphanMask[i]) {
+					n.vx = (n.vx ?? 0) + (g.x - (n.x ?? 0)) * g.strength * alpha;
+					n.vy = (n.vy ?? 0) + (g.y - (n.y ?? 0)) * g.strength * alpha;
+				} else if (mode === "vertical") {
+					n.vx = (n.vx ?? 0) + (g.x - (n.x ?? 0)) * g.strength * alpha;
+				}
+				// radial + structured: nothing — the rings own the radius.
+			}
+		});
 	}
 
 	// Cluster centroid pull: the membership index is resolved ONCE (nodes
@@ -311,7 +353,11 @@ export function createGraphSimulation(
 				const py = n.y ?? 0;
 				const ux = sumX[ci]! / cnt[ci]! - px;
 				const uy = sumY[ci]! / cnt[ci]! - py;
-				if (mode === "vertical") {
+				if (orphan && orphan[i]) {
+					// Orphans: full regular-view pull (see the ORPHAN RULE above).
+					n.vx = (n.vx ?? 0) + ux * strength * alpha;
+					n.vy = (n.vy ?? 0) + uy * strength * alpha;
+				} else if (mode === "vertical") {
 					n.vx = (n.vx ?? 0) + ux * strength * alpha;
 				} else if (mode === "radial") {
 					const rx = px - ringCx;
@@ -342,10 +388,12 @@ export function createGraphSimulation(
 		const strength = da.strength;
 		const spacing = da.spacing;
 		const c = da.center ?? { x: 0, y: 0 };
+		const orphanMask = orphan; // ORPHAN RULE: depth skips unstructured nodes
 		if (da.mode === "vertical") {
 			const baseY = c.y;
 			sim.force("depth", (alpha: number) => {
 				for (let i = 0; i < nodes.length; i++) {
+					if (orphanMask?.[i]) continue;
 					const n = nodes[i]!;
 					const targetY = baseY - (depths.get(n.id) ?? 0) * spacing;
 					n.vy = (n.vy ?? 0) + (targetY - (n.y ?? 0)) * strength * alpha;
@@ -357,8 +405,9 @@ export function createGraphSimulation(
 			const cy0 = c.y;
 			sim.force("depth", (alpha: number) => {
 				for (let i = 0; i < nodes.length; i++) {
+					if (orphanMask?.[i]) continue;
 					const n = nodes[i]!;
-					const dx = (n.x ?? 0) - cx0;
+				const dx = (n.x ?? 0) - cx0;
 					const dy = (n.y ?? 0) - cy0;
 					// Degenerate direction at the exact ring center: nudge
 					// outward on a deterministic axis.

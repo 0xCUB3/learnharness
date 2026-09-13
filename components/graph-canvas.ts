@@ -1205,10 +1205,9 @@ export class GraphCanvasRenderer {
 		});
 
 		// The region IS the dilated skeleton: intra-cluster edges as
-		// round-cap strokes (Minkowski dilation — points become discs at
-		// line ends via the caps). NO per-node discs: a cluster is its
-		// connected points, and discs double-counted where nodes sit on
-		// edges (user-identified hot spots).
+		// round-cap strokes (Minkowski dilation). NO blanket per-node discs
+		// — they double-counted where nodes sit on edges (user-identified
+		// hot spots, when clusters were edge-based).
 		this.regionMeta = [];
 		data.clusters.forEach((cluster, ci) => {
 			const hue = clusterHue(cluster.id);
@@ -1217,6 +1216,8 @@ export class GraphCanvasRenderer {
 			let members = 0;
 			let sumX = 0;
 			let sumY = 0;
+			// Endpoints actually covered by a stroke's round caps.
+			const touched = new Set<string>();
 			for (const e of data.edges) {
 				if (clusterOf.get(e.from) !== ci) continue;
 				if (clusterOf.get(e.to) !== ci) continue;
@@ -1225,8 +1226,28 @@ export class GraphCanvasRenderer {
 				if (!a || !b) continue;
 				rctx.moveTo((a.x - minX) / cell, (a.y - minY) / cell);
 				rctx.lineTo((b.x - minX) / cell, (b.y - minY) / cell);
+				touched.add(e.from);
+				touched.add(e.to);
 			}
 			rctx.stroke();
+
+			// Member discs for the SEMANTIC era (DECIDED 2026-09-13): clusters
+			// are now topics by meaning, and many members (orphans, isolated
+			// micro-topics) share NO intra-cluster edge with anyone — edge
+			// strokes alone left them completely uncolored. A disc (same
+			// radius as a round cap = dilation) covers exactly the members no
+			// stroke reached: every member is painted by its edges' caps OR
+			// one disc, never both — the no-double-counting rule survives.
+			rctx.fillStyle = `hsla(${hue}, 65%, 60%, ${tuning.edgeAlpha})`;
+			const discR = (tuning.dilation * s) / cell;
+			for (const id of cluster.members) {
+				if (touched.has(id) || !isVisible(id)) continue;
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				rctx.beginPath();
+				rctx.arc((n.x - minX) / cell, (n.y - minY) / cell, discR, 0, Math.PI * 2);
+				rctx.fill();
+			}
 
 			// Label anchor: member centroid (world coords).
 			for (const id of cluster.members) {
