@@ -27,6 +27,7 @@ import type {
 	TurnUsage,
 	NotesSource,
 	ClusterLabeling,
+	EmbeddingsLedger,
 } from "./contracts.ts";
 
 // ─── ChatStore — the session record's home (data/chats) ─────────────────────
@@ -104,6 +105,13 @@ export interface GraphStore {
 	readPositions(): Record<string, Position>;
 	/** Replace the whole ledger (the settle is a full-graph computation). */
 	writePositions(positions: Record<string, Position>): void;
+
+	/** The embedding ledger (config.EMBEDDINGS_FILE). WRITTEN ONLY by
+	 *  the embedder (server/embeddings.ts) after a merge — read-only for
+	 *  clustering consumers (snapshot, settle, namer). */
+	readEmbeddings(): EmbeddingsLedger;
+	/** Replace the whole ledger (embedding is a full-batch computation). */
+	writeEmbeddings(ledger: EmbeddingsLedger): void;
 }
 
 // ─── JobStore — background sub-agent jobs (data/jobs) ─────────────────────────

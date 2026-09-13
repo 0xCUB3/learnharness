@@ -21,12 +21,7 @@ import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import type { GraphNode } from "../../core/contracts.ts";
 import { getGraph, clusterContentId } from "../../core/graph.ts";
-import {
-	detectCommunities,
-	matchClusterLabelings,
-	MIN_CLUSTER_SIZE,
-	type Community,
-} from "../../core/clusters.ts";
+import { matchClusterLabelings, MIN_CLUSTER_SIZE, type Community } from "../../core/clusters.ts";
 import type { GraphStore } from "../../core/ports.ts";
 
 /** How many member propositions the namer sees per cluster — enough to
@@ -138,14 +133,17 @@ async function doRefresh(deps: {
 	signal?: AbortSignal;
 }): Promise<ClusterRefreshStats> {
 	const { graphStore, engine, signal } = deps;
-	const { nodes, edges } = getGraph(graphStore);
-	const detection = detectCommunities(nodes, edges);
+	const { nodes } = getGraph(graphStore);
+	// Semantic topics: the partition the embedder persisted in the
+	// embedding ledger (same source the snapshot renders — never
+	// recomputed here; the agglomerative pass is ~1.5s at scale).
+	const communities = graphStore.readEmbeddings().clusters;
 	const labelings = graphStore.readClusterLabels();
-	const claims = matchClusterLabelings(detection.communities, labelings);
+	const claims = matchClusterLabelings(communities, labelings);
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 
 	const claimed = claims.filter((c) => c !== null).length;
-	const unnamed = detection.communities
+	const unnamed = communities
 		.filter((c, i) => !claims[i] && c.members.length >= MIN_CLUSTER_SIZE)
 		.map((c: Community, i) => {
 			const nodesFor = c.members
@@ -156,7 +154,7 @@ async function doRefresh(deps: {
 			return { key: `c${i}`, members: c.members, nodes: nodesFor };
 		});
 
-	if (unnamed.length === 0) return { detected: detection.communities.length, claimed, named: 0, appended: 0 };
+	if (unnamed.length === 0) return { detected: communities.length, claimed, named: 0, appended: 0 };
 
 	const labels = await nameClusters(engine, signal, unnamed);
 	let appended = 0;
@@ -174,7 +172,7 @@ async function doRefresh(deps: {
 		});
 		appended++;
 	}
-	return { detected: detection.communities.length, claimed, named: unnamed.length, appended };
+	return { detected: communities.length, claimed, named: unnamed.length, appended };
 }
 
 let namingTail: Promise<unknown> = Promise.resolve();

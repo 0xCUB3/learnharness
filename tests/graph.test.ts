@@ -23,7 +23,7 @@ import type { QuestionAnswerData } from "../src/core/question-core.ts";
 import { clusterContentId, getGraph, graphSnapshot, mergeFindings, pendingQuizAnswers, type GraphDeps } from "../src/core/graph.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
-import { LEDGER_FILES, PATHS, SOURCES_FILE } from "../config.ts";
+import { LEDGER_FILES, PATHS, SOURCES_FILE, EMBEDDINGS_FILE } from "../config.ts";
 
 /** The wired fs adapters, exactly what src/server/stores.ts passes in production. */
 const graphDeps = { chatStore, graphStore } as const satisfies GraphDeps;
@@ -38,7 +38,9 @@ function sessionSource(chatId: string): { messages: UIMessage[]; foldedAt: strin
 
 // ─── ledger isolation (backup-and-clear of data/graph/*.jsonl) ──────────────
 
-const LEDGER_PATHS = [...Object.values(LEDGER_FILES), SOURCES_FILE];
+// EMBEDDINGS_FILE too: the semantic-cluster source (read by graphSnapshot)
+// — isolated like the rest so this suite never touches the real vectors.
+const LEDGER_PATHS = [...Object.values(LEDGER_FILES), SOURCES_FILE, EMBEDDINGS_FILE];
 const backups: Array<{ file: string; bak: string }> = [];
 const createdChats: string[] = [];
 
@@ -407,8 +409,10 @@ describe("the merger (mergeFindings)", () => {
 		assert.equal(snap.nodeObservations[node.id]!["src_snapfixture"], "solid");
 	});
 
-	it("derives structural clusters in graphSnapshot, joined with persisted labelings", () => {
-		// A self-contained 3-clique: three propositions, all mutually linked.
+	it("derives semantic clusters in graphSnapshot, joined with persisted labelings", () => {
+		// Three propositions; the cluster comes from the EMBEDDING ledger
+		// (semantic topics, DECIDED 2026-09-13) — the embedder persists the
+		// partition, the snapshot just reads it. Here we play the embedder.
 		const tri = ["Alpha.", "Beta.", "Gamma cluster."] as const;
 		const merge = mergeFindings(
 			"src_clusterfixture",
@@ -433,6 +437,16 @@ describe("the merger (mergeFindings)", () => {
 			{ messages: null, foldedAt: "2026-09-13T00:00:00.000Z" },
 		);
 		assert.equal(merge.nodes, 3);
+		// The embedder's contract: recluster at the end of the batch and
+		// PERSIST the partition in the embeddings ledger.
+		const ids = tri.map((s) => getGraph(graphStore).nodes.find((n) => n.statement === s)!.id);
+		graphStore.writeEmbeddings({
+			model: "test/embedder",
+			dim: 2,
+			vectors: {},
+			clusters: [{ members: ids }],
+			updatedAt: "2026-09-13T00:00:00.000Z",
+		});
 		const snap = graphSnapshot(graphDeps);
 		// Presentation threshold: every cluster is >= 3 members.
 		assert.ok(snap.clusters.every((c) => c.members.length >= 3));

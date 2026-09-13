@@ -278,6 +278,26 @@ export interface AuditResult {
  * least half its core survives in some single community (core-survival;
  * under half → the community is renamed, splits can keep only one
  * successor). */
+/** The embedding ledger shape (config.EMBEDDINGS_FILE): vectors for
+ *  EVERY embedded node, all produced by one model at one dimensionality. */
+export interface EmbeddingsLedger {
+	/** The embedding model id (e.g. the HF repo) — mismatch = stale
+	 *  vectors, the writer re-embeds everything. */
+	model: string;
+	/** Vector dimensionality (MRL-truncated on write). */
+	dim: number;
+	/** nodeId → L2-normalized vector (cosine similarity = dot product). */
+	vectors: Record<string, number[]>;
+	/** The topic partition over those vectors, computed by the SAME
+	 *  embedder run (the user-decided trigger: recluster at the end of
+	 *  every embedding batch, never per read — the agglomerative pass is
+	 *  ~1.5s at current scale). Consumers (snapshot, settle, namer) read
+	 *  this instead of recomputing. Empty when nothing is embedded. */
+	clusters: Array<{ members: string[] }>;
+	/** ISO timestamp of the last write. */
+	updatedAt: string;
+}
+
 export interface ClusterLabeling {
 	/** "clu_" + content hash of the sorted core. */
 	id: string;

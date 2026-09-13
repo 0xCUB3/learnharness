@@ -386,7 +386,7 @@ export interface IncrementalLayoutOptions {
 	gravityStrength?: number;
 	/** Cluster partition (Louvain output shape). Supplied by callers so
 	 *  this module stays louvain-free (the browser bundle must not carry
-	 *  graphology-louvain); absent = no cluster pull. */
+	 *  embedding ledger; absent = no cluster pull. */
 	clusters?: ReadonlyArray<{ members: ReadonlyArray<string> }>;
 	/** Cluster centroid pull strength (default CLUSTER_PULL_STRENGTH). */
 	clusterPullStrength?: number;

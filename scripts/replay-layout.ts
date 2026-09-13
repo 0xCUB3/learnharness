@@ -13,7 +13,6 @@
  * playground mode baked into the rest state); omit it for the free layout.
  */
 import { graphStore } from "../src/store/graph.ts";
-import { detectCommunities } from "../src/core/clusters.ts";
 // --depth=vertical|radial: bake the playground depth mode into the ledger.
 const depthArg = process.argv.find((a) => a.startsWith("--depth="));
 const depthMode: "off" | "vertical" | "radial" =
@@ -33,6 +32,12 @@ function main() {
 		nodes.push(line);
 	}
 	const edges = graphStore.readEdges();
+	// The semantic-topic source: the embedding ledger (run
+	// scripts/embed-graph.ts first if missing/stale).
+	const embeddings = graphStore.readEmbeddings();
+	if (Object.keys(embeddings.vectors).length === 0) {
+		console.warn("[replay] embedding ledger is empty — clusters will be absent (run scripts/embed-graph.ts)");
+	}
 
 	// Batches: each imported file, in real import order (sources.json
 	// importedAt). A node belongs to the file whose mapping first claims it
@@ -79,8 +84,12 @@ function main() {
 		const before = new Map(positions);
 		const batchNodes = nodes.filter((n) => delivered.has(n.id));
 		positions = incrementalLayout(batchNodes, activeEdges, positions, {
-			// The same partition the real settle would see for this batch.
-			clusters: detectCommunities(batchNodes, activeEdges).communities,
+			// The same partition the real settle would see for this batch:
+			// the persisted semantic topics, filtered to delivered nodes
+			// (never recomputed — the agglomerative pass is ~1.5s at scale).
+			clusters: embeddings.clusters
+				.map((c) => ({ members: c.members.filter((id) => delivered.has(id)) }))
+				.filter((c) => c.members.length > 0),
 			...(depthMode === "off"
 				? {}
 				: {

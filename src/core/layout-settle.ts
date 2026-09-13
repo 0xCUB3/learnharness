@@ -1,5 +1,4 @@
-import type { GraphEdge, GraphNode } from "./contracts.ts";
-import { detectCommunities } from "./clusters.ts";
+import type { EmbeddingsLedger, GraphEdge, GraphNode } from "./contracts.ts";
 import { incrementalLayout } from "./layout.ts";
 import type { Position } from "./contracts.ts";
 
@@ -13,7 +12,7 @@ import type { Position } from "./contracts.ts";
  *
  * SPLIT FROM layout.ts deliberately (2026-09-13): layout.ts is in the
  * browser barrel, and the settle needs the Louvain partition for the
- * cluster centroid pull — graphology-louvain must not ship in the client
+ * cluster centroid pull — the heavy deps must not ship in the client
  * bundle. Server code imports this module DIRECTLY; it is never
  * re-exported through src/core/index.ts.
  */
@@ -22,6 +21,7 @@ export function settleGraphLayout(graphStore: {
 	readEdges(): GraphEdge[];
 	readPositions(): Record<string, Position>;
 	writePositions(positions: Record<string, Position>): void;
+	readEmbeddings(): EmbeddingsLedger;
 }): void {
 	const nodes = graphStore.readNodes();
 	if (nodes.length === 0) return;
@@ -34,10 +34,11 @@ export function settleGraphLayout(graphStore: {
 	});
 	const edges = graphStore.readEdges();
 	const previous = new Map(Object.entries(graphStore.readPositions()));
-	// The cluster partition for the centroid pull: same Louvain the
-	// snapshot uses (same nodes/edges = same communities). 338 nodes:
-	// ~1-2ms, noise next to the settle itself.
-	const { communities } = detectCommunities(unique, edges);
+	// The cluster partition for the centroid pull: the SAME persisted
+	// semantic topics the snapshot renders (computed by the embedder
+	// once per batch, stored in the embedding ledger) — one cluster
+	// concept everywhere.
+	const communities = graphStore.readEmbeddings().clusters;
 	const next = incrementalLayout(unique, edges, previous, { clusters: communities });
 	graphStore.writePositions(Object.fromEntries(next));
 }

@@ -51,7 +51,7 @@ import type {
 	LedgerEvent,
 	LedgerEventKind,
 } from "./contracts.ts";
-import { detectCommunities, matchClusterLabelings, MIN_CLUSTER_SIZE } from "./clusters.ts";
+import { matchClusterLabelings, MIN_CLUSTER_SIZE } from "./clusters.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
@@ -497,14 +497,18 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		(nodeObservations[nodeId] ??= {})[chatId] = note;
 	}
 
-	// Structural communities (vision §1): Louvain over the undirected
-	// follows+supports structure, joined with persisted labelings —
-	// core-survival matching, size-filtered at the presentation threshold.
-	// Detection is DETERMINISTIC (seeded), so no memo in v1: a snapshot
-	// read recomputes it (ms at current scale; revisit at vault scale).
-	const detection = detectCommunities(nodes, edges);
-	const claims = matchClusterLabelings(detection.communities, deps.graphStore.readClusterLabels());
-	const clusters: Cluster[] = detection.communities
+	// Semantic topic communities (DECIDED 2026-09-13, replacing structural
+	// Louvain): average-linkage clustering over embeddings — related
+	// topics, not reasoning chains. Edge-orphans join topics by meaning;
+	// stragglers stay loose (filtered at the presentation threshold
+	// below). The partition is computed ONCE per embedding batch by the
+	// embedder (the agglomerative pass is ~1.5s at current scale) and
+	// PERSISTED in the embedding ledger — reads just load it. Nodes whose
+	// embedding hasn't landed yet simply sit unclustered until the next
+	// read after the embedder runs.
+	const communities = deps.graphStore.readEmbeddings().clusters;
+	const claims = matchClusterLabelings(communities, deps.graphStore.readClusterLabels());
+	const clusters: Cluster[] = communities
 		.map((community, index) => ({ community, claim: claims[index] }))
 		.filter(({ community }) => community.members.length >= MIN_CLUSTER_SIZE)
 		.map(({ community, claim }) => ({

@@ -4,6 +4,7 @@ import { createProberAgent, createTeacherAgent, type TeachingAgent } from "../ag
 import { piEngineFor } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
+import { embedNewNodes } from "./embeddings.ts";
 import type { ModelRole } from "../../config.ts";
 import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
@@ -40,7 +41,12 @@ const jobRunner = createJobRunner({
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports
  *  (/api/graph/import) hit the same single-flight registry. */
-export const extraction = createExtractionPipeline(stores);
+export const extraction = createExtractionPipeline({
+	...stores,
+	// The REAL embedder (local transformer model): post-merge embedding
+	// batch — semantic clusters are computed and persisted here.
+	embedder: embedNewNodes,
+});
 
 // Wake-pipeline wiring (contracts.ts "THE ASYNC PROTOCOL" §4): the pipeline
 // fires its server-side teacher turns through THIS composition root, and

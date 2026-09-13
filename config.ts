@@ -89,6 +89,12 @@ export const SOURCES_FILE = path.join(PATHS.graph, "sources.json");
  *  Carries an updatedAt stamp for future live-physics conflict handling. */
 export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
 
+/** The embedding ledger: one L2-normalized vector per node id, all from
+ * ONE model (swapping models re-embeds everything — vectors from
+ * different models live in incompatible spaces). Read-modify-write
+ * JSON like positions/sources. */
+export const EMBEDDINGS_FILE = path.join(PATHS.graph, "embeddings.json");
+
 /**
  * Graph render settings (the settings-panel controls): one small JSON blob,
  * read-modify-write. Shared shape/sanitizer: src/core/render-settings.ts.

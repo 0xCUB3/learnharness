@@ -110,6 +110,7 @@ describe("settleGraphLayout", () => {
 			readEdges: () => [edge("a", "b")],
 			readPositions: () => ({} as Record<string, Position>),
 			writePositions: (p: Record<string, Position>) => void written.push(p),
+			readEmbeddings: () => ({ model: "", dim: 0, vectors: {}, clusters: [], updatedAt: "" }),
 		};
 		settleGraphLayout(store);
 		assert.equal(written.length, 1);
@@ -123,6 +124,7 @@ describe("settleGraphLayout", () => {
 			readEdges: () => [],
 			readPositions: () => ({} as Record<string, Position>),
 			writePositions: (p) => void written.push(p),
+			readEmbeddings: () => ({ model: "", dim: 0, vectors: {}, clusters: [], updatedAt: "" }),
 		});
 		assert.equal(written.length, 0);
 	});

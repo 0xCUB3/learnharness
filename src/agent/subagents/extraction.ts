@@ -16,6 +16,7 @@ import type {
 	SessionFindings,
 } from "../../core/contracts.ts";
 import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
+import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { refreshClusterLabels } from "./cluster-namer.ts";
 
@@ -554,7 +555,14 @@ export interface ExtractionModels {
 	labeler?: PiEngine;
 }
 
-export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {}
+export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {
+	/** The post-merge embedding batch (semantic clusters run on it).
+	 *  INJECTED by the composition root (the agent layer never imports
+	 *  the server layer — architecture law): production passes the real
+	 *  local-model embedder (server/embeddings.ts embedNewNodes), tests
+	 *  fake it. Failure inside it is non-fatal by contract. */
+	embedder: (graphStore: GraphStore) => Promise<unknown>;
+}
 
 export interface NotesImportInput {
 	/** The source's file path — its identity (deterministic src id) AND its
@@ -576,7 +584,7 @@ export interface ExtractionPipeline {
 }
 
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
-	const { chatStore, graphStore } = deps;
+	const { chatStore, graphStore, embedder: embed } = deps;
 	const inFlight = new Set<string>();
 
 	function setPhase(chatId: string, phase: ExtractionPhase, kind: "chat" | "notes", label?: string): void {
@@ -715,6 +723,13 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				messages: record.messages as UIMessage[],
 				foldedAt: record.updatedAt,
 			});
+			// Semantic embeddings (DECIDED 2026-09-13): topics come from
+			// MEANING, so embed the new propositions BEFORE the settle and
+			// the namer look at clusters. Failure is non-fatal — clustering
+			// runs without the new nodes until the next merge retries.
+			await embed(graphStore).catch((err) => {
+				console.error(`[extraction ${chatId}] embedding failed (non-fatal):`, err);
+			});
 			// Option A: the layout ledger evolves with the merge (sync — the
 			// next snapshot fetch must already reflect the new nodes).
 			settleGraphLayout(graphStore);
@@ -828,6 +843,11 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// (messages: null) — nothing to attribute, nothing to build.
 			const auditResult: AuditResult = { ...notesResult, attribution: { quiz: {} } };
 			const stats = mergeFindings(id, auditResult, { chatStore, graphStore }, { messages: null, foldedAt: input.importedAt });
+			// Same post-merge chain as the chat path: embeddings first
+			// (topics from meaning), then the settle, then the namer.
+			await embed(graphStore).catch((err) => {
+				console.error(`[extraction ${id}] embedding failed (non-fatal):`, err);
+			});
 			// Option A: same post-merge settle as the chat path.
 			settleGraphLayout(graphStore);
 			persistRunUsage(id, Math.round(performance.now() - t0), stats);

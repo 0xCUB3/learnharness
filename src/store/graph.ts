@@ -29,9 +29,10 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { LEDGER_FILES, POSITIONS_FILE, SOURCES_FILE } from "../../config.ts";
+import { EMBEDDINGS_FILE, LEDGER_FILES, POSITIONS_FILE, SOURCES_FILE } from "../../config.ts";
 import type {
 	ClusterLabeling,
+	EmbeddingsLedger,
 	GraphEdge,
 	GraphNode,
 	ExtractionRunUsage,
@@ -216,6 +217,12 @@ export const graphStore: GraphStore = {
 	writePositions(positions: Record<string, Position>): void {
 		writePositionMap(positions);
 	},
+	readEmbeddings(): EmbeddingsLedger {
+		return readEmbeddingsLedger();
+	},
+	writeEmbeddings(ledger: EmbeddingsLedger): void {
+		writeEmbeddingsLedger(ledger);
+	},
 };
 
 /** positions.json — { positions, updatedAt }. Read-modify-write, NOT
@@ -250,6 +257,57 @@ function writePositionMap(positions: Record<string, Position>): void {
 		JSON.stringify({ positions, updatedAt: new Date().toISOString() }, null, "\t"),
 		"utf-8",
 	);
+}
+
+/** embeddings.json — the whole EmbeddingsLedger at once. Missing/corrupt
+ *  file reads as an EMPTY ledger (model "") so consumers see "nothing
+ *  embedded yet" rather than an error; the embedder backfills. */
+function readEmbeddingsLedger(): EmbeddingsLedger {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(EMBEDDINGS_FILE, "utf-8");
+	} catch {
+		return { model: "", dim: 0, vectors: {}, clusters: [], updatedAt: "" };
+	}
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed)) return { model: "", dim: 0, vectors: {}, clusters: [], updatedAt: "" };
+		const model = typeof parsed.model === "string" ? parsed.model : "";
+		const dim = typeof parsed.dim === "number" && Number.isFinite(parsed.dim) ? parsed.dim : 0;
+		const vectors: Record<string, number[]> = {};
+		if (isRecord(parsed.vectors)) {
+			for (const [id, value] of Object.entries(parsed.vectors)) {
+				if (
+					Array.isArray(value) &&
+					value.length > 0 &&
+					value.every((x) => typeof x === "number" && Number.isFinite(x))
+				) {
+					vectors[id] = value as number[];
+				}
+			}
+		}
+		const clusters: Array<{ members: string[] }> = [];
+		if (Array.isArray(parsed.clusters)) {
+			for (const c of parsed.clusters) {
+				if (
+					isRecord(c) &&
+					Array.isArray(c.members) &&
+					c.members.length > 0 &&
+					c.members.every((m) => typeof m === "string")
+				) {
+					clusters.push({ members: [...(c.members as string[])] });
+				}
+			}
+		}
+		return { model, dim, vectors, clusters, updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "" };
+	} catch {
+		return { model: "", dim: 0, vectors: {}, clusters: [], updatedAt: "" };
+	}
+}
+
+function writeEmbeddingsLedger(ledger: EmbeddingsLedger): void {
+	fs.mkdirSync(path.dirname(EMBEDDINGS_FILE), { recursive: true });
+	fs.writeFileSync(EMBEDDINGS_FILE, JSON.stringify(ledger, null, "\t"), "utf-8");
 }
 
 const isPosition = (v: unknown): v is Position =>

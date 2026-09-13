@@ -14,10 +14,10 @@
  * per-camera-event full-canvas repaints (GPU spikes + coil whine) are
  * gone (at most one draw per frame, and NO frame at all while idle).
  *
- * Layout (graphology + forceAtlas2) runs-then-freezes exactly as
- * before: ONE synchronous 100-iteration pass inside a useEffect writes
- * world-space x/y, then the positions are handed to the renderer as
- * data. No layout animation ever starts; the only animation is the
+ * Layout fallback (ledger absent): ONE synchronous incrementalLayout
+ * pass (d3-force, core/layout.ts) inside a useEffect writes world-space
+ * x/y, then the positions are handed to the renderer as data. No layout
+ * animation ever starts; the only animation is the
  * short hover fade, strictly bounded in time — idle CPU is zero (the
  * loop schedules no rAF until something actually changes).
  *
