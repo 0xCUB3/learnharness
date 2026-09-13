@@ -408,6 +408,15 @@ export function GraphView() {
 			onStageClick: () => setSelected(null),
 			// Any camera move detaches the card from its node — close it.
 			onCameraMove: () => setSelected(null),
+			// Live physics settled: persist the new rest state. Fire-and-
+			// forget — the next snapshot fetch carries the ledger anyway.
+			onCommit: (positions) => {
+				void fetch("/api/graph/positions", {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(positions),
+				}).catch((err) => console.error("[graph] positions commit failed", err));
+			},
 		});
 		rendererRef.current = renderer;
 		return () => {

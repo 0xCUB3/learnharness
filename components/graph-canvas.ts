@@ -52,8 +52,15 @@
 
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { clusterHue, convexHull, offsetPolygon, traceRoundedPath, type Pt } from "./cluster-geometry.ts";
-import type { GraphRenderSettings } from "@/src/core";
+import type { Simulation, SimulationLinkDatum } from "d3-force";
+import { clusterHue, type Pt } from "./cluster-geometry.ts";
+import {
+	createGraphSimulation,
+	INCREMENTAL_GRAVITY,
+	type GraphRenderSettings,
+	type LayoutNode,
+	type Position,
+} from "@/src/core";
 
 export type { GraphRenderSettings };
 
@@ -105,6 +112,9 @@ export interface RendererCallbacks {
 	onStageClick: () => void;
 	/** Any camera move (pan/zoom) — the caller dismisses anchored UI. */
 	onCameraMove: () => void;
+	/** The live sim settled after a drag: commit the new rest state
+	 *  (the caller PUTs it to the positions ledger). */
+	onCommit: (positions: Record<string, Position>) => void;
 }
 
 // ─── Constants (ported verbatim from the sigma view) ────────────────────────
@@ -128,19 +138,26 @@ const PICKING_PAD = 10;
 
 /** Click vs drag threshold: pointer travel under this many px is a click. */
 const CLICK_SLOP = 4;
+/** Live-sim tuning — see the class doc comment. */
+const LIVE_ALPHA_DECAY = 0.05; // snappier anneal than the settle's 0.0228
+const DRAG_ALPHA_TARGET = 0.3; // d3-drag's own reheat constant
+const SIM_SETTLE_ALPHA = 0.005; // below this, the sim counts as settled
+const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel)
 
-/** Cluster hull styling: layered low-alpha fills tint each region, plus
- *  a SOLID viewer-relative border. (The fills were briefly removed on a
- *  misreading of "no glow": they are the REGION BACKGROUNDS, not the
- *  glow. The jagged-when-zoomed look is the straight-line hull
- *  approximation, polishable later once the layout settles.) */
-const HULL_FILL_LAYERS = [
-	[24, 0.025],
-	[19, 0.04],
-	[14, 0.06],
-] as const;
-const HULL_STROKE_PAD = 14;
-const HULL_CORNER_RADIUS = 9;
+/** Cluster region styling — a low-res world-space SPLAT bitmap (the
+ *  density-field technique, Canvas-2D edition): every member node paints
+ *  a soft radial-gradient disc and every intra-cluster edge a round-cap
+ *  stroke; upscaling the bitmap with bilinear smoothing IS the blur.
+ *  Replaces the convex-hull fills + borders: concave cluster shapes are
+ *  finally correct (the hull bridged every gap with straight lines —
+ *  the jagged close-up look), there is no border to lag behind, and a
+ *  live-physics frame pays one tiny blit instead of 32 clusters × 4
+ *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
+const REGION_KERNEL = 30; // screen px at fit — soft disc radius
+const REGION_NODE_ALPHA = 0.2; // per disc; overlaps saturate toward the core
+const REGION_EDGE_ALPHA = 0.08; // round-cap strokes, width = kernel × 0.8
+const REGION_BITMAP = 256; // max bitmap dimension; cell = worldSpan / this
+const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
 const REGION_LABEL_SIZE = 14;
 
 /** All "px" constants above are screen px AT FIT ZOOM. The renderer scales
@@ -322,6 +339,21 @@ export class GraphCanvasRenderer {
 	private settings: GraphRenderSettings | null = null;
 	private visible: ReadonlySet<string> | null = null;
 
+	// ── Live physics ──
+	// One d3-force sim shared with the server settle (createGraphSimulation
+	// in @/src/core): dragging pins fx/fy and reheats (alphaTarget), release
+	// un-pins and the sim anneals; once alpha drops below SIM_SETTLE_ALPHA
+	// the new rest state is debounced-committed via onCommit. The sim mutates
+	// data.nodes IN PLACE (they ARE the sim nodes — zero copying), so every
+	// tick just bumps geoVersion and the draw loop rebuilds geometry.
+	private sim: Simulation<LayoutNode, SimulationLinkDatum<LayoutNode>> | null = null;
+	private simById = new Map<string, LayoutNode>();
+	private simActive = false;
+	private dragId: string | null = null;
+	private dragOrigin: Pt | null = null;
+	private simMoved = false; // any real movement since the last commit
+	private commitTimer: ReturnType<typeof setTimeout> | null = null;
+
 	private frameId: number | null = null;
 	private dirty = true;
 	/** True while tick() runs: markDirty inside the loop (d3's zoom event
@@ -361,14 +393,13 @@ export class GraphCanvasRenderer {
 	private nodesPath: Path2D | null = null;
 	private shaftsPath: Path2D = new Path2D();
 	private headsPath: Path2D = new Path2D();
-	private hullShapes: {
-		fill: Path2D[];
-		stroke: Path2D;
-		label: string | null;
-		cx: number; // world centroid
-		cy: number;
-		hue: number;
-	}[] = [];
+	private regionCanvas: HTMLCanvasElement | null = null;
+	/** World rect the bitmap covers (drawImage target coords). */
+	private regionRect: { minX: number; minY: number; w: number; h: number } | null = null;
+	/** Region labels: cluster centroid + hue, computed at splat build. */
+	private regionMeta: { label: string | null; cx: number; cy: number; hue: number }[] = [];
+	private regionBuiltVersion = -1;
+	private frameCount = 0; // draw counter for the live-sim splat throttle
 	private labelLines = new Map<string, string[]>();
 	private worldLabelFont = "";
 	private world: WorldSizes = { nodeR: 0, glowOuter: 0, labelSize: 0, labelGap: 0 };
@@ -443,6 +474,28 @@ export class GraphCanvasRenderer {
 		}
 		this.worldBBox = { minX, maxX, minY, maxY };
 		if (!this.hasFit && data.nodes.length > 0) this.fit();
+		// Rebuild the live sim around the fresh nodes. New data means the
+		// server spoke (merge or refetch); any pending commit is moot and
+		// the graph is at rest until the next drag.
+		if (this.commitTimer) {
+			clearTimeout(this.commitTimer);
+			this.commitTimer = null;
+		}
+		this.simActive = false;
+		this.dragId = null;
+		this.simMoved = false;
+		if (data.nodes.length > 0) {
+			const cx = (minX + maxX) / 2;
+			const cy = (minY + maxY) / 2;
+			this.sim = createGraphSimulation(data.nodes, data.edges, {
+				gravity: { x: cx, y: cy, strength: INCREMENTAL_GRAVITY },
+				alphaDecay: LIVE_ALPHA_DECAY,
+			});
+			this.simById = new Map(data.nodes.map((n) => [n.id, n as LayoutNode]));
+		} else {
+			this.sim = null;
+			this.simById = new Map();
+		}
 		this.geoVersion++; // new data → rebuild world geometry
 		this.markDirty();
 	}
@@ -478,6 +531,10 @@ export class GraphCanvasRenderer {
 
 	destroy(): void {
 		if (this.frameId !== null) cancelAnimationFrame(this.frameId);
+		if (this.commitTimer) clearTimeout(this.commitTimer);
+		this.sim = null;
+		this.simActive = false;
+		this.dragId = null;
 		this.resizeObserver.disconnect();
 		select(this.canvas).on(".zoom", null);
 		this.canvas.removeEventListener("wheel", this.onWheel);
@@ -506,18 +563,92 @@ export class GraphCanvasRenderer {
 	};
 
 	private onPointerMove = (e: PointerEvent) => {
-		const { x, y } = this.eventPos(e);
-		const node = this.pickAt(x, y);
+		const pos = this.eventPos(e);
+		if (this.dragId) {
+			const n = this.simById.get(this.dragId);
+			if (n) {
+				const moved =
+					this.dragOrigin !== null &&
+					Math.hypot(pos.x - this.dragOrigin.x, pos.y - this.dragOrigin.y) > CLICK_SLOP;
+				if (moved) {
+					// First real movement: reheat and glue the node to the cursor.
+					if (this.commitTimer) {
+						clearTimeout(this.commitTimer);
+						this.commitTimer = null;
+					}
+					this.sim?.alphaTarget(DRAG_ALPHA_TARGET);
+					this.simActive = true;
+					this.markDirty();
+				}
+				const { x: tx, y: ty, k } = this.transform;
+				n.fx = (pos.x - tx) / k;
+				n.fy = (pos.y - ty) / k;
+			}
+			return;
+		}
+		const node = this.pickAt(pos.x, pos.y);
 		if ((node?.id ?? null) !== this.hoverId) this.setHover(node?.id ?? null);
 		this.canvas.style.cursor = node ? "pointer" : "";
 	};
 
 	private onPointerDown = (e: PointerEvent) => {
-		this.downPos = this.eventPos(e);
+		const pos = this.eventPos(e);
+		const node = this.pickAt(pos.x, pos.y);
+		if (node && this.sim) {
+			// Node press: pin the node (at ITS OWN position — the cursor
+			// may be inside the pick pad, off-center). preventDefault kills
+			// the compatibility mousedown, so d3-zoom never starts a pan.
+			// Physics only reheats once the pointer exceeds CLICK_SLOP —
+			// a plain click stays perfectly still.
+			e.preventDefault();
+			try {
+				this.canvas.setPointerCapture(e.pointerId);
+			} catch {
+				/* capture is best-effort */
+			}
+			this.dragId = node.id;
+			this.dragOrigin = pos;
+			const n = this.simById.get(node.id);
+			if (n) {
+				n.fx = n.x;
+				n.fy = n.y;
+			}
+			this.canvas.style.cursor = "grabbing";
+			this.markDirty();
+			return;
+		}
+		this.downPos = pos;
 		this.zoomTarget = null; // a pan takes over — cancel any zoom glide
 	};
 
 	private onPointerUp = (e: PointerEvent) => {
+		// Node press ending: click (no slop) → select; drag → release-and-relax.
+		if (this.dragId) {
+			const id = this.dragId;
+			this.dragId = null;
+			this.dragOrigin = null;
+			try {
+				this.canvas.releasePointerCapture(e.pointerId);
+			} catch {
+				/* already released */
+			}
+			this.canvas.style.cursor = "";
+			const n = this.simById.get(id);
+			if (n) {
+				n.fx = null;
+				n.fy = null;
+			}
+			if (this.simActive) {
+				// Real drag: the sim anneals to the new rest state; advanceSim
+				// detects the settle and schedules the commit.
+				this.sim?.alphaTarget(0);
+				this.markDirty();
+			} else {
+				// Never heated: a plain click on the node.
+				this.callbacks.onSelect(id, this.eventPos(e));
+			}
+			return;
+		}
 		if (!this.downPos) return;
 		const pos = this.eventPos(e);
 		const moved = Math.hypot(pos.x - this.downPos.x, pos.y - this.downPos.y);
@@ -529,6 +660,7 @@ export class GraphCanvasRenderer {
 	};
 
 	private onPointerLeave = () => {
+		if (this.dragId) return; // pointer capture keeps the drag alive
 		this.downPos = null;
 		this.setHover(null);
 	};
@@ -591,10 +723,12 @@ export class GraphCanvasRenderer {
 			this.lastTickAt = now;
 			const hoverAnim = this.advanceHover();
 			const zoomAnim = this.advanceZoom(dt);
+			const simAnim = this.advanceSim();
 			this.draw();
 			// Keep frames coming ONLY while an animation is in motion (hover
-			// fade or zoom glide); an idle graph schedules no rAF at all.
-			this.animating = hoverAnim || zoomAnim;
+			// fade, zoom glide, or live physics); an idle graph schedules no
+			// rAF at all.
+			this.animating = hoverAnim || zoomAnim || simAnim;
 		} finally {
 			this.inTick = false;
 		}
@@ -604,6 +738,42 @@ export class GraphCanvasRenderer {
 				this.tick();
 			});
 		}
+	}
+
+	/** One live-sim step; returns true while physics is still in motion.
+	 *  Runs only while simActive (drag reheat or post-release anneal). */
+	private advanceSim(): boolean {
+		if (!this.sim || !this.simActive) return false;
+		this.sim.tick();
+		// Movement check: did any node actually move (a click-pin that
+		// never reheated leaves everything exactly at rest)?
+		for (const n of this.sim.nodes()) {
+			if (n.vx || n.vy) {
+				this.simMoved = true;
+				break;
+			}
+		}
+		this.geoVersion++; // positions changed → geometry rebuild in draw()
+		// Settled (drag released long ago, alpha annealed away)?
+		if (!this.dragId && this.sim.alpha() < SIM_SETTLE_ALPHA) {
+			this.simActive = false;
+			this.scheduleCommit();
+			return false;
+		}
+		return true;
+	}
+
+	/** Debounced rest-state commit. A new drag or setData cancels it. */
+	private scheduleCommit(): void {
+		if (this.commitTimer) clearTimeout(this.commitTimer);
+		this.commitTimer = setTimeout(() => {
+			this.commitTimer = null;
+			if (!this.data || !this.simMoved) return;
+			this.simMoved = false;
+			const positions: Record<string, Position> = {};
+			for (const n of this.data.nodes) positions[n.id] = { x: n.x, y: n.y };
+			this.callbacks.onCommit(positions);
+		}, COMMIT_DEBOUNCE_MS);
 	}
 
 	/** Hover fade step; returns true while still moving. */
@@ -710,30 +880,9 @@ export class GraphCanvasRenderer {
 		this.shaftsPath = shafts;
 		this.headsPath = heads;
 
-		// Cluster hulls: convex hull of member positions (world = raw data
-		// coordinates, no projection at all), three offset fill layers,
-		// and a SOLID boundary path.
-		this.hullShapes = [];
-		for (const cluster of data.clusters) {
-			const pts: Pt[] = [];
-			for (const id of cluster.members) {
-				if (!isVisible(id)) continue;
-				const n = this.nodeById.get(id);
-				if (n) pts.push({ x: n.x, y: n.y });
-			}
-			const hull = convexHull(pts);
-			if (hull.length < 3) continue;
-			const fills = HULL_FILL_LAYERS.map(([pad]) => {
-				const path = new Path2D();
-				traceRoundedPath(path, offsetPolygon(hull, pad * s), HULL_CORNER_RADIUS * s);
-				return path;
-			});
-			const stroke = new Path2D();
-			traceRoundedPath(stroke, offsetPolygon(hull, HULL_STROKE_PAD * s), HULL_CORNER_RADIUS * s);
-			const cx = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
-			const cy = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
-			this.hullShapes.push({ fill: fills, stroke, label: cluster.label || null, cx, cy, hue: clusterHue(cluster.id) });
-		}
+		// Cluster regions are NOT built here: they rasterize into their own
+		// low-res bitmap (see buildRegions), on their own rebuild schedule
+		// (live-sim frames skip 2 of 3 rebuilds and blit the last bitmap).
 
 		// Label wrapping: measureText once per node per geometry build,
 		// never per frame. Wrap width keeps the bigger-label/bigger-wrap
@@ -747,6 +896,121 @@ export class GraphCanvasRenderer {
 			if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
 		}
 		ctx.font = prevFont;
+	}
+
+	/** Rasterize cluster regions into the low-res world-space bitmap.
+	 *  Runs on data/visibility/settings changes at rest, and every
+	 *  REGION_EVERY-th frame while the live sim moves nodes (the in-between
+	 *  frames blit the previous bitmap — one sim step of staleness at
+	 *  120fps is invisible). Positions come straight from data.nodes. */
+	private buildRegions(): void {
+		const data = this.data;
+		if (!data || data.clusters.length === 0) {
+			this.regionCanvas = null;
+			this.regionRect = null;
+			this.regionMeta = [];
+			return;
+		}
+		const visible = this.visible;
+		const isVisible = (id: string): boolean => !visible || visible.has(id);
+
+		// World rect over VISIBLE cluster members (regions cover members
+		// and their intra-cluster edges — nothing else), padded by the
+		// kernel so discs can bleed past the extremes.
+		const s = 1 / this.kFit;
+		const kernel = REGION_KERNEL * s;
+		let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+		for (const c of data.clusters) {
+			for (const id of c.members) {
+				if (!isVisible(id)) continue;
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				if (n.x - kernel < minX) minX = n.x - kernel;
+				if (n.x + kernel > maxX) maxX = n.x + kernel;
+				if (n.y - kernel < minY) minY = n.y - kernel;
+				if (n.y + kernel > maxY) maxY = n.y + kernel;
+			}
+		}
+		if (minX > maxX) {
+			this.regionCanvas = null;
+			this.regionRect = null;
+			this.regionMeta = [];
+			return;
+		}
+
+		// Bitmap sizing: longest world span maps to REGION_BITMAP px.
+		const spanX = maxX - minX;
+		const spanY = maxY - minY;
+		const cell = Math.max(spanX, spanY) / REGION_BITMAP;
+		const bw = Math.max(1, Math.ceil(spanX / cell));
+		const bh = Math.max(1, Math.ceil(spanY / cell));
+		let rc = this.regionCanvas;
+		if (!rc) {
+			rc = document.createElement("canvas");
+			this.regionCanvas = rc;
+		}
+		if (rc.width !== bw || rc.height !== bh) {
+			rc.width = bw;
+			rc.height = bh; // also clears
+		}
+		const rctx = rc.getContext("2d");
+		if (!rctx) return;
+		rctx.clearRect(0, 0, bw, bh);
+		rctx.lineCap = "round";
+		const R = kernel / cell;
+		const edgeW = R * 0.8 * 2;
+
+		// Which cluster is a node in (for intra-cluster edges)?
+		const clusterOf = new Map<string, number>();
+		data.clusters.forEach((c, i) => {
+			for (const id of c.members) clusterOf.set(id, i);
+		});
+
+		this.regionMeta = [];
+		data.clusters.forEach((cluster, ci) => {
+			const hue = clusterHue(cluster.id);
+			const members: Pt[] = [];
+			const alpha = (a: number): string => `hsla(${hue}, 65%, 60%, ${a})`;
+
+			// Discs: one soft radial gradient per member node.
+			rctx.fillStyle = alpha(REGION_NODE_ALPHA);
+			for (const id of cluster.members) {
+				if (!isVisible(id)) continue;
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				members.push({ x: n.x, y: n.y });
+				const px = (n.x - minX) / cell;
+				const py = (n.y - minY) / cell;
+				const grad = rctx.createRadialGradient(px, py, 0, px, py, R);
+				grad.addColorStop(0, alpha(REGION_NODE_ALPHA));
+				grad.addColorStop(1, alpha(0));
+				rctx.fillStyle = grad;
+				rctx.fillRect(px - R, py - R, R * 2, R * 2);
+			}
+			// Minkowski strokes: intra-cluster edges with round caps make
+			// the region follow its own linkage, not just its node dots.
+			rctx.strokeStyle = alpha(REGION_EDGE_ALPHA);
+			rctx.lineWidth = edgeW;
+			rctx.beginPath();
+			for (const e of data.edges) {
+				if (clusterOf.get(e.from) !== ci) continue;
+				if (clusterOf.get(e.to) !== ci) continue;
+				const a = this.nodeById.get(e.from);
+				const b = this.nodeById.get(e.to);
+				if (!a || !b) continue;
+				rctx.moveTo((a.x - minX) / cell, (a.y - minY) / cell);
+				rctx.lineTo((b.x - minX) / cell, (b.y - minY) / cell);
+			}
+			rctx.stroke();
+
+			// Label anchor: member centroid (world coords).
+			if (members.length > 0) {
+				const cx = members.reduce((sum, p) => sum + p.x, 0) / members.length;
+				const cy = members.reduce((sum, p) => sum + p.y, 0) / members.length;
+				this.regionMeta.push({ label: cluster.label || null, cx, cy, hue });
+			}
+		});
+		this.regionRect = { minX, minY, w: spanX, h: spanY };
 	}
 
 	/** THE draw function: every layer, one frame, one camera. All drawing
@@ -765,6 +1029,16 @@ export class GraphCanvasRenderer {
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, w, h);
 
+		this.frameCount++;
+		// Regions: rebuild on stale geometry at rest; during the live sim,
+		// every REGION_EVERY-th frame (others blit the last bitmap).
+		if (
+			this.regionBuiltVersion !== this.geoVersion &&
+			(!this.simActive || this.frameCount % REGION_EVERY === 0)
+		) {
+			this.buildRegions();
+			this.regionBuiltVersion = this.geoVersion;
+		}
 		if (this.builtVersion !== this.geoVersion) this.buildGeometry();
 		if (!this.nodesPath) return;
 
@@ -777,16 +1051,14 @@ export class GraphCanvasRenderer {
 		const regionAlpha = 1 - nodeAlpha;
 		const { nodeR, glowOuter } = this.world;
 
-		// 1-2. Cluster hulls: cached world paths — soft layered region
-		// fills, then a SOLID viewer-relative hairline border.
-		for (const hs of this.hullShapes) {
-			for (let i = 0; i < hs.fill.length; i++) {
-				ctx.fillStyle = `hsla(${hs.hue}, 65%, 60%, ${HULL_FILL_LAYERS[i]![1]})`;
-				ctx.fill(hs.fill[i]!);
-			}
-			ctx.strokeStyle = `hsla(${hs.hue}, 65%, 62%, 0.5)`;
-			ctx.lineWidth = 1.5 / k; // constant screen px
-			ctx.stroke(hs.stroke);
+		// 1. Cluster regions: one tiny world-space bitmap blit. The upscale
+		//    blur is the region softness; adjacent cluster tints blend
+		//    source-over where they overlap (decided: multiply is invisible
+		//    on the dark background).
+		if (this.regionCanvas && this.regionRect) {
+			const { minX, minY, w, h } = this.regionRect;
+			ctx.imageSmoothingEnabled = true;
+			ctx.drawImage(this.regionCanvas, minX, minY, w, h);
 		}
 
 		// 3. Edges: shafts + arrowheads from cached paths; width constant on
@@ -814,10 +1086,10 @@ export class GraphCanvasRenderer {
 			ctx.font = `${LABEL_WEIGHT} ${REGION_LABEL_SIZE / k}px ${data.fontFamily}`;
 			ctx.textAlign = "center";
 			ctx.textBaseline = "middle";
-			for (const hs of this.hullShapes) {
-				if (!hs.label) continue;
-				ctx.fillStyle = `hsla(${hs.hue}, 55%, 78%, 0.85)`;
-				ctx.fillText(hs.label, hs.cx, hs.cy);
+			for (const rm of this.regionMeta) {
+				if (!rm.label) continue;
+				ctx.fillStyle = `hsla(${rm.hue}, 55%, 78%, 0.85)`;
+				ctx.fillText(rm.label, rm.cx, rm.cy);
 			}
 			ctx.restore();
 		}
