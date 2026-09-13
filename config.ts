@@ -84,3 +84,9 @@ export const LEDGER_FILES = {
  * log. Read-modify-write like a chat file, not append-only like the ledgers.
  */
 export const SOURCES_FILE = path.join(PATHS.graph, "sources.json");
+
+/**
+ * Graph render settings (the settings-panel controls): one small JSON blob,
+ * read-modify-write. Shared shape/sanitizer: src/core/render-settings.ts.
+ */
+export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");

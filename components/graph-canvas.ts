@@ -53,6 +53,9 @@
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { clusterHue, convexHull, offsetPolygon, traceRoundedPath, type Pt } from "./cluster-geometry.ts";
+import type { GraphRenderSettings } from "../src/core/render-settings.ts";
+
+export type { GraphRenderSettings };
 
 // ─── Public data contract ──────────────────────────────────────────────────
 
@@ -86,18 +89,6 @@ export interface CanvasColors {
 	hoverText: string;
 }
 
-/** The rendering controls (persisted by the caller in localStorage). */
-export interface GraphRenderSettings {
-	nodeSize: number;
-	edgeWidth: number;
-	arrowLength: number;
-	/** Camera-ratio threshold for node labels (1 = fit zoom, smaller =
-	 *  zoomed in); cluster labels fade in over the same span, inversely. */
-	labelZoom: number;
-	/** Toggle for the cluster region labels (hulls always draw). */
-	clusterLabels: boolean;
-}
-
 export interface CanvasData {
 	nodes: CanvasNode[];
 	edges: CanvasEdge[];
@@ -118,7 +109,7 @@ export interface RendererCallbacks {
 
 // ─── Constants (ported verbatim from the sigma view) ────────────────────────
 
-const LABEL_SIZE = 12; // px (sigma's labelSize)
+const LABEL_SIZE = 12; // px — the default label size (settings.labelSize scales it)
 const LABEL_WEIGHT = "500";
 const LABEL_MAX_WIDTH = 170; // px — wraps long names instead of a wide strip
 const LABEL_GAP = 6; // px between node edge and first label line
@@ -129,6 +120,7 @@ export const LABELS_FADE_SPAN = 0.5;
 const GLOW_PAD = 9; // px the halo extends beyond the node disc (constant)
 const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
 const HOVER_FADE_MS = 180; // hover halo opacity fade length
+const ZOOM_EASE_MS = 120; // wheel-zoom glide: exponential-ease time constant
 
 /** Extra pickable radius (px) beyond the disc — the whole halo is
  *  hit-testable (the old flicker fix, minus the picking shader). */
@@ -280,19 +272,22 @@ function drawName(
 	x: number,
 	y: number,
 	size: number,
+	labelSize: number,
 	label: string,
 	font: string,
 	color: string,
 ): void {
 	context.save();
-	context.font = `${LABEL_WEIGHT} ${LABEL_SIZE}px ${font}`;
-	const lines = wrapLabel(context, label, LABEL_MAX_WIDTH);
+	context.font = `${LABEL_WEIGHT} ${labelSize}px ${font}`;
+	// Wrap width scales with the font so bigger labels wrap at the same
+	// word count, not earlier.
+	const lines = wrapLabel(context, label, LABEL_MAX_WIDTH * (labelSize / LABEL_SIZE));
 	context.fillStyle = color;
 	context.textAlign = "center";
 	context.textBaseline = "top";
 	const firstTop = y + size + LABEL_GAP;
 	for (let i = 0; i < lines.length; i++) {
-		context.fillText(lines[i]!, x, firstTop + i * LABEL_SIZE * LABEL_LINE_HEIGHT);
+		context.fillText(lines[i]!, x, firstTop + i * labelSize * LABEL_LINE_HEIGHT);
 	}
 	context.restore();
 }
@@ -309,6 +304,9 @@ export class GraphCanvasRenderer {
 	private hasFit = false;
 	/** The k that frames the whole graph — the label-gate's "1×". */
 	private kFit = 1;
+	/** World-space bounds of the current nodes — fit() and the resize-time
+	 *  kFit refresh share it (computed once per setData, not per resize). */
+	private worldBBox: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
 
 	private data: CanvasData | null = null;
 	/** id -> node for the current data (avoids O(n^2) scans). */
@@ -326,6 +324,11 @@ export class GraphCanvasRenderer {
 	private hoverFrom = 0;
 	private hoverTarget = 0;
 	private hoverStart = 0;
+	// Smooth wheel zoom: wheel events accumulate a target scale (cursor-
+	// anchored); each tick eases the camera toward it instead of jumping.
+	private zoomTarget: { k: number; x: number; y: number } | null = null;
+	/** Clock for frame-rate-independent easing (updated every tick). */
+	private lastTickAt = 0;
 	private animating = false;
 
 	private resizeObserver: ResizeObserver;
@@ -350,8 +353,12 @@ export class GraphCanvasRenderer {
 		select(canvas)
 			.call(this.zoomBehavior)
 			// No surprise dblclick-zoom (sigma had none).
-			.on("dblclick.zoom", null);
+			.on("dblclick.zoom", null)
+			// Wheel is OURS now: d3's instant per-notch jump felt janky; the
+			// eased glide below replaces it (pan and pinch stay d3's).
+			.on("wheel.zoom", null);
 
+		canvas.addEventListener("wheel", this.onWheel, { passive: false });
 		canvas.addEventListener("pointermove", this.onPointerMove);
 		canvas.addEventListener("pointerdown", this.onPointerDown);
 		canvas.addEventListener("pointerup", this.onPointerUp);
@@ -360,7 +367,18 @@ export class GraphCanvasRenderer {
 		this.resizeObserver = new ResizeObserver(() => {
 			this.syncSize();
 			if (!this.hasFit) this.fit(); // first real size → fit once
-			this.markDirty();
+			else if (this.worldBBox) {
+				// Keep the label-gate's "1×" honest: kFit is viewport-bound,
+				// so a resize changes it even though the camera persists.
+				const w = this.canvas.clientWidth;
+				const h = this.canvas.clientHeight;
+				if (w >= 10 && h >= 10) this.kFit = fitTransform(this.worldBBox, w, h, 40).k;
+			}
+			// Redraw SYNCHRONOUSLY: syncSize may have reallocated the backing
+			// store (which clears the canvas), and during live window resizes
+			// rAF is starved by relayout — a deferred draw would leave the
+			// canvas blank for the whole drag (the resize-blanking bug).
+			this.draw();
 		});
 		this.resizeObserver.observe(canvas);
 		this.syncSize();
@@ -371,6 +389,17 @@ export class GraphCanvasRenderer {
 	setData(data: CanvasData): void {
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
+		let minX = Infinity;
+		let minY = Infinity;
+		let maxX = -Infinity;
+		let maxY = -Infinity;
+		for (const n of data.nodes) {
+			if (n.x < minX) minX = n.x;
+			if (n.y < minY) minY = n.y;
+			if (n.x > maxX) maxX = n.x;
+			if (n.y > maxY) maxY = n.y;
+		}
+		this.worldBBox = { minX, maxX, minY, maxY };
 		if (!this.hasFit && data.nodes.length > 0) this.fit();
 		this.markDirty();
 	}
@@ -388,21 +417,11 @@ export class GraphCanvasRenderer {
 	/** Frame the whole graph (padding included). Keeps the camera on later
 	 *  setData calls — call fit() only for an explicit re-frame. */
 	fit(): void {
-		if (!this.data || this.data.nodes.length === 0) return;
+		if (!this.data || this.data.nodes.length === 0 || !this.worldBBox) return;
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
 		if (w < 10 || h < 10) return; // layout not ready yet; the ResizeObserver retries
-		let minX = Infinity;
-		let minY = Infinity;
-		let maxX = -Infinity;
-		let maxY = -Infinity;
-		for (const n of this.data.nodes) {
-			if (n.x < minX) minX = n.x;
-			if (n.y < minY) minY = n.y;
-			if (n.x > maxX) maxX = n.x;
-			if (n.y > maxY) maxY = n.y;
-		}
-		const t = fitTransform({ minX, maxX, minY, maxY }, w, h, 40);
+		const t = fitTransform(this.worldBBox, w, h, 40);
 		this.kFit = t.k;
 		this.hasFit = true;
 		select(this.canvas).call(
@@ -415,6 +434,7 @@ export class GraphCanvasRenderer {
 		if (this.frameId !== null) cancelAnimationFrame(this.frameId);
 		this.resizeObserver.disconnect();
 		select(this.canvas).on(".zoom", null);
+		this.canvas.removeEventListener("wheel", this.onWheel);
 		this.canvas.removeEventListener("pointermove", this.onPointerMove);
 		this.canvas.removeEventListener("pointerdown", this.onPointerDown);
 		this.canvas.removeEventListener("pointerup", this.onPointerUp);
@@ -423,6 +443,21 @@ export class GraphCanvasRenderer {
 	}
 
 	// ── Event handlers (state mutation only — never draw) ──
+
+	/** Wheel: accumulate the zoom target; the camera GLIDES toward it in the
+	 *  tick loop (cursor-anchored). Sensitivity formula is d3-zoom's own. */
+	private onWheel = (e: WheelEvent) => {
+		e.preventDefault();
+		const delta = -e.deltaY * (e.deltaMode === 1 ? 0.05 : e.deltaMode ? 1 : 0.002);
+		const { x, y } = this.eventPos(e);
+		const current = this.zoomTarget?.k ?? this.transform.k;
+		// Must stay inside the zoomBehavior's scaleExtent [0.02, 40].
+		const k = Math.min(Math.max(current * Math.exp(delta), 0.02), 40);
+		this.zoomTarget = { k, x, y };
+		// Fresh easing clock so the glide starts gentle, never half-done.
+		this.lastTickAt = performance.now();
+		this.markDirty();
+	};
 
 	private onPointerMove = (e: PointerEvent) => {
 		const { x, y } = this.eventPos(e);
@@ -433,6 +468,7 @@ export class GraphCanvasRenderer {
 
 	private onPointerDown = (e: PointerEvent) => {
 		this.downPos = this.eventPos(e);
+		this.zoomTarget = null; // a pan takes over — cancel any zoom glide
 	};
 
 	private onPointerUp = (e: PointerEvent) => {
@@ -453,7 +489,7 @@ export class GraphCanvasRenderer {
 
 	// ── Internals ──
 
-	private eventPos(e: PointerEvent): Pt {
+	private eventPos(e: { clientX: number; clientY: number }): Pt {
 		const rect = this.canvas.getBoundingClientRect();
 		return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 	}
@@ -496,10 +532,16 @@ export class GraphCanvasRenderer {
 	}
 
 	private tick(): void {
-		this.advanceHover();
+		const now = performance.now();
+		// Clamp the dt: a long idle gap must not teleport the ease forward.
+		const dt = Math.min(Math.max(now - this.lastTickAt, 8), 100);
+		this.lastTickAt = now;
+		const hoverAnim = this.advanceHover();
+		const zoomAnim = this.advanceZoom(dt);
 		this.draw();
-		// Keep frames coming ONLY while the hover fade is in motion; an
-		// idle graph schedules no rAF at all.
+		// Keep frames coming ONLY while an animation is in motion (hover
+		// fade or zoom glide); an idle graph schedules no rAF at all.
+		this.animating = hoverAnim || zoomAnim;
 		if (this.animating) {
 			this.frameId = requestAnimationFrame(() => {
 				this.frameId = null;
@@ -508,11 +550,39 @@ export class GraphCanvasRenderer {
 		}
 	}
 
-	private advanceHover(): void {
-		if (!this.animating) return;
+	/** Hover fade step; returns true while still moving. */
+	private advanceHover(): boolean {
+		if (this.hoverFade === this.hoverTarget) return false;
 		const t = Math.min((performance.now() - this.hoverStart) / HOVER_FADE_MS, 1);
 		this.hoverFade = this.hoverFrom + (this.hoverTarget - this.hoverFrom) * t;
-		if (t >= 1) this.animating = false;
+		return t < 1;
+	}
+
+	/** Zoom glide step: ease k toward the wheel target, keeping the world
+	 *  point under the cursor pinned. Frame-rate independent (exponential
+	 *  approach, time constant ZOOM_EASE_MS). Returns true while gliding. */
+	private advanceZoom(dt: number): boolean {
+		const target = this.zoomTarget;
+		if (!target) return false;
+		const t = this.transform;
+		const blend = 1 - Math.exp(-dt / ZOOM_EASE_MS);
+		let k = t.k + (target.k - t.k) * blend;
+		let done = false;
+		if (Math.abs(target.k - k) / target.k < 0.001) {
+			k = target.k;
+			done = true;
+		}
+		const scale = k / t.k;
+		const x = target.x - (target.x - t.x) * scale;
+		const y = target.y - (target.y - t.y) * scale;
+		if (done) this.zoomTarget = null;
+		// Applied through d3-zoom so constraints + the zoom event (markDirty,
+		// onCameraMove) fire exactly as with any other camera change.
+		select(this.canvas).call(
+			this.zoomBehavior.transform,
+			zoomIdentity.translate(x, y).scale(k),
+		);
+		return !done;
 	}
 
 	/** Resize the backing store to the CSS box × devicePixelRatio; all
@@ -645,7 +715,11 @@ export class GraphCanvasRenderer {
 			this.ctx.globalAlpha = nodeAlpha;
 			for (const [id, p] of pos) {
 				const n = nodeById.get(id);
-				if (n) drawName(this.ctx, p.x, p.y, settings.nodeSize, n.label, data.fontFamily, data.colors.label);
+				if (n)
+					drawName(
+						this.ctx, p.x, p.y, settings.nodeSize, settings.labelSize, n.label,
+						data.fontFamily, data.colors.label,
+					);
 			}
 			this.ctx.restore();
 		}
@@ -669,7 +743,10 @@ export class GraphCanvasRenderer {
 				this.ctx.fill("evenodd");
 				this.ctx.save();
 				this.ctx.globalAlpha = this.hoverFade;
-				drawName(this.ctx, p.x, p.y, settings.nodeSize, n.label, data.fontFamily, data.colors.hoverText);
+				drawName(
+					this.ctx, p.x, p.y, settings.nodeSize, settings.labelSize, n.label,
+					data.fontFamily, data.colors.hoverText,
+				);
 				this.ctx.restore();
 			}
 		}

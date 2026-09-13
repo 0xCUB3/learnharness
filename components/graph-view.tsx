@@ -50,10 +50,15 @@
  *     an open card closes if its node is filtered out.
  *
  * Rendering settings (2026-09-13): the gear in the search panel reveals
- * four sliders (node size, edge width, arrowhead length, the zoom
- * threshold) plus the cluster-labels checkbox, persisted per browser
- * (localStorage). Applied by just redrawing — no rebuild, no re-layout,
- * and the camera never moves.
+ * five sliders (node size, edge width, arrowhead length, label size, the
+ * zoom threshold) plus the cluster-labels checkbox. SERVER-persisted
+ * (data/render-settings.json via /api/graph/render-settings): loaded
+ * once after mount, saved debounced on every user change — one source
+ * of truth shared by every browser. The label-zoom slider is log-scaled
+ * (its useful band 0.25–0.5 sits mid-slider, not crammed at the left)
+ * and displays normalized units where the default 0.5 reads as "1×".
+ * Settings apply by just redrawing — no rebuild, no re-layout, and the
+ * camera never moves.
  */
 
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -63,6 +68,13 @@ import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
+import {
+	DEFAULT_RENDER_SETTINGS,
+	labelZoomDisplay,
+	labelZoomToSlider,
+	sanitizeRenderSettings,
+	sliderToLabelZoom,
+} from "../src/core/render-settings.ts";
 
 /** The uniform node look (no state classes — canvas wants hex, not oklch):
  *  the accent color, until the state model lands. */
@@ -70,27 +82,10 @@ const NODE_COLOR_TOKEN = "--primary";
 
 // ---- Render settings (the settings-panel controls) ------------------------
 //
-// Three basic controls (user-decided 2026-09-13): node disc size, edge line
-// width, and arrowhead length (px). Defaults reflect the pre-panel look
-// (edge 1px + its stock 5px head) except nodeSize, which dropped 8 → 6 for
-// dense graphs (user: "nodes are quite large"). Persisted per browser in
-// localStorage.
+// The shape, defaults, sanitizer, and slider mappings live in
+// src/core/render-settings.ts (shared with the server store + tests).
 
 type RenderSettings = GraphRenderSettings;
-const DEFAULT_RENDER_SETTINGS: RenderSettings = { nodeSize: 6, edgeWidth: 1, arrowLength: 5, labelZoom: 0.5, clusterLabels: true };
-const RENDER_SETTINGS_KEY = "graph-render-settings";
-const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
-/** Defensively merge stored settings (stale/partial/corrupt → defaults). */
-function sanitizeRenderSettings(raw: unknown): RenderSettings {
-	const r = raw as Partial<RenderSettings> | null;
-	return {
-		nodeSize: clamp(Number(r?.nodeSize ?? DEFAULT_RENDER_SETTINGS.nodeSize), 2, 14),
-		edgeWidth: clamp(Number(r?.edgeWidth ?? DEFAULT_RENDER_SETTINGS.edgeWidth), 0.5, 4),
-		arrowLength: clamp(Number(r?.arrowLength ?? DEFAULT_RENDER_SETTINGS.arrowLength), 2, 15),
-		labelZoom: clamp(Number(r?.labelZoom ?? DEFAULT_RENDER_SETTINGS.labelZoom), 0.25, 4),
-		clusterLabels: typeof r?.clusterLabels === "boolean" ? r.clusterLabels : DEFAULT_RENDER_SETTINGS.clusterLabels,
-	};
-}
 
 /**
  * Pure filter predicate for the search panel: a node is visible when the
@@ -189,24 +184,59 @@ export function GraphView() {
 	// Search panel state: the query text + the settings section toggle.
 	const [query, setQuery] = useState("");
 	const [settingsOpen, setSettingsOpen] = useState(false);
-	// Render settings (node size / edge width / arrowhead): loaded from
-	// localStorage AFTER mount (an initial-state read would mismatch the
-	// server-rendered HTML), saved on every change.
+	// Render settings: SERVER-persisted (data/render-settings.json via
+	// /api/graph/render-settings). Loaded once after mount; every user
+	// change saves back, debounced. Defaults render until the load
+	// resolves — a fraction of a second at worst.
 	const [settings, setSettings] = useState<RenderSettings>(DEFAULT_RENDER_SETTINGS);
+	const settingsRef = useRef(settings);
+	settingsRef.current = settings;
+	// True once the user has moved a control this mount: the server copy
+	// must never clobber a (possibly newer) local change.
+	const userTouched = useRef(false);
+	// True once the initial GET settled — saves are held back until then,
+	// so merely mounting never PUTs defaults over the server copy.
+	const serverLoaded = useRef(false);
+	const savePending = useRef(false);
+	const changeSettings = (update: (cur: RenderSettings) => RenderSettings) => {
+		userTouched.current = true;
+		setSettings(update);
+	};
+	const saveToServer = (s: RenderSettings) => {
+		fetch("/api/graph/render-settings", {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(s),
+		}).catch((err) => console.error("[graph] settings save failed:", err));
+	};
 	useEffect(() => {
-		try {
-			const stored = localStorage.getItem(RENDER_SETTINGS_KEY);
-			if (stored) setSettings(sanitizeRenderSettings(JSON.parse(stored)));
-		} catch {
-			// corrupt storage → defaults, never crash the view
-		}
+		fetch("/api/graph/render-settings")
+			.then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
+			.then((raw) => {
+				// Apply only if the user hasn't already moved a slider —
+				// if they outran the network, their change wins.
+				if (raw !== null && !userTouched.current) setSettings(sanitizeRenderSettings(raw));
+			})
+			.catch(() => {
+				// server unreachable → in-memory defaults keep working
+			})
+			.finally(() => {
+				serverLoaded.current = true;
+				// A change made during the fetch was held back — send now.
+				if (savePending.current) {
+					savePending.current = false;
+					saveToServer(settingsRef.current);
+				}
+			});
 	}, []);
 	useEffect(() => {
-		try {
-			localStorage.setItem(RENDER_SETTINGS_KEY, JSON.stringify(settings));
-		} catch {
-			// storage full/blocked → in-memory settings still work
+		if (!userTouched.current) return; // mount-run / server-apply: no save
+		if (!serverLoaded.current) {
+			savePending.current = true; // hold until the GET settles
+			return;
 		}
+		const id = setTimeout(() => saveToServer(settings), 400);
+		return () => clearTimeout(id);
 	}, [settings]);
 
 	// The renderer instance lives across snapshot refetches and settings
@@ -474,7 +504,7 @@ export function GraphView() {
 								max={14}
 								step={1}
 								value={settings.nodeSize}
-								onChange={(v) => setSettings((cur) => ({ ...cur, nodeSize: v }))}
+								onChange={(v) => changeSettings((cur) => ({ ...cur, nodeSize: v }))}
 							/>
 							<SettingSlider
 								label="Edge width"
@@ -482,7 +512,7 @@ export function GraphView() {
 								max={4}
 								step={0.5}
 								value={settings.edgeWidth}
-								onChange={(v) => setSettings((cur) => ({ ...cur, edgeWidth: v }))}
+								onChange={(v) => changeSettings((cur) => ({ ...cur, edgeWidth: v }))}
 							/>
 							<SettingSlider
 								label="Arrowhead size"
@@ -490,23 +520,35 @@ export function GraphView() {
 								max={15}
 								step={1}
 								value={settings.arrowLength}
-								onChange={(v) => setSettings((cur) => ({ ...cur, arrowLength: v }))}
+								onChange={(v) => changeSettings((cur) => ({ ...cur, arrowLength: v }))}
 							/>
 							<SettingSlider
+								label="Label size"
+								min={6}
+								max={24}
+								step={1}
+								value={settings.labelSize}
+								onChange={(v) => changeSettings((cur) => ({ ...cur, labelSize: v }))}
+							/>
+							{/* Log-scaled: the useful band (0.25–0.5 in camera-ratio
+							    units) sits mid-slider; displayed units normalize the
+							    default (0.5) to "1×". Slider position ↔ labelZoom via
+							    src/core/render-settings.ts. */}
+							<SettingSlider
 								label="Labels until zoom"
-								min={0.25}
-								max={4}
-								step={0.25}
-								value={settings.labelZoom}
-								display={`${settings.labelZoom}×`}
-								onChange={(v) => setSettings((cur) => ({ ...cur, labelZoom: v }))}
+								min={0}
+								max={1000}
+								step={5}
+								value={labelZoomToSlider(settings.labelZoom)}
+								display={labelZoomDisplay(settings.labelZoom)}
+								onChange={(v) => changeSettings((cur) => ({ ...cur, labelZoom: sliderToLabelZoom(v) }))}
 							/>
 							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
 								<span>Cluster labels</span>
 								<input
 									type="checkbox"
 									checked={settings.clusterLabels}
-									onChange={(e) => setSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
+									onChange={(e) => changeSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
 									className="accent-primary"
 								/>
 							</label>
