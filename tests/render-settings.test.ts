@@ -44,11 +44,19 @@ describe("sanitizeRenderSettings", () => {
 			clusterLabels: "yes" as unknown as boolean,
 		});
 		assert.equal(s.nodeSize, 14); // clamped to max
-		assert.equal(s.edgeWidth, 0.5); // clamped to min
-		assert.equal(s.arrowLength, 2);
+		assert.equal(s.edgeWidth, 0.25); // clamped to min
+		assert.equal(s.arrowLength, 1);
 		assert.equal(s.labelZoom, LABEL_ZOOM_MAX);
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize); // NaN-safe reset
 		assert.equal(s.clusterLabels, DEFAULT_RENDER_SETTINGS.clusterLabels);
+	});
+
+	test("the widened low ends accept small sizes", () => {
+		const s = sanitizeRenderSettings({ nodeSize: 1, edgeWidth: 0.25, arrowLength: 1, labelSize: 3 });
+		assert.deepEqual(
+			{ nodeSize: s.nodeSize, edgeWidth: s.edgeWidth, arrowLength: s.arrowLength, labelSize: s.labelSize },
+			{ nodeSize: 1, edgeWidth: 0.25, arrowLength: 1, labelSize: 3 },
+		);
 	});
 
 	test("a fully valid object passes through unchanged", () => {

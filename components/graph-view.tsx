@@ -500,33 +500,33 @@ export function GraphView() {
 						<div className="mt-1.5 flex flex-col gap-2 border-t pt-1.5">
 							<SettingSlider
 								label="Node size"
-								min={2}
+								min={1}
 								max={14}
-								step={1}
+								step={0.5}
 								value={settings.nodeSize}
 								onChange={(v) => changeSettings((cur) => ({ ...cur, nodeSize: v }))}
 							/>
 							<SettingSlider
 								label="Edge width"
-								min={0.5}
+								min={0.25}
 								max={4}
-								step={0.5}
+								step={0.25}
 								value={settings.edgeWidth}
 								onChange={(v) => changeSettings((cur) => ({ ...cur, edgeWidth: v }))}
 							/>
 							<SettingSlider
 								label="Arrowhead size"
-								min={2}
+								min={1}
 								max={15}
-								step={1}
+								step={0.5}
 								value={settings.arrowLength}
 								onChange={(v) => changeSettings((cur) => ({ ...cur, arrowLength: v }))}
 							/>
 							<SettingSlider
 								label="Label size"
-								min={6}
+								min={3}
 								max={24}
-								step={1}
+								step={0.5}
 								value={settings.labelSize}
 								onChange={(v) => changeSettings((cur) => ({ ...cur, labelSize: v }))}
 							/>

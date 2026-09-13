@@ -117,7 +117,7 @@ const LABEL_LINE_HEIGHT = 1.3;
 /** Zoom span (camera-ratio units) over which labels fade together. */
 export const LABELS_FADE_SPAN = 0.5;
 
-const GLOW_PAD = 9; // px the halo extends beyond the node disc (constant)
+const GLOW_PAD = 6; // px the halo extends beyond the node disc (constant)
 const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
 const HOVER_FADE_MS = 180; // hover halo opacity fade length
 const ZOOM_EASE_MS = 45; // wheel-zoom glide: exponential-ease time constant (~250ms per notch)
@@ -139,7 +139,7 @@ const HULL_FILL_LAYERS = [
 ] as const;
 const HULL_STROKE_PAD = 14;
 const HULL_CORNER_RADIUS = 9;
-const REGION_LABEL_SIZE = 18;
+const REGION_LABEL_SIZE = 14;
 
 /** All "px" constants above are screen px AT FIT ZOOM. The renderer scales
  *  them into world units (÷ kFit) once per geometry build; camera zoom then

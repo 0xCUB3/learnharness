@@ -22,18 +22,23 @@ export interface GraphRenderSettings {
 	arrowLength: number;
 	/** Camera-ratio threshold for node labels (see module doc). */
 	labelZoom: number;
-	/** Node + hover label font size, px. */
+	/** Node + hover label font size, px at fit zoom (scales with camera). */
 	labelSize: number;
 	/** Toggle for the cluster region labels (hulls always draw). */
 	clusterLabels: boolean;
 }
 
+// Sizes are screen px AT FIT ZOOM (the world-space renderer scales them
+// with the camera, so a label reads at labelSize x k/kFit on screen).
+// Defaults were re-tuned for world-scaling on 2026-09-13: the old values
+// were calibrated in the screen-fixed era, so everything rendered ~2x
+// too big once sizes started scaling with the graph.
 export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
-	nodeSize: 6,
+	nodeSize: 4,
 	edgeWidth: 1,
-	arrowLength: 5,
+	arrowLength: 4,
 	labelZoom: 0.5,
-	labelSize: 12,
+	labelSize: 7,
 	clusterLabels: true,
 };
 
@@ -51,12 +56,12 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 		return clamp(n, min, max);
 	};
 	return {
-		nodeSize: num(r.nodeSize, DEFAULT_RENDER_SETTINGS.nodeSize, 2, 14),
-		edgeWidth: num(r.edgeWidth, DEFAULT_RENDER_SETTINGS.edgeWidth, 0.5, 4),
-		arrowLength: num(r.arrowLength, DEFAULT_RENDER_SETTINGS.arrowLength, 2, 15),
+		nodeSize: num(r.nodeSize, DEFAULT_RENDER_SETTINGS.nodeSize, 1, 14),
+		edgeWidth: num(r.edgeWidth, DEFAULT_RENDER_SETTINGS.edgeWidth, 0.25, 4),
+		arrowLength: num(r.arrowLength, DEFAULT_RENDER_SETTINGS.arrowLength, 1, 15),
 		// Range matches the log slider's span [LABEL_ZOOM_MIN, LABEL_ZOOM_MAX].
 		labelZoom: num(r.labelZoom, DEFAULT_RENDER_SETTINGS.labelZoom, 0.0625, 4),
-		labelSize: num(r.labelSize, DEFAULT_RENDER_SETTINGS.labelSize, 6, 24),
+		labelSize: num(r.labelSize, DEFAULT_RENDER_SETTINGS.labelSize, 3, 24),
 		clusterLabels:
 			typeof r.clusterLabels === "boolean" ? r.clusterLabels : DEFAULT_RENDER_SETTINGS.clusterLabels,
 	};
