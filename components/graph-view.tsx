@@ -79,6 +79,7 @@ import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
 import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { clusterHue, convexHull, offsetPolygon, traceRoundedPath, type Pt } from "./cluster-geometry.ts";
 
 /** The uniform node look (no state classes — WebGL wants hex, not oklch):
  *  the accent color, until the state model lands. */
@@ -107,8 +108,11 @@ interface RenderSettings {
 	 * settings for exactly that reuse.
 	 */
 	labelZoom: number;
+	/** Toggle for the cluster region labels (the hulls stay) — they can
+	 *  crowd the screen at fit zoom with many regions (user, 2026-09-13). */
+	clusterLabels: boolean;
 }
-const DEFAULT_RENDER_SETTINGS: RenderSettings = { nodeSize: 6, edgeWidth: 1, arrowLength: 5, labelZoom: 0.5 };
+const DEFAULT_RENDER_SETTINGS: RenderSettings = { nodeSize: 6, edgeWidth: 1, arrowLength: 5, labelZoom: 0.5, clusterLabels: true };
 const RENDER_SETTINGS_KEY = "graph-render-settings";
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 /** Defensively merge stored settings (stale/partial/corrupt → defaults). */
@@ -119,6 +123,7 @@ function sanitizeRenderSettings(raw: unknown): RenderSettings {
 		edgeWidth: clamp(Number(r?.edgeWidth ?? DEFAULT_RENDER_SETTINGS.edgeWidth), 0.5, 4),
 		arrowLength: clamp(Number(r?.arrowLength ?? DEFAULT_RENDER_SETTINGS.arrowLength), 2, 15),
 		labelZoom: clamp(Number(r?.labelZoom ?? DEFAULT_RENDER_SETTINGS.labelZoom), 0.25, 4),
+		clusterLabels: typeof r?.clusterLabels === "boolean" ? r.clusterLabels : DEFAULT_RENDER_SETTINGS.clusterLabels,
 	};
 }
 
@@ -423,71 +428,9 @@ function SettingSlider({
 // ─── cluster hulls (vision §1, DECIDED 2026-09-13) ────────────────────────────
 // Boundary geometry is a PURE FUNCTION OF POSITIONS AT DRAW TIME: every
 // redraw re-derives the hull from current member positions mapped through
-// the camera, so pan/zoom/relayout can never invalidate it. No metaballs
-// in v1 — convex hull + outward offset + rounded corners; revisit when
-// regions want concave fidelity.
-
-/** Stable hue per cluster id (content-hash): the region keeps its color
- *  across reshuffles because the id only changes when the members do. */
-function clusterHue(id: string): number {
-	let h = 0;
-	for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) % 360;
-	return h;
-}
-
-type Pt = { x: number; y: number };
-
-/** Convex hull (Andrew monotone chain), viewport pixels. */
-function convexHull(points: Pt[]): Pt[] {
-	if (points.length < 3) return points;
-	const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
-	const cross = (o: Pt, a: Pt, b: Pt) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-	const lower: Pt[] = [];
-	for (const p of pts) {
-		while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0) lower.pop();
-		lower.push(p);
-	}
-	const upper: Pt[] = [];
-	for (let i = pts.length - 1; i >= 0; i--) {
-		const p = pts[i]!;
-		while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0) upper.pop();
-		upper.push(p);
-	}
-	upper.pop();
-	lower.pop();
-	return [...lower, ...upper];
-}
-
-/** Outward edge normal of segment a→b (screen coords: y grows down). */
-function outwardNormal(a: Pt, b: Pt): Pt {
-	const dx = b.x - a.x;
-	const dy = b.y - a.y;
-	const len = Math.hypot(dx, dy) || 1;
-	return { x: -dy / len, y: dx / len };
-}
-
-/** Offset a convex polygon outward by `pad` px (per-vertex normal sum). */
-function offsetPolygon(points: Pt[], pad: number): Pt[] {
-	return points.map((p, i) => {
-		const prev = points[(i - 1 + points.length) % points.length]!;
-		const next = points[(i + 1) % points.length]!;
-		const n1 = outwardNormal(prev, p);
-		const n2 = outwardNormal(p, next);
-		return { x: p.x + (n1.x + n2.x) * pad, y: p.y + (n1.y + n2.y) * pad };
-	});
-}
-
-/** Path through the polygon with rounded corners (arcTo). */
-function traceRoundedPath(ctx: CanvasRenderingContext2D, points: Pt[], radius: number): void {
-	const first = points[0]!;
-	ctx.moveTo(first.x, first.y);
-	for (let i = 1; i <= points.length; i++) {
-		const corner = points[i % points.length]!;
-		const next = points[(i + 1) % points.length]!;
-		ctx.arcTo(corner.x, corner.y, next.x, next.y, radius);
-	}
-	ctx.closePath();
-}
+// the camera, so pan/zoom/relayout can never invalidate it. The math
+// lives in ./cluster-geometry.ts (unit-tested — see that file's header
+// for the inward-normal bug this extraction is named after).
 
 export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
@@ -797,32 +740,38 @@ export function GraphView() {
 						const hull = convexHull(pts);
 						if (hull.length < 3) continue;
 						const hue = clusterHue(cluster.id);
-						// Blurred low-opacity fill + dashed boundary stroke.
-						const outer = offsetPolygon(hull, 14);
-						hullCtx.beginPath();
-						traceRoundedPath(hullCtx, outer, 9);
-						// ctx.filter degrades to flat fill where unsupported.
-						try {
-							hullCtx.filter = "blur(12px)";
-						} catch {
-							/* older browsers: skip the blur */
+						// Soft translucent tint WITHOUT ctx.filter: a canvas blur
+						// filter rasterizes on the GPU per call — hooked to every
+						// render that was ~32 blurred fills per frame (sustained
+						// ~100% GPU rasterization + audible coil whine; reported
+						// 2026-09-13). Layered low-alpha fills approximate the
+						// same soft edge for a fraction of the cost.
+						for (const [pad, alpha] of [[24, 0.025], [19, 0.04], [14, 0.06]] as const) {
+							hullCtx.beginPath();
+							traceRoundedPath(hullCtx, offsetPolygon(hull, pad), 9);
+							hullCtx.fillStyle = `hsla(${hue}, 65%, 60%, ${alpha})`;
+							hullCtx.fill();
 						}
-						hullCtx.fillStyle = `hsla(${hue}, 65%, 60%, 0.08)`;
-						hullCtx.fill();
-						hullCtx.filter = "none";
+						// Dashed boundary on the innermost offset.
+						hullCtx.beginPath();
+						traceRoundedPath(hullCtx, offsetPolygon(hull, 14), 9);
 						hullCtx.setLineDash([7, 7]);
 						hullCtx.strokeStyle = `hsla(${hue}, 65%, 62%, 0.5)`;
 						hullCtx.lineWidth = 1.5;
 						hullCtx.stroke();
 						hullCtx.setLineDash([]);
-						// The region label at the centroid (inverse-gated layer).
-						if (!cluster.label) continue;
+						// The region label at the centroid (inverse-gated layer) —
+						// skippable entirely via the settings toggle.
+						if (!settings.clusterLabels || !cluster.label) continue;
 						const centroid = hull.reduce((acc, p) => ({ x: acc.x + p.x / hull.length, y: acc.y + p.y / hull.length }), { x: 0, y: 0 });
 						labelCtx.fillStyle = `hsla(${hue}, 55%, 78%, 0.85)`;
 						labelCtx.fillText(cluster.label, centroid.x, centroid.y);
 					}
 				};
-				renderer.on("afterRender", drawClusters);
+				// Redraw ONLY when the view actually moves: camera updates and
+				// resizes. NOT on sigma's afterRender — hover animations re-render
+				// sigma many frames per interaction, and hulls don't care.
+				renderer.on("resize", drawClusters);
 
 				renderer.on("clickNode", ({ node }) => {
 					const graphNode = snapshot.nodes.find((n) => n.id === node);
@@ -858,9 +807,11 @@ export function GraphView() {
 					// the exact span node labels fade out — THE one zoom control.
 					regionCanvas.style.opacity = (1 - alpha).toFixed(3);
 				};
+				drawClusters();
 				syncRenderLabels(renderer.getCamera().getState().ratio);
 				renderer.getCamera().on("updated", (state) => {
 					syncRenderLabels(state.ratio);
+					drawClusters();
 					setSelected(null);
 				});
 				// The hover fade: entering schedules renders (sigma re-invokes
@@ -1028,6 +979,15 @@ export function GraphView() {
 								display={`${settings.labelZoom}×`}
 								onChange={(v) => setSettings((cur) => ({ ...cur, labelZoom: v }))}
 							/>
+							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
+								<span>Cluster labels</span>
+								<input
+									type="checkbox"
+									checked={settings.clusterLabels}
+									onChange={(e) => setSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
+									className="accent-primary"
+								/>
+							</label>
 						</div>
 					)}
 					{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (

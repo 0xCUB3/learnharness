@@ -7,6 +7,7 @@
 import { strict as assert } from "node:assert";
 import { describe, test } from "node:test";
 import { detectCommunities, matchClusterLabelings, MIN_CLUSTER_SIZE } from "../src/core/clusters.ts";
+import { clusterHue, convexHull, offsetPolygon, outwardNormal } from "../components/cluster-geometry.ts";
 import type { Community } from "../src/core/clusters.ts";
 import type { ClusterLabeling } from "../src/core/contracts.ts";
 
@@ -69,6 +70,98 @@ describe("matchClusterLabelings", () => {
 
 	test("MIN_CLUSTER_SIZE is 3 (the render/naming threshold)", () => {
 		assert.equal(MIN_CLUSTER_SIZE, 3);
+	});
+});
+
+describe("hull geometry (the inward-normal regression)", () => {
+	// Screen coordinates: y grows DOWN. The first implementation used
+	// (-dy, dx) as the "outward" normal — which points INWARD for the
+	// clockwise-on-screen rings monotone chain produces here, shrinking
+	// every hull by the pad and inverting it entirely once a cluster
+	// projected smaller than ~2x the pad (spiky shape churn on zoom).
+
+	const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
+
+	test("outwardNormal points away from a square's interior (screen coords)", () => {
+		const square = [
+			{ x: 0, y: 0 },
+			{ x: 10, y: 0 },
+			{ x: 10, y: 10 },
+			{ x: 0, y: 10 },
+		];
+		const center = { x: 5, y: 5 };
+		for (let i = 0; i < 4; i++) {
+			const a = square[i]!;
+			const b = square[(i + 1) % 4]!;
+			const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+			const n = outwardNormal(a, b);
+			// The normal translated from the edge midpoint moves AWAY from the center.
+			const moved = { x: mid.x + n.x, y: mid.y + n.y };
+			assert.ok(dist(moved, center) > dist(mid, center), `edge ${i}: normal points inward`);
+		}
+	});
+
+	test("offsetPolygon moves every vertex AWAY from the centroid", () => {
+		const hull = convexHull([
+			{ x: 0, y: 0 }, { x: 40, y: 3 }, { x: 55, y: 30 }, { x: 20, y: 44 }, { x: 2, y: 25 },
+		]);
+		const centroid = {
+			x: hull.reduce((s, p) => s + p.x, 0) / hull.length,
+			y: hull.reduce((s, p) => s + p.y, 0) / hull.length,
+		};
+		for (const [i, v] of hull.entries()) {
+			const moved = offsetPolygon(hull, 14)[i]!;
+			assert.ok(
+				dist(moved, centroid) > dist(v, centroid),
+				`vertex ${i} moved inward (was ${dist(v, centroid).toFixed(1)}, now ${dist(moved, centroid).toFixed(1)})`,
+			);
+		}
+	});
+
+	test("offsetPolygon stays sane when the hull is SMALLER than the pad (the zoom-out case)", () => {
+		// A 10px cluster padded by 14px: must still be a simple polygon
+		// (no vertex crossing the centroid, no inversion).
+		const hull = convexHull([
+			{ x: 0, y: 0 }, { x: 10, y: 1 }, { x: 9, y: 9 }, { x: 1, y: 8 },
+		]);
+		const centroid = {
+			x: hull.reduce((s, p) => s + p.x, 0) / hull.length,
+			y: hull.reduce((s, p) => s + p.y, 0) / hull.length,
+		};
+		const moved = offsetPolygon(hull, 14);
+		for (const v of moved) {
+			assert.ok(dist(v, centroid) >= 10, `vertex collapsed past the centroid: ${JSON.stringify(v)}`);
+		}
+		// Vertex ORDER stays angularly monotone around the centroid (no self-intersection).
+		const angles = moved.map((v) => Math.atan2(v.y - centroid.y, v.x - centroid.x));
+		let prev = angles[0]!;
+		for (const a of angles.slice(1)) {
+			let d = a - prev;
+			while (d > Math.PI) d -= 2 * Math.PI;
+			while (d < -Math.PI) d += 2 * Math.PI;
+			assert.ok(d !== 0, "duplicate angle — degenerate offset");
+			prev = a;
+		}
+	});
+
+	test("convexHull returns a clockwise-on-screen ring (the orientation the normal math assumes)", () => {
+		const hull = convexHull([
+			{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+		]);
+		// Signed area in code coords: clockwise-on-screen (y-down) = positive.
+		let area = 0;
+		for (let i = 0; i < hull.length; i++) {
+			const a = hull[i]!;
+			const b = hull[(i + 1) % hull.length]!;
+			area += a.x * b.y - b.x * a.y;
+		}
+		assert.ok(area / 2 > 0, `expected positive (clockwise-on-screen) area, got ${area / 2}`);
+	});
+
+	test("clusterHue is stable per id and spreads", () => {
+		assert.equal(clusterHue("clu_abc123def456"), clusterHue("clu_abc123def456"));
+		const hues = new Set(Array.from({ length: 40 }, (_, i) => clusterHue(`clu_${i}`)));
+		assert.ok(hues.size > 25, `expected spread hues, got ${hues.size}`);
 	});
 });
 
