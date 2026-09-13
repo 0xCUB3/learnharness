@@ -25,6 +25,7 @@ import type {
 	SessionCheckpoint,
 	TurnUsage,
 	NotesSource,
+	ClusterLabeling,
 } from "./contracts.ts";
 
 // ─── ChatStore — the session record's home (data/chats) ─────────────────────
@@ -81,6 +82,11 @@ export interface GraphStore {
 	/** Append one emission checkpoint. */
 	appendCheckpoint(checkpoint: SessionCheckpoint): void;
 	readCheckpoints(): SessionCheckpoint[];
+
+	/** Append one cluster labeling — idempotent by id (the id hashes the
+	 *  sorted core, so identical member sets dedupe). */
+	appendClusterLabel(labeling: ClusterLabeling): void;
+	readClusterLabels(): ClusterLabeling[];
 
 	/** Upsert one imported-notes source record (config.SOURCES_FILE — a
 	 *  JSON map, not a ledger; an upsert keeps the existing usage log). */

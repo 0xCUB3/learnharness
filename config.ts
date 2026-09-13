@@ -47,6 +47,9 @@ export const MODELS = {
 	extractor: { model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** The auditor verifies evidence exists; keep it cheap. */
 	auditor: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	/** Names detected communities — one singular call, given member names
+	 * + statements. Purely a labeling flourish; keep it cheap. */
+	labeler: { model: "z-ai/glm-5.3-flash", effort: "low" },
 } satisfies Record<string, ModelSpec>;
 
 export type ModelRole = keyof typeof MODELS;
@@ -71,6 +74,8 @@ export const LEDGER_FILES = {
 	events: path.join(PATHS.graph, "events.jsonl"),
 	mappings: path.join(PATHS.graph, "mappings.jsonl"),
 	sessions: path.join(PATHS.graph, "sessions.jsonl"),
+	/** LLM-named community records (contracts/graph.ts ClusterLabeling). */
+	clusterLabels: path.join(PATHS.graph, "cluster-labels.jsonl"),
 } as const;
 
 /**

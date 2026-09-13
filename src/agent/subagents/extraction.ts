@@ -16,6 +16,7 @@ import type {
 	SessionFindings,
 } from "../../core/contracts.ts";
 import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
+import { refreshClusterLabels } from "./cluster-namer.ts";
 
 /**
  * The extraction pipeline (vision §1 construction, 2026-09-02 redesign) — the
@@ -548,6 +549,8 @@ export interface ExtractionModels {
 	/** Test seam: a scripted engine per stage (production uses the roles). */
 	extractor?: PiEngine;
 	auditor?: PiEngine;
+	/** Test seam for the cluster namer (post-extraction garnish). */
+	labeler?: PiEngine;
 }
 
 export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {}
@@ -716,6 +719,13 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
 					`(${Math.round(performance.now() - t0)}ms total)`,
 			);
+			// Post-extraction garnish (DECIDED 2026-09-13): name new/changed
+			// clusters. Fire-and-forget — naming never fails the run.
+			refreshClusterLabels({
+				graphStore,
+				engine: deps.labeler,
+				signal: runningExtractions.get(chatId)?.controller.signal,
+			}).catch(() => {});
 			return stats;
 		} catch (err) {
 			persistRunUsage(chatId, Math.round(performance.now() - t0), undefined);
@@ -819,6 +829,11 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
 					`(${Math.round(performance.now() - t0)}ms total)`,
 			);
+			refreshClusterLabels({
+				graphStore,
+				engine: deps.labeler,
+				signal: runningExtractions.get(id)?.controller.signal,
+			}).catch(() => {});
 			return stats;
 		} catch (err) {
 			persistRunUsage(id, Math.round(performance.now() - t0), undefined);

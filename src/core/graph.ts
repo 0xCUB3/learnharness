@@ -38,10 +38,11 @@
  * adapters in.
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { isToolUIPart, type UIMessage } from "ai";
 import type {
 	AuditResult,
+	Cluster,
 	EmissionStats,
 	GraphEdge,
 	GraphNode,
@@ -50,6 +51,7 @@ import type {
 	LedgerEvent,
 	LedgerEventKind,
 } from "./contracts.ts";
+import { detectCommunities, matchClusterLabelings, MIN_CLUSTER_SIZE } from "./clusters.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
@@ -330,6 +332,16 @@ export function pendingQuizAnswers(chatId: string, deps: GraphDeps): number {
 
 // ─── derivation (reads only — everything below is recomputable) ─────────────
 
+/** The content identity of a community: "clu_" + sha256 of the sorted
+ *  member ids (12 hex). Deterministic — the same member set always mints
+ *  the same id — so re-naming races and idempotent re-runs dedupe at the
+ *  store seam (appendClusterLabel). Lives here (server-only core), not in
+ *  clusters.ts, because clusters.ts is barrel-exported and must stay
+ *  browser-safe (no node:crypto). */
+export function clusterContentId(members: readonly string[]): string {
+	return "clu_" + createHash("sha256").update([...members].sort().join("\n")).digest("hex").slice(0, 12);
+}
+
 export interface DerivedGraph {
 	nodes: GraphNode[];
 	edges: GraphEdge[];
@@ -485,7 +497,23 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		(nodeObservations[nodeId] ??= {})[chatId] = note;
 	}
 
-	return { nodes, edges, sessions, fileSources, nodeSessions, nodeObservations };
+	// Structural communities (vision §1): Louvain over the undirected
+	// follows+supports structure, joined with persisted labelings —
+	// core-survival matching, size-filtered at the presentation threshold.
+	// Detection is DETERMINISTIC (seeded), so no memo in v1: a snapshot
+	// read recomputes it (ms at current scale; revisit at vault scale).
+	const detection = detectCommunities(nodes, edges);
+	const claims = matchClusterLabelings(detection.communities, deps.graphStore.readClusterLabels());
+	const clusters: Cluster[] = detection.communities
+		.map((community, index) => ({ community, claim: claims[index] }))
+		.filter(({ community }) => community.members.length >= MIN_CLUSTER_SIZE)
+		.map(({ community, claim }) => ({
+			id: claim?.id ?? clusterContentId(community.members),
+			label: claim?.label ?? null,
+			members: community.members,
+		}));
+
+	return { nodes, edges, sessions, fileSources, nodeSessions, nodeObservations, clusters };
 }
 
 // Re-export: the contract owns the shape; legacy importers still reach it.

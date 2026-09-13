@@ -31,6 +31,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { LEDGER_FILES, SOURCES_FILE } from "../../config.ts";
 import type {
+	ClusterLabeling,
 	GraphEdge,
 	GraphNode,
 	ExtractionRunUsage,
@@ -85,6 +86,14 @@ function readValid<T>(file: string, isValid: (v: unknown) => v is T): T[] {
 /** Provenance points are (chatId, messageId) pairs — message-granular. */
 const isProvenancePoint = (v: unknown): v is ProvenancePoint =>
 	isRecord(v) && isString(v.chatId) && isString(v.messageId);
+
+const isClusterLabeling = (v: unknown): v is ClusterLabeling =>
+	isRecord(v) &&
+	isString(v.id) &&
+	isString(v.label) &&
+	Array.isArray(v.core) &&
+	v.core.every(isString) &&
+	isString(v.createdAt);
 
 const isGraphNode = (v: unknown): v is GraphNode =>
 	isRecord(v) &&
@@ -162,6 +171,18 @@ export const graphStore: GraphStore = {
 	},
 	readCheckpoints(): SessionCheckpoint[] {
 		return readValid(LEDGER_FILES.sessions, isCheckpoint);
+	},
+
+	// ── cluster labelings (config.LEDGER_FILES.clusterLabels) ──
+
+	/** Idempotent by id: the id is a hash of the sorted core, so re-appending
+	 *  the same member set (re-naming races, idempotent re-runs) is a no-op. */
+	appendClusterLabel(labeling: ClusterLabeling): void {
+		if (this.readClusterLabels().some((l) => l.id === labeling.id)) return;
+		appendLine(LEDGER_FILES.clusterLabels, labeling);
+	},
+	readClusterLabels(): ClusterLabeling[] {
+		return readValid(LEDGER_FILES.clusterLabels, isClusterLabeling);
 	},
 
 	// ── imported-notes bookkeeping (config.SOURCES_FILE — a JSON map) ──

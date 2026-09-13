@@ -6,14 +6,71 @@
  */
 import { strict as assert } from "node:assert";
 import { describe, test } from "node:test";
-import { detectCommunities } from "../src/core/clusters.ts";
+import { detectCommunities, matchClusterLabelings, MIN_CLUSTER_SIZE } from "../src/core/clusters.ts";
 import type { Community } from "../src/core/clusters.ts";
+import type { ClusterLabeling } from "../src/core/contracts.ts";
 
 const ids = (n: number, prefix = "n") => [...Array(n).keys()].map((i) => `${prefix}${i}`);
 
 /** A clique on the given ids. */
 const clique = (nodeIds: string[]) =>
 	nodeIds.flatMap((a, i) => nodeIds.slice(i + 1).map((b) => ({ from: a, to: b })));
+
+const labeling = (id: string, core: string[], createdAt = "2026-09-01T00:00:00.000Z"): ClusterLabeling => ({
+	id,
+	label: `label-${id}`,
+	core,
+	createdAt,
+});
+
+describe("matchClusterLabelings", () => {
+	test("claims a labeling while at least half its core survives in the community", () => {
+		const community: Community = { members: ["a", "b", "c", "d", "e"] };
+		const records = [labeling("clu_1", ["a", "b", "x", "y"])]; // 2 of 4 survive — exactly half
+		const [claim] = matchClusterLabelings([community], records);
+		assert.equal(claim?.id, "clu_1");
+		// One fewer survivor: under half → relabel.
+		const [dead] = matchClusterLabelings([{ members: ["a", "c", "d", "e", "f"] }], records);
+		assert.equal(dead, null);
+	});
+
+	test("single successor: a split core keeps its label in only one community", () => {
+		const records = [labeling("clu_1", ["a", "b", "c", "d"])];
+		const left: Community = { members: ["a", "b", "z"] }; // 2 of 4 — half
+		const right: Community = { members: ["c", "d", "w"] }; // 2 of 4 — half
+		// Tie: larger overlap wins; equal → both eligible, greedy takes first come.
+		const claims = matchClusterLabelings([left, right], records);
+		const claimed = claims.filter((c) => c !== null);
+		assert.equal(claimed.length, 1);
+		assert.equal(claimed[0]?.id, "clu_1");
+	});
+
+	test("greedy: the best-overlapping community wins the record", () => {
+		const records = [labeling("clu_1", ["a", "b", "c", "d"])];
+		const weak: Community = { members: ["a", "b", "q", "r", "s"] }; // 2/4
+		const strong: Community = { members: ["a", "b", "c", "x", "y"] }; // 3/4
+		const claims = matchClusterLabelings([weak, strong], records);
+		assert.equal(claims[0], null);
+		assert.equal(claims[1]?.id, "clu_1");
+	});
+
+	test("one record per community; newest record breaks ties", () => {
+		const oldR = labeling("clu_old", ["a", "b"], "2026-09-01T00:00:00.000Z");
+		const newR = labeling("clu_new", ["a", "b"], "2026-09-02T00:00:00.000Z");
+		const community: Community = { members: ["a", "b", "c"] };
+		const [claim] = matchClusterLabelings([community], [oldR, newR]);
+		assert.equal(claim?.id, "clu_new");
+	});
+
+	test("no labelings: every community unclaimed; empty communities array ok", () => {
+		assert.deepEqual(matchClusterLabelings([{ members: ["a", "b"] }], []), [null]);
+		assert.deepEqual(matchClusterLabelings([], [labeling("clu_1", ["a"])]), []);
+	});
+
+	test("MIN_CLUSTER_SIZE is 3 (the render/naming threshold)", () => {
+		assert.equal(MIN_CLUSTER_SIZE, 3);
+	});
+});
 
 describe("detectCommunities", () => {
 	test("two dense cliques joined by a single bridge split into two communities", () => {
@@ -57,7 +114,7 @@ describe("detectCommunities", () => {
 			{ from: "b", to: "c" },
 		]);
 		assert.equal(result.communities.length, 1);
-		assert.deepEqual(result.communities[0].members.sort(), ["a", "b", "c"]);
+		assert.deepEqual(result.communities[0]!.members.sort(), ["a", "b", "c"]);
 	});
 
 	test("self-loops and unknown-endpoint edges are skipped defensively", () => {
@@ -69,7 +126,7 @@ describe("detectCommunities", () => {
 			{ from: "a", to: "b" }, // the one real edge
 		]);
 		assert.equal(result.communities.length, 1);
-		assert.deepEqual(result.communities[0].members.sort(), ["a", "b"]);
+		assert.deepEqual(result.communities[0]!.members.sort(), ["a", "b"]);
 	});
 
 	test("members are sorted; communities ordered by size then id", () => {
@@ -84,7 +141,7 @@ describe("detectCommunities", () => {
 			assert.deepEqual(c.members, sorted);
 		}
 		// iso (isolated) is last: size 1 < 4.
-		const last = result.communities[result.communities.length - 1];
+		const last = result.communities[result.communities.length - 1]!;
 		assert.deepEqual(last.members, ["iso"]);
 	});
 

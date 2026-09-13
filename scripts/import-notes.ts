@@ -15,6 +15,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createExtractionPipeline } from "../src/agent/subagents/extraction.ts";
+import { clusterNamingSettled } from "../src/agent/subagents/cluster-namer.ts";
 import { getGraph } from "../src/core/graph.ts";
 import { stores } from "../src/server/stores.ts";
 
@@ -52,10 +53,16 @@ async function main() {
 	});
 	await Promise.all(workers);
 
+	// The post-merge cluster naming is fire-and-forget inside the pipeline;
+	// settle it before the process exits so labels actually land.
+	await clusterNamingSettled();
+
 	const graph = getGraph(stores.graphStore);
+	const labels = stores.graphStore.readClusterLabels().length;
 	console.log(
 		`[import-notes] done: +${totals.nodes} nodes, +${totals.edges} edges, +${totals.events} events, ${totals.failed} failed — ` +
-			`graph now ${graph.nodes.length} nodes, ${graph.edges.length} edges, ${graph.events.length} events`,
+			`graph now ${graph.nodes.length} nodes, ${graph.edges.length} edges, ${graph.events.length} events, ` +
+			`${labels} named clusters`,
 	);
 }
 

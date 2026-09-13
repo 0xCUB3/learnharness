@@ -20,7 +20,7 @@ import { after, describe, it } from "node:test";
 import type { UIMessage } from "ai";
 import type { AuditResult } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
-import { getGraph, graphSnapshot, mergeFindings, pendingQuizAnswers, type GraphDeps } from "../src/core/graph.ts";
+import { clusterContentId, getGraph, graphSnapshot, mergeFindings, pendingQuizAnswers, type GraphDeps } from "../src/core/graph.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { LEDGER_FILES, PATHS, SOURCES_FILE } from "../config.ts";
@@ -405,6 +405,53 @@ describe("the merger (mergeFindings)", () => {
 		assert.equal(snap.sessions["src_snapfixture"], undefined, "a notes source is never a chat session");
 		// The understanding observation joins under the source id like any session's.
 		assert.equal(snap.nodeObservations[node.id]!["src_snapfixture"], "solid");
+	});
+
+	it("derives structural clusters in graphSnapshot, joined with persisted labelings", () => {
+		// A self-contained 3-clique: three propositions, all mutually linked.
+		const tri = ["Alpha.", "Beta.", "Gamma cluster."] as const;
+		const merge = mergeFindings(
+			"src_clusterfixture",
+			{
+				propositions: tri.map((statement, i) => ({
+					id: `p${i + 1}`,
+					name: `Cluster node ${i + 1}`,
+					statement,
+					aliases: [],
+					messages: [],
+					evidence: ["fixture evidence"],
+				})),
+				edges: [
+					{ from: "p1", to: "p2", type: "follows", messages: [], evidence: ["e"] },
+					{ from: "p2", to: "p3", type: "follows", messages: [], evidence: ["e"] },
+					{ from: "p1", to: "p3", type: "follows", messages: [], evidence: ["e"] },
+				],
+				attribution: { quiz: {} },
+				dropped: [],
+			},
+			graphDeps,
+			{ messages: null, foldedAt: "2026-09-13T00:00:00.000Z" },
+		);
+		assert.equal(merge.nodes, 3);
+		const snap = graphSnapshot(graphDeps);
+		// Presentation threshold: every cluster is >= 3 members.
+		assert.ok(snap.clusters.every((c) => c.members.length >= 3));
+		// Our trio is exactly one cluster, unlabeled until the namer runs.
+		const mine = snap.clusters.find((c) => c.members.length === 3 && tri.every((s) => c.members.includes(snap.nodes.find((n) => n.statement === s)!.id)));
+		assert.ok(mine, "the 3-clique is a cluster");
+		assert.equal(mine!.label, null);
+		assert.match(mine!.id, /^clu_/);
+		// Mint the labeling the namer would append — the next read joins it.
+		graphStore.appendClusterLabel({
+			id: clusterContentId(mine!.members),
+			label: "Test region",
+			core: mine!.members,
+			createdAt: "2026-09-13T00:00:00.000Z",
+		});
+		const snap2 = graphSnapshot(graphDeps);
+		const claimed = snap2.clusters.find((c) => c.members.length === 3 && tri.every((s) => c.members.includes(snap2.nodes.find((n) => n.statement === s)!.id)))!;
+		assert.equal(claimed.label, "Test region");
+		assert.equal(claimed.id, clusterContentId(mine!.members), "the claimed cluster carries the record's id");
 	});
 
 	it("derives sessions and per-session understanding observations in graphSnapshot", () => {

@@ -270,6 +270,37 @@ export interface AuditResult {
 }
 
 /** The GET /api/graph payload — everything the home view's PURE renderer needs. */
+/** cluster-labels.jsonl line — one LLM-named community (vision §1,
+ * DECIDED 2026-09-13). Append-only history: records are immutable, never
+ * edited or deleted; dead labelings remain as history. IDENTITY is the
+ * sorted member set ("core"), hashed into the id, so re-naming the same
+ * community dedupes and a labeling survives graph edits as long as at
+ * least half its core survives in some single community (core-survival;
+ * under half → the community is renamed, splits can keep only one
+ * successor). */
+export interface ClusterLabeling {
+	/** "clu_" + content hash of the sorted core. */
+	id: string;
+	/** The short domain label (1–4 words), e.g. "Differential forms". */
+	label: string;
+	/** The member node ids the label was minted for, sorted — the survival core. */
+	core: string[];
+	createdAt: string;
+}
+
+/** One rendered cluster in the snapshot payload (vision §1). Members are
+ * node ids; the renderer draws the hull from member positions at draw
+ * time and gates the label inversely on the node-label zoom control. */
+export interface Cluster {
+	/** The labeling record id when claimed; unlabeled clusters still
+	 * appear (hull, no name) with a member-hash id. */
+	id: string;
+	/** null until the naming call has minted/claimed a labeling. */
+	label: string | null;
+	/** Node ids, sorted. Hull + centroid are renderer concerns. */
+	members: string[];
+}
+
 export interface GraphSnapshot {
 	nodes: GraphNode[];
 	edges: GraphEdge[];
@@ -286,6 +317,10 @@ export interface GraphSnapshot {
 	 *  shown next to the session list — the confidence history). Multiple
 	 *  notes for one (node, chat) collapse to the latest. */
 	nodeObservations: Record<string, Record<string, string>>;
+	/** Structural communities (Louvain over follows+supports), size ≥ 3,
+	 * joined with persisted LLM labelings. Purely structural — never
+	 * depends on layout. */
+	clusters: Cluster[];
 }
 
 /** Derive a short chat title from the learner's first message (pure).

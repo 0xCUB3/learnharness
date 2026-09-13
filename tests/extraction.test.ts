@@ -27,6 +27,7 @@ import type { UIMessage } from "ai";
 import type { PiEngine } from "../src/agent/models.ts";
 import type {
 	AuditResult,
+	ClusterLabeling,
 	ExtractionRunUsage,
 	GraphEdge,
 	GraphNode,
@@ -38,6 +39,7 @@ import type {
 } from "../src/core/contracts.ts";
 import type { GraphStore } from "../src/core/ports.ts";
 import { abortExtraction, createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
+import { clusterNamingSettled, refreshClusterLabels } from "../src/agent/subagents/cluster-namer.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
@@ -63,6 +65,7 @@ function memoryLedgers() {
 	const mappings: NodeMapping[] = [];
 	const checkpoints: SessionCheckpoint[] = [];
 	const sources = new Map<string, NotesSource>();
+	const clusterLabels: ClusterLabeling[] = [];
 	return {
 		appendNode: (n: GraphNode) => void nodes.push(n),
 		readNodes: () => nodes.map((n) => ({ ...n })),
@@ -87,6 +90,11 @@ function memoryLedgers() {
 				source.extractions = [...(source.extractions ?? []), entry];
 			}
 		},
+		// Cluster labelings — mirrors the real store: append dedupes by id.
+		appendClusterLabel: (l: ClusterLabeling) => {
+			if (!clusterLabels.some((x) => x.id === l.id)) clusterLabels.push(l);
+		},
+		readClusterLabels: () => clusterLabels.map((l) => ({ ...l, core: [...l.core] })),
 	} satisfies GraphStore;
 }
 
@@ -306,6 +314,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", verdict),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const stats = await pipeline.runExtraction(chatId);
 
@@ -346,6 +355,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: silentModel(), // never submits the review
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await assert.rejects(pipeline.runExtraction(chatId), /the auditor never submitted a review/);
 		assert.equal(ledgers.readNodes().length, 0);
@@ -356,6 +366,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			graphStore: ledgers,
 			extractor: silentModel(),
 			auditor: submitModel("submit_review", { ...FINDINGS, dropped: [] }),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await assert.rejects(failingExtractor.runExtraction(chatId), /the extractor never submitted findings/);
 		assert.equal(ledgers.readCheckpoints().length, 0);
@@ -388,6 +399,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			// registry must already carry this chat at the right phase.
 			extractor: submitModel("submit_findings", FINDINGS, () => seen.push(phaseOf())),
 			auditor: submitModel("submit_review", verdict, () => seen.push(phaseOf())),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await pipeline.runExtraction(chatId);
 		assert.deepEqual(seen, ["extracting", "auditing"]);
@@ -422,6 +434,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			auditor: submitModel("submit_review", verdict, () =>
 				usageSeen.push(extractionStatuses().find((r) => r.chatId === chatId)?.usage.extractor?.steps.at(-1)?.inputTokens),
 			),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await pipeline.runExtraction(chatId);
 
@@ -458,6 +471,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			graphStore: ledgers,
 			extractor: hangingModel(), // hangs until aborted — no step finishes
 			auditor: submitModel("submit_review", { propositions: [], edges: [], attribution: { quiz: {} }, dropped: [] }),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const runPromise = pipeline.runExtraction(chatId);
 
@@ -508,6 +522,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			graphStore: ledgers,
 			extractor: gatedExtractor,
 			auditor: silentModel(),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 
 		const first = pipeline.runExtraction(chatId);
@@ -525,6 +540,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			graphStore: ledgers,
 			extractor: silentModel(),
 			auditor: silentModel(),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await assert.rejects(pipeline.runExtraction("chat_does_not_exist"), /Chat not found/);
 	});
@@ -562,6 +578,70 @@ const NOTES_VERDICT = {
 	dropped: [],
 } as const;
 
+const CLUSTER_FINDINGS = {
+	propositions: [
+		{ id: "p1", name: "Modal editing", statement: "Vim edits text through modal command modes.", aliases: [], messages: [], evidence: ["Normal mode keys are commands."], understanding: "solid" },
+		{ id: "p2", name: "Verb-object grammar", statement: "Vim commands compose as verb and object.", aliases: [], messages: [], evidence: ["d then motion deletes."], understanding: "solid" },
+		{ id: "p3", name: "Operator-pending", statement: "Vim enters operator-pending mode between verb and object.", aliases: [], messages: [], evidence: ["After d, a motion is expected."], understanding: "solid" },
+	],
+	edges: [
+		{ from: "p1", to: "p2", type: "follows", messages: [], evidence: ["e"] },
+		{ from: "p2", to: "p3", type: "follows", messages: [], evidence: ["e"] },
+	],
+} as const;
+
+const CLUSTER_VERDICT = {
+	propositions: CLUSTER_FINDINGS.propositions,
+	edges: CLUSTER_FINDINGS.edges,
+	dropped: [],
+} as const;
+
+describe("cluster naming (the post-extraction garnish)", () => {
+	it("names a new community after a notes merge — one record, claimed on the next refresh", async () => {
+		const ledgers = memoryLedgers();
+		const namerCalls: number[] = [];
+		const labeler = submitModel("submit_labels", { labels: [{ key: "c0", label: "Vim modal grammar" }] }, () => namerCalls.push(1));
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", CLUSTER_FINDINGS),
+			auditor: submitModel("submit_review", CLUSTER_VERDICT),
+			labeler,
+		});
+		const stats = await pipeline.importNotes({ filePath: "/vault/modal.md", text: "raw notes, any format" });
+		assert.deepEqual(stats, { nodes: 3, edges: 2, events: 3 });
+		// The refresh is fire-and-forget inside the pipeline — settle it.
+		await clusterNamingSettled();
+		assert.equal(namerCalls.length, 1, "ONE singular naming call");
+		const records = ledgers.readClusterLabels();
+		assert.equal(records.length, 1);
+		assert.equal(records[0]!.label, "Vim modal grammar");
+		assert.equal(records[0]!.core.length, 3);
+		assert.match(records[0]!.id, /^clu_/);
+		// Second refresh: core-survival claims it — nothing new to name.
+		const again = await refreshClusterLabels({ graphStore: ledgers, engine: labeler });
+		assert.equal(again.named, 0);
+		assert.equal(again.appended, 0);
+		assert.ok(again.claimed >= 1);
+		assert.equal(ledgers.readClusterLabels().length, 1, "no duplicate records");
+	});
+
+	it("naming failure never fails the run", async () => {
+		const ledgers = memoryLedgers();
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", CLUSTER_FINDINGS),
+			auditor: submitModel("submit_review", CLUSTER_VERDICT),
+			labeler: silentModel(), // never submits — the namer throws
+		});
+		const stats = await pipeline.importNotes({ filePath: "/vault/modal.md", text: "raw notes" });
+		assert.deepEqual(stats, { nodes: 3, edges: 2, events: 3 }, "the merge itself succeeded");
+		await clusterNamingSettled();
+		assert.equal(ledgers.readClusterLabels().length, 0, "nothing named, nothing appended");
+	});
+});
+
 describe("the notes front door (importNotes — format-agnostic)", () => {
 	it("imports raw notes end to end: source record, file-scoped provenance, no quiz events", async () => {
 		const ledgers = memoryLedgers();
@@ -575,6 +655,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 				const run = extractionStatuses().find((r) => r.chatId.startsWith("src_"));
 				seen.push({ kind: run?.kind, label: run?.label });
 			}),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const stats = await pipeline.importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
 
@@ -618,6 +699,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 				graphStore: ledgers,
 				extractor: submitModel("submit_findings", NOTES_FINDINGS),
 				auditor: submitModel("submit_review", NOTES_VERDICT),
+				labeler: submitModel("submit_labels", { labels: [] }),
 			});
 		const first = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
 		assert.deepEqual(first, { nodes: 1, edges: 0, events: 1 });
@@ -637,6 +719,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 			graphStore: ledgers,
 			extractor: hangingModel(),
 			auditor: submitModel("submit_review", NOTES_VERDICT),
+			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const runPromise = pipeline.importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
 
