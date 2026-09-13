@@ -21,6 +21,7 @@ export * from "./render-settings.ts";
 
 export * from "./question-core.ts";
 export * from "./clusters.ts";
+export * from "./layout.ts";
 export * from "./plan-tree.ts";
 export * from "./phases.ts";
 export * from "./pending.ts";

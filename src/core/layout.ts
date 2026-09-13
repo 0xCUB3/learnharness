@@ -1,53 +1,134 @@
 /**
- * Option A — incremental anchored force layout (DECIDED 2026-09-13).
+ * The layout engine — d3-force, everywhere (DECIDED 2026-09-13).
  *
- * The layout EVOLVES instead of reshuffling: each settle warm-starts
- * forceAtlas2 from the positions ledger, ties every previously-positioned
- * node back toward its anchor (a per-iteration re-blend), and seeds new
- * nodes near their positioned neighbors — so old placements stay
- * recognizable while the graph grows, exactly the way a mind map accretes
- * around what came before.
+ * One engine owns the equilibrium: the merge-time incremental settle AND
+ * the live drag physics run the SAME force set (links as springs, charge
+ * repulsion, weak gravity), so the positions ledger and the transient
+ * simulation agree on what "resting" means. (FA2 was replaced after a
+ * research round: it has no annealing/pinning/settle model and mixing it
+ * with a different live engine visibly re-flows the graph on every drag.)
  *
- * Design constraints (kept deliberately, for future live physics):
- *  - PURE: no fs, no server types — the same function is the merge-time
- *    server settler AND the future client-side live simulator (a pinned
- *    node is just an anchor with full retention).
- *  - DETERMINISTIC: seeded by node id, so the same graph + ledger state
- *    always settles identically.
+ * Layout EVOLVES instead of reshuffling (Option A): each settle warm-starts
+ * from the positions ledger and spring-ties every previously-positioned
+ * node toward its anchor (a per-node anchor force). New nodes seed near
+ * their positioned neighbors; orphans seed on the rim OUTSIDE the core and
+ * are anchored there, so they read as "not yet connected knowledge".
  *
- * Orphans (degree-0 nodes) seed on the rim — outside the anchored core's
- * bounding box — so they read as "not yet connected knowledge", the organic
- * outer ring the user asked for.
+ * Design constraints (kept deliberately, for live physics):
+ *  - PURE: no fs, no server types — this module runs server-side (the
+ *    merge settle) and in the browser (the live simulation, via the core
+ *    barrel). A pinned node is just fx/fy; an anchored node is a spring.
+ *  - DETERMINISTIC: seeds derive from node id; d3-force ticks are
+ *    deterministic — same inputs, same layout.
  */
 
-import Graph from "graphology";
-import forceAtlas2 from "graphology-layout-forceatlas2";
-import type { GraphNode, GraphEdge, Position } from "./contracts.ts";
+import {
+	forceSimulation,
+	forceLink,
+	forceManyBody,
+	forceX,
+	forceY,
+	type Simulation,
+	type SimulationLinkDatum,
+	type SimulationNodeDatum,
+} from "d3-force";
+import type { GraphEdge, GraphNode, Position } from "./contracts.ts";
 import { seededRandom } from "./question-core.ts";
 
-export interface IncrementalLayoutOptions {
-	/** FA2 iterations per settle (default 100 — same depth as the classic
-	 *  one-shot pass, so a fresh graph settles exactly like the old code). */
-	iterations?: number;
-	/** Per-iteration anchor retention: how much of a previously-positioned
-	 *  node's displacement from its anchor SURVIVES each iteration.
-	 *  1 = fully pinned (never moves), 0.85 = gentle drift where forces
-	 *  are strong (near new nodes), stillness where they are not. */
-	anchorRetention?: number;
+/** A node the d3 simulation mutates (x/y/vx/vy; fx/fy = pinned). */
+export interface LayoutNode extends SimulationNodeDatum {
+	id: string;
 }
 
-/** Layout adjacency input: edges are undirected for layout purposes. */
+/** A link as d3 sees it (id strings resolve to node refs on init). */
+type SimLink = SimulationLinkDatum<LayoutNode>;
+
+export interface SimOptions {
+	/** Link spring rest length (world units). */
+	linkDistance?: number;
+	/** Many-body repulsion strength (negative). */
+	chargeStrength?: number;
+	/** Center-of-mass gravity: pulls loose components inward. Weak —
+	 *  anchors, not gravity, hold the evolved layout's frame. */
+	gravity?: { x: number; y: number; strength: number };
+	/** Alpha decay per tick — higher = snappier settle. The merge settle
+	 *  uses d3's default 0.0228 (~300 ticks); the live sim passes ~0.05. */
+	alphaDecay?: number;
+}
+
+/** Link input: edges are undirected for layout purposes. */
 export interface LayoutEdge {
 	from: string;
 	to: string;
 }
 
+const LINK_DISTANCE = 40;
+const CHARGE_STRENGTH = -120;
+/** Per-tick anchor re-blend: fraction of an anchored node's displacement
+ *  from its previous position that SURVIVES each tick. 0.85 = gentle
+ *  evolution where forces are strong, stillness where they are not —
+ *  the exact FA2-era constant. Position-space (alpha-independent), so it
+ *  cannot be overpowered by d3's long-range link springs the way a force-
+ *  space anchor can (forceLink is a Hooke spring: strength*(d-L)*alpha). */
+const ANCHOR_RETENTION = 0.85;
+/** Gravity strengths. d3 manyBody repulsion falls off as 1/d, so two
+ *  20-node blobs at distance d push with ~n1*n2*|charge|/d; cluster
+ *  spacing settles where that equals g*d*n/2 — g=0.03 lands clusters
+ *  ~400 world units apart (the FA2-era density), and the anchor re-blend
+ *  (position-space, alpha-independent) keeps gravity's transient sag
+ *  from ever moving an anchored node at rest. */
+const BOOTSTRAP_GRAVITY = 0.2;
+/** Exported: the live sim reuses this so its rest state matches the
+ *  server settle's equilibrium (one engine, one rest). */
+export const INCREMENTAL_GRAVITY = 0.12;
+
+/**
+ * The one force set. Returns a STOPPED simulation — callers drive it
+ * manually (tick-per-frame live, or a bounded tick loop when settling).
+ * Deterministic; mutates `nodes` in place (d3 semantics: impure by design,
+ * zero per-tick allocation).
+ */
+export function createGraphSimulation(
+	nodes: LayoutNode[],
+	edges: ReadonlyArray<LayoutEdge>,
+	options: SimOptions = {},
+): Simulation<LayoutNode, SimLink> {
+	const sim = forceSimulation<LayoutNode, SimLink>(nodes)
+		.force(
+			"link",
+			forceLink<LayoutNode, SimLink>(
+				edges.map((e) => ({ source: e.from, target: e.to })),
+			)
+				.id((d) => d.id)
+				.distance(options.linkDistance ?? LINK_DISTANCE),
+		)
+		.force("charge", forceManyBody<LayoutNode>().strength(options.chargeStrength ?? CHARGE_STRENGTH))
+		.alphaDecay(options.alphaDecay ?? 0.0228)
+		.stop();
+
+	const g = options.gravity;
+	if (g) {
+		sim.force("x", forceX<LayoutNode>(g.x).strength(g.strength));
+		sim.force("y", forceY<LayoutNode>(g.y).strength(g.strength));
+	}
+	return sim;
+}
+
+export interface IncrementalLayoutOptions {
+	/** Manual ticks for the settle (default 300 — d3's anneal to alphaMin). */
+	ticks?: number;
+	/** Per-tick anchor re-blend (default 0.85; 1 = fully pinned). */
+	anchorRetention?: number;
+	/** Center-of-mass gravity strength override (tuning/A-B experiments;
+	 *  defaults to the internal bootstrap/incremental constants). */
+	gravityStrength?: number;
+}
+
 /**
  * One incremental settle. `nodes`/`edges` describe the CURRENT graph;
  * `previous` is the positions ledger (empty on the very first settle —
- * then this degrades to the classic seeded-scatter + 100-iteration FA2
- * pass, i.e. what the browser used to do from scratch every time).
- * Returns positions for EVERY node in `nodes`.
+ * then this degrades to a seeded-scatter bootstrap). Returns positions
+ * for EVERY node in `nodes`.
  */
 export function incrementalLayout(
 	nodes: ReadonlyArray<Pick<GraphNode, "id">>,
@@ -55,8 +136,8 @@ export function incrementalLayout(
 	previous: ReadonlyMap<string, Position>,
 	options: IncrementalLayoutOptions = {},
 ): Map<string, Position> {
-	const iterations = options.iterations ?? 100;
-	const retention = options.anchorRetention ?? 0.85;
+	const ticks = options.ticks ?? 300;
+	const retention = options.anchorRetention ?? ANCHOR_RETENTION;
 
 	// Anchors: the warm-start set (the previous rest state).
 	const anchors = new Map<string, Position>();
@@ -85,20 +166,39 @@ export function incrementalLayout(
 		cx /= anchors.size;
 		cy /= anchors.size;
 	}
-	const coreRadius = hasCore
-		? Math.max(maxX - minX, maxY - minY) / 2
-		: 1;
+	const coreRadius = hasCore ? Math.max(maxX - minX, maxY - minY) / 2 : 1;
 
 	// Adjacency for neighbor seeding (undirected: edges include assertions).
 	const adjacency = new Map<string, string[]>();
+	const linkTo = (a: string, b: string): void => {
+		if (a === b) return;
+		let list = adjacency.get(a);
+		if (!list) adjacency.set(a, (list = []));
+		list.push(b);
+	};
 	for (const e of edges) {
-		if (e.from === e.to) continue;
-		(adjacency.get(e.from) ?? adjacency.set(e.from, []).get(e.from)!).push(e.to);
-		(adjacency.get(e.to) ?? adjacency.set(e.to, []).get(e.to)!).push(e.from);
+		linkTo(e.from, e.to);
+		linkTo(e.to, e.from);
 	}
 
-	const graph = new Graph();
-	for (const node of nodes) {
+	// The rim radius derives from the CONNECTED core's mean radius — orphans
+	// never inflate it (a max-span-based radius feeds back: each batch's
+	// rim pushes the next batch's rim farther out, and the layout runs
+	// away). 1.7x matches the density the FA2-era settle produced
+	// (orphan mean r ~338 vs connected ~194).
+	let rimRadius = 0;
+	let connectedAnchored = 0;
+	for (const [id, a] of anchors) {
+		if ((adjacency.get(id)?.length ?? 0) === 0) continue;
+		connectedAnchored++;
+		rimRadius += Math.hypot(a.x - cx, a.y - cy);
+	}
+	if (connectedAnchored > 0) rimRadius = (rimRadius / connectedAnchored) * 1.7;
+	else if (hasCore) rimRadius = coreRadius * 1.15; // no connected anchors yet: bbox fallback
+	rimRadius += 4;
+
+	// Seed every node.
+	const simNodes: LayoutNode[] = nodes.map((node) => {
 		const rand = seededRandom(node.id);
 		const anchor = anchors.get(node.id);
 		let x: number;
@@ -126,57 +226,63 @@ export function incrementalLayout(
 				y = sy / found + (rand() - 0.5) * 8;
 			} else if (hasCore) {
 				const angle = rand() * Math.PI * 2;
-				const radius = coreRadius * 1.15 + 4 + rand() * 8;
+				const radius = rimRadius + rand() * 8;
 				x = cx + Math.cos(angle) * radius;
 				y = cy + Math.sin(angle) * radius;
+				// An orphan's intended rest spot IS the rim seed: anchor it
+				// there so gravity cannot sink it into the core. (A later
+				// batch linking it to the graph pulls it in naturally —
+				// but then it also has a previous position, and its anchor
+				// becomes that previous position, exactly like any node.)
+				anchors.set(node.id, { x, y });
 			} else {
-				// Bootstrap: the classic seeded scatter (FA2 requires
-				// non-zero coordinates; (rand()-0.5)*100 hits both axes).
+				// Bootstrap: the classic seeded scatter.
 				x = (rand() - 0.5) * 100;
 				y = (rand() - 0.5) * 100;
 			}
 		}
-		// FA2 divides by distances — a coincident (0,0) seed is degenerate.
+		// d3 is fine with coincident seeds (no division), but nudge exact
+		// overlaps of a brand-new node onto its only neighbor anyway.
 		if (x === 0 && y === 0) x = 0.5;
-		graph.addNode(node.id, { x, y });
-	}
-	for (const e of edges) {
-		if (graph.hasNode(e.from) && graph.hasNode(e.to) && !graph.hasEdge(e.from, e.to)) {
-			graph.addEdge(e.from, e.to);
-		}
-	}
+		return { id: node.id, x, y };
+	});
 
-	// Same escalation as the browser path: Barnes-Hut above ~500 nodes.
-	const settings = {
-		...forceAtlas2.inferSettings(graph),
-		...(graph.order > 500 ? { barnesHutOptimize: true } : {}),
-	};
-	for (let i = 0; i < iterations; i++) {
-		forceAtlas2.assign(graph, { iterations: 1, settings });
-		// Anchor re-blend: previously-positioned nodes are pulled back
-		// toward their rest positions, so the layout evolves locally
-		// instead of globally reshuffling. displacement * retention —
-		// strong forces still win out (equilibrium ≈ force/(1-retention)),
-		// weak ones fade to stillness.
+	const sim = createGraphSimulation(simNodes, edges, {
+		gravity: {
+			x: cx,
+			y: cy,
+			strength: options.gravityStrength ?? (hasCore ? INCREMENTAL_GRAVITY : BOOTSTRAP_GRAVITY),
+		},
+	});
+	const byId = new Map(simNodes.map((n) => [n.id, n]));
+	for (let i = 0; i < ticks; i++) {
+		sim.tick();
+		// Anchor re-blend (position space, alpha-independent — see the
+		// ANCHOR_RETENTION note). Pinned nodes (fx/fy) are left to d3.
 		if (hasCore && retention < 1) {
 			for (const [id, a] of anchors) {
-				const attrs = graph.getNodeAttributes(id);
-				graph.setNodeAttribute(id, "x", a.x + (attrs.x - a.x) * retention);
-				graph.setNodeAttribute(id, "y", a.y + (attrs.y - a.y) * retention);
+				const n = byId.get(id);
+				if (!n || n.fx != null || n.fy != null) continue;
+				const x = n.x ?? 0;
+				const y = n.y ?? 0;
+				n.x = a.x + (x - a.x) * retention;
+				n.y = a.y + (y - a.y) * retention;
 			}
 		}
 	}
 
 	const out = new Map<string, Position>();
-	graph.forEachNode((id, attrs) => out.set(id, { x: attrs.x, y: attrs.y }));
+	for (const n of simNodes) out.set(n.id, { x: n.x ?? 0, y: n.y ?? 0 });
 	return out;
 }
 
 /**
  * The merge-time settle: recompute the resting layout from the CURRENT
  * graph + the positions ledger, and replace the ledger. Called by the
- * extraction pipeline after every merge (the sole writer). Synchronous —
- * it must finish before the next /api/graph fetch reflects the merge.
+ * extraction pipeline after every merge (the sole writer) and by the
+ * positions-commit endpoint when the graph grew under a live-physics
+ * commit (client positions become the anchor set). Synchronous — it must
+ * finish before the next /api/graph fetch reflects the change.
  */
 export function settleGraphLayout(graphStore: {
 	readNodes(): GraphNode[];

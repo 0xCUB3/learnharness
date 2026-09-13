@@ -49,6 +49,7 @@ function main() {
 
 	console.log(`[replay] ${nodes.length} unique nodes, ${edges.length} edge lines, ${sources.length} sources`);
 	let maxOldShift = 0;
+	let shiftReport = "";
 	for (const source of sources) {
 		const batch = nodes.filter((n) => batchOf.get(n.id) === source.id);
 		const isLast = source.id === sources[sources.length - 1]!.id;
@@ -76,7 +77,10 @@ function main() {
 		for (const [id, prev] of before) {
 			const now = positions.get(id)!;
 			const shift = Math.hypot(prev.x - now.x, prev.y - now.y);
-			if (shift > maxOldShift) maxOldShift = shift;
+			if (shift > maxOldShift) {
+				maxOldShift = shift;
+				shiftReport = `${id} ${prev.x.toFixed(0)},${prev.y.toFixed(0)} -> ${now.x.toFixed(0)},${now.y.toFixed(0)} (batch ${batch.length} new, ${activeEdges.length} edges)`;
+			}
 		}
 		const label = source.filePath.split("/").pop() ?? source.id;
 		console.log(
@@ -87,7 +91,7 @@ function main() {
 	graphStore.writePositions(Object.fromEntries(positions));
 	console.log(
 		`[replay] done: ${positions.size} positions written in ${((Date.now() - t0) / 1000).toFixed(1)}s` +
-			` (max old-node shift within a batch: ${maxOldShift.toFixed(1)})`,
+			` (max old-node shift within a batch: ${maxOldShift.toFixed(1)}: ${shiftReport})`,
 	);
 }
 
