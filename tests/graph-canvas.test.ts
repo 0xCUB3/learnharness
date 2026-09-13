@@ -13,10 +13,13 @@ import assert from "node:assert/strict";
 import { describe, it as test } from "node:test";
 import {
 	arrowGeometry,
+	boxBlurRound,
 	fitTransform,
 	labelAlpha,
 	pickNearest,
+	sanitizeRegionTuning,
 	zoomRatioOf,
+	DEFAULT_REGION_TUNING,
 	LABELS_FADE_SPAN,
 } from "../components/graph-canvas.ts";
 
@@ -135,5 +138,59 @@ describe("pickNearest (distance-check picking)", () => {
 
 	test("empty node list picks nothing", () => {
 		assert.equal(pickNearest([], 0, 0, 100), null);
+	});
+});
+
+describe("sanitizeRegionTuning (dev number inputs)", () => {
+	test("defaults survive untouched; partial input keeps the rest", () => {
+		const t = sanitizeRegionTuning(undefined);
+		assert.deepEqual(t, DEFAULT_REGION_TUNING);
+		const half = sanitizeRegionTuning({ blur: 0 });
+		assert.equal(half.blur, 0);
+		assert.equal(half.dilation, DEFAULT_REGION_TUNING.dilation);
+	});
+
+	test("garbage clamps: NaN falls back, out-of-range clamps", () => {
+		const t = sanitizeRegionTuning({ dilation: Number.NaN, blur: -5, bitmap: 99999, edgeAlpha: 42 });
+		assert.equal(t.dilation, DEFAULT_REGION_TUNING.dilation); // NaN -> default
+		assert.equal(t.blur, 0);
+		assert.equal(t.bitmap, 1024);
+		assert.equal(t.edgeAlpha, 1);
+	});
+
+	test("empty string / null / undefined values fall back per-field", () => {
+		const t = sanitizeRegionTuning({ edgeAlpha: Number.NaN });
+		assert.equal(t.edgeAlpha, DEFAULT_REGION_TUNING.edgeAlpha);
+	});
+});
+
+describe("boxBlurRound (premultiplied region blur)", () => {
+	test("spreads a single opaque px into its neighborhood and conserves sum", () => {
+		// 5x5 RGBA, one white opaque pixel at (2,2)
+		const w = 5, h = 5;
+		const a = new Float32Array(w * h * 4);
+		const center = (2 * w + 2) * 4;
+		a[center] = 255; a[center + 1] = 255; a[center + 2] = 255; a[center + 3] = 255;
+		const tmp = new Float32Array(a.length);
+		const b = new Float32Array(a.length);
+		boxBlurRound(a, tmp, b, w, h, 1);
+		// Alpha conservation: total alpha unchanged.
+		let sumA = 0;
+		for (let i = 3; i < b.length; i += 4) sumA += b[i]!;
+		assert.ok(Math.abs(sumA - 255) < 1e-3, `alpha sum ${sumA}`);
+		// The center dimmed, the 8 neighbors picked some up.
+		assert.ok(b[center + 3]! < 255 && b[center + 3]! > 0);
+		const up = ((1 * w) + 2) * 4 + 3;
+		assert.ok(b[up]! > 0, "neighbor got alpha");
+		// Far corner (4,4) untouched.
+		assert.equal(b[(4 * 5 + 4) * 4 + 3], 0);
+	});
+
+	test("radius 0 is a plain copy", () => {
+		const a = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+		const tmp = new Float32Array(8);
+		const b = new Float32Array(8);
+		boxBlurRound(a, tmp, b, 1, 2, 0);
+		assert.deepEqual([...b], [1, 2, 3, 4, 5, 6, 7, 8]);
 	});
 });

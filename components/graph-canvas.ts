@@ -153,12 +153,117 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  the jagged close-up look), there is no border to lag behind, and a
  *  live-physics frame pays one tiny blit instead of 32 clusters × 4
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
-const REGION_KERNEL = 30; // screen px at fit — soft disc radius
-const REGION_NODE_ALPHA = 0.2; // per disc; overlaps saturate toward the core
-const REGION_EDGE_ALPHA = 0.08; // round-cap strokes, width = kernel × 0.8
-const REGION_BITMAP = 256; // max bitmap dimension; cell = worldSpan / this
 const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
 const REGION_LABEL_SIZE = 14;
+
+/** Dev-tunable region rendering (2026-09-13, user request): plain number
+ *  inputs in the settings panel — session-only, never persisted — so the
+ *  look can be tuned live against the real graph. A cluster is its
+ *  CONNECTED SKELETON: the region is the dilated line network ONLY (no
+ *  per-node discs — they double-counted where nodes sit on edges and
+ *  made hubs hot). Blur is REAL: a premultiplied 3-pass box blur on the
+ *  bitmap (bilinear upscale alone was no blur at all — zoom-in showed
+ *  tent-ramp chunkiness, the "low-quality JPEG" look). */
+export interface RegionTuning {
+	/** Dilation half-width of the round-cap edge strokes, screen px at
+	 *  fit zoom (the expansion of the cluster skeleton). */
+	dilation: number;
+	/** Box-blur radius in bitmap px (3 passes ≈ Gaussian). 0 = off. */
+	blur: number;
+	/** Max bitmap dimension (cell = worldSpan / this). */
+	bitmap: number;
+	/** Per-stroke alpha; overlapping strokes stack toward the core. */
+	edgeAlpha: number;
+}
+
+export const DEFAULT_REGION_TUNING: RegionTuning = {
+	dilation: 28,
+	blur: 10,
+	bitmap: 384,
+	edgeAlpha: 0.35,
+};
+
+/** Clamp anything into a usable tuning (number inputs can be empty/NaN). */
+export function sanitizeRegionTuning(input: Partial<RegionTuning> | null | undefined): RegionTuning {
+	const d = DEFAULT_REGION_TUNING;
+	const num = (v: unknown, fallback: number): number =>
+		typeof v === "number" && Number.isFinite(v) ? v : fallback;
+	return {
+		dilation: Math.min(Math.max(num(input?.dilation, d.dilation), 4), 250),
+		blur: Math.min(Math.max(num(input?.blur, d.blur), 0), 40),
+		bitmap: Math.round(Math.min(Math.max(num(input?.bitmap, d.bitmap), 128), 1024)),
+		edgeAlpha: Math.min(Math.max(num(input?.edgeAlpha, d.edgeAlpha), 0.02), 1),
+	};
+}
+
+/** One horizontal+vertical box-blur round over PREMULTIPLIED RGBA
+ *  (Float32, stride 4, length w*h*4). Premultiplying first is what keeps
+ *  the blur halo-free: blurring non-premultiplied RGB over varying alpha
+ *  bleeds solid color into transparent space. Pure: DOM-free, tested. */
+export function boxBlurRound(
+	src: Float32Array,
+	tmp: Float32Array,
+	dst: Float32Array,
+	w: number,
+	h: number,
+	radius: number,
+): void {
+	if (radius <= 0) {
+		dst.set(src);
+		return;
+	}
+	const div = radius * 2 + 1;
+	// Horizontal: src → tmp (clamped window, running sum).
+	for (let y = 0; y < h; y++) {
+		const row = y * w * 4;
+		let sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
+		for (let x = -radius; x <= radius; x++) {
+			const i = row + Math.min(Math.max(x, 0), w - 1) * 4;
+			sum0 += src[i]!;
+			sum1 += src[i + 1]!;
+			sum2 += src[i + 2]!;
+			sum3 += src[i + 3]!;
+		}
+		for (let x = 0; x < w; x++) {
+			const o = row + x * 4;
+			tmp[o] = sum0 / div;
+			tmp[o + 1] = sum1 / div;
+			tmp[o + 2] = sum2 / div;
+			tmp[o + 3] = sum3 / div;
+			const addI = row + Math.min(x + radius + 1, w - 1) * 4;
+			const subI = row + Math.max(x - radius, 0) * 4;
+			sum0 += src[addI]! - src[subI]!;
+			sum1 += src[addI + 1]! - src[subI + 1]!;
+			sum2 += src[addI + 2]! - src[subI + 2]!;
+			sum3 += src[addI + 3]! - src[subI + 3]!;
+		}
+	}
+	// Vertical: tmp → dst.
+	for (let x = 0; x < w; x++) {
+		const col = x * 4;
+		let sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
+		for (let y = -radius; y <= radius; y++) {
+			const i = col + Math.min(Math.max(y, 0), h - 1) * w * 4;
+			sum0 += tmp[i]!;
+			sum1 += tmp[i + 1]!;
+			sum2 += tmp[i + 2]!;
+			sum3 += tmp[i + 3]!;
+		}
+		for (let y = 0; y < h; y++) {
+			const o = col + y * w * 4;
+			dst[o] = sum0 / div;
+			dst[o + 1] = sum1 / div;
+			dst[o + 2] = sum2 / div;
+			dst[o + 3] = sum3 / div;
+			const addI = col + Math.min(y + radius + 1, h - 1) * w * 4;
+			const subI = col + Math.max(y - radius, 0) * w * 4;
+			sum0 += tmp[addI]! - tmp[subI]!;
+			sum1 += tmp[addI + 1]! - tmp[subI + 1]!;
+			sum2 += tmp[addI + 2]! - tmp[subI + 2]!;
+			sum3 += tmp[addI + 3]! - tmp[subI + 3]!;
+		}
+	}
+}
 
 /** All "px" constants above are screen px AT FIT ZOOM. The renderer scales
  *  them into world units (÷ kFit) once per geometry build; camera zoom then
@@ -398,6 +503,7 @@ export class GraphCanvasRenderer {
 	private regionRect: { minX: number; minY: number; w: number; h: number } | null = null;
 	/** Region labels: cluster centroid + hue, computed at splat build. */
 	private regionMeta: { label: string | null; cx: number; cy: number; hue: number }[] = [];
+	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
 	private regionBuiltVersion = -1;
 	private frameCount = 0; // draw counter for the live-sim splat throttle
 	private labelLines = new Map<string, string[]>();
@@ -503,6 +609,15 @@ export class GraphCanvasRenderer {
 	setSettings(settings: GraphRenderSettings): void {
 		this.settings = settings;
 		this.geoVersion++; // sizes/wrap width changed → rebuild geometry
+		this.markDirty();
+	}
+
+	/** Dev tuning for region rendering (session-only, never persisted):
+	 *  invalid numbers fall back to defaults — the number inputs can be
+	 *  emptied while typing. Forces a region bitmap rebuild. */
+	setRegionTuning(input: Partial<RegionTuning>): void {
+		this.regionTuning = sanitizeRegionTuning(input);
+		this.regionBuiltVersion = -2; // never equals geoVersion → rebuild
 		this.markDirty();
 	}
 
@@ -914,21 +1029,21 @@ export class GraphCanvasRenderer {
 		const visible = this.visible;
 		const isVisible = (id: string): boolean => !visible || visible.has(id);
 
-		// World rect over VISIBLE cluster members (regions cover members
-		// and their intra-cluster edges — nothing else), padded by the
-		// kernel so discs can bleed past the extremes.
+		const tuning = this.regionTuning;
 		const s = 1 / this.kFit;
-		const kernel = REGION_KERNEL * s;
+
+		// World rect over VISIBLE cluster members (regions cover members
+		// and their intra-cluster edges — nothing else).
 		let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 		for (const c of data.clusters) {
 			for (const id of c.members) {
 				if (!isVisible(id)) continue;
 				const n = this.nodeById.get(id);
 				if (!n) continue;
-				if (n.x - kernel < minX) minX = n.x - kernel;
-				if (n.x + kernel > maxX) maxX = n.x + kernel;
-				if (n.y - kernel < minY) minY = n.y - kernel;
-				if (n.y + kernel > maxY) maxY = n.y + kernel;
+				if (n.x < minX) minX = n.x;
+				if (n.x > maxX) maxX = n.x;
+				if (n.y < minY) minY = n.y;
+				if (n.y > maxY) maxY = n.y;
 			}
 		}
 		if (minX > maxX) {
@@ -938,10 +1053,17 @@ export class GraphCanvasRenderer {
 			return;
 		}
 
-		// Bitmap sizing: longest world span maps to REGION_BITMAP px.
+		// Bitmap sizing: longest world span maps to `bitmap` px. The rect
+		// is padded by the stroke half-width (dilation) plus the blur
+		// reach so nothing clips at the bitmap edge.
+		const cell = Math.max(maxX - minX, maxY - minY) / tuning.bitmap;
+		const padWorld = tuning.dilation * s + (tuning.blur * cell) * 2;
+		minX -= padWorld;
+		minY -= padWorld;
+		maxX += padWorld;
+		maxY += padWorld;
 		const spanX = maxX - minX;
 		const spanY = maxY - minY;
-		const cell = Math.max(spanX, spanY) / REGION_BITMAP;
 		const bw = Math.max(1, Math.ceil(spanX / cell));
 		const bh = Math.max(1, Math.ceil(spanY / cell));
 		let rc = this.regionCanvas;
@@ -953,12 +1075,14 @@ export class GraphCanvasRenderer {
 			rc.width = bw;
 			rc.height = bh; // also clears
 		}
-		const rctx = rc.getContext("2d");
+		// willReadFrequently: the blur step getImageData/putImageData every
+		// rebuild — Chrome keeps this canvas on the CPU instead of GPU-
+		// shuttling it.
+		const rctx = rc.getContext("2d", { willReadFrequently: true });
 		if (!rctx) return;
 		rctx.clearRect(0, 0, bw, bh);
 		rctx.lineCap = "round";
-		const R = kernel / cell;
-		const edgeW = R * 0.8 * 2;
+		rctx.lineWidth = (tuning.dilation * s * 2) / cell;
 
 		// Which cluster is a node in (for intra-cluster edges)?
 		const clusterOf = new Map<string, number>();
@@ -966,32 +1090,19 @@ export class GraphCanvasRenderer {
 			for (const id of c.members) clusterOf.set(id, i);
 		});
 
+		// The region IS the dilated skeleton: intra-cluster edges as
+		// round-cap strokes (Minkowski dilation — points become discs at
+		// line ends via the caps). NO per-node discs: a cluster is its
+		// connected points, and discs double-counted where nodes sit on
+		// edges (user-identified hot spots).
 		this.regionMeta = [];
 		data.clusters.forEach((cluster, ci) => {
 			const hue = clusterHue(cluster.id);
-			const members: Pt[] = [];
-			const alpha = (a: number): string => `hsla(${hue}, 65%, 60%, ${a})`;
-
-			// Discs: one soft radial gradient per member node.
-			rctx.fillStyle = alpha(REGION_NODE_ALPHA);
-			for (const id of cluster.members) {
-				if (!isVisible(id)) continue;
-				const n = this.nodeById.get(id);
-				if (!n) continue;
-				members.push({ x: n.x, y: n.y });
-				const px = (n.x - minX) / cell;
-				const py = (n.y - minY) / cell;
-				const grad = rctx.createRadialGradient(px, py, 0, px, py, R);
-				grad.addColorStop(0, alpha(REGION_NODE_ALPHA));
-				grad.addColorStop(1, alpha(0));
-				rctx.fillStyle = grad;
-				rctx.fillRect(px - R, py - R, R * 2, R * 2);
-			}
-			// Minkowski strokes: intra-cluster edges with round caps make
-			// the region follow its own linkage, not just its node dots.
-			rctx.strokeStyle = alpha(REGION_EDGE_ALPHA);
-			rctx.lineWidth = edgeW;
+			rctx.strokeStyle = `hsla(${hue}, 65%, 60%, ${tuning.edgeAlpha})`;
 			rctx.beginPath();
+			let members = 0;
+			let sumX = 0;
+			let sumY = 0;
 			for (const e of data.edges) {
 				if (clusterOf.get(e.from) !== ci) continue;
 				if (clusterOf.get(e.to) !== ci) continue;
@@ -1004,12 +1115,56 @@ export class GraphCanvasRenderer {
 			rctx.stroke();
 
 			// Label anchor: member centroid (world coords).
-			if (members.length > 0) {
-				const cx = members.reduce((sum, p) => sum + p.x, 0) / members.length;
-				const cy = members.reduce((sum, p) => sum + p.y, 0) / members.length;
-				this.regionMeta.push({ label: cluster.label || null, cx, cy, hue });
+			for (const id of cluster.members) {
+				if (!isVisible(id)) continue;
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				members++;
+				sumX += n.x;
+				sumY += n.y;
+			}
+			if (members > 0) {
+				this.regionMeta.push({ label: cluster.label || null, cx: sumX / members, cy: sumY / members, hue });
 			}
 		});
+
+		// THE blur: 3 box-blur rounds on the premultiplied bitmap. Bilinear
+		// upscaling alone is no blur at all (tent ramps — the JPEG look);
+		// this makes the field genuinely smooth before the blit.
+		if (tuning.blur > 0) {
+			const img = rctx.getImageData(0, 0, bw, bh);
+			const n = bw * bh * 4;
+			const a = new Float32Array(n);
+			for (let i = 0; i < n; i += 4) {
+				const alpha = img.data[i + 3]! / 255;
+				a[i] = img.data[i]! * alpha;
+				a[i + 1] = img.data[i + 1]! * alpha;
+				a[i + 2] = img.data[i + 2]! * alpha;
+				a[i + 3] = img.data[i + 3]!;
+			}
+			const b = new Float32Array(n);
+			const tmp = new Float32Array(n); // scratch inside each round only
+			boxBlurRound(a, tmp, b, bw, bh, tuning.blur); // a → b
+			boxBlurRound(b, tmp, a, bw, bh, tuning.blur); // b → a
+			boxBlurRound(a, tmp, b, bw, bh, tuning.blur); // a → b (result)
+			// Unpremultiply back into pixels.
+			for (let i = 0; i < n; i += 4) {
+				const alpha = b[i + 3]!;
+				if (alpha <= 0) {
+					img.data[i] = 0;
+					img.data[i + 1] = 0;
+					img.data[i + 2] = 0;
+					img.data[i + 3] = 0;
+				} else {
+					// Un-premultiply: pm = c * a/255, so c = pm / a * 255.
+					img.data[i] = Math.round((b[i]! / alpha) * 255);
+					img.data[i + 1] = Math.round((b[i + 1]! / alpha) * 255);
+					img.data[i + 2] = Math.round((b[i + 2]! / alpha) * 255);
+					img.data[i + 3] = Math.round(alpha);
+				}
+			}
+			rctx.putImageData(img, 0, 0);
+		}
 		this.regionRect = { minX, minY, w: spanX, h: spanY };
 	}
 

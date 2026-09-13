@@ -67,7 +67,12 @@ import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, Waypoi
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
-import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
+import {
+	DEFAULT_REGION_TUNING,
+	GraphCanvasRenderer,
+	type GraphRenderSettings,
+	type RegionTuning,
+} from "./graph-canvas.ts";
 import {
 	ARROW_LENGTH_RANGE,
 	DEFAULT_RENDER_SETTINGS,
@@ -144,6 +149,33 @@ function sizeDisplay(v: number): string {
 	return `${v >= 1 ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100}`;
 }
 
+/** Dev number input: raw value in, raw value out (NaN while empty → the
+ *  renderer's sanitizer holds the last sane tuning). Development tool. */
+function NumberField({
+	label,
+	value,
+	step,
+	onChange,
+}: {
+	label: string;
+	value: number;
+	step: number;
+	onChange: (v: number) => void;
+}) {
+	return (
+		<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+			<span>{label}</span>
+			<input
+				type="number"
+				value={Number.isFinite(value) ? value : ""}
+				step={step}
+				onChange={(e) => onChange(e.target.valueAsNumber)}
+				className="w-20 rounded-md border bg-background px-1.5 py-0.5 text-right tabular-nums text-foreground"
+			/>
+		</label>
+	);
+}
+
 function SettingSlider({
 	label,
 	min,
@@ -195,6 +227,10 @@ export function GraphView() {
 	// Search panel state: the query text + the settings section toggle.
 	const [query, setQuery] = useState("");
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	// Region tuning: DEV-ONLY, session state, never persisted (unlike the
+	// render settings, which live on the server). Number inputs so any
+	// value can be tried quickly.
+	const [regionTuning, setRegionTuning] = useState<RegionTuning>(DEFAULT_REGION_TUNING);
 	// Render settings: SERVER-persisted (data/render-settings.json via
 	// /api/graph/render-settings). Loaded once after mount; every user
 	// change saves back, debounced. Defaults render until the load
@@ -467,6 +503,12 @@ export function GraphView() {
 		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
 	}, [visibleIds, query]);
 
+	// Feed #4 — region tuning (dev number inputs): its own update path,
+	// independent of the server-persisted render settings.
+	useEffect(() => {
+		rendererRef.current?.setRegionTuning(regionTuning);
+	}, [regionTuning]);
+
 	// Position the detail card: below the clicked node, flipped above near
 	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
 	// before paint) because the flip needs the card's measured height.
@@ -598,6 +640,38 @@ export function GraphView() {
 									className="accent-primary"
 								/>
 							</label>
+						{/* Regions (dev): quick-tuning number inputs. Session state
+						    only - never persisted. Bad/empty values fall back to
+						    the last sane tuning inside the renderer. */}
+						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
+							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+								Regions (dev)
+							</span>
+							<NumberField
+								label="Dilation (px at fit)"
+								value={regionTuning.dilation}
+								step={5}
+								onChange={(v) => setRegionTuning((t) => ({ ...t, dilation: v }))}
+							/>
+							<NumberField
+								label="Blur (bitmap px)"
+								value={regionTuning.blur}
+								step={1}
+								onChange={(v) => setRegionTuning((t) => ({ ...t, blur: v }))}
+							/>
+							<NumberField
+								label="Bitmap resolution"
+								value={regionTuning.bitmap}
+								step={64}
+								onChange={(v) => setRegionTuning((t) => ({ ...t, bitmap: v }))}
+							/>
+							<NumberField
+								label="Edge alpha"
+								value={regionTuning.edgeAlpha}
+								step={0.05}
+								onChange={(v) => setRegionTuning((t) => ({ ...t, edgeAlpha: v }))}
+							/>
+						</div>
 						</div>
 					)}
 					{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
