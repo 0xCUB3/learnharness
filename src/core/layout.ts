@@ -43,6 +43,122 @@ export interface LayoutNode extends SimulationNodeDatum {
 /** A link as d3 sees it (id strings resolve to node refs on init). */
 type SimLink = SimulationLinkDatum<LayoutNode>;
 
+/** How the inference rank is expressed spatially (playground, 2026-09-13):
+ *  the graph's `follows`/`supports` edges encode derivation (premise →
+ *  conclusion), so depth-0 nodes (no incoming edges — the fundamentals)
+ *  can anchor a shared baseline and every derivation level rises from it.
+ *  `vertical`: levels are horizontal rows, arrows point up.
+ *  `radial`: levels are concentric rings, foundations at the center, the
+ *  outer boundary IS the edge of the user's knowledge.
+ *  `off`: today's free layout. */
+export type DepthAnchorMode = "off" | "vertical" | "radial";
+
+export interface DepthAnchor {
+	mode: DepthAnchorMode;
+	/** Anchor pull toward the level (same units as clusterPull). */
+	strength: number;
+	/** Distance between consecutive inference levels (world units). */
+	spacing: number;
+	/** Baseline point: vertical mode uses .y as the depth-0 line; radial
+	 *  mode uses the full point as the ring center. Default (0,0). */
+	center?: { x: number; y: number };
+	/** Inner ring radius (radial only; depth-0 nodes sit at this ring). */
+	baseRadius?: number;
+}
+
+/** Inference depth per node: the longest chain of directed edges from a
+ * base node. CYCLE-SAFE (2026-09-13, user requirement — the DAG property
+ * is typical, not guaranteed): Tarjan SCC condensation collapses each
+ * strongly connected component to one super-node, ranks the (always
+ * acyclic) condensation, and every cycle member shares its component's
+ * depth — mutual support reads as equal footing. Iterative Tarjan (no
+ * recursion depth limits), O(V+E), deterministic. */
+export function inferenceDepths(
+	nodes: ReadonlyArray<Pick<GraphNode, "id">>,
+	edges: ReadonlyArray<LayoutEdge>,
+): Map<string, number> {
+	const valid = new Set(nodes.map((n) => n.id));
+	const adj = new Map<string, string[]>();
+	for (const e of edges) {
+		if (e.from === e.to || !valid.has(e.from) || !valid.has(e.to)) continue;
+		let list = adj.get(e.from);
+		if (!list) adj.set(e.from, (list = []));
+		list.push(e.to);
+	}
+
+	// Iterative Tarjan SCC.
+	const num = new Map<string, number>();
+	const low = new Map<string, number>();
+	const onStack = new Set<string>();
+	const stack: string[] = [];
+	const comp = new Map<string, number>();
+	let counter = 0;
+	let compCount = 0;
+	for (const start of valid) {
+		if (num.has(start)) continue;
+		num.set(start, counter);
+		low.set(start, counter);
+		counter++;
+		stack.push(start);
+		onStack.add(start);
+		const work: [string, number][] = [[start, 0]];
+		while (work.length > 0) {
+			const frame = work[work.length - 1]!;
+			const v = frame[0];
+			const outs = adj.get(v) ?? [];
+			if (frame[1] < outs.length) {
+				const i = frame[1];
+				frame[1] = i + 1;
+				const w = outs[i]!;
+				if (!num.has(w)) {
+					num.set(w, counter);
+					low.set(w, counter);
+					counter++;
+					stack.push(w);
+					onStack.add(w);
+					work.push([w, 0]);
+				} else if (onStack.has(w)) {
+					low.set(v, Math.min(low.get(v)!, num.get(w)!));
+				}
+			} else {
+				work.pop();
+				if (low.get(v) === num.get(v)) {
+					let w: string;
+					do {
+						w = stack.pop()!;
+						onStack.delete(w);
+						comp.set(w, compCount);
+					} while (w !== v);
+					compCount++;
+				}
+				if (work.length > 0) {
+					const parent = work[work.length - 1]![0];
+					low.set(parent, Math.min(low.get(parent)!, low.get(v)!));
+				}
+			}
+		}
+	}
+
+	// Condensation predecessors, then longest path. Tarjan emits sinks
+	// first, so descending comp index = topological order (sources first).
+	const preds: Set<number>[] = Array.from({ length: compCount }, () => new Set<number>());
+	for (const e of edges) {
+		const a = comp.get(e.from);
+		const b = comp.get(e.to);
+		if (a == null || b == null || a === b) continue;
+		preds[b]!.add(a);
+	}
+	const depth = new Array<number>(compCount).fill(0);
+	for (let c = compCount - 1; c >= 0; c--) {
+		let d = 0;
+		for (const p of preds[c]!) d = Math.max(d, depth[p]! + 1);
+		depth[c] = d;
+	}
+	const out = new Map<string, number>();
+	for (const n of nodes) out.set(n.id, depth[comp.get(n.id)!] ?? 0);
+	return out;
+}
+
 export interface SimOptions {
 	/** Link spring rest length (world units). */
 	linkDistance?: number;
@@ -59,6 +175,8 @@ export interface SimOptions {
 	alphaDecay?: number;
 	/** Velocity damping per tick (d3 default 0.4). Higher = more friction. */
 	velocityDecay?: number;
+	/** Inference-depth anchoring (see DepthAnchor). Off by default. */
+	depthAnchor?: DepthAnchor;
 	/** Cluster centroid pull (the "virtual node" without the node):
 	 *  members of each cluster accelerate toward their own cluster's
 	 *  centroid. Two O(n) passes per tick — cheaper than a real virtual
@@ -140,10 +258,15 @@ export function createGraphSimulation(
 		.velocityDecay(options.velocityDecay ?? 0.4)
 		.stop();
 
+	// Gravity, mode-projected: in vertical mode the depth force OWNS the
+	// y axis, so gravity goes x-only (it would fight the level lines); in
+	// radial mode a center pull is purely radial and would fight the
+	// rings, so it is dropped entirely (rings already bound the radius).
+	const mode = options.depthAnchor?.mode ?? "off";
 	const g = options.gravity;
-	if (g) {
+	if (g && mode !== "radial") {
 		sim.force("x", forceX<LayoutNode>(g.x).strength(g.strength));
-		sim.force("y", forceY<LayoutNode>(g.y).strength(g.strength));
+		if (mode !== "vertical") sim.force("y", forceY<LayoutNode>(g.y).strength(g.strength));
 	}
 
 	// Cluster centroid pull: the membership index is resolved ONCE (nodes
@@ -161,6 +284,13 @@ export function createGraphSimulation(
 		const sumY = new Float64Array(k);
 		const cnt = new Float64Array(k);
 		const strength = cp.strength;
+		// The cluster centroid pull also respects the depth mode: vertical
+		// → x-only (the depth force owns y); radial → tangential only
+		// (the radial component would drag members off their rings; the
+		// tangential component still tightens each cluster's angular
+		// spread, which is all clustering needs to do there).
+		const ringCx = options.depthAnchor?.center?.x ?? 0;
+		const ringCy = options.depthAnchor?.center?.y ?? 0;
 		sim.force("clusterPull", (alpha: number) => {
 			sumX.fill(0);
 			sumY.fill(0);
@@ -177,10 +307,71 @@ export function createGraphSimulation(
 				const ci = nodeCluster[i]!;
 				if (ci < 0 || (cnt[ci] ?? 0) < 2) continue;
 				const n = nodes[i]!;
-				n.vx = (n.vx ?? 0) + (sumX[ci]! / cnt[ci]! - (n.x ?? 0)) * strength * alpha;
-				n.vy = (n.vy ?? 0) + (sumY[ci]! / cnt[ci]! - (n.y ?? 0)) * strength * alpha;
+				const px = n.x ?? 0;
+				const py = n.y ?? 0;
+				const ux = sumX[ci]! / cnt[ci]! - px;
+				const uy = sumY[ci]! / cnt[ci]! - py;
+				if (mode === "vertical") {
+					n.vx = (n.vx ?? 0) + ux * strength * alpha;
+				} else if (mode === "radial") {
+					const rx = px - ringCx;
+					const ry = py - ringCy;
+					const r = Math.hypot(rx, ry);
+					if (r > 1e-9) {
+						// Tangential component: u − (u·r̂)r̂
+						const dot = (ux * rx + uy * ry) / (r * r);
+						n.vx = (n.vx ?? 0) + (ux - dot * rx) * strength * alpha;
+						n.vy = (n.vy ?? 0) + (uy - dot * ry) * strength * alpha;
+					}
+				} else {
+					n.vx = (n.vx ?? 0) + ux * strength * alpha;
+					n.vy = (n.vy ?? 0) + uy * strength * alpha;
+				}
 			}
 		});
+	}
+
+	// ── Inference-depth anchoring ────────────────────────────────────────
+	// The rank is COMPUTED (not simulated): per-node target scalar derived
+	// from inferenceDepths, then one O(n) pull pass per tick. Soft knob —
+	// high strength approaches pinned rows/rings while low strength leaves
+	// organic sag.
+	const da = options.depthAnchor;
+	if (da && da.mode !== "off" && da.strength > 0) {
+		const depths = inferenceDepths(nodes, edges);
+		const strength = da.strength;
+		const spacing = da.spacing;
+		const c = da.center ?? { x: 0, y: 0 };
+		if (da.mode === "vertical") {
+			const baseY = c.y;
+			sim.force("depth", (alpha: number) => {
+				for (let i = 0; i < nodes.length; i++) {
+					const n = nodes[i]!;
+					const targetY = baseY - (depths.get(n.id) ?? 0) * spacing;
+					n.vy = (n.vy ?? 0) + (targetY - (n.y ?? 0)) * strength * alpha;
+				}
+			});
+		} else {
+			const baseR = da.baseRadius ?? 0;
+			const cx0 = c.x;
+			const cy0 = c.y;
+			sim.force("depth", (alpha: number) => {
+				for (let i = 0; i < nodes.length; i++) {
+					const n = nodes[i]!;
+					const dx = (n.x ?? 0) - cx0;
+					const dy = (n.y ?? 0) - cy0;
+					// Degenerate direction at the exact ring center: nudge
+					// outward on a deterministic axis.
+					const r = Math.hypot(dx, dy);
+					const ux = r > 1e-9 ? dx / r : 1;
+					const uy = r > 1e-9 ? dy / r : 0;
+					const target = baseR + (depths.get(n.id) ?? 0) * spacing;
+					const mag = (target - r) * strength * alpha;
+					n.vx = (n.vx ?? 0) + ux * mag;
+					n.vy = (n.vy ?? 0) + uy * mag;
+				}
+			});
+		}
 	}
 	return sim;
 }
@@ -199,6 +390,9 @@ export interface IncrementalLayoutOptions {
 	clusters?: ReadonlyArray<{ members: ReadonlyArray<string> }>;
 	/** Cluster centroid pull strength (default CLUSTER_PULL_STRENGTH). */
 	clusterPullStrength?: number;
+	/** Inference-depth anchoring (see DepthAnchor). `center` defaults to
+	 *  the anchored core's centroid. */
+	depthAnchor?: DepthAnchor;
 }
 
 /**
@@ -333,20 +527,49 @@ export function incrementalLayout(
 		clusterPull: options.clusters
 			? { clusters: options.clusters, strength: options.clusterPullStrength ?? CLUSTER_PULL_STRENGTH }
 			: undefined,
+		depthAnchor:
+			options.depthAnchor && options.depthAnchor.mode !== "off"
+				? { ...options.depthAnchor, center: options.depthAnchor.center ?? { x: cx, y: cy } }
+				: options.depthAnchor,
 	});
+	const dMode = options.depthAnchor?.mode ?? "off";
+	const dCenter = options.depthAnchor?.center ?? { x: cx, y: cy };
 	const byId = new Map(simNodes.map((n) => [n.id, n]));
 	for (let i = 0; i < ticks; i++) {
 		sim.tick();
 		// Anchor re-blend (position space, alpha-independent — see the
 		// ANCHOR_RETENTION note). Pinned nodes (fx/fy) are left to d3.
+		// DEPTH-MODE PROJECTION: the re-blend preserves the user's
+		// arrangement in the FREE dimension only — x in vertical mode, the
+		// angle in radial mode — because the depth force owns the
+		// constrained dimension (a node's level/ring is meaning, not
+		// memory). Off-mode: full 2D blend as before.
 		if (hasCore && retention < 1) {
 			for (const [id, a] of anchors) {
 				const n = byId.get(id);
 				if (!n || n.fx != null || n.fy != null) continue;
 				const x = n.x ?? 0;
 				const y = n.y ?? 0;
-				n.x = a.x + (x - a.x) * retention;
-				n.y = a.y + (y - a.y) * retention;
+				if (dMode === "vertical") {
+					n.x = a.x + (x - a.x) * retention;
+				} else if (dMode === "radial") {
+					const rx = x - dCenter.x;
+					const ry = y - dCenter.y;
+					const r = Math.hypot(rx, ry);
+					const ax = a.x - dCenter.x;
+					const ay = a.y - dCenter.y;
+					const ar = Math.hypot(ax, ay);
+					if (r > 1e-9 && ar > 1e-9) {
+						const theta = Math.atan2(ry, rx);
+						const thetaA = Math.atan2(ay, ax);
+						const blended = thetaA + Math.atan2(Math.sin(theta - thetaA), Math.cos(theta - thetaA)) * retention;
+						n.x = dCenter.x + r * Math.cos(blended);
+						n.y = dCenter.y + r * Math.sin(blended);
+					}
+				} else {
+					n.x = a.x + (x - a.x) * retention;
+					n.y = a.y + (y - a.y) * retention;
+				}
 			}
 		}
 	}

@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createGraphSimulation, incrementalLayout } from "../src/core/layout.ts";
+import { createGraphSimulation, incrementalLayout, inferenceDepths } from "../src/core/layout.ts";
 import { settleGraphLayout } from "../src/core/layout-settle.ts";
 import type { GraphNode, GraphEdge, Position } from "../src/core/contracts.ts";
 
@@ -166,5 +166,106 @@ describe("clusterPull (the centroid force)", () => {
 		assert.ok(pulled < unpulled * 0.8, `pulled spread ${pulled.toFixed(1)} should be well under ${unpulled.toFixed(1)}`);
 		// ...and both groups survive as separate blobs (no merge).
 		assert.ok(pulled > 0, "spread is finite/positive");
+	});
+});
+
+describe("inferenceDepths (SCC-safe ranking)", () => {
+	const nodes = (ids: string[]) => ids.map((id) => ({ id }));
+
+	it("ranks a chain, a diamond takes the longest path, orphans are depth 0", () => {
+		// chain a->b->c; diamond a->d, b->d, c->d (d reachable at 1 and 2 and 3)
+		const ns = nodes(["a", "b", "c", "d", "loner"]);
+		const edges = [
+			{ from: "a", to: "b" },
+			{ from: "b", to: "c" },
+			{ from: "a", to: "d" },
+			{ from: "b", to: "d" },
+			{ from: "c", to: "d" },
+		];
+		const d = inferenceDepths(ns, edges);
+		assert.equal(d.get("a"), 0);
+		assert.equal(d.get("b"), 1);
+		assert.equal(d.get("c"), 2);
+		assert.equal(d.get("d"), 3); // longest path, not shortest
+		assert.equal(d.get("loner"), 0);
+	});
+
+	it("cycles share a depth (mutual support = equal footing)", () => {
+		// x <-> y (a cycle), fed by s; z follows x.
+		const ns = nodes(["s", "x", "y", "z"]);
+		const edges = [
+			{ from: "s", to: "x" },
+			{ from: "x", to: "y" },
+			{ from: "y", to: "x" },
+			{ from: "x", to: "z" },
+		];
+		const d = inferenceDepths(ns, edges);
+		assert.equal(d.get("s"), 0);
+		assert.equal(d.get("x"), d.get("y"), "cycle members share a depth");
+		assert.equal(d.get("x"), 1);
+		assert.equal(d.get("z"), 2);
+		// Deterministic across calls.
+		assert.deepEqual([...inferenceDepths(ns, edges).entries()], [...d.entries()]);
+	});
+});
+
+describe("depthAnchor force", () => {
+	const nodes = (ids: string[]) => ids.map((id) => ({ id, x: 0, y: 0 }));
+
+	it("vertical: the premise lands below its conclusion", () => {
+		const ns = nodes(["base", "derived"]);
+		const edges = [{ from: "base", to: "derived" }];
+		const sim = createGraphSimulation(ns, edges, {
+			depthAnchor: { mode: "vertical", strength: 1.2, spacing: 100, center: { x: 0, y: 0 } },
+		});
+		for (let i = 0; i < 300; i++) sim.tick();
+		const byId = new Map(sim.nodes().map((n) => [n.id, n]));
+		const baseY = byId.get("base")!.y!;
+		const derivedY = byId.get("derived")!.y!;
+		assert.ok(baseY > derivedY, `base (${baseY.toFixed(0)}) should sit BELOW derived (${derivedY.toFixed(0)})`);
+		assert.ok(
+			baseY - derivedY > 60,
+			`level separation should be substantial (got ${(baseY - derivedY).toFixed(0)})`,
+		);
+	});
+
+	it("radial: inference depth becomes radius", () => {
+		const ns = nodes(["base", "mid", "top"]);
+		const edges = [
+			{ from: "base", to: "mid" },
+			{ from: "mid", to: "top" },
+		];
+		const sim = createGraphSimulation(ns, edges, {
+			depthAnchor: { mode: "radial", strength: 1.2, spacing: 80, baseRadius: 100, center: { x: 0, y: 0 } },
+		});
+		for (let i = 0; i < 300; i++) sim.tick();
+		const r = (id: string) => {
+			const n = sim.nodes().find((x) => x.id === id)!;
+			return Math.hypot(n.x!, n.y!);
+		};
+		assert.ok(r("base") < r("mid"), `base ring (${r("base").toFixed(0)}) inside mid (${r("mid").toFixed(0)})`);
+		assert.ok(r("mid") < r("top"), `mid ring (${r("mid").toFixed(0)}) inside top (${r("top").toFixed(0)})`);
+	});
+
+	it("settle with depthAnchor: old nodes keep x memory but snap to their level", () => {
+		// Node "old" was previously placed at y=300 (off-level). With
+		// vertical anchoring a re-settle must move it to the baseline
+		// while preserving (roughly) its x arrangement.
+		const previous = new Map([["old", { x: 250, y: 300 }], ["peer", { x: 260, y: 290 }]]);
+		const next = incrementalLayout(
+			[{ id: "old" }, { id: "peer" }, { id: "child" }],
+			[
+				{ from: "old", to: "child" },
+				{ from: "peer", to: "child" },
+			],
+			previous,
+			{ depthAnchor: { mode: "vertical", strength: 0.6, spacing: 80 } },
+		);
+		const old = next.get("old")!;
+		// The baseline defaults to the anchor centroid: (300+290)/2 = 295.
+		assert.ok(Math.abs(old.y - 295) < 20, `old node snaps to the baseline (y=${old.y.toFixed(1)})`);
+		assert.ok(old.x > 150, `x memory preserved (x=${old.x.toFixed(1)})`);
+		const child = next.get("child")!;
+		assert.ok(child.y < old.y - 40, `child rises above its premises (child=${child.y.toFixed(1)}, old=${old.y.toFixed(1)})`);
 	});
 });

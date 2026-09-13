@@ -665,6 +665,41 @@ export function GraphView() {
 							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 								Physics
 							</span>
+							<label className="flex items-center justify-between gap-2 text-xs">
+								Depth anchor
+								<select
+									className="rounded border bg-background px-1 py-0.5 text-xs"
+									value={physicsTuning.depthMode}
+									onChange={(e) =>
+										setPhysicsTuning((t) => ({
+											...t,
+											depthMode: e.target.value as PhysicsTuning["depthMode"],
+										}))
+									}
+								>
+									<option value="off">Off</option>
+									<option value="vertical">Vertical (up)</option>
+									<option value="radial">Radial (outward)</option>
+								</select>
+							</label>
+							<NumberField
+								label="Depth strength"
+								value={physicsTuning.depthStrength}
+								step={0.05}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, depthStrength: v }))}
+							/>
+							<NumberField
+								label="Depth spacing"
+								value={physicsTuning.depthSpacing}
+								step={10}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, depthSpacing: v }))}
+							/>
+							<NumberField
+								label="Base ring radius"
+								value={physicsTuning.depthBaseRadius}
+								step={20}
+								onChange={(v) => setPhysicsTuning((t) => ({ ...t, depthBaseRadius: v }))}
+							/>
 							<NumberField
 								label="Node repulsion"
 								value={physicsTuning.chargeStrength}

@@ -7,10 +7,17 @@
  * Reads ONLY the ledgers (nodes / edges / mappings / sources); writes ONLY
  * data/graph/positions.json — no LLM calls, no extraction, no chat records.
  *
- *   npx tsx scripts/replay-layout.ts
+ *   npx tsx scripts/replay-layout.ts [--depth=vertical|radial]
+ *
+ * --depth regenerates the ledger WITH inference-depth anchoring (the
+ * playground mode baked into the rest state); omit it for the free layout.
  */
 import { graphStore } from "../src/store/graph.ts";
 import { detectCommunities } from "../src/core/clusters.ts";
+// --depth=vertical|radial: bake the playground depth mode into the ledger.
+const depthArg = process.argv.find((a) => a.startsWith("--depth="));
+const depthMode: "off" | "vertical" | "radial" =
+	depthArg === "--depth=vertical" ? "vertical" : depthArg === "--depth=radial" ? "radial" : "off";
 import { incrementalLayout } from "../src/core/layout.ts";
 import type { GraphNode, NodeMapping, Position } from "../src/core/contracts.ts";
 
@@ -74,6 +81,16 @@ function main() {
 		positions = incrementalLayout(batchNodes, activeEdges, positions, {
 			// The same partition the real settle would see for this batch.
 			clusters: detectCommunities(batchNodes, activeEdges).communities,
+			...(depthMode === "off"
+				? {}
+				: {
+						depthAnchor: {
+							mode: depthMode,
+							strength: 0.8,
+							spacing: 60,
+							...(depthMode === "radial" ? { baseRadius: 220 } : {}),
+						},
+					}),
 		});
 		for (const [id, prev] of before) {
 			const now = positions.get(id)!;

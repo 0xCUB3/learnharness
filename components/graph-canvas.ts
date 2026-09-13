@@ -60,6 +60,7 @@ import {
 	createGraphSimulation,
 	INCREMENTAL_GRAVITY,
 	LINK_DISTANCE,
+	type DepthAnchorMode,
 	type GraphRenderSettings,
 	type LayoutNode,
 	type Position,
@@ -218,6 +219,14 @@ export interface PhysicsTuning {
 	clusterPull: number;
 	/** Per-tick velocity damping (d3 default 0.4). */
 	velocityDecay: number;
+	/** Inference-depth anchoring mode (see DepthAnchor in core). */
+	depthMode: DepthAnchorMode;
+	/** Depth-anchor pull strength. */
+	depthStrength: number;
+	/** Spacing between inference levels (world units). */
+	depthSpacing: number;
+	/** Inner ring radius, radial mode (world units). */
+	depthBaseRadius: number;
 }
 
 export const DEFAULT_PHYSICS_TUNING: PhysicsTuning = {
@@ -227,6 +236,13 @@ export const DEFAULT_PHYSICS_TUNING: PhysicsTuning = {
 	gravity: INCREMENTAL_GRAVITY,
 	clusterPull: CLUSTER_PULL_STRENGTH,
 	velocityDecay: 0.4,
+	depthMode: "off",
+	// 0.8 by sweep on the real graph: 215/216 arrows read upward with
+	// organic sag (mean |dev| from level ~34u at spacing 60); 1.5 gives
+	// crisp rows (dev ~18) if the promoted default wants them.
+	depthStrength: 0.8,
+	depthSpacing: 60,
+	depthBaseRadius: 220,
 };
 
 /** Clamp anything into a usable tuning (number inputs can be empty/NaN). */
@@ -241,6 +257,10 @@ export function sanitizePhysicsTuning(input: Partial<PhysicsTuning> | null | und
 		gravity: Math.min(Math.max(num(input?.gravity, d.gravity), 0), 1),
 		clusterPull: Math.min(Math.max(num(input?.clusterPull, d.clusterPull), 0), 2),
 		velocityDecay: Math.min(Math.max(num(input?.velocityDecay, d.velocityDecay), 0), 0.99),
+		depthMode: input?.depthMode === "vertical" || input?.depthMode === "radial" ? input.depthMode : "off",
+		depthStrength: Math.min(Math.max(num(input?.depthStrength, d.depthStrength), 0), 2),
+		depthSpacing: Math.min(Math.max(num(input?.depthSpacing, d.depthSpacing), 1), 500),
+		depthBaseRadius: Math.min(Math.max(num(input?.depthBaseRadius, d.depthBaseRadius), 0), 2000),
 	};
 }
 
@@ -670,6 +690,14 @@ export class GraphCanvasRenderer {
 	setPhysicsTuning(input: Partial<PhysicsTuning>): void {
 		this.physicsTuning = sanitizePhysicsTuning(input);
 		this.buildSim();
+		// Reheat: a tuning change re-anneals the layout from its current
+		// state, so mode toggles (off/vertical/radial) visibly RE-FORM the
+		// graph instead of waiting for the next drag. Mid-drag is safe —
+		// buildSim preserved the pinned node's fx/fy.
+		if (this.sim) {
+			this.sim.alpha(1);
+			this.simActive = true;
+		}
 		this.markDirty();
 	}
 
@@ -1085,6 +1113,16 @@ export class GraphCanvasRenderer {
 			linkDistance: t.linkDistance,
 			clusterPull:
 				data.clusters.length > 0 ? { clusters: data.clusters, strength: t.clusterPull } : undefined,
+			depthAnchor:
+				t.depthMode === "off"
+					? undefined
+					: {
+							mode: t.depthMode,
+							strength: t.depthStrength,
+							spacing: t.depthSpacing,
+							baseRadius: t.depthBaseRadius,
+							center: this.simCenter,
+						},
 		});
 		this.simById = new Map(data.nodes.map((n) => [n.id, n as LayoutNode]));
 	}
