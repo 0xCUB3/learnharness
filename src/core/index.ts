@@ -19,6 +19,7 @@ export * from "./contracts.ts";
 export * from "./ports.ts";
 
 export * from "./question-core.ts";
+export * from "./clusters.ts";
 export * from "./plan-tree.ts";
 export * from "./phases.ts";
 export * from "./pending.ts";

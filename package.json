@@ -31,6 +31,7 @@
 		"cmdk": "^1.1.1",
 		"embla-carousel-react": "^8.6.0",
 		"graphology": "^0.26.0",
+		"graphology-communities-louvain": "^2.0.2",
 		"graphology-layout-forceatlas2": "^0.10.1",
 		"katex": "^0.16.47",
 		"linkedom": "^0.18.13",
