@@ -54,6 +54,7 @@ import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import { clusterHue, type Pt } from "./cluster-geometry.ts";
+import { hslToRgb, joinContourSegments, marchingSquares, projectCrop } from "./region-contour.ts";
 import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
@@ -159,6 +160,15 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
 const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
 const REGION_LABEL_SIZE = 14;
+/** Region REBUILDS between boundary recomputes during the live sim: the
+ *  boundary stage (projection + marching squares over ~26 crops) costs
+ *  about as much as the whole fill pipeline, so it runs on every 2nd
+ *  rebuild (~6th frame) and the stale paths ride along — at rest it
+ *  always syncs with the fill. */
+const BOUNDARY_EVERY = 2;
+/** Boundary stroke width, screen px at fit zoom (world units = this / kFit,
+ *  so it zooms with the graph like every other stroke). */
+const REGION_BOUNDARY_WIDTH = 1.5;
 
 /** Dev-tunable region rendering (2026-09-13, user request): plain number
  *  inputs in the settings panel — session-only, never persisted — so the
@@ -178,6 +188,10 @@ export interface RegionTuning {
 	bitmap: number;
 	/** Per-stroke alpha; overlapping strokes stack toward the core. */
 	edgeAlpha: number;
+	/** Boundary iso-level as a FRACTION OF each cluster's peak field
+	 *  value (0.3 = the line where the blurred halo has faded to 30% of
+	 *  its densest point). 0 = no boundaries. */
+	boundary: number;
 }
 
 export const DEFAULT_REGION_TUNING: RegionTuning = {
@@ -185,6 +199,7 @@ export const DEFAULT_REGION_TUNING: RegionTuning = {
 	blur: 10,
 	bitmap: 384,
 	edgeAlpha: 0.35,
+	boundary: 0.3,
 };
 
 /** Clamp anything into a usable tuning (number inputs can be empty/NaN). */
@@ -197,6 +212,7 @@ export function sanitizeRegionTuning(input: Partial<RegionTuning> | null | undef
 		blur: Math.min(Math.max(num(input?.blur, d.blur), 0), 40),
 		bitmap: Math.round(Math.min(Math.max(num(input?.bitmap, d.bitmap), 128), 1024)),
 		edgeAlpha: Math.min(Math.max(num(input?.edgeAlpha, d.edgeAlpha), 0.02), 1),
+		boundary: Math.min(Math.max(num(input?.boundary, d.boundary), 0), 0.95),
 	};
 }
 
@@ -571,11 +587,19 @@ export class GraphCanvasRenderer {
 	private regionRect: { minX: number; minY: number; w: number; h: number } | null = null;
 	/** Region labels: cluster centroid + hue, computed at splat build. */
 	private regionMeta: { label: string | null; cx: number; cy: number; hue: number }[] = [];
+	/** Boundary paths (world-space Path2D per cluster), from the last
+	 *  region rebuild — stroked every frame under the camera transform. */
+	private regionBoundaries: { path: Path2D; hue: number }[] = [];
 	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
 	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
 	/** Gravity center for the live sim (graph bbox centroid at setData). */
 	private simCenter: Pt = { x: 0, y: 0 };
 	private regionBuiltVersion = -1;
+	/** geoVersion of the boundary paths (they lag one rebuild behind the
+	 *  region fill during the live sim — see BOUNDARY_EVERY). */
+	private boundaryBuiltVersion = -1;
+	/** Rebuild counter for the boundary throttle (counts region rebuilds). */
+	private regionRebuildCount = 0;
 	private frameCount = 0; // draw counter for the live-sim splat throttle
 	private labelLines = new Map<string, string[]>();
 	private worldLabelFont = "";
@@ -1138,6 +1162,7 @@ export class GraphCanvasRenderer {
 			this.regionCanvas = null;
 			this.regionRect = null;
 			this.regionMeta = [];
+			this.regionBoundaries = [];
 			return;
 		}
 		const visible = this.visible;
@@ -1147,23 +1172,32 @@ export class GraphCanvasRenderer {
 		const s = 1 / this.kFit;
 
 		// World rect over VISIBLE cluster members (regions cover members
-		// and their intra-cluster edges — nothing else).
+		// and their intra-cluster edges — nothing else), plus each cluster's
+		// OWN bbox for the boundary crops (the contour only needs to scan
+		// where a cluster's halo can reach).
 		let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-		for (const c of data.clusters) {
+		const boxes = data.clusters.map((c) => {
+			let a = Infinity, b = Infinity, e = -Infinity, f = -Infinity;
 			for (const id of c.members) {
 				if (!isVisible(id)) continue;
 				const n = this.nodeById.get(id);
 				if (!n) continue;
+				if (n.x < a) a = n.x;
+				if (n.x > e) e = n.x;
+				if (n.y < b) b = n.y;
+				if (n.y > f) f = n.y;
 				if (n.x < minX) minX = n.x;
 				if (n.x > maxX) maxX = n.x;
 				if (n.y < minY) minY = n.y;
 				if (n.y > maxY) maxY = n.y;
-			}
 		}
+			return a > e ? null : { minX: a, minY: b, maxX: e, maxY: f };
+		});
 		if (minX > maxX) {
 			this.regionCanvas = null;
 			this.regionRect = null;
 			this.regionMeta = [];
+			this.regionBoundaries = [];
 			return;
 		}
 
@@ -1266,6 +1300,7 @@ export class GraphCanvasRenderer {
 		// THE blur: 3 box-blur rounds on the premultiplied bitmap. Bilinear
 		// upscaling alone is no blur at all (tent ramps — the JPEG look);
 		// this makes the field genuinely smooth before the blit.
+		let blurred: Float32Array | null = null; // premultiplied field, for boundaries
 		if (tuning.blur > 0) {
 			const img = rctx.getImageData(0, 0, bw, bh);
 			const n = bw * bh * 4;
@@ -1299,6 +1334,65 @@ export class GraphCanvasRenderer {
 				}
 			}
 			rctx.putImageData(img, 0, 0);
+			blurred = b;
+		}
+
+		// ── Boundaries (DECIDED 2026-09-13) ──────────────────────────────
+		// Iso-lines of the blurred field at a FRACTION OF each cluster's
+		// peak. Per-cluster fields are recovered from the ONE shared
+		// bitmap by projecting crops of the blurred premultiplied array
+		// onto each cluster's paint color (pure-i pixels → their alpha;
+		// overlaps split proportionally — the natural divider between
+		// neighboring halos). One paint, one blur, one readback — the
+		// per-cluster work is cheap typed-array math over small crops.
+		// During the live sim this doubles the rebuild cost, so it runs on
+		// every BOUNDARY_EVERY-th region rebuild (at rest it always syncs;
+		// the stale paths just ride along for ~3 frames).
+		if (tuning.boundary <= 0 || !blurred) {
+			// Off (or no blurred field): never keep stale paths around.
+			this.regionBoundaries = [];
+		} else if (!this.simActive || this.regionRebuildCount % BOUNDARY_EVERY === 0) {
+			this.regionBoundaries = [];
+			for (let ci = 0; ci < data.clusters.length; ci++) {
+				const box = boxes[ci];
+				if (!box) continue;
+				const cluster = data.clusters[ci]!;
+				// Crop in bitmap coords: the cluster bbox + the halo reach,
+				// clamped to the bitmap.
+				const cx0 = Math.max(0, Math.floor((box.minX - padWorld - minX) / cell));
+				const cy0 = Math.max(0, Math.floor((box.minY - padWorld - minY) / cell));
+				const cx1 = Math.min(bw - 1, Math.ceil((box.maxX + padWorld - minX) / cell));
+				const cy1 = Math.min(bh - 1, Math.ceil((box.maxY + padWorld - minY) / cell));
+				const cw = cx1 - cx0;
+				const ch = cy1 - cy0;
+				if (cw < 3 || ch < 3) continue;
+				const hue = clusterHue(cluster.id);
+				const rgb = hslToRgb(hue, 0.65, 0.6);
+				// Stride 2: sample every other bitmap pixel — the blurred field
+				// varies on a ~blur-radius scale, so the half-res grid loses
+				// nothing and the contour work quarters (measured ~1ms total).
+				const { field, peak } = projectCrop(blurred, bw, { x: cx0, y: cy0, w: cw, h: ch }, rgb, 2);
+				const level = tuning.boundary * peak;
+				if (peak <= 0 || level <= 0) continue;
+				const fw = Math.ceil(cw / 2);
+				const fh = Math.ceil(ch / 2);
+				const segments = marchingSquares(field, fw, fh, level);
+				if (segments.length === 0) continue;
+				// Grid coords (stride-2 samples) → world coords → one stroked
+				// path per cluster. Sample (gx, gy) is bitmap pixel
+				// (cx0 + gx*2, cy0 + gy*2).
+				const path = new Path2D();
+				for (const line of joinContourSegments(segments)) {
+					if (line.length < 4) continue;
+					path.moveTo(minX + (cx0 + line[0]! * 2) * cell, minY + (cy0 + line[1]! * 2) * cell);
+					for (let i = 2; i < line.length; i += 2) {
+						path.lineTo(minX + (cx0 + line[i]! * 2) * cell, minY + (cy0 + line[i + 1]! * 2) * cell);
+					}
+					// Closed loop (first point == last point) → close the path.
+					if (line[0] === line[line.length - 2] && line[1] === line[line.length - 1]) path.closePath();
+				}
+				this.regionBoundaries.push({ path, hue });
+			}
 		}
 		this.regionRect = { minX, minY, w: spanX, h: spanY };
 	}
@@ -1326,6 +1420,7 @@ export class GraphCanvasRenderer {
 			this.regionBuiltVersion !== this.geoVersion &&
 			(!this.simActive || this.frameCount % REGION_EVERY === 0)
 		) {
+			this.regionRebuildCount++;
 			this.buildRegions();
 			this.regionBuiltVersion = this.geoVersion;
 		}
@@ -1349,6 +1444,18 @@ export class GraphCanvasRenderer {
 			const { minX, minY, w, h } = this.regionRect;
 			ctx.imageSmoothingEnabled = true;
 			ctx.drawImage(this.regionCanvas, minX, minY, w, h);
+		}
+
+		// 2. Region boundaries: the cached iso-line paths, one stroke per
+		//    cluster (hue-tinted, zoom-scaling width — see REGION_BOUNDARY_WIDTH).
+		if (this.regionBoundaries.length > 0) {
+			ctx.lineWidth = REGION_BOUNDARY_WIDTH * (1 / this.kFit);
+			ctx.lineJoin = "round";
+			ctx.lineCap = "round";
+			for (const rb of this.regionBoundaries) {
+				ctx.strokeStyle = `hsla(${rb.hue}, 65%, 68%, 0.55)`;
+				ctx.stroke(rb.path);
+			}
 		}
 
 		// 3. Edges: shafts + arrowheads from cached paths; width constant on

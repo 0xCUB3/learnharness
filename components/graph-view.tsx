@@ -656,6 +656,12 @@ export function GraphView() {
 								step={0.05}
 								onChange={(v) => setRegionTuning((t) => ({ ...t, edgeAlpha: v }))}
 							/>
+							<NumberField
+								label="Boundary level (fraction of peak, 0 = off)"
+								value={regionTuning.boundary}
+								step={0.05}
+								onChange={(v) => setRegionTuning((t) => ({ ...t, boundary: v }))}
+							/>
 						</div>
 						{/* Physics (user-facing): the live sim's forces. Every value feeds
 						    the SAME engine the server settle runs (createGraphSimulation);
