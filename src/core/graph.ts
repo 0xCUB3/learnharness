@@ -513,7 +513,21 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 			members: community.members,
 		}));
 
-	return { nodes, edges, sessions, fileSources, nodeSessions, nodeObservations, clusters };
+	// Resting layout (Option A): the positions ledger, when the settle has
+	// ever run. Absent on a fresh graph — the view falls back to its own
+	// one-shot pass until the first merge writes the ledger.
+	const positions = deps.graphStore.readPositions();
+
+	return {
+		nodes,
+		edges,
+		sessions,
+		fileSources,
+		nodeSessions,
+		nodeObservations,
+		clusters,
+		...(Object.keys(positions).length > 0 ? { positions } : {}),
+	};
 }
 
 // Re-export: the contract owns the shape; legacy importers still reach it.

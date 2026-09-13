@@ -22,6 +22,7 @@ import type {
 	ExtractionRunUsage,
 	NodeMapping,
 	PlanTree,
+	Position,
 	SessionCheckpoint,
 	TurnUsage,
 	NotesSource,
@@ -96,6 +97,13 @@ export interface GraphStore {
 	/** Append one run's usage to a source record — idempotent per
 	 *  startedAt, mirroring ChatRecord.extractions. */
 	appendSourceUsage(id: string, entry: ExtractionRunUsage): void;
+
+	/** The layout ledger (config.POSITIONS_FILE): nodeId → resting {x,y}.
+	 *  WRITTEN ONLY by the incremental settle after a merge (core/layout.ts
+	 *  settleGraphLayout) — read-only for everything else. */
+	readPositions(): Record<string, Position>;
+	/** Replace the whole ledger (the settle is a full-graph computation). */
+	writePositions(positions: Record<string, Position>): void;
 }
 
 // ─── JobStore — background sub-agent jobs (data/jobs) ─────────────────────────

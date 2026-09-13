@@ -327,12 +327,30 @@ export function GraphView() {
 		};
 	}, []);
 
-	// Build the graphology graph and lay it out ONCE per snapshot: seeded
-	// start positions, one synchronous forceAtlas2 pass, then freeze. The
-	// renderer only ever receives the frozen positions as data — layout is
-	// never recomputed for a settings tweak or a refetch of identical data.
+	// Layout (Option A): the positions ledger (written by the server's
+	// incremental settle after every merge) IS the layout — the renderer
+	// receives it as frozen data. The local one-shot forceAtlas2 pass runs
+	// ONLY as a fallback when the ledger is absent (a graph never merged
+	// through the pipeline, e.g. tests or a fresh install).
 	useEffect(() => {
 		if (!snapshot || snapshot.nodes.length === 0) return;
+		// The ledger path: every positioned node uses its resting position;
+		// nodes the ledger doesn't know yet (raced mid-settle) fall through
+		// to seeded scatter below.
+		const ledger = snapshot.positions;
+		if (ledger) {
+			const positions = new Map<string, { x: number; y: number }>();
+			for (const node of snapshot.nodes) {
+				const p = ledger[node.id];
+				if (p) positions.set(node.id, { x: p.x, y: p.y });
+			}
+			if (positions.size > 0) {
+				posRef.current = positions;
+				return () => {
+					posRef.current = null;
+				};
+			}
+		}
 		const graph = new Graph();
 		for (const node of snapshot.nodes) {
 			// Seeded start positions (FA2 requires non-zero x/y) keep the

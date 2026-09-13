@@ -321,6 +321,16 @@ export interface GraphSnapshot {
 	 * joined with persisted LLM labelings. Purely structural — never
 	 * depends on layout. */
 	clusters: Cluster[];
+	/** Resting layout positions per node id, when a positions ledger
+	 *  exists (core/layout.ts settle writes it). Absent on a fresh graph —
+	 *  the view then falls back to its own one-shot forceAtlas2 pass. */
+	positions?: Record<string, Position>;
+}
+
+/** A node's resting position in layout space (the positions ledger). */
+export interface Position {
+	x: number;
+	y: number;
 }
 
 /** Derive a short chat title from the learner's first message (pure).

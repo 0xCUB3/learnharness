@@ -16,6 +16,7 @@ import type {
 	SessionFindings,
 } from "../../core/contracts.ts";
 import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
+import { settleGraphLayout } from "../../core/layout.ts";
 import { refreshClusterLabels } from "./cluster-namer.ts";
 
 /**
@@ -714,6 +715,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				messages: record.messages as UIMessage[],
 				foldedAt: record.updatedAt,
 			});
+			// Option A: the layout ledger evolves with the merge (sync — the
+			// next snapshot fetch must already reflect the new nodes).
+			settleGraphLayout(graphStore);
 			persistRunUsage(chatId, Math.round(performance.now() - t0), stats);
 			console.info(
 				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
@@ -824,6 +828,8 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// (messages: null) — nothing to attribute, nothing to build.
 			const auditResult: AuditResult = { ...notesResult, attribution: { quiz: {} } };
 			const stats = mergeFindings(id, auditResult, { chatStore, graphStore }, { messages: null, foldedAt: input.importedAt });
+			// Option A: same post-merge settle as the chat path.
+			settleGraphLayout(graphStore);
 			persistRunUsage(id, Math.round(performance.now() - t0), stats);
 			console.info(
 				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +

@@ -66,6 +66,7 @@ function memoryLedgers() {
 	const checkpoints: SessionCheckpoint[] = [];
 	const sources = new Map<string, NotesSource>();
 	const clusterLabels: ClusterLabeling[] = [];
+	const positions = new Map<string, { x: number; y: number }>();
 	return {
 		appendNode: (n: GraphNode) => void nodes.push(n),
 		readNodes: () => nodes.map((n) => ({ ...n })),
@@ -95,6 +96,12 @@ function memoryLedgers() {
 			if (!clusterLabels.some((x) => x.id === l.id)) clusterLabels.push(l);
 		},
 		readClusterLabels: () => clusterLabels.map((l) => ({ ...l, core: [...l.core] })),
+		// The layout ledger — settleGraphLayout writes it after each merge.
+		readPositions: () => Object.fromEntries([...positions].map(([id, p]) => [id, { ...p }])),
+		writePositions: (next) => {
+			positions.clear();
+			for (const [id, p] of Object.entries(next)) positions.set(id, { x: p.x, y: p.y });
+		},
 	} satisfies GraphStore;
 }
 
