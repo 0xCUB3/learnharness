@@ -9,15 +9,31 @@ import assert from "node:assert/strict";
 import { describe, it as test } from "node:test";
 import {
 	ARROW_LENGTH_RANGE,
+	CHARGE_RANGE,
+	CLUSTER_PULL_RANGE,
 	DEFAULT_RENDER_SETTINGS,
+	DEPTH_BASE_RADIUS_RANGE,
+	DEPTH_SPACING_RANGE,
+	DEPTH_STRENGTH_RANGE,
 	EDGE_WIDTH_RANGE,
+	GRAVITY_RANGE,
 	LABEL_SIZE_RANGE,
 	LABEL_ZOOM_MAX,
 	LABEL_ZOOM_MIN,
+	LINK_DISTANCE_RANGE,
+	LINK_STRENGTH_RANGE,
 	NODE_SIZE_RANGE,
+	REGION_BLUR_RANGE,
+	REGION_DILATION_RANGE,
+	REGION_EDGE_ALPHA_RANGE,
+	VELOCITY_DECAY_RANGE,
+	DEFAULT_PHYSICS_TUNING,
+	DEFAULT_REGION_TUNING,
+	fromOffSliderPosition,
 	fromSliderPosition,
 	labelZoomDisplay,
 	sanitizeRenderSettings,
+	toOffSliderPosition,
 	toSliderPosition,
 } from "../src/core/render-settings.ts";
 
@@ -64,8 +80,43 @@ describe("sanitizeRenderSettings", () => {
 	});
 
 	test("a fully valid object passes through unchanged", () => {
-		const valid = { nodeSize: 4, edgeWidth: 2, arrowLength: 3, labelZoom: 0.25, labelSize: 4, clusterLabels: false };
+		const valid = {
+			nodeSize: 4,
+			edgeWidth: 2,
+			arrowLength: 3,
+			labelZoom: 0.25,
+			labelSize: 4,
+			clusterLabels: false,
+			regions: DEFAULT_REGION_TUNING,
+			physics: DEFAULT_PHYSICS_TUNING,
+		};
 		assert.deepEqual(sanitizeRenderSettings(valid), valid);
+	});
+
+	test("the pre-2026-09-13 stored shape (flat, no regions/physics) still loads", () => {
+		// data/render-settings.json on disk predates the nested sections —
+		// those loads must get defaults, not crash, not shift anything.
+		const s = sanitizeRenderSettings({ nodeSize: 4, edgeWidth: 1, arrowLength: 5, labelZoom: 0.5, clusterLabels: true });
+		assert.deepEqual(s.regions, DEFAULT_REGION_TUNING);
+		assert.deepEqual(s.physics, DEFAULT_PHYSICS_TUNING);
+		assert.equal(s.nodeSize, 4);
+	});
+
+	test("nested sections sanitize: garbage clamps inside them without touching the rest", () => {
+		const s = sanitizeRenderSettings({
+			nodeSize: 3,
+			regions: { blur: -5, bitmap: 999, edgeAlpha: 9 },
+			physics: { linkStrength: 99, gravity: 7, depthMode: "sideways" },
+		});
+		assert.equal(s.nodeSize, 3);
+		assert.equal(s.regions.blur, 0);
+		assert.equal(s.regions.bitmap, 512); // snaps to the nearest fixed option
+		assert.equal(s.regions.edgeAlpha, 1);
+		assert.equal(s.regions.dilation, DEFAULT_REGION_TUNING.dilation);
+		assert.equal(s.physics.linkStrength, 4); // sweep-validated cap
+		assert.equal(s.physics.gravity, 0.48);
+		assert.equal(s.physics.depthMode, "off"); // unknown mode → off
+		assert.equal(s.physics.chargeStrength, DEFAULT_PHYSICS_TUNING.chargeStrength);
 	});
 
 	test("the pre-wave stored shape (no labelSize) still loads", () => {
@@ -113,5 +164,42 @@ describe("slider mapping (log scale, default-centered)", () => {
 		assert.equal(labelZoomDisplay(0.25), "0.5×");
 		assert.equal(labelZoomDisplay(4), "8×");
 		assert.equal(labelZoomDisplay(0.0625), "0.13×"); // rounded to 2 decimals
+	});
+
+	test("every region/physics default sits dead-center at position 50", () => {
+		// The same law for the 2026-09-13 sliders: default = geometric mean
+		// of the range ends (repulsion maps |charge|; friction tolerates
+		// the sub-0.5° drift).
+		const pairs: [number, number, number][] = [
+			[REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max, DEFAULT_REGION_TUNING.dilation],
+			[REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max, DEFAULT_REGION_TUNING.edgeAlpha],
+			// |charge| in [30, 480] (the range stores negative ends).
+			[-CHARGE_RANGE.max, -CHARGE_RANGE.min, -DEFAULT_PHYSICS_TUNING.chargeStrength],
+			[LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max, DEFAULT_PHYSICS_TUNING.linkStrength],
+			[LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max, DEFAULT_PHYSICS_TUNING.linkDistance],
+			[GRAVITY_RANGE.min, GRAVITY_RANGE.max, DEFAULT_PHYSICS_TUNING.gravity],
+			[VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max, DEFAULT_PHYSICS_TUNING.velocityDecay],
+			[DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max, DEFAULT_PHYSICS_TUNING.depthStrength],
+			[DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max, DEFAULT_PHYSICS_TUNING.depthSpacing],
+			[DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max, DEFAULT_PHYSICS_TUNING.depthBaseRadius],
+		];
+		for (const [min, max, d] of pairs) {
+			assert.ok(Math.abs(toSliderPosition(d, min, max) - 50) < 0.6, `default ${d} in [${min}, ${max}]`);
+		}
+		// Off-zone fields: the default sits at 50 INSIDE the on-part.
+		assert.ok(Math.abs(toOffSliderPosition(DEFAULT_PHYSICS_TUNING.clusterPull, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max) - 50) < 0.6);
+		assert.ok(Math.abs(toOffSliderPosition(DEFAULT_REGION_TUNING.blur, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max) - 50) < 0.6);
+	});
+
+	test("off-slider mapping: position 0 ↔ value 0; the log part round-trips", () => {
+		assert.equal(toOffSliderPosition(0, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max), 0);
+		assert.equal(fromOffSliderPosition(0, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max), 0);
+		const v = fromOffSliderPosition(toOffSliderPosition(10, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max), REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max);
+		assert.ok(Math.abs(v - 10) < 1e-9);
+		// One step in (position 5) sits just above the log floor:
+		// min * (max/min)^(5/100), NOT the floor itself (that's position 0,
+		// the off zone).
+		const stepIn = REGION_BLUR_RANGE.min * (REGION_BLUR_RANGE.max / REGION_BLUR_RANGE.min) ** (5 / 100);
+		assert.ok(Math.abs(fromOffSliderPosition(5, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max) - stepIn) < 1e-9);
 	});
 });

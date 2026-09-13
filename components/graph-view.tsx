@@ -65,25 +65,33 @@ import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState
 import Link from "next/link";
 import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
 import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/core";
-import {
-	DEFAULT_PHYSICS_TUNING,
-	DEFAULT_REGION_TUNING,
-	GraphCanvasRenderer,
-	type GraphRenderSettings,
-	type PhysicsTuning,
-	type RegionTuning,
-} from "./graph-canvas.ts";
+import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import {
 	ARROW_LENGTH_RANGE,
+	CHARGE_RANGE,
+	CLUSTER_PULL_RANGE,
+	DEPTH_BASE_RADIUS_RANGE,
+	DEPTH_SPACING_RANGE,
+	DEPTH_STRENGTH_RANGE,
 	DEFAULT_RENDER_SETTINGS,
 	EDGE_WIDTH_RANGE,
+	GRAVITY_RANGE,
 	LABEL_SIZE_RANGE,
 	LABEL_ZOOM_MAX,
 	LABEL_ZOOM_MIN,
+	LINK_DISTANCE_RANGE,
+	LINK_STRENGTH_RANGE,
 	NODE_SIZE_RANGE,
+	REGION_BITMAP_OPTIONS,
+	REGION_BLUR_RANGE,
+	REGION_DILATION_RANGE,
+	REGION_EDGE_ALPHA_RANGE,
+	VELOCITY_DECAY_RANGE,
+	fromOffSliderPosition,
 	fromSliderPosition,
 	labelZoomDisplay,
 	sanitizeRenderSettings,
+	toOffSliderPosition,
 	toSliderPosition,
 } from "@/src/core";
 
@@ -149,33 +157,6 @@ function sizeDisplay(v: number): string {
 	return `${v >= 1 ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100}`;
 }
 
-/** Dev number input: raw value in, raw value out (NaN while empty → the
- *  renderer's sanitizer holds the last sane tuning). Development tool. */
-function NumberField({
-	label,
-	value,
-	step,
-	onChange,
-}: {
-	label: string;
-	value: number;
-	step: number;
-	onChange: (v: number) => void;
-}) {
-	return (
-		<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-			<span>{label}</span>
-			<input
-				type="number"
-				value={Number.isFinite(value) ? value : ""}
-				step={step}
-				onChange={(e) => onChange(e.target.valueAsNumber)}
-				className="w-20 rounded-md border bg-background px-1.5 py-0.5 text-right tabular-nums text-foreground"
-			/>
-		</label>
-	);
-}
-
 function SettingSlider({
 	label,
 	min,
@@ -227,19 +208,16 @@ export function GraphView() {
 	// Search panel state: the query text + the settings section toggle.
 	const [query, setQuery] = useState("");
 	const [settingsOpen, setSettingsOpen] = useState(false);
-	// Region tuning: DEV-ONLY, session state, never persisted (unlike the
-	// render settings, which live on the server). Number inputs so any
-	// value can be tried quickly.
-	const [regionTuning, setRegionTuning] = useState<RegionTuning>(DEFAULT_REGION_TUNING);
-	// Live-sim physics controls: session state, never persisted. Changes
-	// rebuild the renderer's sim from the current node positions — the
-	// same engine the server settle runs, so the feel IS the physics.
-	const [physicsTuning, setPhysicsTuning] = useState<PhysicsTuning>(DEFAULT_PHYSICS_TUNING);
 	// Render settings: SERVER-persisted (data/render-settings.json via
-	// /api/graph/render-settings). Loaded once after mount; every user
-	// change saves back, debounced. Defaults render until the load
-	// resolves — a fraction of a second at worst.
-	const [settings, setSettings] = useState<RenderSettings>(DEFAULT_RENDER_SETTINGS);
+	// /api/graph/render-settings) — sizes AND the region/physics sections
+	// (user-facing since 2026-09-13; the dev-session era is over). Loaded
+	// once after mount; every user change saves back, debounced. Defaults
+	// render until the load resolves — a fraction of a second at worst.
+	const [settings, setSettings] = useState<GraphRenderSettings>(DEFAULT_RENDER_SETTINGS);
+	// The two nested sections, unpacked for the renderer feed effects
+	// below (same names the old session state had).
+	const regionTuning = settings.regions;
+	const physicsTuning = settings.physics;
 	const settingsRef = useRef(settings);
 	settingsRef.current = settings;
 	// True once the user has moved a control this mount: the server copy
@@ -625,42 +603,82 @@ export function GraphView() {
 									className="accent-primary"
 								/>
 							</label>
-						{/* Regions (dev): quick-tuning number inputs. Session state
-						    only - never persisted. Bad/empty values fall back to
-						    the last sane tuning inside the renderer. */}
+						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
+						    dropdown for the bitmap resolution (it's a discrete
+						    choice, not a free number). Server-persisted like the
+						    sizes; every range end was sweep-validated on the real
+						    graph. */}
 						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
 							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-								Regions (dev)
+								Regions
 							</span>
-							<NumberField
-								label="Dilation (px at fit)"
-								value={regionTuning.dilation}
+							<SettingSlider
+								label="Dilation"
+								min={0}
+								max={100}
 								step={5}
-								onChange={(v) => setRegionTuning((t) => ({ ...t, dilation: v }))}
+								value={toSliderPosition(regionTuning.dilation, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max)}
+								display={sizeDisplay(regionTuning.dilation)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										regions: { ...cur.regions, dilation: fromSliderPosition(p, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max) },
+									}))}
 							/>
-							<NumberField
-								label="Blur (bitmap px)"
-								value={regionTuning.blur}
-								step={1}
-								onChange={(v) => setRegionTuning((t) => ({ ...t, blur: v }))}
+							<SettingSlider
+								label="Blur"
+								min={0}
+								max={100}
+								step={5}
+								value={toOffSliderPosition(regionTuning.blur, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max)}
+								display={regionTuning.blur <= 0 ? "off" : sizeDisplay(regionTuning.blur)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										regions: { ...cur.regions, blur: fromOffSliderPosition(p, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max) },
+									}))}
 							/>
-							<NumberField
-								label="Bitmap resolution"
-								value={regionTuning.bitmap}
-								step={64}
-								onChange={(v) => setRegionTuning((t) => ({ ...t, bitmap: v }))}
-							/>
-							<NumberField
+							<SettingSlider
 								label="Edge alpha"
-								value={regionTuning.edgeAlpha}
-								step={0.05}
-								onChange={(v) => setRegionTuning((t) => ({ ...t, edgeAlpha: v }))}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(regionTuning.edgeAlpha, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max)}
+								display={sizeDisplay(regionTuning.edgeAlpha)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										regions: { ...cur.regions, edgeAlpha: fromSliderPosition(p, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max) },
+									}))}
 							/>
+							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+								<span>Bitmap resolution</span>
+								<select
+									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
+									value={regionTuning.bitmap}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											regions: { ...cur.regions, bitmap: Number(e.target.value) },
+										}))
+									}
+								>
+									{REGION_BITMAP_OPTIONS.map((o) => (
+										<option key={o} value={o}>
+											{o}
+										</option>
+									))}
+								</select>
+							</label>
 						</div>
-						{/* Physics (user-facing): the live sim's forces. Every value feeds
-						    the SAME engine the server settle runs (createGraphSimulation);
+						{/* Physics: the live sim's forces. Every value feeds the SAME
+						    engine the server settle runs (createGraphSimulation);
 						    changing one rebuilds the sim from the current positions —
-						    drag mid-settle re-anneals, pins survive. Session-only. */}
+						    drag mid-settle re-anneals, pins survive. Sliders over
+						    sweep-validated ranges (src/core/render-settings.ts):
+						    range ends and all four corners settle cleanly — no NaN,
+						    no explosion, no non-settle. Repulsion is displayed as
+						    the negative it is; cluster pull's far left = off. */}
 						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
 							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 								Physics
@@ -671,9 +689,9 @@ export function GraphView() {
 									className="rounded border bg-background px-1 py-0.5 text-xs"
 									value={physicsTuning.depthMode}
 									onChange={(e) =>
-										setPhysicsTuning((t) => ({
-											...t,
-											depthMode: e.target.value as PhysicsTuning["depthMode"],
+										changeSettings((cur) => ({
+											...cur,
+											physics: { ...cur.physics, depthMode: e.target.value as GraphRenderSettings["physics"]["depthMode"] },
 										}))
 									}
 								>
@@ -682,59 +700,122 @@ export function GraphView() {
 									<option value="radial">Radial (outward)</option>
 								</select>
 							</label>
-							<NumberField
+							<SettingSlider
 								label="Depth strength"
-								value={physicsTuning.depthStrength}
-								step={0.05}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, depthStrength: v }))}
-							/>
-							<NumberField
-								label="Depth spacing"
-								value={physicsTuning.depthSpacing}
-								step={10}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, depthSpacing: v }))}
-							/>
-							<NumberField
-								label="Base ring radius"
-								value={physicsTuning.depthBaseRadius}
-								step={20}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, depthBaseRadius: v }))}
-							/>
-							<NumberField
-								label="Node repulsion"
-								value={physicsTuning.chargeStrength}
-								step={10}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, chargeStrength: v }))}
-							/>
-							<NumberField
-								label="Edge attraction"
-								value={physicsTuning.linkStrength}
-								step={0.25}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, linkStrength: v }))}
-							/>
-							<NumberField
-								label="Edge length"
-								value={physicsTuning.linkDistance}
+								min={0}
+								max={100}
 								step={5}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, linkDistance: v }))}
+								value={toSliderPosition(physicsTuning.depthStrength, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthStrength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthStrength: fromSliderPosition(p, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max) },
+									}))}
 							/>
-							<NumberField
+							<SettingSlider
+								label="Depth spacing"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthSpacing, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthSpacing)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthSpacing: fromSliderPosition(p, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Base ring radius"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthBaseRadius, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthBaseRadius)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthBaseRadius: fromSliderPosition(p, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Node repulsion"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(-physicsTuning.chargeStrength, -CHARGE_RANGE.max, -CHARGE_RANGE.min)}
+								display={`-${Math.round(-physicsTuning.chargeStrength)}`}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, chargeStrength: -fromSliderPosition(p, -CHARGE_RANGE.max, -CHARGE_RANGE.min) },
+									}))}
+							/>
+							<SettingSlider
+								label="Edge attraction"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.linkStrength, LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max)}
+								display={sizeDisplay(physicsTuning.linkStrength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, linkStrength: fromSliderPosition(p, LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Edge length"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.linkDistance, LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max)}
+								display={sizeDisplay(physicsTuning.linkDistance)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, linkDistance: fromSliderPosition(p, LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
 								label="Central pull"
-								value={physicsTuning.gravity}
-								step={0.01}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, gravity: v }))}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.gravity, GRAVITY_RANGE.min, GRAVITY_RANGE.max)}
+								display={sizeDisplay(physicsTuning.gravity)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, gravity: fromSliderPosition(p, GRAVITY_RANGE.min, GRAVITY_RANGE.max) },
+									}))}
 							/>
-							<NumberField
+							<SettingSlider
 								label="Cluster pull"
-								value={physicsTuning.clusterPull}
-								step={0.05}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, clusterPull: v }))}
+								min={0}
+								max={100}
+								step={5}
+								value={toOffSliderPosition(physicsTuning.clusterPull, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max)}
+								display={physicsTuning.clusterPull <= 0 ? "off" : sizeDisplay(physicsTuning.clusterPull)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, clusterPull: fromOffSliderPosition(p, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max) },
+									}))}
 							/>
-							<NumberField
+							<SettingSlider
 								label="Friction"
-								value={physicsTuning.velocityDecay}
-								step={0.05}
-								onChange={(v) => setPhysicsTuning((t) => ({ ...t, velocityDecay: v }))}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.velocityDecay, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max)}
+								display={sizeDisplay(physicsTuning.velocityDecay)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, velocityDecay: fromSliderPosition(p, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max) },
+									}))}
 							/>
 						</div>
 						</div>

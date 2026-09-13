@@ -58,6 +58,12 @@ import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
 	createGraphSimulation,
+	DEFAULT_PHYSICS_TUNING,
+	DEFAULT_REGION_TUNING,
+	sanitizePhysicsTuning,
+	sanitizeRegionTuning,
+	type PhysicsTuning,
+	type RegionTuning,
 	INCREMENTAL_GRAVITY,
 	LINK_DISTANCE,
 	type DepthAnchorMode,
@@ -160,109 +166,6 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
 const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
 const REGION_LABEL_SIZE = 14;
 
-/** Dev-tunable region rendering (2026-09-13, user request): plain number
- *  inputs in the settings panel — session-only, never persisted — so the
- *  look can be tuned live against the real graph. A cluster is its
- *  CONNECTED SKELETON: the region is the dilated line network ONLY (no
- *  per-node discs — they double-counted where nodes sit on edges and
- *  made hubs hot). Blur is REAL: a premultiplied 3-pass box blur on the
- *  bitmap (bilinear upscale alone was no blur at all — zoom-in showed
- *  tent-ramp chunkiness, the "low-quality JPEG" look). */
-export interface RegionTuning {
-	/** Dilation half-width of the round-cap edge strokes, screen px at
-	 *  fit zoom (the expansion of the cluster skeleton). */
-	dilation: number;
-	/** Box-blur radius in bitmap px (3 passes ≈ Gaussian). 0 = off. */
-	blur: number;
-	/** Max bitmap dimension (cell = worldSpan / this). */
-	bitmap: number;
-	/** Per-stroke alpha; overlapping strokes stack toward the core. */
-	edgeAlpha: number;
-}
-
-export const DEFAULT_REGION_TUNING: RegionTuning = {
-	dilation: 28,
-	blur: 10,
-	bitmap: 384,
-	edgeAlpha: 0.35,
-};
-
-/** Clamp anything into a usable tuning (number inputs can be empty/NaN). */
-export function sanitizeRegionTuning(input: Partial<RegionTuning> | null | undefined): RegionTuning {
-	const d = DEFAULT_REGION_TUNING;
-	const num = (v: unknown, fallback: number): number =>
-		typeof v === "number" && Number.isFinite(v) ? v : fallback;
-	return {
-		dilation: Math.min(Math.max(num(input?.dilation, d.dilation), 4), 250),
-		blur: Math.min(Math.max(num(input?.blur, d.blur), 0), 40),
-		bitmap: Math.round(Math.min(Math.max(num(input?.bitmap, d.bitmap), 128), 1024)),
-		edgeAlpha: Math.min(Math.max(num(input?.edgeAlpha, d.edgeAlpha), 0.02), 1),
-	};
-}
-
-/** User-facing live-sim physics controls (2026-09-13, user request):
- *  every value feeds createGraphSimulation — the SAME engine the server
- *  settle runs — so tuning the feel changes exactly what a drag relaxes
- *  toward. Session state, never persisted. The cluster pull is the
- *  "virtual node" realized as a centroid force (O(n)/tick, measured
- *  indistinguishable from off). */
-export interface PhysicsTuning {
-	/** Node repulsion (d3 charge, negative = push apart). */
-	chargeStrength: number;
-	/** Edge attraction: link-spring stiffness multiplier (1 = d3 default). */
-	linkStrength: number;
-	/** Link spring rest length (world units). */
-	linkDistance: number;
-	/** Central pull toward the graph centroid. */
-	gravity: number;
-	/** Per-cluster pull toward the cluster centroid. */
-	clusterPull: number;
-	/** Per-tick velocity damping (d3 default 0.4). */
-	velocityDecay: number;
-	/** Inference-depth anchoring mode (see DepthAnchor in core). */
-	depthMode: DepthAnchorMode;
-	/** Depth-anchor pull strength. */
-	depthStrength: number;
-	/** Spacing between inference levels (world units). */
-	depthSpacing: number;
-	/** Inner ring radius, radial mode (world units). */
-	depthBaseRadius: number;
-}
-
-export const DEFAULT_PHYSICS_TUNING: PhysicsTuning = {
-	chargeStrength: CHARGE_STRENGTH,
-	linkStrength: 1,
-	linkDistance: LINK_DISTANCE,
-	gravity: INCREMENTAL_GRAVITY,
-	clusterPull: CLUSTER_PULL_STRENGTH,
-	velocityDecay: 0.4,
-	depthMode: "off",
-	// 0.8 by sweep on the real graph: 215/216 arrows read upward with
-	// organic sag (mean |dev| from level ~34u at spacing 60); 1.5 gives
-	// crisp rows (dev ~18) if the promoted default wants them.
-	depthStrength: 0.8,
-	depthSpacing: 60,
-	depthBaseRadius: 220,
-};
-
-/** Clamp anything into a usable tuning (number inputs can be empty/NaN). */
-export function sanitizePhysicsTuning(input: Partial<PhysicsTuning> | null | undefined): PhysicsTuning {
-	const d = DEFAULT_PHYSICS_TUNING;
-	const num = (v: unknown, fallback: number): number =>
-		typeof v === "number" && Number.isFinite(v) ? v : fallback;
-	return {
-		chargeStrength: Math.min(Math.max(num(input?.chargeStrength, d.chargeStrength), -1000), -10),
-		linkStrength: Math.min(Math.max(num(input?.linkStrength, d.linkStrength), 0), 5),
-		linkDistance: Math.min(Math.max(num(input?.linkDistance, d.linkDistance), 1), 300),
-		gravity: Math.min(Math.max(num(input?.gravity, d.gravity), 0), 1),
-		clusterPull: Math.min(Math.max(num(input?.clusterPull, d.clusterPull), 0), 2),
-		velocityDecay: Math.min(Math.max(num(input?.velocityDecay, d.velocityDecay), 0), 0.99),
-		depthMode: input?.depthMode === "vertical" || input?.depthMode === "radial" ? input.depthMode : "off",
-		depthStrength: Math.min(Math.max(num(input?.depthStrength, d.depthStrength), 0), 2),
-		depthSpacing: Math.min(Math.max(num(input?.depthSpacing, d.depthSpacing), 1), 500),
-		depthBaseRadius: Math.min(Math.max(num(input?.depthBaseRadius, d.depthBaseRadius), 0), 2000),
-	};
-}
 
 /** One horizontal+vertical box-blur round over PREMULTIPLIED RGBA
  *  (Float32, stride 4, length w*h*4). Premultiplying first is what keeps

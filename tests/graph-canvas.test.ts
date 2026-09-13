@@ -17,13 +17,16 @@ import {
 	fitTransform,
 	labelAlpha,
 	pickNearest,
-	sanitizePhysicsTuning,
-	sanitizeRegionTuning,
 	zoomRatioOf,
-	DEFAULT_PHYSICS_TUNING,
-	DEFAULT_REGION_TUNING,
 	LABELS_FADE_SPAN,
 } from "../components/graph-canvas.ts";
+import {
+	sanitizePhysicsTuning,
+	sanitizeRegionTuning,
+	DEFAULT_PHYSICS_TUNING,
+	DEFAULT_REGION_TUNING,
+	REGION_BITMAP_OPTIONS,
+} from "../src/core/render-settings.ts";
 
 describe("zoomRatioOf (the sigma-compatible camera ratio)", () => {
 	test("1 at fit zoom, smaller when zoomed in, larger when zoomed out", () => {
@@ -156,7 +159,7 @@ describe("sanitizeRegionTuning (dev number inputs)", () => {
 		const t = sanitizeRegionTuning({ dilation: Number.NaN, blur: -5, bitmap: 99999, edgeAlpha: 42 });
 		assert.equal(t.dilation, DEFAULT_REGION_TUNING.dilation); // NaN -> default
 		assert.equal(t.blur, 0);
-		assert.equal(t.bitmap, 1024);
+		assert.equal(t.bitmap, REGION_BITMAP_OPTIONS[REGION_BITMAP_OPTIONS.length - 1]); // 99999 snaps to the largest option
 		assert.equal(t.edgeAlpha, 1);
 	});
 
@@ -215,10 +218,10 @@ describe("sanitizePhysicsTuning (physics controls)", () => {
 			velocityDecay: 3,
 		});
 		assert.equal(t.chargeStrength, DEFAULT_PHYSICS_TUNING.chargeStrength);
-		assert.equal(t.linkStrength, 5);
-		assert.equal(t.linkDistance, 1);
-		assert.equal(t.gravity, 1);
+		assert.equal(t.linkStrength, 4); // sweep-validated cap (8 explodes, 5 wobbles)
+		assert.equal(t.linkDistance, 10);
+		assert.equal(t.gravity, 0.48);
 		assert.equal(t.clusterPull, 0);
-		assert.equal(t.velocityDecay, 0.99);
+		assert.equal(t.velocityDecay, 0.9);
 	});
 });
