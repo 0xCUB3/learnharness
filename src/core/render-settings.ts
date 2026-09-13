@@ -34,11 +34,11 @@ export interface GraphRenderSettings {
 // were calibrated in the screen-fixed era, so everything rendered ~2x
 // too big once sizes started scaling with the graph.
 export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
-	nodeSize: 4,
+	nodeSize: 2,
 	edgeWidth: 1,
-	arrowLength: 4,
+	arrowLength: 2,
 	labelZoom: 0.5,
-	labelSize: 7,
+	labelSize: 2,
 	clusterLabels: true,
 };
 
@@ -61,7 +61,7 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 		arrowLength: num(r.arrowLength, DEFAULT_RENDER_SETTINGS.arrowLength, 1, 15),
 		// Range matches the log slider's span [LABEL_ZOOM_MIN, LABEL_ZOOM_MAX].
 		labelZoom: num(r.labelZoom, DEFAULT_RENDER_SETTINGS.labelZoom, 0.0625, 4),
-		labelSize: num(r.labelSize, DEFAULT_RENDER_SETTINGS.labelSize, 3, 24),
+		labelSize: num(r.labelSize, DEFAULT_RENDER_SETTINGS.labelSize, 1, 24),
 		clusterLabels:
 			typeof r.clusterLabels === "boolean" ? r.clusterLabels : DEFAULT_RENDER_SETTINGS.clusterLabels,
 	};

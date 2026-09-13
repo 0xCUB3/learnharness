@@ -524,7 +524,7 @@ export function GraphView() {
 							/>
 							<SettingSlider
 								label="Label size"
-								min={3}
+								min={1}
 								max={24}
 								step={0.5}
 								value={settings.labelSize}

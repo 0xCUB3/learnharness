@@ -129,14 +129,10 @@ const PICKING_PAD = 10;
 /** Click vs drag threshold: pointer travel under this many px is a click. */
 const CLICK_SLOP = 4;
 
-/** Cluster hull styling: layered low-alpha fills approximate the soft
- *  translucent tint (a canvas blur filter rasterizes on the GPU per call
- *  — the original coil-whine driver; never bring ctx.filter back). */
-const HULL_FILL_LAYERS = [
-	[24, 0.025],
-	[19, 0.04],
-	[14, 0.06],
-] as const;
+/** Cluster hull styling: a SOLID viewer-relative border only. The layered
+ *  low-alpha fills (the "glow") were removed on user request — they read
+ *  as jagged up close (straight-line hull approximation) and are better
+ *  revisited once the layout settles. */
 const HULL_STROKE_PAD = 14;
 const HULL_CORNER_RADIUS = 9;
 const REGION_LABEL_SIZE = 14;
@@ -355,7 +351,6 @@ export class GraphCanvasRenderer {
 	private shaftsPath: Path2D = new Path2D();
 	private headsPath: Path2D = new Path2D();
 	private hullShapes: {
-		fill: Path2D[];
 		stroke: Path2D;
 		label: string | null;
 		cx: number; // world centroid
@@ -699,8 +694,7 @@ export class GraphCanvasRenderer {
 		this.headsPath = heads;
 
 		// Cluster hulls: convex hull of member positions (world = raw data
-		// coordinates — no projection at all), three offset fill layers,
-		// and a SOLID boundary path.
+		// coordinates — no projection at all) and a SOLID boundary path.
 		this.hullShapes = [];
 		for (const cluster of data.clusters) {
 			const pts: Pt[] = [];
@@ -711,16 +705,11 @@ export class GraphCanvasRenderer {
 			}
 			const hull = convexHull(pts);
 			if (hull.length < 3) continue;
-			const fills = HULL_FILL_LAYERS.map(([pad]) => {
-				const path = new Path2D();
-				traceRoundedPath(path, offsetPolygon(hull, pad * s), HULL_CORNER_RADIUS * s);
-				return path;
-			});
 			const stroke = new Path2D();
 			traceRoundedPath(stroke, offsetPolygon(hull, HULL_STROKE_PAD * s), HULL_CORNER_RADIUS * s);
 			const cx = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
 			const cy = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
-			this.hullShapes.push({ fill: fills, stroke, label: cluster.label || null, cx, cy, hue: clusterHue(cluster.id) });
+			this.hullShapes.push({ stroke, label: cluster.label || null, cx, cy, hue: clusterHue(cluster.id) });
 		}
 
 		// Label wrapping: measureText once per node per geometry build,
@@ -765,13 +754,9 @@ export class GraphCanvasRenderer {
 		const regionAlpha = 1 - nodeAlpha;
 		const { nodeR, glowOuter } = this.world;
 
-		// 1–2. Cluster hulls: cached world paths — soft layered fills, then
-		// a SOLID viewer-relative hairline border (dashes dropped for now).
+		// 1. Cluster hulls: cached world paths — SOLID viewer-relative
+		// hairline border only (no fill glow, removed for now).
 		for (const hs of this.hullShapes) {
-			for (let i = 0; i < hs.fill.length; i++) {
-				ctx.fillStyle = `hsla(${hs.hue}, 65%, 60%, ${HULL_FILL_LAYERS[i]![1]})`;
-				ctx.fill(hs.fill[i]!);
-			}
 			ctx.strokeStyle = `hsla(${hs.hue}, 65%, 62%, 0.5)`;
 			ctx.lineWidth = 1.5 / k; // constant screen px
 			ctx.stroke(hs.stroke);
