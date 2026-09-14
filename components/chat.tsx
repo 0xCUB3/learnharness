@@ -40,6 +40,15 @@ import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
  */
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
+// The dock overlay's gradient band (h-24) — part of the reserved tail.
+const GRADIENT_H = 96;
+// Fold thresholds (owner, scroll round 1, tuned round 3): pixel distance
+// from the bottom — position, not velocity. Leave the bottom → the box
+// folds (visual only); reach it again → it re-opens. 96 (was 64, owner
+// round 3) tolerates a small peek upward without folding; the dead band
+// vs EXPAND_DIST absorbs trackpad drift.
+const COLLAPSE_DIST = 96;
+const EXPAND_DIST = 16;
 
 /**
  * Server-sync channel for artifact renderers: the CENTRAL jobs poll in Chat
@@ -264,6 +273,13 @@ export function Chat({
 	// The per-chat model control state (model-picker writes via PUT; the
 	// record is the source of truth, lifted here so the stats bar re-renders).
 	const [settings, setSettings] = useState<ChatSettings | undefined>(initialSettings);
+	// The dock's reserved tail height (DockOverlay reports it; the spacer at
+	// the end of the transcript renders it). Lives here because the spacer is
+	// inside the scroller while the dock overlays OUTSIDE it — two parents.
+	// 208 ≈ gradient(96) + composer block(~112): the SSR/pre-hydration
+	// guess so the static paint has a sane tail. The first layout effect
+	// replaces it with the measured truth before paint.
+	const [dockReserve, setDockReserve] = useState(208);
 	const syncTurns = useCallback(async () => {
 		try {
 			const res = await fetch(`/api/chats/${chatId}`);
@@ -458,7 +474,8 @@ export function Chat({
 		    the plan-tree panel as full-height SIBLINGS — the panel spans top to
 		    bottom exactly like the left sidebar, and the header (name + phase
 		    chip) spans from the left sidebar's edge to the panel's edge. The
-		    dock stays sticky inside the scroller, untouched. */}
+		    dock overlays the column bottom (outside the scroller); a spacer in
+		    the transcript reserves its height. */}
 		<div className="flex h-dvh">
 			<div className="flex min-w-0 flex-1 flex-col">
 				{/* h-10, not py-2: the toggle (a size-9 icon button) renders only
@@ -600,45 +617,56 @@ export function Chat({
 							)}
 						</div>
 
-						<DockOverlay
-							pending={pending}
-							chatId={chatId}
-							settings={settings}
-							onSettingsSaved={setSettings}
-							requiresReveal={requiresReveal}
-							phase={phases.at(-1) ?? "probe"}
-							turns={turns}
-							composer={
-								<Composer
-									// Stop applies only to a LOCAL stream: a server-side turn has no
-									// client request to abort (stop() would be a no-op lie).
-									busy={localStream}
-									value={text}
-									onChange={setText}
-									onSend={onSend}
-									onStop={() => stop()}
-									canSend={canSend}
-									verdict={
-										planVerdict
-											? {
-													onAccept: () => sendVerdict(true),
-													onDecline: () => sendVerdict(false),
-												}
-											: undefined
-									}
-								/>
+						{/* The dock's reserved tail (DockOverlay reports its height):
+						    keeps at-rest transcript content scrolling fully clear of
+						    the overlay — the flow-space replacement for the old
+						    sticky dock. Zero only pre-measurement (the first layout
+						    effect reports before paint). */}
+						<div aria-hidden data-testid="dock-spacer" style={{ height: dockReserve }} />
+				</ConversationContent>
+				{/* The dock: an overlay sibling of the scroller (the
+				    use-stick-to-bottom pattern — like the scroll button). Before
+				    the button in DOM order so the button keeps painting above
+				    the dock, as it always has. */}
+				<DockOverlay
+					pending={pending}
+					chatId={chatId}
+					settings={settings}
+					onSettingsSaved={setSettings}
+					requiresReveal={requiresReveal}
+					phase={phases.at(-1) ?? "probe"}
+					turns={turns}
+					onReserve={setDockReserve}
+					composer={
+						<Composer
+							// Stop applies only to a LOCAL stream: a server-side turn has no
+							// client request to abort (stop() would be a no-op lie).
+							busy={localStream}
+							value={text}
+							onChange={setText}
+							onSend={onSend}
+							onStop={() => stop()}
+							canSend={canSend}
+							verdict={
+								planVerdict
+									? {
+											onAccept: () => sendVerdict(true),
+											onDecline: () => sendVerdict(false),
+										}
+									: undefined
 							}
-							onSubmitAnswer={(output) => {
-								if (!pending) return;
-								void addToolOutput({
-									tool: pending.tool as "quiz" | "ask_user_question",
-									toolCallId: pending.toolCallId,
-									output,
-								});
-							}}
 						/>
-					</ConversationContent>
-					<ConversationScrollButton />
+					}
+					onSubmitAnswer={(output) => {
+						if (!pending) return;
+						void addToolOutput({
+							tool: pending.tool as "quiz" | "ask_user_question",
+							toolCallId: pending.toolCallId,
+							output,
+						});
+					}}
+				/>
+				<ConversationScrollButton />
 				</Conversation>
 				</div>
 			</div>
@@ -652,14 +680,27 @@ export function Chat({
 }
 
 /**
- * The floating blob: ONE persistent shell, sticky at the bottom of the
- * scroller (in flow — the transcript scrolls fully clear of it, and it never
- * covers the scrollbar). Contents swap between the chat composer and the
- * question dock; shell height morphs between variants (WAAPI, quick).
+ * The floating blob: ONE persistent shell, OVERLAID at the bottom of the
+ * column (absolute — a sibling of the scroller, the use-stick-to-bottom
+ * pattern; it replaced the old in-flow sticky dock, which died of the
+ * fold-latency problem below). Contents swap between the chat composer and
+ * the question dock; shell height morphs between variants (WAAPI, quick). A
+ * spacer at the end of the transcript (rendered by ChatView from onReserve
+ * reports) holds the dock's flow-space, so at-rest content scrolls fully
+ * clear of the overlay.
  *
- * Collapse: scroll up and the dock folds into a slim bar; click it (or scroll
- * back to the bottom) to re-expand. The question form stays MOUNTED while
- * collapsed (hidden, not unmounted) so a half-made selection survives.
+ * Why an overlay (owner, scroll round 1): an in-flow dock IS scroll geometry
+ * — folding it shrinks the scroll content, so the fold had to wait until the
+ * learner was a full dock-height past the bottom (any closer and the browser
+ * clamp pinned them back, re-expanding the box: the oscillation). Decoupled
+ * from the flow, the fold is VISUAL ONLY: it fires as soon as the learner
+ * leaves the bottom, and the reserved tail only ever GROWS while a question
+ * is open (a shrinking tail would reintroduce the clamp).
+ *
+ * Collapse: scroll up past COLLAPSE_DIST and the dock folds into a slim bar;
+ * click it (or scroll back to the bottom) to re-expand. The question form
+ * stays MOUNTED while collapsed (hidden, not unmounted) so a half-made
+ * selection survives.
  */
 function DockOverlay({
 	pending,
@@ -671,6 +712,7 @@ function DockOverlay({
 	chatId,
 	settings,
 	onSettingsSaved,
+	onReserve,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
@@ -685,6 +727,9 @@ function DockOverlay({
 	chatId: string;
 	settings?: ChatSettings;
 	onSettingsSaved: (settings: ChatSettings) => void;
+	/** Reports the dock's settled height (block + gradient) — ChatView's
+	 *  dockReserve state feeds the transcript's spacer from it. */
+	onReserve: (h: number) => void;
 }) {
 	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
 	// Teach-phase mount (session reload with a pending check): the dock starts
@@ -718,13 +763,10 @@ function DockOverlay({
 		// fire only when a NEW question lands
 	}, [pendingId]);
 
-	// ── Collapse state machine with hysteresis ──
-	// Collapsing frees ~Δpx of flow height. If it happened while the learner is
-	// within Δ of the bottom, the browser clamps scrollTop to the new max —
-	// landing them AT the bottom, which re-expands the dock, which re-collapses…
-	// the oscillation. So: collapse only once scrolled a full dock-height past
-	// the bottom (clamp-proof), expand only within 16px of the bottom, and leave
-	// a wide dead band between the two thresholds. Heights measured live.
+	// ── Fold machine (position, not velocity — owner, scroll round 1) ──
+	// The dock is an overlay: folding is visual-only and scroll geometry never
+	// moves, so the thresholds can hug the bottom. Leave it → fold; reach it
+	// again → re-open. The dead band keeps trackpad drift from chattering.
 	const expandedRef = useRef(expanded);
 	expandedRef.current = expanded;
 	const pendingRef = useRef(!!pending);
@@ -733,8 +775,62 @@ function DockOverlay({
 	requiresRevealRef.current = requiresReveal;
 	const revealedRef = useRef(revealed);
 	revealedRef.current = revealed;
-	const expandedHRef = useRef(0);
-	const collapsedHRef = useRef(42);
+
+	// The overlay must not paint over the scroller's scrollbar (owner, scroll
+	// round 2): the scroller reserves symmetric gutters (scrollbar-gutter:
+	// stable both-edges), so inset the overlay's right edge by the gutter —
+	// zero on macOS overlay scrollbars, the real width on classic platforms.
+	const [sbInset, setSbInset] = useState(0);
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		const measure = () => setSbInset(Math.round((el.offsetWidth - el.clientWidth) / 2));
+		measure();
+		window.addEventListener("resize", measure);
+		return () => window.removeEventListener("resize", measure);
+	}, [scrollRef]);
+
+	// Wheel over the dock must still scroll the transcript (owner, scroll
+	// round 2): the overlay is a SIBLING of the scroller, so the browser's
+	// native scroll chaining stops at the overlay (the old in-flow dock
+	// chained for free). Internal scrollers — the question area, textarea
+	// overflow, the model menus — keep native scrolling, including their
+	// own edge chaining; only when nothing under the cursor can take the
+	// delta do we forward it to the transcript.
+	useEffect(() => {
+		const root = blockRef.current;
+		const el = scrollRef.current;
+		if (!root || !el) return;
+		const canScroll = (n: HTMLElement, dir: number) => {
+			if (n.scrollHeight - n.clientHeight < 2) return false; // not scrollable
+			return dir < 0 ? n.scrollTop > 0 : n.scrollTop < n.scrollHeight - n.clientHeight - 0.5;
+		};
+		const onWheel = (e: WheelEvent) => {
+			if (e.deltaY === 0) return;
+			for (let n = e.target as HTMLElement | null; n && n !== root; n = n.parentElement) {
+				if (n instanceof HTMLElement && canScroll(n, e.deltaY)) return; // native
+			}
+			e.preventDefault();
+			el.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1);
+		};
+		root.addEventListener("wheel", onWheel, { passive: false });
+		return () => root.removeEventListener("wheel", onWheel);
+	}, [scrollRef]);
+
+	// ── The reserve: the spacer's height, reported upward ──
+	// Grows immediately (typing, new variants). NEVER drops while a question
+	// is open — a shrinking reserved tail is scroll geometry and the browser
+	// clamp would pin a nearby learner to the bottom (the old oscillation).
+	// In chat mode drops apply (the composer's typing shrink is today's
+	// harmless in-flow behavior; nothing auto-expands there).
+	const reserveRef = useRef(0);
+	const blockRef = useRef<HTMLDivElement>(null);
+	const offer = (blockH: number) => {
+		const next = blockH + GRADIENT_H;
+		if (next <= reserveRef.current + 0.5 && pendingRef.current) return; // fold immunity
+		reserveRef.current = next;
+		onReserve(next);
+	};
 
 	// Explicit expand (bar click): the smooth scroll to the bottom takes
 	// hundreds of ms, during which the position is still legitimately inside
@@ -763,10 +859,9 @@ function DockOverlay({
 		const onScroll = () => {
 			if (!pendingRef.current) return;
 			const d = el.scrollHeight - el.clientHeight - el.scrollTop;
-			const delta = Math.max(expandedHRef.current - collapsedHRef.current, 240);
 			if (expandedRef.current) {
-				if (d > delta + 64 && !expandIntentRef.current) setExpanded(false);
-			} else if (d < 16) {
+				if (d > COLLAPSE_DIST && !expandIntentRef.current) setExpanded(false);
+			} else if (d < EXPAND_DIST) {
 				// Teach checks stay collapsed until the learner opens them (W5): the
 				// at-bottom auto-expand would pop the form over the teaching.
 				if (requiresRevealRef.current && !revealedRef.current) return;
@@ -778,10 +873,12 @@ function DockOverlay({
 		return () => el.removeEventListener("scroll", onScroll);
 	}, [scrollRef, scrollToBottom]);
 
-	const recordHeight = (h: number) => {
-		if (!pendingRef.current) return;
-		if (expandedRef.current) expandedHRef.current = h;
-		else collapsedHRef.current = h;
+	// The settled block height (gradient excluded), offered to the spacer.
+	// Only ever called with NATURAL heights — never the animated mid-morph
+	// value (the iso effect's getAnimations guard wraps every call).
+	const measureBlock = () => {
+		const b = blockRef.current;
+		if (b) offer(b.getBoundingClientRect().height);
 	};
 
 	const mode = pending ? `question:${pending.toolCallId}` : "chat";
@@ -806,13 +903,15 @@ function DockOverlay({
 			if (el.getAnimations().length === 0) {
 				const h = el.getBoundingClientRect().height;
 				p.height = h;
-				recordHeight(h);
+				measureBlock(); // typing growth → the spacer grows with the box
 			}
 			return;
 		}
 		el.getAnimations().forEach((a) => a.cancel()); // flush to natural height before measuring
 		const h = el.getBoundingClientRect().height;
-		recordHeight(h);
+		// Variant change → re-reserve. Growth applies instantly; a drop (the
+		// fold, or question → composer) is filtered by the offer policy.
+		measureBlock();
 		if (p && Math.abs(p.height - h) > 1) {
 			el.animate([{ height: `${p.height}px` }, { height: `${h}px` }], {
 				duration: 180,
@@ -823,9 +922,9 @@ function DockOverlay({
 	});
 
 	return (
-		<div className="pointer-events-none sticky bottom-0 mt-auto">
+		<div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ right: sbInset }}>
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-			<div className="bg-background pb-4">
+			<div ref={blockRef} className="bg-background pb-4">
 				<div className={DOCK}>
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>

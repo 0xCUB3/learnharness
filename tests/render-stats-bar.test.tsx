@@ -34,9 +34,12 @@ describe("stats bar", () => {
 		assert.match(html, /data-testid="stats-bar"/);
 		assert.match(html, /data-testid="stats-context">—</);
 		assert.match(html, /data-testid="stats-cost">—</);
-		// no turns, no settings, catalog not loaded → both control labels "—"
+		// no turns, no settings, catalog not loaded → both control labels
+		// "—" (the thinking button shows just the level, like the model
+		// button shows just the model name — no prefix, no dot separator)
 		assert.match(html, /data-testid="stats-model"[^>]*>\s*<span[^>]*>—<\/span>/);
-		assert.match(html, /Thinking —</);
+		assert.match(html, /data-testid="stats-thinking"[^>]*>\s*<span[^>]*>—<\/span>/);
+		assert.ok(!html.includes("aria-hidden>·"), "no dot between the controls");
 		// the control reads as a button: pill border + dropdown chevron
 		assert.match(html, /data-testid="stats-model"[^>]*rounded-full[^>]*>/);
 		assert.match(html, /▾/);

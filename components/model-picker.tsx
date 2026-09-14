@@ -101,6 +101,7 @@ export function ModelControl({
 	const [query, setQuery] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const searchRef = useRef<HTMLInputElement>(null);
+	const containerRef = useRef<HTMLDivElement>(null);
 
 	const defaults = catalog?.defaults;
 	const effectiveId = settings?.model?.id ?? defaults?.model.id ?? fallbackModelId;
@@ -112,6 +113,28 @@ export function ModelControl({
 	// Focus the search box when the model menu opens (pi's /model feel).
 	useEffect(() => {
 		if (open === "model") searchRef.current?.focus();
+	}, [open]);
+
+	// The intuitive dropdown contract (owner, stats-control round 1): any
+	// click outside the open menu — or an Esc keypress — closes it. Only the
+	// menu's own surface keeps it open (the toggle buttons live inside the
+	// same container and handle their own toggling in onClick).
+	useEffect(() => {
+		if (open === null) return;
+		const onPointerDown = (e: PointerEvent) => {
+			if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+				setOpen(null);
+			}
+		};
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setOpen(null);
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", onPointerDown);
+			document.removeEventListener("keydown", onKeyDown);
+		};
 	}, [open]);
 
 	const save = useCallback(
@@ -153,7 +176,7 @@ export function ModelControl({
 		.map((r) => r.m);
 
 	return (
-		<div className="relative flex items-center gap-1.5" data-testid="model-control">
+		<div ref={containerRef} className="relative flex items-center gap-1.5" data-testid="model-control">
 			<button
 				type="button"
 				data-testid="stats-model"
@@ -167,9 +190,8 @@ export function ModelControl({
 				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
 			>
 				<span className="text-card-foreground">{effectiveId ? prettyModel(effectiveId) : "—"}</span>
-				<span aria-hidden className="text-xxs text-muted-foreground">▾</span>
+					<span aria-hidden className="text-xxs text-muted-foreground">▾</span>
 			</button>
-			<span aria-hidden>·</span>
 			<button
 				type="button"
 				data-testid="stats-thinking"
@@ -181,8 +203,10 @@ export function ModelControl({
 				title="Thinking level — applies next turn"
 				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
 			>
+				{/* Just the level — the button reads like the model button reads
+				   the model name (owner, stats-control round 1). */}
 				<span className="text-card-foreground">
-					{effectiveLevel === undefined ? "Thinking —" : `Thinking: ${LEVEL_LABEL[effectiveLevel] ?? effectiveLevel}`}
+					{effectiveLevel === undefined ? "—" : (LEVEL_LABEL[effectiveLevel] ?? effectiveLevel)}
 				</span>
 				<span aria-hidden className="text-xxs text-muted-foreground">▾</span>
 			</button>

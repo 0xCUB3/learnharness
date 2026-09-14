@@ -3,6 +3,15 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { MaximizeIcon, MinusIcon, PlusIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+// The placement engine — literally mermaid's: dagre-d3-es, the fork
+// mermaid 11 ships with (owner, plan-graph round 8: same engine as the
+// mermaid graphs, our SVG skin stays). The deep subpath is how mermaid
+// itself imports it.
+import { graphlib } from "dagre-d3-es";
+import { layout as dagreLayout } from "dagre-d3-es/src/dagre/index.js";
+// Mermaid's default flowchart edge curve: dagre's waypoints drawn through
+// d3's curveBasis (the exact recipe dagre-d3's own renderer uses).
+import { curveBasis, line } from "d3-shape";
 import type { PlanBlockData, PlanNodeStatus, PlanTree } from "@/src/core";
 import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
 
@@ -12,17 +21,19 @@ import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
  * the right sidebar is retired.
  *
  * - kind "full": the whole DAG, BORDERLESS — no wrapping chrome, the SVG
- *   scales to the full column width (viewBox = layout extent, so the
- *   leftmost/rightmost nodes hug the edges), natural height, no cap.
+ *   scales to the full column width (viewBox = layout extent + GRAPH_PAD,
+ *   so strokes/glow never clip), natural height, capped at the chat prose
+ *   font size (TEXT_CAP_SCALE — fills the column, never oversizes text).
  * - Clicking opens the full plan in a full-screen popup overlay —
  *   the LIVE plan: the latest tree from the transcript with statuses
  *   derived at click time (contracts/plan.ts derivePlanStatuses). Blocks
  *   are frozen snapshots rendered exactly as carried (never re-derived);
  *   the popup is the live view (user decision, 2026-09).
  *
- * Hand-built SVG everywhere (user decision): a deterministic layered
- * layout fills exactly and stays SSR-testable — no force simulation, no
- * coupling to the graph stream's sigma internals. Pan/zoom in the popup
+ * Hand-built SVG everywhere (user decision): placement runs on dagre
+ * (mermaid's engine — deterministic, synchronous, DOM-free, so SSR and
+ * render tests stay exact); the skin is ours — no coupling to the graph
+ * stream's internals. Pan/zoom in the popup
  * is harvested from the retired tree panel's graph (fit-floor semantics:
  * fully zoomed out IS the fit; panning locks at the floor).
  */
@@ -31,6 +42,8 @@ import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
 
 export const NODE_W = 160;
 export const NODE_H = 44;
+/** Baseline-to-baseline distance of node titles. */
+export const LINE_H = 13;
 export const GAP_X = 24;
 export const GAP_Y = 48;
 
@@ -40,7 +53,9 @@ export interface LayoutNode {
 	title: string;
 }
 
-/** Topological order + longest-path depth (Kahn, authoring tie-break). */
+/** Topological order + longest-path depth (Kahn, authoring tie-break) —
+ *  order + depth semantics kept for tests; placement itself runs on dagre
+ *  now (owner, round 8). */
 export function topoFor(nodes: readonly LayoutNode[], edges: ReadonlyArray<{ from: string; to: string }>) {
 	const index = new Map(nodes.map((n, i) => [n.id, i] as const));
 	const indegree = new Map<string, number>(nodes.map((n) => [n.id, 0] as const));
@@ -79,68 +94,256 @@ export function topoFor(nodes: readonly LayoutNode[], edges: ReadonlyArray<{ fro
 	return { order, depth };
 }
 
-/** Layered positions: depth = row (top-down), authoring order within the
- *  row, each row centered on the widest one. */
+/** Placement — dagre (mermaid's engine, owner round 8): Sugiyama-style
+ *  layered layout, TB, with our geometry (NODE_W boxes, GAP_X/GAP_Y
+ *  separations, zero margin — the caller adds GRAPH_PAD/POPUP_PAD).
+ *  Node sizes are fed in (boxes grow with their wrapped content, round
+ *  7); dagre returns node CENTERS, we hand back top-lefts like before,
+ *  so every consumer (diagram, popup fit, plan window) is unchanged.
+ *  Deterministic + synchronous + DOM-free: SSR and render tests stay
+ *  exact. Dangling edges are ignored defensively — a ghost endpoint
+ *  would spawn an unmeasured node and break the measurer. */
 export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{ from: string; to: string }>) {
-	const { order, depth } = topoFor(nodes, edges);
-	const layers: LayoutNode[][] = [];
-	for (const n of order) {
-		const d = depth.get(n.id) ?? 0;
-		if (!layers[d]) layers[d] = [];
-		layers[d].push(n);
-	}
-	const rowWidth = (l: LayoutNode[]) => l.length * NODE_W + (l.length - 1) * GAP_X;
-	let maxWidth = 0;
-	for (const l of layers) maxWidth = Math.max(maxWidth, rowWidth(l));
 	const x = new Map<string, number>();
 	const y = new Map<string, number>();
-	layers.forEach((l, d) => {
-		const start = (maxWidth - rowWidth(l)) / 2;
-		l.forEach((n, i) => {
-			x.set(n.id, start + i * (NODE_W + GAP_X));
-			y.set(n.id, d * (NODE_H + GAP_Y));
-		});
-	});
-	const height = layers.length * NODE_H + Math.max(0, layers.length - 1) * GAP_Y;
-	return { x, y, width: maxWidth, height };
+	const nodeH = new Map<string, number>();
+	/** Dagre's per-edge waypoint routes — each starts/ends at the node
+	 *  border intersection on whatever SIDE the edge leaves/enters
+	 *  (round 11: the mermaid line drawing, no more fixed bottom-center →
+	 *  top-center). Keyed `${from}->${to}`. */
+	const edgePts = new Map<string, Array<{ x: number; y: number }>>();
+	if (nodes.length === 0) return { x, y, nodeH, edgePts, width: 0, height: 0 };
+	const ids = new Set(nodes.map((n) => n.id));
+	const routed: Array<{ from: string; to: string }> = [];
+	const g = new graphlib.Graph({ compound: false, multigraph: true });
+	g.setGraph({ rankdir: "TB", nodesep: GAP_X, ranksep: GAP_Y, marginx: 0, marginy: 0 });
+	for (const n of nodes) {
+		const h = NODE_H + Math.max(0, wrapTitle(n.title).length - 2) * LINE_H;
+		nodeH.set(n.id, h);
+		g.setNode(n.id, { width: NODE_W, height: h });
+	}
+	for (const e of edges) {
+		if (ids.has(e.from) && ids.has(e.to)) {
+			g.setEdge(e.from, e.to, { label: "", width: 0, height: 0 });
+			routed.push(e);
+		}
+	}
+	// (the d.ts marks opts required; the runtime ignores it)
+	dagreLayout(g, undefined);
+	for (const n of nodes) {
+		const pos = g.node(n.id);
+		const h = nodeH.get(n.id) ?? NODE_H;
+		if (pos) {
+			x.set(n.id, pos.x - NODE_W / 2);
+			y.set(n.id, pos.y - h / 2);
+		}
+	}
+	for (const e of routed) {
+		const pts: Array<{ x: number; y: number }> | undefined = g.edge(e.from, e.to)?.points;
+		if (pts) edgePts.set(`${e.from}->${e.to}`, pts.map((pt) => ({ x: pt.x, y: pt.y })));
+	}
+	return {
+		x,
+		y,
+		nodeH,
+		edgePts,
+		width: Math.max(g.graph().width ?? 0, 1),
+		height: Math.max(g.graph().height ?? 0, 1),
+	};
 }
 
-/** Greedy word wrap to ≤ maxLines lines of ≤ maxChars; overflow ends in an
- *  ellipsis, a single oversized word is hard-clamped. Pure. */
-export function wrapTitle(title: string, maxChars = 20, maxLines = 2): string[] {
+/** Greedy word wrap to lines of ≤ maxChars — NOTHING is dropped: the
+ *  node's box grows to fit every line (owner: show the full content of
+ *  each node). A single oversized word is hard-chunked across lines at
+ *  maxChars. Pure. */
+export function wrapTitle(title: string, maxChars = 20): string[] {
 	const words = title.trim().split(/\s+/).filter(Boolean);
 	if (words.length === 0) return [""];
-	const lines: string[] = [];
+	// Oversized words can never fit a line — chunk them so no content is lost.
+	const atoms: string[] = [];
 	for (const w of words) {
+		for (let i = 0; i < w.length; i += maxChars) atoms.push(w.slice(i, i + maxChars));
+	}
+	const lines: string[] = [];
+	for (const a of atoms) {
 		const last = lines[lines.length - 1];
-		const fits = last !== undefined && last.length + 1 + w.length <= maxChars;
-		if (fits) {
-			lines[lines.length - 1] = `${last} ${w}`;
-		} else if (lines.length < maxLines) {
-			lines.push(w.length > maxChars ? `${w.slice(0, maxChars - 1)}…` : w);
+		if (last !== undefined && last.length + 1 + a.length <= maxChars) {
+			lines[lines.length - 1] = `${last} ${a}`;
 		} else {
-			const lastLine = lines[lines.length - 1];
-			if (lastLine !== undefined && !lastLine.endsWith("…")) {
-				lines[lines.length - 1] =
-					lastLine.length >= maxChars ? `${lastLine.slice(0, maxChars - 1)}…` : `${lastLine}…`;
-			}
+			lines.push(a);
 		}
 	}
 	return lines;
 }
 
+// ─── Geometry caps (owner, plan-graph refinement round 1) ─────────────────────
+
+/** SVG-unit padding around the layout extent: strokes are centered on the
+ *  geometry (half bleeds outside the extent) and the glow halo reaches −4 —
+ *  without this pad the outermost node borders clip at the svg edge. */
+export const GRAPH_PAD = 8;
+/** The current node's yellow glow: a fill blurred so it bleeds over the
+ *  node's edges (owner). A Gaussian's visible spread is ≈3σ, so the glow
+ *  reaches GLOW_MARGIN + 3·GLOW_BLUR past the node — any surface that
+ *  shows the glow must pad its viewBox by GLOW_REACH or the blur clips
+ *  at the frame edge (owner: extend the container padding to fit it). */
+export const GLOW_MARGIN = 8;
+export const GLOW_BLUR = 5;
+export const GLOW_REACH = GLOW_MARGIN + 3 * GLOW_BLUR;
+/** Node titles render at text-xs (12.5px) in svg units. The in-chat block
+ *  scales up to fill the column but NEVER past the chat prose size
+ *  (--lh-prose-size, 16.5px) — the width cap that makes that hold. */
+export const TEXT_CAP_SCALE = 16.5 / 12.5;
+
+// ─── The owner's arrowhead (plan-graph round 5) ──────────────────────────────
+
+/** Baked from arrowhead_1.svg (the CM/MJX long-arrow head), transform chain
+ *  collapsed: viewBox 0 0 50.2 104, tip at (50.2, 52), notch mouth at
+ *  x 27.2 with a 9.6-tall opening — at full height 104 the tail opening
+ *  is ≈10, per the owner's spec. Solid white fill, no padding. */
+export const ARROW_HEAD = "M48,55.2C49.4,54.6 50.2,53.4 50.2,52C50.2,50.6 49.4,49.4 48,48.8C38.2,45.6 29.2,38.8 21,28.4C15.2,21.4 11.4,13.2 9.6,3.8C9,1.2 7.4,0 4.8,0C1.6,0 0,1.6 0,5L0.2,5.6C3.6,23 12.6,36.8 27.2,47.2L27.2,56.8C12.6,67.2 3.6,81 0.2,98.4L0,99C0,102.4 1.6,104 4.8,104C7.4,104 9,102.8 9.6,100.2C11.4,90.8 15.2,82.6 21,75.6C29.2,65.2 38.2,58.4 48,55.2Z";
+/** Head height 16: the tail opening (9.6/104 of height) then tucks the
+ *  1.5-wide line flush — the LaTeX proportion. The owner's rule: keep the
+ *  current line width; size the head from the 104→10 ratio. */
+const HEAD_H = 16;
+const HEAD_SCALE = HEAD_H / 104;
+const HEAD_W = 50.2 * HEAD_SCALE;
+/** The drawn line terminates at the notch mouth (refX 27.2) — it never
+ *  reaches the narrow tip, where it would show through (owner). The tip
+ *  overhangs the line's end by this much, so edges shorten by it to land
+ *  the tip exactly on the target node's border. */
+const HEAD_TIP_OVERHANG = (50.2 - 27.2) * HEAD_SCALE;
+/** The head floats this far off the target face — the tip kisses nothing
+ *  (owner, round 12). ~half a head length: clearly docked-off, still
+ *  visually attached. */
+const DOCK_GAP = 4;
+/** The shaft stub — the straight run before the head (owner, round 12):
+ *  control points from Q on sit exactly on the approach line, so the
+ *  basis spline renders that stretch perfectly straight and the head
+ *  lands on a straight shaft; the corner where the route squares up onto
+ *  the line is rounded by the curve. ~1.5 head lengths of shaft. */
+const STRAIGHT_RUN = 12;
+/** The tilt limit at the termination point, measured off the entry
+ *  face's perpendicular: past ±40° one of the head's barbs crosses the
+ *  tip's level and the silhouette breaks (owner measured it in
+ *  Photoshop, round 14). The final run swings to the cone edge instead. */
+const ENTRY_ANGLE_LIMIT = (40 * Math.PI) / 180;
+const edgeLine = line<{ x: number; y: number }>()
+	.x((p) => p.x)
+	.y((p) => p.y)
+	.curve(curveBasis);
+
+/** The entry face's outward unit normal — whichever face of the target
+ *  box dagre's border point sits on. Pure. */
+function faceNormal(
+	border: { x: number; y: number },
+	box: { x: number; y: number; w: number; h: number },
+): { x: number; y: number } {
+	const d = { top: border.y - box.y, bottom: box.y + box.h - border.y, left: border.x - box.x, right: box.x + box.w - border.x };
+	const face = (Object.keys(d) as Array<keyof typeof d>).reduce((a, b) => (d[a] <= d[b] ? a : b));
+	switch (face) {
+		case "top":
+			return { x: 0, y: -1 };
+		case "bottom":
+			return { x: 0, y: 1 };
+		case "left":
+			return { x: -1, y: 0 };
+		default:
+			return { x: 1, y: 0 };
+	}
+}
+
+/** The edge path — mermaid's own line drawing: dagre's border-intersected
+ *  waypoints through d3's curveBasis (mermaid's default flowchart curve —
+ *  the same recipe dagre-d3's renderer uses). The head docks off the
+ *  target: its TIP floats DOCK_GAP past the border along the FACE NORMAL
+ *  (constant gap at any tilt), its mouth sits at the path's end on a
+ *  straight run (the shaft stub), and — when the target box is given —
+ *  the entry direction is clamped to ±ENTRY_ANGLE_LIMIT of the face's
+ *  perpendicular (owner, round 14): a steeper natural approach swings to
+ *  the 40° cone edge instead of breaking the head's silhouette. Without
+ *  a target box the unclamped geometry applies. Straight collinear
+ *  routes render identically. Pure, exported for tests. */
+export function edgePathD(
+	points: Array<{ x: number; y: number }>,
+	target?: { x: number; y: number; w: number; h: number },
+): string {
+	const pts = points.map((p) => ({ ...p }));
+	if (pts.length >= 2) {
+		const last = pts[pts.length - 1]!;
+		const prev = pts[pts.length - 2]!;
+		const dx = last.x - prev.x;
+		const dy = last.y - prev.y;
+		const len = Math.hypot(dx, dy) || 1;
+		let ux = dx / len;
+		let uy = dy / len;
+		// The tip: DOCK_GAP outside the face along its normal (or along the
+		// approach when no box is known).
+		let tipx: number;
+		let tipy: number;
+		if (target) {
+			const n = faceNormal(last, target);
+			tipx = last.x + n.x * DOCK_GAP;
+			tipy = last.y + n.y * DOCK_GAP;
+			// Clamp the approach to the ±LIMIT cone around the normal: if
+			// the outgoing direction -u tilts past ENTRY_ANGLE_LIMIT, swing
+			// it to the cone edge (same rotation side as the route).
+			const v = { x: -ux, y: -uy };
+			const vn = v.x * n.x + v.y * n.y;
+			if (vn < Math.cos(ENTRY_ANGLE_LIMIT)) {
+				const t = { x: v.x - vn * n.x, y: v.y - vn * n.y };
+				const tl = Math.hypot(t.x, t.y);
+				const that = tl > 0 ? { x: t.x / tl, y: t.y / tl } : { x: -n.y, y: n.x };
+				const c = Math.cos(ENTRY_ANGLE_LIMIT);
+				const s = Math.sin(ENTRY_ANGLE_LIMIT);
+				v.x = c * n.x + s * that.x;
+				v.y = c * n.y + s * that.y;
+				ux = -v.x;
+				uy = -v.y;
+			}
+		} else {
+			tipx = last.x - ux * DOCK_GAP;
+			tipy = last.y - uy * DOCK_GAP;
+		}
+		// The mouth: overhang back from the tip along the (clamped) approach.
+		const M = { x: tipx - ux * HEAD_TIP_OVERHANG, y: tipy - uy * HEAD_TIP_OVERHANG };
+		// From Q the control points lie on the approach line — the basis
+		// spline renders Q→M perfectly straight (a B-spline span with
+		// collinear control points IS the line), and curveBasis's internal
+		// endpoint repetition makes the end tangent exactly the approach
+		// direction. NOTE: do NOT repeat M manually — a duplicated final
+		// control point renders a zero-length last segment, and
+		// orient="auto" on a zero-length segment falls back to 0° (every
+		// head pointing right — the round-12 regression, fixed round 13).
+		const Q = { x: M.x - ux * STRAIGHT_RUN, y: M.y - uy * STRAIGHT_RUN };
+		pts.splice(pts.length - 1, 1, Q, M);
+	}
+	return edgeLine(pts) ?? "";
+}
+
 // ─── Status styling (the retired panel's color language, unchanged) ──────────
 
+// The simple look (owner, plan-graph round 4): rectangular boxes, white
+// outlines/arrows/text; no fill on visited, today's gray look on upcoming,
+// and the current node carries a faint yellow glow (a blurred yellow fill
+// bleeding over the edges). The IN-CHAT block is monochrome white instead
+// — no status language; the popup/window show the progression.
 const BOX: Record<PlanNodeStatus, string> = {
-	visited: "fill-phase-teach/10 stroke-phase-teach/50",
-	current: "fill-primary/10 stroke-primary",
+	// 50%-opacity app background instead of true transparency: a routed
+	// edge passing behind the box composites UNDER the fill — dimmed to
+	// half, not shown straight through (owner, round 9).
+	visited: "fill-background/50 stroke-white",
+	current: "fill-background/50 stroke-white",
+	// The grayed-out not-yet-visited look stays as-is (owner).
 	upcoming: "fill-card stroke-border",
 };
 const TEXT: Record<PlanNodeStatus, string> = {
-	visited: "fill-muted-foreground text-xs",
-	current: "fill-foreground text-xs font-medium",
+	visited: "fill-white text-xs",
+	current: "fill-white text-xs font-medium",
 	upcoming: "fill-muted-foreground/80 text-xs",
 };
+const MONO_BOX = "fill-background/50 stroke-white";
+const MONO_TEXT = "fill-white text-xs";
 
 /** The diagram itself: positioned nodes + bezier edges. Pure-ish render —
  *  every input is data, so SSR render tests pin the whole thing. */
@@ -151,6 +354,10 @@ export function PlanDiagram({
 	glowId,
 	markerId,
 	viewBoxOverride,
+	pad: padUnits,
+	textCapScale,
+	naturalSize,
+	monochrome,
 }: {
 	nodes: readonly LayoutNode[];
 	edges: ReadonlyArray<{ from: string; to: string }>;
@@ -159,48 +366,112 @@ export function PlanDiagram({
 	markerId: string;
 	/** A windowed viewBox (the plan window) instead of the full extent. */
 	viewBoxOverride?: string;
+	/** Pads the viewBox by this many svg units so centered strokes and the
+	 *  glow halo never clip at the extent edges (full-extent renders only). */
+	pad?: number;
+	/** Caps the rendered width at extent × scale — the chat-font-size zoom
+	 *  ceiling for the in-chat block (fills the column, never past prose). */
+	textCapScale?: number;
+	/** Renders at the viewBox width in px (1 svg unit = 1 px at zoom 1) —
+	 *  the popup's transform math depends on it; w-full inside the popup's
+	 *  shrink-to-fit wrapper resolved to the popup width and broke fit. */
+	naturalSize?: boolean;
+	/** The in-chat block's mode: every node white (fill-none, white stroke
+	 *  and text, no glow) — statuses never show in the transcript (owner). */
+	monochrome?: boolean;
 }) {
 	const layout = useMemo(() => blockLayout(nodes, edges), [nodes, edges]);
+	// Pad only the full-extent render — the plan window's override viewBox is
+	// a deliberate viewport crop, and the popup keeps its own fit margins.
+	const pad = viewBoxOverride ? 0 : (padUnits ?? 0);
+	const w = Math.max(layout.width, 1);
+	const h = Math.max(layout.height, 1);
+	const vbW = w + 2 * pad;
+	const vbH = h + 2 * pad;
 	return (
 		<svg
-			viewBox={viewBoxOverride ?? `0 0 ${Math.max(layout.width, 1)} ${Math.max(layout.height, 1)}`}
-			className="block h-auto w-full"
+			viewBox={viewBoxOverride ?? `${-pad} ${-pad} ${vbW} ${vbH}`}
+			className={`block h-auto${naturalSize ? "" : " w-full"}${textCapScale ? " mx-auto" : ""}`}
+			style={
+				textCapScale
+					? { maxWidth: `${Math.round(vbW * textCapScale * 100) / 100}px` }
+					: naturalSize
+						? { width: `${vbW}px` }
+						: undefined
+			}
 			role="img"
 			aria-label="Plan diagram"
 		>
 			<defs>
 				<marker
 					id={markerId}
-					viewBox="0 0 8 8"
-					refX="7"
-					refY="4"
-					markerWidth="6"
-					markerHeight="6"
-					orient="auto-start-reverse"
+					viewBox="0 0 50.2 104"
+					refX={27.2}
+					refY={52}
+					markerWidth={HEAD_W}
+					markerHeight={HEAD_H}
+					markerUnits="userSpaceOnUse"
+					orient="auto"
 				>
-					<path d="M0,1 L7,4 L0,7 z" className="fill-muted-foreground/50" />
+					{/* The owner's arrowhead. The mouth (x 27.2) sits at refX so the
+					    line ends AT the notch — the tip beyond it is solid fill. */}
+					<path d={ARROW_HEAD} className="fill-white" />
 				</marker>
+				{/* Same head, grayed — arrows into not-yet-visited nodes are
+				    grayed out like the nodes themselves (owner, round 6). */}
+				<marker
+					id={`${markerId}-dim`}
+					viewBox="0 0 50.2 104"
+					refX={27.2}
+					refY={52}
+					markerWidth={HEAD_W}
+					markerHeight={HEAD_H}
+					markerUnits="userSpaceOnUse"
+					orient="auto"
+				>
+					<path d={ARROW_HEAD} className="fill-border" />
+				</marker>
+				{/* The current node's highlight: a faint yellow fill BLURRED so it
+				    bleeds out over the node's edges (owner). Generous filter region
+				    so the blur never clips at its own bounds. */}
+				<filter id={`${markerId}-glow`} x="-60%" y="-60%" width="220%" height="220%">
+					<feGaussianBlur stdDeviation={GLOW_BLUR} />
+				</filter>
 			</defs>
 			{edges.map((e) => {
-				const x1 = (layout.x.get(e.from) ?? 0) + NODE_W / 2;
-				const y1 = (layout.y.get(e.from) ?? 0) + NODE_H;
-				const x2 = (layout.x.get(e.to) ?? 0) + NODE_W / 2;
-				const y2 = layout.y.get(e.to) ?? 0;
-				const mid = (y1 + y2) / 2;
+				// Dagre's route for this edge: border-intersected waypoints —
+				// the line leaves/enters nodes on whatever side dagre chose
+				// (mermaid's drawing, owner round 11). Unroutable edges
+				// (dangling endpoints) draw nothing.
+				const pts = layout.edgePts.get(`${e.from}->${e.to}`);
+				if (!pts) return null;
+				// The target's box — drives the docking gap + entry-angle clamp.
+				const tx = layout.x.get(e.to);
+				const ty = layout.y.get(e.to);
+				const target =
+					tx !== undefined && ty !== undefined
+						? { x: tx, y: ty, w: NODE_W, h: layout.nodeH.get(e.to) ?? NODE_H }
+						: undefined;
+				// An arrow into a not-yet-visited node is grayed out like the
+				// node (owner, round 6); the in-chat block stays all-white.
+				const dim = !monochrome && statusOf(e.to) === "upcoming";
 				return (
 					<path
 						key={`${e.from}->${e.to}`}
-						d={`M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`}
-						className="fill-none stroke-muted-foreground/40"
+						d={edgePathD(pts, target)}
+						className={dim ? "fill-none stroke-border" : "fill-none stroke-white"}
 						strokeWidth={1.5}
-						markerEnd={`url(#${markerId})`}
+						markerEnd={`url(#${markerId}${dim ? "-dim" : ""})`}
 					/>
 				);
 			})}
 			{nodes.map((n) => {
 				const status = statusOf(n.id);
-				const glow = n.id === glowId;
+				const glow = n.id === glowId && !monochrome;
 				const lines = wrapTitle(n.title);
+				// The box grows with its wrapped content; text centers in it.
+				const h = layout.nodeH.get(n.id) ?? NODE_H;
+				const y0 = (h - lines.length * LINE_H) / 2 + 10;
 				return (
 					<g
 						key={n.id}
@@ -208,21 +479,35 @@ export function PlanDiagram({
 						data-testid={`plan-node-${n.id}`}
 						data-status={status}
 					>
+						{/* Rectangular — no corner rounding (owner). */}
+						<rect
+							width={NODE_W}
+							height={h}
+							className={monochrome ? MONO_BOX : BOX[status]}
+							strokeWidth={1.5}
+						/>
 						{glow && (
-							// The glow target: a soft primary halo breathing around the box.
+							// The current node's highlight: faint yellow, blurred so it
+							// bleeds over the edges — static, no pulse (owner, round 6).
+							// Paints ABOVE the box fill (owner, round 10): the round-9
+							// background fill no longer dims the glow inside the box,
+							// while edges behind the box still dim under that fill.
 							<rect
-								x={-4}
-								y={-4}
-								width={NODE_W + 8}
-								height={NODE_H + 8}
-								rx={12}
-								className="fill-none stroke-primary/70 animate-pulse"
-								strokeWidth={1.5}
+								x={-GLOW_MARGIN}
+								y={-GLOW_MARGIN}
+								width={NODE_W + 2 * GLOW_MARGIN}
+								height={h + 2 * GLOW_MARGIN}
+								className="fill-yellow-400/25"
+								filter={`url(#${markerId}-glow)`}
 							/>
 						)}
-						<rect width={NODE_W} height={NODE_H} rx={10} className={BOX[status]} strokeWidth={1.5} />
 						{lines.map((line, i) => (
-							<text key={i} x={12} y={lines.length === 1 ? 27 : 18 + i * 13} className={TEXT[status]}>
+							<text
+								key={i}
+								x={12}
+								y={y0 + i * LINE_H}
+								className={monochrome ? MONO_TEXT : TEXT[status]}
+							>
 								{line}
 							</text>
 						))}
@@ -254,7 +539,18 @@ export function PlanBlock({ data, onOpen }: { data: PlanBlockData; onOpen: () =>
 			title="Open the full plan"
 			className="block w-full text-left"
 		>
-			<PlanDiagram nodes={data.nodes} edges={data.edges} statusOf={statusOf} markerId={markerId} />
+			{/* pad keeps centered strokes + the glow halo inside the frame; the
+		    cap keeps node text at or below chat prose size while still filling
+		    the column when it can (owner, plan-graph refinement round 1). */}
+		<PlanDiagram
+			nodes={data.nodes}
+			edges={data.edges}
+			statusOf={statusOf}
+			markerId={markerId}
+			pad={GRAPH_PAD}
+			textCapScale={TEXT_CAP_SCALE}
+			monochrome
+		/>
 		</button>
 	);
 }
@@ -281,10 +577,16 @@ export function latestTree(messages: readonly PopupMessage[]): PlanTree | null {
 	return null;
 }
 
-/** Zoom bounds: never below fit (fully zoomed out IS the fit), never above 2×. */
-const ZOOM_MAX = 2;
-const ZOOM_FLOOR = 0.15;
+/** Zoom bounds: never below fit (fully zoomed out IS the fit — the whole
+ *  graph visible, whichever axis binds — owner, plan-graph round 2), never
+ *  above ZOOM_MAX (raised 2×→4× for reading node titles closely, owner,
+ *  plan-graph round 3). The old 0.15 floor could sit ABOVE a true fit for
+ *  wide graphs; the fit itself is the floor now. */
+const ZOOM_MAX = 4;
 const FIT_PAD = 16;
+/** The popup shows the glow, so its frame pads by the glow's reach —
+ *  the in-chat block (monochrome, no glow) stays tight at GRAPH_PAD. */
+const POPUP_PAD = GLOW_REACH;
 const FIT_ZOOM_MAX = 1.5;
 
 interface GraphView {
@@ -295,10 +597,9 @@ interface GraphView {
 
 function fitZoomFor(box: { w: number; h: number }, viewport: { w: number; h: number }): number {
 	if (!viewport.w || !viewport.h || box.w === 0) return 1;
-	return Math.max(
-		ZOOM_FLOOR,
-		Math.min((viewport.w - FIT_PAD) / box.w, (viewport.h - FIT_PAD) / box.h, FIT_ZOOM_MAX),
-	);
+	// No artificial floor: a wide graph must fit even below 0.15× — the
+	// epsilon only guards degenerate viewports.
+	return Math.max(0.02, Math.min((viewport.w - FIT_PAD) / box.w, (viewport.h - FIT_PAD) / box.h, FIT_ZOOM_MAX));
 }
 
 function fitGraphView(box: { w: number; h: number }, viewport: { w: number; h: number }, zoom: number): GraphView {
@@ -354,12 +655,22 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	}, []);
 
 	const layout = useMemo(() => (tree ? blockLayout(tree.nodes, tree.edges) : null), [tree]);
-	const box = useMemo(() => (layout ? { w: layout.width, h: layout.height } : { w: 0, h: 0 }), [layout]);
+	// The fit box is the PADDED ink box — the diagram renders with POPUP_PAD
+	// (= the glow's reach) so the blurred glow never clips at the frame, and
+	// the fit must account for that padding.
+	const box = useMemo(
+		() => (layout ? { w: layout.width + 2 * POPUP_PAD, h: layout.height + 2 * POPUP_PAD } : { w: 0, h: 0 }),
+		[layout],
+	);
 	const fitZoom = useMemo(() => fitZoomFor(box, size), [box, size]);
 
 	const [view, setView] = useState<GraphView>({ x: 0, y: 0, zoom: 1 });
 	const userAdjustedRef = useRef(false);
 	const atFloor = view.zoom <= fitZoom + 1e-9;
+	// The transition stays off until the FIRST fit has been applied — the
+	// popup paints at the fit directly instead of flying in from the initial
+	// top-left zoom:1 state (owner, plan-graph round 4).
+	const [settled, setSettled] = useState(false);
 
 	useEffect(() => {
 		if (atFloor) userAdjustedRef.current = false;
@@ -367,6 +678,12 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	useEffect(() => {
 		if (userAdjustedRef.current || !size.w || !size.h) return;
 		setView(fitGraphView(box, size, fitZoom));
+		// Enable the transition only AFTER the fit has painted: flipping
+		// settled in the SAME commit lets the browser animate from the
+		// initial top-left zoom:1 state — the fly-in the owner keeps
+		// seeing (round 4's gate wasn't enough; round 7 fix).
+		const raf = requestAnimationFrame(() => setSettled(true));
+		return () => cancelAnimationFrame(raf);
 	}, [fitZoom, size, box]);
 
 	useEffect(() => {
@@ -386,12 +703,17 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 		return () => el.removeEventListener("wheel", onWheel);
 	}, [fitZoom, box, size]);
 
+	// Smooth zoom: the transform eases between states (CSS retargets from the
+	// current computed value, so chained wheel ticks stay fluid). Panning is
+	// per-frame — the transition is off while dragging or it rubber-bands.
+	const [panning, setPanning] = useState(false);
 	const dragRef = useRef<{ px: number; py: number; x: number; y: number; moved: boolean } | null>(null);
 	const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
 		if (e.button !== 0) return;
 		if ((e.target as HTMLElement).closest("button")) return;
 		if (atFloor) return;
 		dragRef.current = { px: e.clientX, py: e.clientY, x: view.x, y: view.y, moved: false };
+		setPanning(true);
 		e.currentTarget.classList.add("cursor-grabbing");
 		e.currentTarget.setPointerCapture(e.pointerId);
 	};
@@ -409,6 +731,7 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 			dragRef.current = null;
 			if (d.moved) userAdjustedRef.current = true;
 		}
+		setPanning(false);
 		e.currentTarget.classList.remove("cursor-grabbing");
 	};
 	const stepZoom = (factor: number) => {
@@ -462,7 +785,11 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 					<>
 						<div
 							className="absolute top-0 left-0 origin-top-left"
-							style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
+							style={{
+								transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
+								transition:
+									panning || !settled ? "none" : "transform 180ms ease-out",
+							}}
 						>
 							<PlanDiagram
 								nodes={tree.nodes}
@@ -470,6 +797,8 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 								statusOf={statusOf}
 								glowId={statuses?.current ?? null}
 								markerId={markerId}
+								pad={POPUP_PAD}
+								naturalSize
 							/>
 						</div>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-2">
