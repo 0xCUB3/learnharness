@@ -460,17 +460,20 @@ export function GraphView() {
 		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
 	}, [visibleIds, query]);
 
-	// Feed #4 — region tuning (dev number inputs): its own update path,
-	// independent of the server-persisted render settings.
+	// Feed #4 — region tuning. `isEmpty` in the deps (same as Feed #2):
+	// the settings fetch resolves BEFORE the snapshot creates the renderer,
+	// so the load-time run hits a null renderer and would never re-fire —
+	// the renderer would silently keep the default tuning forever.
 	useEffect(() => {
 		rendererRef.current?.setRegionTuning(regionTuning);
-	}, [regionTuning]);
+	}, [regionTuning, isEmpty]);
 
 	// Feed #5 — physics tuning: rebuilds the live sim in place (drag pins
-	// survive; a mid-settle change re-anneals, the honest response).
+	// survive; a mid-settle change re-anneals, the honest response). Same
+	// isEmpty dep as Feed #4 — see there.
 	useEffect(() => {
 		rendererRef.current?.setPhysicsTuning(physicsTuning);
-	}, [physicsTuning]);
+	}, [physicsTuning, isEmpty]);
 
 	// Position the detail card: below the clicked node, flipped above near
 	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
