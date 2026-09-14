@@ -349,9 +349,19 @@ export function PlanDiagram({
 						data-testid={`plan-node-${n.id}`}
 						data-status={status}
 					>
+						{/* Rectangular — no corner rounding (owner). */}
+						<rect
+							width={NODE_W}
+							height={h}
+							className={monochrome ? MONO_BOX : BOX[status]}
+							strokeWidth={1.5}
+						/>
 						{glow && (
 							// The current node's highlight: faint yellow, blurred so it
 							// bleeds over the edges — static, no pulse (owner, round 6).
+							// Paints ABOVE the box fill (owner, round 10): the round-9
+							// background fill no longer dims the glow inside the box,
+							// while edges behind the box still dim under that fill.
 							<rect
 								x={-GLOW_MARGIN}
 								y={-GLOW_MARGIN}
@@ -361,13 +371,6 @@ export function PlanDiagram({
 								filter={`url(#${markerId}-glow)`}
 							/>
 						)}
-						{/* Rectangular — no corner rounding (owner). */}
-						<rect
-							width={NODE_W}
-							height={h}
-							className={monochrome ? MONO_BOX : BOX[status]}
-							strokeWidth={1.5}
-						/>
 						{lines.map((line, i) => (
 							<text
 								key={i}
