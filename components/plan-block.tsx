@@ -332,9 +332,10 @@ export function latestTree(messages: readonly PopupMessage[]): PlanTree | null {
 
 /** Zoom bounds: never below fit (fully zoomed out IS the fit — the whole
  *  graph visible, whichever axis binds — owner, plan-graph round 2), never
- *  above 2×. The old 0.15 floor could sit ABOVE a true fit for wide graphs
- *  and break that rule; the fit itself is the floor now. */
-const ZOOM_MAX = 2;
+ *  above ZOOM_MAX (raised 2×→4× for reading node titles closely, owner,
+ *  plan-graph round 3). The old 0.15 floor could sit ABOVE a true fit for
+ *  wide graphs; the fit itself is the floor now. */
+const ZOOM_MAX = 4;
 const FIT_PAD = 16;
 const FIT_ZOOM_MAX = 1.5;
 
@@ -441,12 +442,17 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 		return () => el.removeEventListener("wheel", onWheel);
 	}, [fitZoom, box, size]);
 
+	// Smooth zoom: the transform eases between states (CSS retargets from the
+	// current computed value, so chained wheel ticks stay fluid). Panning is
+	// per-frame — the transition is off while dragging or it rubber-bands.
+	const [panning, setPanning] = useState(false);
 	const dragRef = useRef<{ px: number; py: number; x: number; y: number; moved: boolean } | null>(null);
 	const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
 		if (e.button !== 0) return;
 		if ((e.target as HTMLElement).closest("button")) return;
 		if (atFloor) return;
 		dragRef.current = { px: e.clientX, py: e.clientY, x: view.x, y: view.y, moved: false };
+		setPanning(true);
 		e.currentTarget.classList.add("cursor-grabbing");
 		e.currentTarget.setPointerCapture(e.pointerId);
 	};
@@ -464,6 +470,7 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 			dragRef.current = null;
 			if (d.moved) userAdjustedRef.current = true;
 		}
+		setPanning(false);
 		e.currentTarget.classList.remove("cursor-grabbing");
 	};
 	const stepZoom = (factor: number) => {
@@ -517,7 +524,10 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 					<>
 						<div
 							className="absolute top-0 left-0 origin-top-left"
-							style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
+							style={{
+								transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
+								transition: panning ? "none" : "transform 180ms ease-out",
+							}}
 						>
 							<PlanDiagram
 								nodes={tree.nodes}
