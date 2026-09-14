@@ -1124,6 +1124,11 @@ export class GraphCanvasRenderer {
 			for (const e of data.edges) {
 				if (clusterOf.get(e.from) !== ci) continue;
 				if (clusterOf.get(e.to) !== ci) continue;
+				// Search filter: stroke only fully-visible edges. Invisible-node
+				// segments still stroked into the (visible-only) bitmap cut
+				// diagonal hue streaks across other clusters' regions (user-
+				// reported 2026-09-14) — rect, discs, and anchors already filter.
+				if (!isVisible(e.from) || !isVisible(e.to)) continue;
 				const a = this.nodeById.get(e.from);
 				const b = this.nodeById.get(e.to);
 				if (!a || !b) continue;
