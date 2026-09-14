@@ -921,7 +921,7 @@ function DockOverlay({
 	return (
 		<div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ right: sbInset }}>
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-			<div ref={blockRef} className="bg-background pb-4">
+			<div ref={blockRef} className="bg-background pb-5">
 				<div className={DOCK}>
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
