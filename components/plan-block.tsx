@@ -143,16 +143,24 @@ export const TEXT_CAP_SCALE = 16.5 / 12.5;
 
 // ─── Status styling (the retired panel's color language, unchanged) ──────────
 
+// The simple look (owner, plan-graph round 4): rectangular boxes, white
+// outlines/arrows/text; no fill on visited, today's gray look on upcoming,
+// and the current node carries a faint yellow glow (a blurred yellow fill
+// bleeding over the edges). The IN-CHAT block is monochrome white instead
+// — no status language; the popup/window show the progression.
 const BOX: Record<PlanNodeStatus, string> = {
-	visited: "fill-phase-teach/10 stroke-phase-teach/50",
-	current: "fill-primary/10 stroke-primary",
+	visited: "fill-none stroke-white",
+	current: "fill-none stroke-white",
+	// The grayed-out not-yet-visited look stays as-is (owner).
 	upcoming: "fill-card stroke-border",
 };
 const TEXT: Record<PlanNodeStatus, string> = {
-	visited: "fill-muted-foreground text-xs",
-	current: "fill-foreground text-xs font-medium",
+	visited: "fill-white text-xs",
+	current: "fill-white text-xs font-medium",
 	upcoming: "fill-muted-foreground/80 text-xs",
 };
+const MONO_BOX = "fill-none stroke-white";
+const MONO_TEXT = "fill-white text-xs";
 
 /** The diagram itself: positioned nodes + bezier edges. Pure-ish render —
  *  every input is data, so SSR render tests pin the whole thing. */
@@ -166,6 +174,7 @@ export function PlanDiagram({
 	pad: padUnits,
 	textCapScale,
 	naturalSize,
+	monochrome,
 }: {
 	nodes: readonly LayoutNode[];
 	edges: ReadonlyArray<{ from: string; to: string }>;
@@ -184,6 +193,9 @@ export function PlanDiagram({
 	 *  the popup's transform math depends on it; w-full inside the popup's
 	 *  shrink-to-fit wrapper resolved to the popup width and broke fit. */
 	naturalSize?: boolean;
+	/** The in-chat block's mode: every node white (fill-none, white stroke
+	 *  and text, no glow) — statuses never show in the transcript (owner). */
+	monochrome?: boolean;
 }) {
 	const layout = useMemo(() => blockLayout(nodes, edges), [nodes, edges]);
 	// Pad only the full-extent render — the plan window's override viewBox is
@@ -217,8 +229,16 @@ export function PlanDiagram({
 					markerHeight="6"
 					orient="auto-start-reverse"
 				>
-					<path d="M0,1 L7,4 L0,7 z" className="fill-muted-foreground/50" />
+					{/* Interim head — swapped for the owner's arrowhead SVG when it
+					    lands (right-pointing, tight viewBox, tip at the right edge). */}
+					<path d="M0,1 L7,4 L0,7 z" className="fill-white" />
 				</marker>
+				{/* The current node's highlight: a faint yellow fill BLURRED so it
+				    bleeds out over the node's edges (owner). Generous filter region
+				    so the blur never clips at its own bounds. */}
+				<filter id={`${markerId}-glow`} x="-60%" y="-60%" width="220%" height="220%">
+					<feGaussianBlur stdDeviation={7} />
+				</filter>
 			</defs>
 			{edges.map((e) => {
 				const x1 = (layout.x.get(e.from) ?? 0) + NODE_W / 2;
@@ -230,7 +250,7 @@ export function PlanDiagram({
 					<path
 						key={`${e.from}->${e.to}`}
 						d={`M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`}
-						className="fill-none stroke-muted-foreground/40"
+						className="fill-none stroke-white"
 						strokeWidth={1.5}
 						markerEnd={`url(#${markerId})`}
 					/>
@@ -238,7 +258,7 @@ export function PlanDiagram({
 			})}
 			{nodes.map((n) => {
 				const status = statusOf(n.id);
-				const glow = n.id === glowId;
+				const glow = n.id === glowId && !monochrome;
 				const lines = wrapTitle(n.title);
 				return (
 					<g
@@ -248,20 +268,31 @@ export function PlanDiagram({
 						data-status={status}
 					>
 						{glow && (
-							// The glow target: a soft primary halo breathing around the box.
+							// The current node's highlight: faint yellow, blurred so it
+							// bleeds over the edges (owner, plan-graph round 4).
 							<rect
-								x={-4}
-								y={-4}
-								width={NODE_W + 8}
-								height={NODE_H + 8}
-								rx={12}
-								className="fill-none stroke-primary/70 animate-pulse"
-								strokeWidth={1.5}
+								x={-10}
+								y={-10}
+								width={NODE_W + 20}
+								height={NODE_H + 20}
+								className="fill-yellow-400/25 animate-pulse"
+								filter={`url(#${markerId}-glow)`}
 							/>
 						)}
-						<rect width={NODE_W} height={NODE_H} rx={10} className={BOX[status]} strokeWidth={1.5} />
+						{/* Rectangular — no corner rounding (owner). */}
+						<rect
+							width={NODE_W}
+							height={NODE_H}
+							className={monochrome ? MONO_BOX : BOX[status]}
+							strokeWidth={1.5}
+						/>
 						{lines.map((line, i) => (
-							<text key={i} x={12} y={lines.length === 1 ? 27 : 18 + i * 13} className={TEXT[status]}>
+							<text
+								key={i}
+								x={12}
+								y={lines.length === 1 ? 27 : 18 + i * 13}
+								className={monochrome ? MONO_TEXT : TEXT[status]}
+							>
 								{line}
 							</text>
 						))}
@@ -303,6 +334,7 @@ export function PlanBlock({ data, onOpen }: { data: PlanBlockData; onOpen: () =>
 			markerId={markerId}
 			pad={GRAPH_PAD}
 			textCapScale={TEXT_CAP_SCALE}
+			monochrome
 		/>
 		</button>
 	);
@@ -416,6 +448,10 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	const [view, setView] = useState<GraphView>({ x: 0, y: 0, zoom: 1 });
 	const userAdjustedRef = useRef(false);
 	const atFloor = view.zoom <= fitZoom + 1e-9;
+	// The transition stays off until the FIRST fit has been applied — the
+	// popup paints at the fit directly instead of flying in from the initial
+	// top-left zoom:1 state (owner, plan-graph round 4).
+	const [settled, setSettled] = useState(false);
 
 	useEffect(() => {
 		if (atFloor) userAdjustedRef.current = false;
@@ -423,6 +459,7 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	useEffect(() => {
 		if (userAdjustedRef.current || !size.w || !size.h) return;
 		setView(fitGraphView(box, size, fitZoom));
+		setSettled(true);
 	}, [fitZoom, size, box]);
 
 	useEffect(() => {
@@ -526,7 +563,8 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 							className="absolute top-0 left-0 origin-top-left"
 							style={{
 								transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
-								transition: panning ? "none" : "transform 180ms ease-out",
+								transition:
+									panning || !settled ? "none" : "transform 180ms ease-out",
 							}}
 						>
 							<PlanDiagram
