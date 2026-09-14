@@ -866,8 +866,6 @@ export function GraphView() {
 							</div>
 						)}
 					</div>
-					{/* Rendering settings — own component; the gear toggles it. */}
-					<GraphSettingsControl settings={settings} changeSettings={changeSettings} />
 					{/* Import notes — its own container. */}
 					<div className="rounded-xl border bg-card/85 p-1.5 shadow-lg backdrop-blur">
 						<input
@@ -891,6 +889,10 @@ export function GraphView() {
 							{importing ? "Importing…" : "Import notes…"}
 						</button>
 					</div>
+					{/* Rendering settings — own component; the gear toggles it. The
+					    gear sits at the far right (owner, round 3) so its panel
+					    drops at the very right edge, over less of the graph. */}
+					<GraphSettingsControl settings={settings} changeSettings={changeSettings} />
 				</div>
 			)}
 
