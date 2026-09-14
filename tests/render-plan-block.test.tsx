@@ -72,6 +72,32 @@ describe("plan block layout (pure)", () => {
 		// renders straight — the shaft stub never bends a straight edge.
 		const xs = [...d.matchAll(/(?:[MLC]|,)(-?[\d.]+),/g)].map((m) => m[1]);
 		assert.ok(xs.length > 0 && xs.every((v) => v === "80"), "collinear route renders on-axis");
+		// A perpendicular entry with the target box is the SAME geometry.
+		const pd = edgePathD([{ x: 80, y: 44 }, { x: 80, y: 68 }, { x: 80, y: 92 }], { x: 0, y: 92, w: 160, h: 44 });
+		assert.equal(pd, d);
+	});
+
+	it("edgePathD clamps the entry to ±40° of the face perpendicular (owner, round 14)", () => {
+		const box = { x: 20, y: 100, w: 160, h: 44 };
+		// A 60° tilt into the top face swings to the 40° cone edge: the
+		// mouth lands at (97.726, 93.289) and the final segment runs at
+		// exactly 40° (Δx/Δy = tan 40°). The tip floats DOCK_GAP (4) off the
+		// face along the normal: border (100,100) → tip (100,96).
+		const clamped = edgePathD([{ x: 70, y: 70 }, { x: 100, y: 100 }], box);
+		assert.ok(clamped.endsWith("L97.726,93.289"), "swung to the cone edge");
+		// final L's from-point is the previous number pair; recompute direction
+		const nums = [...clamped.matchAll(/(-?[\d.]+)/g)].map((m) => Number(m[1]));
+		const ax = nums[nums.length - 4]!;
+		const ay = nums[nums.length - 3]!;
+		const bx = nums[nums.length - 2]!;
+		const by = nums[nums.length - 1]!;
+		assert.ok(Math.abs((bx - ax) / (by - ay) - Math.tan((40 * Math.PI) / 180)) < 0.01, "40° cone edge");
+		// Tip = mouth + u'·overhang floats 4 above the face.
+		const tipY = by + 0.766 * 3.538;
+		assert.ok(Math.abs(tipY - 96) < 0.01, "docking gap along the face normal");
+		// A shallow (~9.5°) tilt is WITHIN the limit: no swing.
+		const free = edgePathD([{ x: 90, y: 40 }, { x: 100, y: 100 }], box);
+		assert.ok(free.endsWith("L99.418,92.51"), "unclamped within the cone");
 	});
 
 	it("wrapTitle wraps greedily and NEVER drops content (boxes grow instead)", () => {

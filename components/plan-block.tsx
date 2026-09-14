@@ -223,19 +223,51 @@ const DOCK_GAP = 4;
  *  lands on a straight shaft; the corner where the route squares up onto
  *  the line is rounded by the curve. ~1.5 head lengths of shaft. */
 const STRAIGHT_RUN = 12;
+/** The tilt limit at the termination point, measured off the entry
+ *  face's perpendicular: past ±40° one of the head's barbs crosses the
+ *  tip's level and the silhouette breaks (owner measured it in
+ *  Photoshop, round 14). The final run swings to the cone edge instead. */
+const ENTRY_ANGLE_LIMIT = (40 * Math.PI) / 180;
 const edgeLine = line<{ x: number; y: number }>()
 	.x((p) => p.x)
 	.y((p) => p.y)
 	.curve(curveBasis);
 
+/** The entry face's outward unit normal — whichever face of the target
+ *  box dagre's border point sits on. Pure. */
+function faceNormal(
+	border: { x: number; y: number },
+	box: { x: number; y: number; w: number; h: number },
+): { x: number; y: number } {
+	const d = { top: border.y - box.y, bottom: box.y + box.h - border.y, left: border.x - box.x, right: box.x + box.w - border.x };
+	const face = (Object.keys(d) as Array<keyof typeof d>).reduce((a, b) => (d[a] <= d[b] ? a : b));
+	switch (face) {
+		case "top":
+			return { x: 0, y: -1 };
+		case "bottom":
+			return { x: 0, y: 1 };
+		case "left":
+			return { x: -1, y: 0 };
+		default:
+			return { x: 1, y: 0 };
+	}
+}
+
 /** The edge path — mermaid's own line drawing: dagre's border-intersected
  *  waypoints through d3's curveBasis (mermaid's default flowchart curve —
- *  the same recipe dagre-d3's renderer uses). The final point pulls back
- *  along the last segment by the tip overhang + the docking gap so the
- *  head's TIP floats DOCK_GAP short of the target border with its mouth
- *  at the path's end, on a straight run (the shaft stub). Straight
- *  collinear routes render identically. Pure, exported for tests. */
-export function edgePathD(points: Array<{ x: number; y: number }>): string {
+ *  the same recipe dagre-d3's renderer uses). The head docks off the
+ *  target: its TIP floats DOCK_GAP past the border along the FACE NORMAL
+ *  (constant gap at any tilt), its mouth sits at the path's end on a
+ *  straight run (the shaft stub), and — when the target box is given —
+ *  the entry direction is clamped to ±ENTRY_ANGLE_LIMIT of the face's
+ *  perpendicular (owner, round 14): a steeper natural approach swings to
+ *  the 40° cone edge instead of breaking the head's silhouette. Without
+ *  a target box the unclamped geometry applies. Straight collinear
+ *  routes render identically. Pure, exported for tests. */
+export function edgePathD(
+	points: Array<{ x: number; y: number }>,
+	target?: { x: number; y: number; w: number; h: number },
+): string {
 	const pts = points.map((p) => ({ ...p }));
 	if (pts.length >= 2) {
 		const last = pts[pts.length - 1]!;
@@ -243,11 +275,38 @@ export function edgePathD(points: Array<{ x: number; y: number }>): string {
 		const dx = last.x - prev.x;
 		const dy = last.y - prev.y;
 		const len = Math.hypot(dx, dy) || 1;
-		const ux = dx / len;
-		const uy = dy / len;
-		// The mouth: tip overhang + the docking gap back from the border.
-		const back = HEAD_TIP_OVERHANG + DOCK_GAP;
-		const M = { x: last.x - ux * back, y: last.y - uy * back };
+		let ux = dx / len;
+		let uy = dy / len;
+		// The tip: DOCK_GAP outside the face along its normal (or along the
+		// approach when no box is known).
+		let tipx: number;
+		let tipy: number;
+		if (target) {
+			const n = faceNormal(last, target);
+			tipx = last.x + n.x * DOCK_GAP;
+			tipy = last.y + n.y * DOCK_GAP;
+			// Clamp the approach to the ±LIMIT cone around the normal: if
+			// the outgoing direction -u tilts past ENTRY_ANGLE_LIMIT, swing
+			// it to the cone edge (same rotation side as the route).
+			const v = { x: -ux, y: -uy };
+			const vn = v.x * n.x + v.y * n.y;
+			if (vn < Math.cos(ENTRY_ANGLE_LIMIT)) {
+				const t = { x: v.x - vn * n.x, y: v.y - vn * n.y };
+				const tl = Math.hypot(t.x, t.y);
+				const that = tl > 0 ? { x: t.x / tl, y: t.y / tl } : { x: -n.y, y: n.x };
+				const c = Math.cos(ENTRY_ANGLE_LIMIT);
+				const s = Math.sin(ENTRY_ANGLE_LIMIT);
+				v.x = c * n.x + s * that.x;
+				v.y = c * n.y + s * that.y;
+				ux = -v.x;
+				uy = -v.y;
+			}
+		} else {
+			tipx = last.x - ux * DOCK_GAP;
+			tipy = last.y - uy * DOCK_GAP;
+		}
+		// The mouth: overhang back from the tip along the (clamped) approach.
+		const M = { x: tipx - ux * HEAD_TIP_OVERHANG, y: tipy - uy * HEAD_TIP_OVERHANG };
 		// From Q the control points lie on the approach line — the basis
 		// spline renders Q→M perfectly straight (a B-spline span with
 		// collinear control points IS the line), and curveBasis's internal
@@ -386,13 +445,20 @@ export function PlanDiagram({
 				// (dangling endpoints) draw nothing.
 				const pts = layout.edgePts.get(`${e.from}->${e.to}`);
 				if (!pts) return null;
+				// The target's box — drives the docking gap + entry-angle clamp.
+				const tx = layout.x.get(e.to);
+				const ty = layout.y.get(e.to);
+				const target =
+					tx !== undefined && ty !== undefined
+						? { x: tx, y: ty, w: NODE_W, h: layout.nodeH.get(e.to) ?? NODE_H }
+						: undefined;
 				// An arrow into a not-yet-visited node is grayed out like the
 				// node (owner, round 6); the in-chat block stays all-white.
 				const dim = !monochrome && statusOf(e.to) === "upcoming";
 				return (
 					<path
 						key={`${e.from}->${e.to}`}
-						d={edgePathD(pts)}
+						d={edgePathD(pts, target)}
 						className={dim ? "fill-none stroke-border" : "fill-none stroke-white"}
 						strokeWidth={1.5}
 						markerEnd={`url(#${markerId}${dim ? "-dim" : ""})`}
