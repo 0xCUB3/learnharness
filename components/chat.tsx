@@ -479,12 +479,12 @@ export function Chat({
 		<div className="flex h-dvh">
 			<div className="flex min-w-0 flex-1 flex-col">
 				{/* The top bar is its own block (owner, top-fade round 4): in flow
-				    above the scroller on the plain page background — no gradient, no
-				    border; it reads as a block simply because the transcript starts
-				    below it. h-10, not py-2: the toggle (a size-9 icon button)
+				    above the scroller on the plain page background — no gradient. Its
+				    bottom outline (border-b border-border) matches the one that
+				    separates the left sidebar — same width, same color (owner, r5). h-10, not py-2: the toggle (a size-9 icon button)
 				    renders only while the sidebar is CLOSED — an auto-height row
 				    would collapse when it disappears and slide the title + chip up. */}
-				<header className="flex h-10 items-center gap-3 px-3">
+				<header className="flex h-10 items-center gap-3 border-b border-border px-3">
 					<SidebarToggle />
 					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
