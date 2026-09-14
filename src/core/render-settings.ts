@@ -95,7 +95,10 @@ export interface RegionTuning {
 	/** Max bitmap dimension (cell = worldSpan / this). Fixed set:
 	 *  see REGION_BITMAP_OPTIONS (dropdown in the panel). */
 	bitmap: number;
-	/** Per-stroke alpha; overlapping strokes stack toward the core. */
+	/** Region alpha, applied ONCE after the blur (dilate at full
+	 *  opacity → blur → scale). Constant interior, soft edges; overlaps
+	 *  of any count never stack (DECIDED 2026-09-14 — per-stroke alpha
+	 *  accumulated through source-over and double-counted orphans). */
 	edgeAlpha: number;
 }
 

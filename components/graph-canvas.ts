@@ -1136,7 +1136,14 @@ export class GraphCanvasRenderer {
 		this.regionMeta = [];
 		data.clusters.forEach((cluster, ci) => {
 			const hue = clusterHue(cluster.id);
-			rctx.strokeStyle = `hsla(${hue}, 65%, 60%, ${tuning.edgeAlpha})`;
+			// Full-opacity strokes: alpha is applied ONCE at the very end
+			// (dilate at 1 → blur → scale by edgeAlpha). Baking per-stroke
+			// alpha in here made source-over stacking ACCUMULATE it — an
+			// orphan disc overlapping anything read as a darker double-
+			// counted spot (user report 2026-09-14). At alpha 1 the alpha
+			// channel is a pure coverage indicator: overlaps of any count
+			// contribute exactly 1.0.
+			rctx.strokeStyle = `hsla(${hue}, 65%, 60%, 1)`;
 			rctx.beginPath();
 			let members = 0;
 			let sumX = 0;
@@ -1168,7 +1175,7 @@ export class GraphCanvasRenderer {
 			// radius as a round cap = dilation) covers exactly the members no
 			// stroke reached: every member is painted by its edges' caps OR
 			// one disc, never both — the no-double-counting rule survives.
-			rctx.fillStyle = `hsla(${hue}, 65%, 60%, ${tuning.edgeAlpha})`;
+			rctx.fillStyle = `hsla(${hue}, 65%, 60%, 1)`;
 			const discR = dilationW / cell;
 			for (const id of cluster.members) {
 				if (touched.has(id) || !isVisible(id)) continue;
@@ -1193,13 +1200,18 @@ export class GraphCanvasRenderer {
 			}
 		});
 
-		// THE blur: 3 box-blur rounds on the premultiplied bitmap. Bilinear
+		// THE blur + alpha (in that order, by design — user-decided
+		// 2026-09-14): 3 box-blur rounds on the premultiplied bitmap,
+		// THEN scale the whole field by edgeAlpha once. Bilinear
 		// upscaling alone is no blur at all (tent ramps — the JPEG look);
 		// this makes the field genuinely smooth before the blit. The
-		// radius is blurW in bitmap px (screen-anchored — see sizing above),
-		// an integer because boxBlurRound indexes with the loop counter.
-		if (tuning.blur > 0) {
-			const blurPx = Math.max(1, Math.round(blurW / cell));
+		// radius is blurW in bitmap px (screen-anchored — see sizing
+		// above), an integer because boxBlurRound indexes with the loop
+		// counter. Radius 0 (blur off) still runs this path — boxBlurRound
+		// copies — so the end-alpha applies uniformly with or without
+		// blur.
+		{
+			const blurPx = tuning.blur > 0 ? Math.max(1, Math.round(blurW / cell)) : 0;
 			const img = rctx.getImageData(0, 0, bw, bh);
 			const n = bw * bh * 4;
 			const a = new Float32Array(n);
@@ -1215,7 +1227,9 @@ export class GraphCanvasRenderer {
 			boxBlurRound(a, tmp, b, bw, bh, blurPx); // a → b
 			boxBlurRound(b, tmp, a, bw, bh, blurPx); // b → a
 			boxBlurRound(a, tmp, b, bw, bh, blurPx); // a → b (result)
-			// Unpremultiply back into pixels.
+			// Unpremultiply back into pixels; scale the alpha by edgeAlpha
+			// HERE — the one, final application. Result: constant interior
+			// alpha everywhere covered, tapering only across the blur edges.
 			for (let i = 0; i < n; i += 4) {
 				const alpha = b[i + 3]!;
 				if (alpha <= 0) {
@@ -1228,7 +1242,7 @@ export class GraphCanvasRenderer {
 					img.data[i] = Math.round((b[i]! / alpha) * 255);
 					img.data[i + 1] = Math.round((b[i + 1]! / alpha) * 255);
 					img.data[i + 2] = Math.round((b[i + 2]! / alpha) * 255);
-					img.data[i + 3] = Math.round(alpha);
+					img.data[i + 3] = Math.round(alpha * tuning.edgeAlpha);
 				}
 			}
 			rctx.putImageData(img, 0, 0);
