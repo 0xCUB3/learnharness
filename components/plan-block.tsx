@@ -248,13 +248,16 @@ export function edgePathD(points: Array<{ x: number; y: number }>): string {
 		// The mouth: tip overhang + the docking gap back from the border.
 		const back = HEAD_TIP_OVERHANG + DOCK_GAP;
 		const M = { x: last.x - ux * back, y: last.y - uy * back };
-		// From Q every control point lies on the approach line — the basis
+		// From Q the control points lie on the approach line — the basis
 		// spline renders Q→M perfectly straight (a B-spline span with
-		// collinear control points IS the line), and the repeated M makes
-		// the end tangent exactly the approach direction, so the head
-		// squares onto its shaft.
+		// collinear control points IS the line), and curveBasis's internal
+		// endpoint repetition makes the end tangent exactly the approach
+		// direction. NOTE: do NOT repeat M manually — a duplicated final
+		// control point renders a zero-length last segment, and
+		// orient="auto" on a zero-length segment falls back to 0° (every
+		// head pointing right — the round-12 regression, fixed round 13).
 		const Q = { x: M.x - ux * STRAIGHT_RUN, y: M.y - uy * STRAIGHT_RUN };
-		pts.splice(pts.length - 1, 1, Q, M, M);
+		pts.splice(pts.length - 1, 1, Q, M);
 	}
 	return edgeLine(pts) ?? "";
 }
