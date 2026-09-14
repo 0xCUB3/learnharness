@@ -477,27 +477,31 @@ export function Chat({
 		    dock overlays the column bottom (outside the scroller); a spacer in
 		    the transcript reserves its height. */}
 		<div className="flex h-dvh">
-			<div className="flex min-w-0 flex-1 flex-col">
-				{/* h-10, not py-2: the toggle (a size-9 icon button) renders only
-				    while the sidebar is CLOSED — an auto-height row would collapse
-				    when it disappears and slide the title + chip up. */}
-				<header className="relative flex h-10 items-center gap-3 px-3">
-					<SidebarToggle />
-					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
-					<PhaseChip phase={phases.at(-1) ?? "probe"} />
-					{/* Soft top fade (owner, round 2): peaks at 60% right under the
-					    title and ramps down to transparent within 40px — supports the
-					    header without a bar edge or a long tail into the chat. */}
+			<div className="relative flex min-w-0 flex-1 flex-col">
+				{/* The header OVERLAYS the scroller (owner, top-fade round 3): the
+				    transcript runs under the title to the very top, easing beneath
+				    it through the header's own wash — no hard cut below the title.
+				    The wash peaks at 60% at the very top (behind the title) and
+				    ramps down to transparent just under it. h-10, not py-2: the
+				    toggle renders only while the sidebar is CLOSED. */}
+				<header className="pointer-events-none absolute inset-x-0 top-0 z-20">
 					<div
 						aria-hidden
-						className="pointer-events-none absolute inset-x-0 top-full z-10 h-10 bg-gradient-to-b from-background/60 to-transparent"
+						className="absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-background/60 to-transparent"
 					/>
+					<div className="relative flex h-10 items-center gap-3 px-3">
+						<div className="pointer-events-auto">
+							<SidebarToggle />
+						</div>
+						<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
+						<PhaseChip phase={phases.at(-1) ?? "probe"} />
+					</div>
 				</header>
 
 				<div className="relative flex min-h-0 flex-1">
 				<Conversation className="h-full min-w-0 flex-1" initial="instant">
 					<ConversationContent className="min-h-full gap-0 p-0">
-						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
+						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-14`}>
 							{messages.length === 0 && !busy && (
 								<ConversationEmptyState
 									title="New session"
