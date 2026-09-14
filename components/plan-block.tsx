@@ -12,8 +12,9 @@ import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
  * the right sidebar is retired.
  *
  * - kind "full": the whole DAG, BORDERLESS — no wrapping chrome, the SVG
- *   scales to the full column width (viewBox = layout extent, so the
- *   leftmost/rightmost nodes hug the edges), natural height, no cap.
+ *   scales to the full column width (viewBox = layout extent + GRAPH_PAD,
+ *   so strokes/glow never clip), natural height, capped at the chat prose
+ *   font size (TEXT_CAP_SCALE — fills the column, never oversizes text).
  * - Clicking opens the full plan in a full-screen popup overlay —
  *   the LIVE plan: the latest tree from the transcript with statuses
  *   derived at click time (contracts/plan.ts derivePlanStatuses). Blocks
@@ -164,6 +165,7 @@ export function PlanDiagram({
 	viewBoxOverride,
 	pad: padUnits,
 	textCapScale,
+	naturalSize,
 }: {
 	nodes: readonly LayoutNode[];
 	edges: ReadonlyArray<{ from: string; to: string }>;
@@ -178,6 +180,10 @@ export function PlanDiagram({
 	/** Caps the rendered width at extent × scale — the chat-font-size zoom
 	 *  ceiling for the in-chat block (fills the column, never past prose). */
 	textCapScale?: number;
+	/** Renders at the viewBox width in px (1 svg unit = 1 px at zoom 1) —
+	 *  the popup's transform math depends on it; w-full inside the popup's
+	 *  shrink-to-fit wrapper resolved to the popup width and broke fit. */
+	naturalSize?: boolean;
 }) {
 	const layout = useMemo(() => blockLayout(nodes, edges), [nodes, edges]);
 	// Pad only the full-extent render — the plan window's override viewBox is
@@ -190,8 +196,14 @@ export function PlanDiagram({
 	return (
 		<svg
 			viewBox={viewBoxOverride ?? `${-pad} ${-pad} ${vbW} ${vbH}`}
-			className={`block h-auto w-full${textCapScale ? " mx-auto" : ""}`}
-			style={textCapScale ? { maxWidth: `${Math.round(vbW * textCapScale * 100) / 100}px` } : undefined}
+			className={`block h-auto${naturalSize ? "" : " w-full"}${textCapScale ? " mx-auto" : ""}`}
+			style={
+				textCapScale
+					? { maxWidth: `${Math.round(vbW * textCapScale * 100) / 100}px` }
+					: naturalSize
+						? { width: `${vbW}px` }
+						: undefined
+			}
 			role="img"
 			aria-label="Plan diagram"
 		>
@@ -318,9 +330,11 @@ export function latestTree(messages: readonly PopupMessage[]): PlanTree | null {
 	return null;
 }
 
-/** Zoom bounds: never below fit (fully zoomed out IS the fit), never above 2×. */
+/** Zoom bounds: never below fit (fully zoomed out IS the fit — the whole
+ *  graph visible, whichever axis binds — owner, plan-graph round 2), never
+ *  above 2×. The old 0.15 floor could sit ABOVE a true fit for wide graphs
+ *  and break that rule; the fit itself is the floor now. */
 const ZOOM_MAX = 2;
-const ZOOM_FLOOR = 0.15;
 const FIT_PAD = 16;
 const FIT_ZOOM_MAX = 1.5;
 
@@ -332,10 +346,9 @@ interface GraphView {
 
 function fitZoomFor(box: { w: number; h: number }, viewport: { w: number; h: number }): number {
 	if (!viewport.w || !viewport.h || box.w === 0) return 1;
-	return Math.max(
-		ZOOM_FLOOR,
-		Math.min((viewport.w - FIT_PAD) / box.w, (viewport.h - FIT_PAD) / box.h, FIT_ZOOM_MAX),
-	);
+	// No artificial floor: a wide graph must fit even below 0.15× — the
+	// epsilon only guards degenerate viewports.
+	return Math.max(0.02, Math.min((viewport.w - FIT_PAD) / box.w, (viewport.h - FIT_PAD) / box.h, FIT_ZOOM_MAX));
 }
 
 function fitGraphView(box: { w: number; h: number }, viewport: { w: number; h: number }, zoom: number): GraphView {
@@ -391,7 +404,12 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	}, []);
 
 	const layout = useMemo(() => (tree ? blockLayout(tree.nodes, tree.edges) : null), [tree]);
-	const box = useMemo(() => (layout ? { w: layout.width, h: layout.height } : { w: 0, h: 0 }), [layout]);
+	// The fit box is the PADDED ink box — the diagram renders with GRAPH_PAD
+	// so strokes/glow never clip, and the fit must account for it.
+	const box = useMemo(
+		() => (layout ? { w: layout.width + 2 * GRAPH_PAD, h: layout.height + 2 * GRAPH_PAD } : { w: 0, h: 0 }),
+		[layout],
+	);
 	const fitZoom = useMemo(() => fitZoomFor(box, size), [box, size]);
 
 	const [view, setView] = useState<GraphView>({ x: 0, y: 0, zoom: 1 });
@@ -507,6 +525,8 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 								statusOf={statusOf}
 								glowId={statuses?.current ?? null}
 								markerId={markerId}
+								pad={GRAPH_PAD}
+								naturalSize
 							/>
 						</div>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-2">
