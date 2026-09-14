@@ -61,18 +61,20 @@ export function StatsBar({
 
 	return (
 		<div
-			ref={barRef}
 			data-testid="stats-bar"
 			// pointer-events-auto: the sticky composer wrapper is pointer-events-none
 			// (so its transparent gradient area never blocks scrolling) — this row
 			// must re-enable events or every control on it is dead (the model-
 			// control wave caught this live: buttons rendered, clicks never landed).
-			className="pointer-events-auto relative flex items-center justify-between gap-3 px-3 pt-1.5 text-xs text-muted-foreground"
+			className="pointer-events-auto relative flex items-center justify-between gap-3 px-3 pt-4 text-xs text-muted-foreground"
 		>
 			{/* The summary button + its popover: the popover anchors to this
 			    wrapper, CENTERED over the button itself (owner, stats round 2)
-			    — not over the whole bar row, which made it line up oddly. */}
-			<div className="relative">
+			    — not over the whole bar row, which made it line up oddly. The
+			    outside-close ref anchors HERE too (owner, round 3): on the whole
+			    bar it wrapped the model control, so clicking model/thinking never
+			    counted as outside — the asymmetry the owner observed. */}
+			<div ref={barRef} className="relative">
 				<button
 					type="button"
 					onClick={() => setOpen((o) => !o)}
