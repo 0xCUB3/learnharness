@@ -32,6 +32,8 @@ import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
 
 export const NODE_W = 160;
 export const NODE_H = 44;
+/** Baseline-to-baseline distance of node titles. */
+export const LINE_H = 13;
 export const GAP_X = 24;
 export const GAP_Y = 48;
 
@@ -95,36 +97,48 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 	for (const l of layers) maxWidth = Math.max(maxWidth, rowWidth(l));
 	const x = new Map<string, number>();
 	const y = new Map<string, number>();
-	layers.forEach((l, d) => {
+	// Per-node heights: boxes grow to show the FULL wrapped content —
+	// nothing is ever truncated (owner, plan-graph round 7).
+	const nodeH = new Map<string, number>();
+	let cursor = 0;
+	layers.forEach((l) => {
+		// The row's height = its tallest node.
+		let rowH = NODE_H;
+		for (const n of l) {
+			const h = NODE_H + Math.max(0, wrapTitle(n.title).length - 2) * LINE_H;
+			nodeH.set(n.id, h);
+			rowH = Math.max(rowH, h);
+		}
 		const start = (maxWidth - rowWidth(l)) / 2;
 		l.forEach((n, i) => {
 			x.set(n.id, start + i * (NODE_W + GAP_X));
-			y.set(n.id, d * (NODE_H + GAP_Y));
+			y.set(n.id, cursor);
 		});
+		cursor += rowH + GAP_Y;
 	});
-	const height = layers.length * NODE_H + Math.max(0, layers.length - 1) * GAP_Y;
-	return { x, y, width: maxWidth, height };
+	const height = layers.length > 0 ? cursor - GAP_Y : 0;
+	return { x, y, nodeH, width: maxWidth, height };
 }
 
-/** Greedy word wrap to ≤ maxLines lines of ≤ maxChars; overflow ends in an
- *  ellipsis, a single oversized word is hard-clamped. Pure. */
-export function wrapTitle(title: string, maxChars = 20, maxLines = 2): string[] {
+/** Greedy word wrap to lines of ≤ maxChars — NOTHING is dropped: the
+ *  node's box grows to fit every line (owner: show the full content of
+ *  each node). A single oversized word is hard-chunked across lines at
+ *  maxChars. Pure. */
+export function wrapTitle(title: string, maxChars = 20): string[] {
 	const words = title.trim().split(/\s+/).filter(Boolean);
 	if (words.length === 0) return [""];
-	const lines: string[] = [];
+	// Oversized words can never fit a line — chunk them so no content is lost.
+	const atoms: string[] = [];
 	for (const w of words) {
+		for (let i = 0; i < w.length; i += maxChars) atoms.push(w.slice(i, i + maxChars));
+	}
+	const lines: string[] = [];
+	for (const a of atoms) {
 		const last = lines[lines.length - 1];
-		const fits = last !== undefined && last.length + 1 + w.length <= maxChars;
-		if (fits) {
-			lines[lines.length - 1] = `${last} ${w}`;
-		} else if (lines.length < maxLines) {
-			lines.push(w.length > maxChars ? `${w.slice(0, maxChars - 1)}…` : w);
+		if (last !== undefined && last.length + 1 + a.length <= maxChars) {
+			lines[lines.length - 1] = `${last} ${a}`;
 		} else {
-			const lastLine = lines[lines.length - 1];
-			if (lastLine !== undefined && !lastLine.endsWith("…")) {
-				lines[lines.length - 1] =
-					lastLine.length >= maxChars ? `${lastLine.slice(0, maxChars - 1)}…` : `${lastLine}…`;
-			}
+			lines.push(a);
 		}
 	}
 	return lines;
@@ -284,7 +298,7 @@ export function PlanDiagram({
 			</defs>
 			{edges.map((e) => {
 				const x1 = (layout.x.get(e.from) ?? 0) + NODE_W / 2;
-				const y1 = (layout.y.get(e.from) ?? 0) + NODE_H;
+				const y1 = (layout.y.get(e.from) ?? 0) + (layout.nodeH.get(e.from) ?? NODE_H);
 				const x2 = (layout.x.get(e.to) ?? 0) + NODE_W / 2;
 				// Shortened by the tip overhang so the head's TIP lands on the
 				// node border while the line stops at the notch mouth.
@@ -307,6 +321,9 @@ export function PlanDiagram({
 				const status = statusOf(n.id);
 				const glow = n.id === glowId && !monochrome;
 				const lines = wrapTitle(n.title);
+				// The box grows with its wrapped content; text centers in it.
+				const h = layout.nodeH.get(n.id) ?? NODE_H;
+				const y0 = (h - lines.length * LINE_H) / 2 + 10;
 				return (
 					<g
 						key={n.id}
@@ -321,7 +338,7 @@ export function PlanDiagram({
 								x={-GLOW_MARGIN}
 								y={-GLOW_MARGIN}
 								width={NODE_W + 2 * GLOW_MARGIN}
-								height={NODE_H + 2 * GLOW_MARGIN}
+								height={h + 2 * GLOW_MARGIN}
 								className="fill-yellow-400/25"
 								filter={`url(#${markerId}-glow)`}
 							/>
@@ -329,7 +346,7 @@ export function PlanDiagram({
 						{/* Rectangular — no corner rounding (owner). */}
 						<rect
 							width={NODE_W}
-							height={NODE_H}
+							height={h}
 							className={monochrome ? MONO_BOX : BOX[status]}
 							strokeWidth={1.5}
 						/>
@@ -337,7 +354,7 @@ export function PlanDiagram({
 							<text
 								key={i}
 								x={12}
-								y={lines.length === 1 ? 27 : 18 + i * 13}
+								y={y0 + i * LINE_H}
 								className={monochrome ? MONO_TEXT : TEXT[status]}
 							>
 								{line}
@@ -510,7 +527,12 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	useEffect(() => {
 		if (userAdjustedRef.current || !size.w || !size.h) return;
 		setView(fitGraphView(box, size, fitZoom));
-		setSettled(true);
+		// Enable the transition only AFTER the fit has painted: flipping
+		// settled in the SAME commit lets the browser animate from the
+		// initial top-left zoom:1 state — the fly-in the owner keeps
+		// seeing (round 4's gate wasn't enough; round 7 fix).
+		const raf = requestAnimationFrame(() => setSettled(true));
+		return () => cancelAnimationFrame(raf);
 	}, [fitZoom, size, box]);
 
 	useEffect(() => {

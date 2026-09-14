@@ -52,7 +52,7 @@ export function planWindowViewBox(tree: PlanTree, current: string | null): strin
 			: Math.max(layout.width, 1) / 2;
 	const cy =
 		focusId !== null
-			? (layout.y.get(focusId) ?? 0) + NODE_H / 2
+			? (layout.y.get(focusId) ?? 0) + (layout.nodeH.get(focusId) ?? NODE_H) / 2
 			: Math.max(layout.height, 1) / 2;
 	const clamp = (c: number, extent: number, view: number) =>
 		extent <= view ? extent / 2 : Math.min(Math.max(c, view / 2), extent - view / 2);

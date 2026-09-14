@@ -58,10 +58,14 @@ describe("plan block layout (pure)", () => {
 		assert.ok(layout.x.get("x") === 0 && layout.x.get("y") === NODE_W + GAP_X);
 	});
 
-	it("wrapTitle wraps greedily and ellipsizes overflow", () => {
+	it("wrapTitle wraps greedily and NEVER drops content (boxes grow instead)", () => {
 		assert.deepEqual(wrapTitle("Chain rule intuition"), ["Chain rule intuition"]); // exactly 20 chars — fits one line
 		assert.deepEqual(wrapTitle("Chain rule intuition and fluency"), ["Chain rule intuition", "and fluency"]);
-		assert.deepEqual(wrapTitle("supercalifragilisticexpialidocious word"), ["supercalifragilisti…", "word"]); // oversized word hard-clamped, overflow dropped
+		// Oversized word hard-chunked, nothing lost (owner, round 7).
+		assert.deepEqual(wrapTitle("supercalifragilisticexpialidocious word"), [
+			"supercalifragilistic",
+			"expialidocious word",
+		]);
 		assert.deepEqual(wrapTitle("supercalifragilistic"), ["supercalifragilistic"]); // exactly maxChars — fits
 	});
 });
