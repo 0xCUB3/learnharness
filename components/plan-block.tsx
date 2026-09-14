@@ -129,6 +129,17 @@ export function wrapTitle(title: string, maxChars = 20, maxLines = 2): string[] 
 	return lines;
 }
 
+// ─── Geometry caps (owner, plan-graph refinement round 1) ─────────────────────
+
+/** SVG-unit padding around the layout extent: strokes are centered on the
+ *  geometry (half bleeds outside the extent) and the glow halo reaches −4 —
+ *  without this pad the outermost node borders clip at the svg edge. */
+export const GRAPH_PAD = 8;
+/** Node titles render at text-xs (12.5px) in svg units. The in-chat block
+ *  scales up to fill the column but NEVER past the chat prose size
+ *  (--lh-prose-size, 16.5px) — the width cap that makes that hold. */
+export const TEXT_CAP_SCALE = 16.5 / 12.5;
+
 // ─── Status styling (the retired panel's color language, unchanged) ──────────
 
 const BOX: Record<PlanNodeStatus, string> = {
@@ -151,6 +162,8 @@ export function PlanDiagram({
 	glowId,
 	markerId,
 	viewBoxOverride,
+	pad: padUnits,
+	textCapScale,
 }: {
 	nodes: readonly LayoutNode[];
 	edges: ReadonlyArray<{ from: string; to: string }>;
@@ -159,12 +172,26 @@ export function PlanDiagram({
 	markerId: string;
 	/** A windowed viewBox (the plan window) instead of the full extent. */
 	viewBoxOverride?: string;
+	/** Pads the viewBox by this many svg units so centered strokes and the
+	 *  glow halo never clip at the extent edges (full-extent renders only). */
+	pad?: number;
+	/** Caps the rendered width at extent × scale — the chat-font-size zoom
+	 *  ceiling for the in-chat block (fills the column, never past prose). */
+	textCapScale?: number;
 }) {
 	const layout = useMemo(() => blockLayout(nodes, edges), [nodes, edges]);
+	// Pad only the full-extent render — the plan window's override viewBox is
+	// a deliberate viewport crop, and the popup keeps its own fit margins.
+	const pad = viewBoxOverride ? 0 : (padUnits ?? 0);
+	const w = Math.max(layout.width, 1);
+	const h = Math.max(layout.height, 1);
+	const vbW = w + 2 * pad;
+	const vbH = h + 2 * pad;
 	return (
 		<svg
-			viewBox={viewBoxOverride ?? `0 0 ${Math.max(layout.width, 1)} ${Math.max(layout.height, 1)}`}
-			className="block h-auto w-full"
+			viewBox={viewBoxOverride ?? `${-pad} ${-pad} ${vbW} ${vbH}`}
+			className={`block h-auto w-full${textCapScale ? " mx-auto" : ""}`}
+			style={textCapScale ? { maxWidth: `${Math.round(vbW * textCapScale * 100) / 100}px` } : undefined}
 			role="img"
 			aria-label="Plan diagram"
 		>
@@ -254,7 +281,17 @@ export function PlanBlock({ data, onOpen }: { data: PlanBlockData; onOpen: () =>
 			title="Open the full plan"
 			className="block w-full text-left"
 		>
-			<PlanDiagram nodes={data.nodes} edges={data.edges} statusOf={statusOf} markerId={markerId} />
+			{/* pad keeps centered strokes + the glow halo inside the frame; the
+		    cap keeps node text at or below chat prose size while still filling
+		    the column when it can (owner, plan-graph refinement round 1). */}
+		<PlanDiagram
+			nodes={data.nodes}
+			edges={data.edges}
+			statusOf={statusOf}
+			markerId={markerId}
+			pad={GRAPH_PAD}
+			textCapScale={TEXT_CAP_SCALE}
+		/>
 		</button>
 	);
 }

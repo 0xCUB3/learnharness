@@ -82,11 +82,14 @@ describe("plan block render", () => {
 		assert.match(html, /data-testid="plan-block-full"/);
 		// Borderless: the wrapper carries no border/rounded chrome.
 		assert.ok(!/data-testid="plan-block-full"[^>]*border/.test(html), "no wrapping chrome");
-		// Fills the column: the svg is w-full with the layout extent as viewBox
-		// (leftmost/rightmost nodes hug the edges), height natural.
-		assert.match(html, /<svg[^>]*class="block h-auto w-full"/);
-		// Two stacked nodes: 2*NODE_H + GAP_Y = 136 natural height, width = one node column.
-		assert.match(html, /viewBox="0 0 160 136"/);
+		// Fills the column UP TO the chat-font cap: the svg is w-full +
+		// mx-auto with maxWidth = extent × TEXT_CAP_SCALE, so node text never
+		// renders past the 16.5px prose size (owner, plan-graph round 1).
+		assert.match(html, /<svg[^>]*class="block h-auto w-full mx-auto"/);
+		assert.match(html, /max-width:232\.32px/); // (160+16) × 1.32
+		// Two stacked nodes: 2*NODE_H + GAP_Y = 136 extent + GRAPH_PAD on
+		// every side (strokes/glow never clip at the edges).
+		assert.match(html, /viewBox="-8 -8 176 152"/);
 		// Snapshot statuses render as carried.
 		assert.match(html, /data-testid="plan-node-a" data-status="visited"/);
 		assert.match(html, /data-testid="plan-node-b" data-status="upcoming"/);
