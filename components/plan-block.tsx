@@ -136,6 +136,14 @@ export function wrapTitle(title: string, maxChars = 20, maxLines = 2): string[] 
  *  geometry (half bleeds outside the extent) and the glow halo reaches −4 —
  *  without this pad the outermost node borders clip at the svg edge. */
 export const GRAPH_PAD = 8;
+/** The current node's yellow glow: a fill blurred so it bleeds over the
+ *  node's edges (owner). A Gaussian's visible spread is ≈3σ, so the glow
+ *  reaches GLOW_MARGIN + 3·GLOW_BLUR past the node — any surface that
+ *  shows the glow must pad its viewBox by GLOW_REACH or the blur clips
+ *  at the frame edge (owner: extend the container padding to fit it). */
+export const GLOW_MARGIN = 8;
+export const GLOW_BLUR = 5;
+export const GLOW_REACH = GLOW_MARGIN + 3 * GLOW_BLUR;
 /** Node titles render at text-xs (12.5px) in svg units. The in-chat block
  *  scales up to fill the column but NEVER past the chat prose size
  *  (--lh-prose-size, 16.5px) — the width cap that makes that hold. */
@@ -253,11 +261,25 @@ export function PlanDiagram({
 					    line ends AT the notch — the tip beyond it is solid fill. */}
 					<path d={ARROW_HEAD} className="fill-white" />
 				</marker>
+				{/* Same head, grayed — arrows into not-yet-visited nodes are
+				    grayed out like the nodes themselves (owner, round 6). */}
+				<marker
+					id={`${markerId}-dim`}
+					viewBox="0 0 50.2 104"
+					refX={27.2}
+					refY={52}
+					markerWidth={HEAD_W}
+					markerHeight={HEAD_H}
+					markerUnits="userSpaceOnUse"
+					orient="auto"
+				>
+					<path d={ARROW_HEAD} className="fill-border" />
+				</marker>
 				{/* The current node's highlight: a faint yellow fill BLURRED so it
 				    bleeds out over the node's edges (owner). Generous filter region
 				    so the blur never clips at its own bounds. */}
 				<filter id={`${markerId}-glow`} x="-60%" y="-60%" width="220%" height="220%">
-					<feGaussianBlur stdDeviation={7} />
+					<feGaussianBlur stdDeviation={GLOW_BLUR} />
 				</filter>
 			</defs>
 			{edges.map((e) => {
@@ -268,13 +290,16 @@ export function PlanDiagram({
 				// node border while the line stops at the notch mouth.
 				const y2 = (layout.y.get(e.to) ?? 0) - HEAD_TIP_OVERHANG;
 				const mid = (y1 + y2) / 2;
+				// An arrow into a not-yet-visited node is grayed out like the
+				// node (owner, round 6); the in-chat block stays all-white.
+				const dim = !monochrome && statusOf(e.to) === "upcoming";
 				return (
 					<path
 						key={`${e.from}->${e.to}`}
 						d={`M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`}
-						className="fill-none stroke-white"
+						className={dim ? "fill-none stroke-border" : "fill-none stroke-white"}
 						strokeWidth={1.5}
-						markerEnd={`url(#${markerId})`}
+						markerEnd={`url(#${markerId}${dim ? "-dim" : ""})`}
 					/>
 				);
 			})}
@@ -291,13 +316,13 @@ export function PlanDiagram({
 					>
 						{glow && (
 							// The current node's highlight: faint yellow, blurred so it
-							// bleeds over the edges (owner, plan-graph round 4).
+							// bleeds over the edges — static, no pulse (owner, round 6).
 							<rect
-								x={-10}
-								y={-10}
-								width={NODE_W + 20}
-								height={NODE_H + 20}
-								className="fill-yellow-400/25 animate-pulse"
+								x={-GLOW_MARGIN}
+								y={-GLOW_MARGIN}
+								width={NODE_W + 2 * GLOW_MARGIN}
+								height={NODE_H + 2 * GLOW_MARGIN}
+								className="fill-yellow-400/25"
 								filter={`url(#${markerId}-glow)`}
 							/>
 						)}
@@ -391,6 +416,9 @@ export function latestTree(messages: readonly PopupMessage[]): PlanTree | null {
  *  wide graphs; the fit itself is the floor now. */
 const ZOOM_MAX = 4;
 const FIT_PAD = 16;
+/** The popup shows the glow, so its frame pads by the glow's reach —
+ *  the in-chat block (monochrome, no glow) stays tight at GRAPH_PAD. */
+const POPUP_PAD = GLOW_REACH;
 const FIT_ZOOM_MAX = 1.5;
 
 interface GraphView {
@@ -459,10 +487,11 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	}, []);
 
 	const layout = useMemo(() => (tree ? blockLayout(tree.nodes, tree.edges) : null), [tree]);
-	// The fit box is the PADDED ink box — the diagram renders with GRAPH_PAD
-	// so strokes/glow never clip, and the fit must account for it.
+	// The fit box is the PADDED ink box — the diagram renders with POPUP_PAD
+	// (= the glow's reach) so the blurred glow never clips at the frame, and
+	// the fit must account for that padding.
 	const box = useMemo(
-		() => (layout ? { w: layout.width + 2 * GRAPH_PAD, h: layout.height + 2 * GRAPH_PAD } : { w: 0, h: 0 }),
+		() => (layout ? { w: layout.width + 2 * POPUP_PAD, h: layout.height + 2 * POPUP_PAD } : { w: 0, h: 0 }),
 		[layout],
 	);
 	const fitZoom = useMemo(() => fitZoomFor(box, size), [box, size]);
@@ -595,7 +624,7 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 								statusOf={statusOf}
 								glowId={statuses?.current ?? null}
 								markerId={markerId}
-								pad={GRAPH_PAD}
+								pad={POPUP_PAD}
 								naturalSize
 							/>
 						</div>
