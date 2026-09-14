@@ -141,6 +141,25 @@ export const GRAPH_PAD = 8;
  *  (--lh-prose-size, 16.5px) — the width cap that makes that hold. */
 export const TEXT_CAP_SCALE = 16.5 / 12.5;
 
+// ─── The owner's arrowhead (plan-graph round 5) ──────────────────────────────
+
+/** Baked from arrowhead_1.svg (the CM/MJX long-arrow head), transform chain
+ *  collapsed: viewBox 0 0 50.2 104, tip at (50.2, 52), notch mouth at
+ *  x 27.2 with a 9.6-tall opening — at full height 104 the tail opening
+ *  is ≈10, per the owner's spec. Solid white fill, no padding. */
+export const ARROW_HEAD = "M48,55.2C49.4,54.6 50.2,53.4 50.2,52C50.2,50.6 49.4,49.4 48,48.8C38.2,45.6 29.2,38.8 21,28.4C15.2,21.4 11.4,13.2 9.6,3.8C9,1.2 7.4,0 4.8,0C1.6,0 0,1.6 0,5L0.2,5.6C3.6,23 12.6,36.8 27.2,47.2L27.2,56.8C12.6,67.2 3.6,81 0.2,98.4L0,99C0,102.4 1.6,104 4.8,104C7.4,104 9,102.8 9.6,100.2C11.4,90.8 15.2,82.6 21,75.6C29.2,65.2 38.2,58.4 48,55.2Z";
+/** Head height 16: the tail opening (9.6/104 of height) then tucks the
+ *  1.5-wide line flush — the LaTeX proportion. The owner's rule: keep the
+ *  current line width; size the head from the 104→10 ratio. */
+const HEAD_H = 16;
+const HEAD_SCALE = HEAD_H / 104;
+const HEAD_W = 50.2 * HEAD_SCALE;
+/** The drawn line terminates at the notch mouth (refX 27.2) — it never
+ *  reaches the narrow tip, where it would show through (owner). The tip
+ *  overhangs the line's end by this much, so edges shorten by it to land
+ *  the tip exactly on the target node's border. */
+const HEAD_TIP_OVERHANG = (50.2 - 27.2) * HEAD_SCALE;
+
 // ─── Status styling (the retired panel's color language, unchanged) ──────────
 
 // The simple look (owner, plan-graph round 4): rectangular boxes, white
@@ -222,16 +241,17 @@ export function PlanDiagram({
 			<defs>
 				<marker
 					id={markerId}
-					viewBox="0 0 8 8"
-					refX="7"
-					refY="4"
-					markerWidth="6"
-					markerHeight="6"
-					orient="auto-start-reverse"
+					viewBox="0 0 50.2 104"
+					refX={27.2}
+					refY={52}
+					markerWidth={HEAD_W}
+					markerHeight={HEAD_H}
+					markerUnits="userSpaceOnUse"
+					orient="auto"
 				>
-					{/* Interim head — swapped for the owner's arrowhead SVG when it
-					    lands (right-pointing, tight viewBox, tip at the right edge). */}
-					<path d="M0,1 L7,4 L0,7 z" className="fill-white" />
+					{/* The owner's arrowhead. The mouth (x 27.2) sits at refX so the
+					    line ends AT the notch — the tip beyond it is solid fill. */}
+					<path d={ARROW_HEAD} className="fill-white" />
 				</marker>
 				{/* The current node's highlight: a faint yellow fill BLURRED so it
 				    bleeds out over the node's edges (owner). Generous filter region
@@ -244,7 +264,9 @@ export function PlanDiagram({
 				const x1 = (layout.x.get(e.from) ?? 0) + NODE_W / 2;
 				const y1 = (layout.y.get(e.from) ?? 0) + NODE_H;
 				const x2 = (layout.x.get(e.to) ?? 0) + NODE_W / 2;
-				const y2 = layout.y.get(e.to) ?? 0;
+				// Shortened by the tip overhang so the head's TIP lands on the
+				// node border while the line stops at the notch mouth.
+				const y2 = (layout.y.get(e.to) ?? 0) - HEAD_TIP_OVERHANG;
 				const mid = (y1 + y2) / 2;
 				return (
 					<path
