@@ -6,6 +6,7 @@ import {
 	PlanPopup,
 	blockLayout,
 	topoFor,
+	edgePathD,
 	wrapTitle,
 	GAP_X,
 	NODE_H,
@@ -56,6 +57,16 @@ describe("plan block layout (pure)", () => {
 		// Root centered over its two children: (2*W+GAP - W)/2
 		assert.equal(layout.x.get("r"), (2 * NODE_W + GAP_X - NODE_W) / 2);
 		assert.ok(layout.x.get("x") === 0 && layout.x.get("y") === NODE_W + GAP_X);
+	});
+
+	it("edgePathD draws dagre's route through curveBasis — mouth pulled back from the border", () => {
+		// Straight 3-point route (source border → mid → target border): the
+		// basis curve starts exactly at the border point and the END pulls
+		// back by HEAD_TIP_OVERHANG so the arrowhead's TIP lands on the
+		// border while its mouth sits at the path's end (owner, round 11).
+		const d = edgePathD([{ x: 80, y: 44 }, { x: 80, y: 68 }, { x: 80, y: 92 }]);
+		assert.ok(d.startsWith("M80,44"), "starts at the source border point");
+		assert.ok(d.endsWith("L80,88.462"), "ends pulled back by the tip overhang");
 	});
 
 	it("wrapTitle wraps greedily and NEVER drops content (boxes grow instead)", () => {

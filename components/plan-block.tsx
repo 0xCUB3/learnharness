@@ -9,6 +9,9 @@ import { cn } from "@/lib/utils";
 // itself imports it.
 import { graphlib } from "dagre-d3-es";
 import { layout as dagreLayout } from "dagre-d3-es/src/dagre/index.js";
+// Mermaid's default flowchart edge curve: dagre's waypoints drawn through
+// d3's curveBasis (the exact recipe dagre-d3's own renderer uses).
+import { curveBasis, line } from "d3-shape";
 import type { PlanBlockData, PlanNodeStatus, PlanTree } from "@/src/core";
 import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
 
@@ -104,8 +107,14 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 	const x = new Map<string, number>();
 	const y = new Map<string, number>();
 	const nodeH = new Map<string, number>();
-	if (nodes.length === 0) return { x, y, nodeH, width: 0, height: 0 };
+	/** Dagre's per-edge waypoint routes — each starts/ends at the node
+	 *  border intersection on whatever SIDE the edge leaves/enters
+	 *  (round 11: the mermaid line drawing, no more fixed bottom-center →
+	 *  top-center). Keyed `${from}->${to}`. */
+	const edgePts = new Map<string, Array<{ x: number; y: number }>>();
+	if (nodes.length === 0) return { x, y, nodeH, edgePts, width: 0, height: 0 };
 	const ids = new Set(nodes.map((n) => n.id));
+	const routed: Array<{ from: string; to: string }> = [];
 	const g = new graphlib.Graph({ compound: false, multigraph: true });
 	g.setGraph({ rankdir: "TB", nodesep: GAP_X, ranksep: GAP_Y, marginx: 0, marginy: 0 });
 	for (const n of nodes) {
@@ -114,7 +123,10 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 		g.setNode(n.id, { width: NODE_W, height: h });
 	}
 	for (const e of edges) {
-		if (ids.has(e.from) && ids.has(e.to)) g.setEdge(e.from, e.to, { label: "", width: 0, height: 0 });
+		if (ids.has(e.from) && ids.has(e.to)) {
+			g.setEdge(e.from, e.to, { label: "", width: 0, height: 0 });
+			routed.push(e);
+		}
 	}
 	// (the d.ts marks opts required; the runtime ignores it)
 	dagreLayout(g, undefined);
@@ -126,10 +138,15 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 			y.set(n.id, pos.y - h / 2);
 		}
 	}
+	for (const e of routed) {
+		const pts: Array<{ x: number; y: number }> | undefined = g.edge(e.from, e.to)?.points;
+		if (pts) edgePts.set(`${e.from}->${e.to}`, pts.map((pt) => ({ x: pt.x, y: pt.y })));
+	}
 	return {
 		x,
 		y,
 		nodeH,
+		edgePts,
 		width: Math.max(g.graph().width ?? 0, 1),
 		height: Math.max(g.graph().height ?? 0, 1),
 	};
@@ -196,6 +213,30 @@ const HEAD_W = 50.2 * HEAD_SCALE;
  *  overhangs the line's end by this much, so edges shorten by it to land
  *  the tip exactly on the target node's border. */
 const HEAD_TIP_OVERHANG = (50.2 - 27.2) * HEAD_SCALE;
+const edgeLine = line<{ x: number; y: number }>()
+	.x((p) => p.x)
+	.y((p) => p.y)
+	.curve(curveBasis);
+
+/** The edge path — mermaid's own line drawing: dagre's border-intersected
+ *  waypoints through d3's curveBasis (mermaid's default flowchart curve —
+ *  the same recipe dagre-d3's renderer uses). The final point pulls back
+ *  along the last segment by the tip overhang so the head's TIP lands on
+ *  the target border while the mouth sits at the path's end. Pure,
+ *  exported for tests. */
+export function edgePathD(points: Array<{ x: number; y: number }>): string {
+	const pts = points.map((p) => ({ ...p }));
+	if (pts.length >= 2) {
+		const last = pts[pts.length - 1]!;
+		const prev = pts[pts.length - 2]!;
+		const dx = last.x - prev.x;
+		const dy = last.y - prev.y;
+		const len = Math.hypot(dx, dy) || 1;
+		const t = Math.min(HEAD_TIP_OVERHANG / len, 0.5);
+		pts[pts.length - 1] = { x: last.x - dx * t, y: last.y - dy * t };
+	}
+	return edgeLine(pts) ?? "";
+}
 
 // ─── Status styling (the retired panel's color language, unchanged) ──────────
 
@@ -315,20 +356,19 @@ export function PlanDiagram({
 				</filter>
 			</defs>
 			{edges.map((e) => {
-				const x1 = (layout.x.get(e.from) ?? 0) + NODE_W / 2;
-				const y1 = (layout.y.get(e.from) ?? 0) + (layout.nodeH.get(e.from) ?? NODE_H);
-				const x2 = (layout.x.get(e.to) ?? 0) + NODE_W / 2;
-				// Shortened by the tip overhang so the head's TIP lands on the
-				// node border while the line stops at the notch mouth.
-				const y2 = (layout.y.get(e.to) ?? 0) - HEAD_TIP_OVERHANG;
-				const mid = (y1 + y2) / 2;
+				// Dagre's route for this edge: border-intersected waypoints —
+				// the line leaves/enters nodes on whatever side dagre chose
+				// (mermaid's drawing, owner round 11). Unroutable edges
+				// (dangling endpoints) draw nothing.
+				const pts = layout.edgePts.get(`${e.from}->${e.to}`);
+				if (!pts) return null;
 				// An arrow into a not-yet-visited node is grayed out like the
 				// node (owner, round 6); the in-chat block stays all-white.
 				const dim = !monochrome && statusOf(e.to) === "upcoming";
 				return (
 					<path
 						key={`${e.from}->${e.to}`}
-						d={`M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`}
+						d={edgePathD(pts)}
 						className={dim ? "fill-none stroke-border" : "fill-none stroke-white"}
 						strokeWidth={1.5}
 						markerEnd={`url(#${markerId}${dim ? "-dim" : ""})`}
