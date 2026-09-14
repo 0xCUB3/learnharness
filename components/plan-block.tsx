@@ -358,6 +358,7 @@ export function PlanDiagram({
 	textCapScale,
 	naturalSize,
 	monochrome,
+	fill,
 }: {
 	nodes: readonly LayoutNode[];
 	edges: ReadonlyArray<{ from: string; to: string }>;
@@ -379,6 +380,11 @@ export function PlanDiagram({
 	/** The in-chat block's mode: every node white (fill-none, white stroke
 	 *  and text, no glow) — statuses never show in the transcript (owner). */
 	monochrome?: boolean;
+	/** Meet-fits the diagram inside a fixed box (h-full w-full — the svg's
+	 *  default preserveAspectRatio centers + contains the viewBox): the
+	 *  dock band's marginalia mode, where the diagram must fit BOTH the
+	 *  flank's width and the band's height rather than run width-first. */
+	fill?: boolean;
 }) {
 	const layout = useMemo(() => blockLayout(nodes, edges), [nodes, edges]);
 	// Pad only the full-extent render — the plan window's override viewBox is
@@ -391,7 +397,7 @@ export function PlanDiagram({
 	return (
 		<svg
 			viewBox={viewBoxOverride ?? `${-pad} ${-pad} ${vbW} ${vbH}`}
-			className={`block h-auto${naturalSize ? "" : " w-full"}${textCapScale ? " mx-auto" : ""}`}
+			className={`block ${fill ? "h-full w-full" : `h-auto${naturalSize ? "" : " w-full"}`}${textCapScale ? " mx-auto" : ""}`}
 			style={
 				textCapScale
 					? { maxWidth: `${Math.round(vbW * textCapScale * 100) / 100}px` }

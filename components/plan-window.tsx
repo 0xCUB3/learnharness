@@ -1,102 +1,54 @@
 "use client";
 
 import { useId, useMemo } from "react";
-import { WaypointsIcon } from "lucide-react";
-import type { PlanTree } from "@/src/core";
 import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
 import {
 	PlanDiagram,
-	blockLayout,
+	GRAPH_PAD,
 	latestTree,
-	NODE_H,
-	NODE_W,
+	TEXT_CAP_SCALE,
 	type PopupMessage,
 } from "@/components/plan-block";
 
 /**
- * THE PLAN WINDOW (docs/probe-teach-split.md §6): the plan's persistent,
- * ambient presence — the successor of the injected plan blocks. Always on
- * once a tree exists, it shows a ZOOMED-IN window on the CURRENT node and
- * moves by itself as the lesson advances (auto-pan: the viewBox re-centers
- * on the latest tagged check — no animation machinery, the window just
- * follows the derived position). Click opens the full-DAG popup.
+ * THE PLAN MARGINALIA: the plan's ambient presence in the session view —
+ * the successor of the old fixed corner card (the plan window, retired
+ * with the dock-band placement round). NO container: the bare diagram,
+ * meet-fitted into the dock band's right flank — the wrapper (DockOverlay)
+ * positions and fades it — so it reads as marginalia on the lesson's
+ * page, not a floating widget. Live by construction: statuses derive from
+ * the transcript on every render (derivePlanStatuses — calls, not
+ * results), so the glow moves the moment a tagged check streams in.
  *
- * Live by construction: statuses derive from the transcript on every
- * render (derivePlanStatuses — calls, not results), so the window moves
- * the moment a tagged check call streams in or a record adoption lands.
- * Hidden on narrow viewports (the dock owns that corner's collapse
- * pattern); the learner's visual polish pass (colors, motion) comes later.
+ * Visibile only while a question owns the dock band (the reserved tail's
+ * height is the diagram's canvas — quiz open, tall band, full plan);
+ * folding the dock fades + blurs the whole thing out of existence. The
+ * top-bar plan chip carries access at every width; the popup is the study
+ * view. The viewBox pad clears the current node's blurred yellow halo
+ * (GLOW_REACH) at the extent edges.
  */
 
-/** Window dimensions in SVG units — 2:1, ~2¼ node widths: the current
- *  node plus its immediate neighborhood. Aspect-matched to the card. */
-const VIEW_W = 360;
-const VIEW_H = 180;
+const MARGIN_PAD = GRAPH_PAD + 16;
 
-/**
- * The windowed viewBox, centered on the current node — pure (exported for
- * tests). Falls back to the FIRST node (authoring order — the lesson's
- * start) while no check has been tagged. A layout smaller than the window
- * centers itself; a larger one clamps so the window never strays into
- * empty space beyond an edge node.
- */
-export function planWindowViewBox(tree: PlanTree, current: string | null): string {
-	const layout = blockLayout(tree.nodes, tree.edges);
-	const focusId =
-		current && layout.x.has(current)
-			? current
-			: (tree.nodes[0]?.id ?? null);
-	const cx =
-		focusId !== null
-			? (layout.x.get(focusId) ?? 0) + NODE_W / 2
-			: Math.max(layout.width, 1) / 2;
-	const cy =
-		focusId !== null
-			? (layout.y.get(focusId) ?? 0) + (layout.nodeH.get(focusId) ?? NODE_H) / 2
-			: Math.max(layout.height, 1) / 2;
-	const clamp = (c: number, extent: number, view: number) =>
-		extent <= view ? extent / 2 : Math.min(Math.max(c, view / 2), extent - view / 2);
-	const x = clamp(cx, layout.width, VIEW_W) - VIEW_W / 2;
-	const y = clamp(cy, layout.height, VIEW_H) - VIEW_H / 2;
-	return `${x} ${y} ${VIEW_W} ${VIEW_H}`;
-}
-
-export function PlanWindow({ messages, onOpen }: { messages: readonly PopupMessage[]; onOpen: () => void }) {
+export function PlanMarginalia({ messages }: { messages: readonly PopupMessage[] }) {
 	const markerId = useId().replace(/[^a-zA-Z0-9-]/g, "");
 	const tree = useMemo(() => latestTree(messages), [messages]);
 	const statuses = useMemo(
 		() => (tree ? derivePlanStatuses(tree, messages as Parameters<typeof derivePlanStatuses>[1]) : null),
 		[tree, messages],
 	);
-	if (!tree || tree.nodes.length === 0) return null; // no plan yet: no window
+	if (!tree || tree.nodes.length === 0) return null; // no plan yet: nothing in the margin
 	const statusOf = (id: string) => (statuses ? derivedNodeStatus(statuses, id) : "upcoming");
-	const currentTitle = statuses?.current
-		? (tree.nodes.find((n) => n.id === statuses.current)?.title ?? null)
-		: null;
-
 	return (
-		<button
-			type="button"
-			data-testid="plan-window"
-			onClick={onOpen}
-			title="Open the full plan"
-			className="fixed bottom-3 left-3 z-30 hidden w-80 flex-col gap-1 rounded-xl border bg-card/95 p-2 text-left shadow-lg backdrop-blur sm:flex"
-		>
-			<div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				<WaypointsIcon className="size-3.5 text-primary" />
-				The plan
-				<span className="ml-auto min-w-0 truncate font-normal normal-case" title={currentTitle ?? undefined}>
-					{currentTitle ?? "starting"}
-				</span>
-			</div>
-			<PlanDiagram
-				nodes={tree.nodes}
-				edges={tree.edges}
-				statusOf={statusOf}
-				glowId={statuses?.current ?? null}
-				markerId={markerId}
-				viewBoxOverride={planWindowViewBox(tree, statuses?.current ?? null)}
-			/>
-		</button>
+		<PlanDiagram
+			nodes={tree.nodes}
+			edges={tree.edges}
+			statusOf={statusOf}
+			glowId={statuses?.current ?? null}
+			markerId={markerId}
+			pad={MARGIN_PAD}
+			textCapScale={TEXT_CAP_SCALE}
+			fill
+		/>
 	);
 }
