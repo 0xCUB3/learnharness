@@ -1073,8 +1073,30 @@ export class GraphCanvasRenderer {
 		// Bitmap sizing: longest world span maps to `bitmap` px. The rect
 		// is padded by the stroke half-width (dilation) plus the blur
 		// reach so nothing clips at the bitmap edge.
-		const cell = Math.max(maxX - minX, maxY - minY) / tuning.bitmap;
-		const padWorld = tuning.dilation * s + (tuning.blur * cell) * 2;
+		//
+		// SCREEN-ANCHORED RADII (user report 2026-09-14: a tight search
+		// collapsed the blur). The stroke width is anchored to kFit (screen
+		// px at fit zoom — the camera persists, searches don't refit), but
+		// the blur radius was anchored to `cell`, which shrinks with the
+		// FILTERED span: close-together matches → tiny cell → blur reach
+		// (blur·cell·kFit) collapsed on screen while the stroke stayed put.
+		// The blur now uses the stroke's anchoring: its world reach is
+		// blur · cellRef, cellRef being the FULL-graph cell (worldBBox —
+		// the same bbox kFit comes from). Span-independent, and with
+		// nothing filtered cell == cellRef, so the look is unchanged.
+		const dilationW = tuning.dilation * s;
+		const bbox = this.worldBBox;
+		const cellRef = bbox
+			? Math.max(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY) / tuning.bitmap
+			: 0;
+		const blurW = tuning.blur * cellRef;
+		const padWorld = dilationW + blurW * 2;
+		// Cell floor: a single visible node (span 0) zeroed the cell and
+		// blew the bitmap dims to Infinity (getImageData TypeError). The
+		// floor is the padded rect's own reach, so dims stay finite (long
+		// side ≤ bitmap · (1 + span/2·pad)) however tight the search.
+		const spanNow = Math.max(maxX - minX, maxY - minY);
+		const cell = Math.max(spanNow, padWorld * 2) / tuning.bitmap;
 		minX -= padWorld;
 		minY -= padWorld;
 		maxX += padWorld;
@@ -1099,7 +1121,7 @@ export class GraphCanvasRenderer {
 		if (!rctx) return;
 		rctx.clearRect(0, 0, bw, bh);
 		rctx.lineCap = "round";
-		rctx.lineWidth = (tuning.dilation * s * 2) / cell;
+		rctx.lineWidth = (dilationW * 2) / cell;
 
 		// Which cluster is a node in (for intra-cluster edges)?
 		const clusterOf = new Map<string, number>();
@@ -1147,7 +1169,7 @@ export class GraphCanvasRenderer {
 			// stroke reached: every member is painted by its edges' caps OR
 			// one disc, never both — the no-double-counting rule survives.
 			rctx.fillStyle = `hsla(${hue}, 65%, 60%, ${tuning.edgeAlpha})`;
-			const discR = (tuning.dilation * s) / cell;
+			const discR = dilationW / cell;
 			for (const id of cluster.members) {
 				if (touched.has(id) || !isVisible(id)) continue;
 				const n = this.nodeById.get(id);
@@ -1173,8 +1195,11 @@ export class GraphCanvasRenderer {
 
 		// THE blur: 3 box-blur rounds on the premultiplied bitmap. Bilinear
 		// upscaling alone is no blur at all (tent ramps — the JPEG look);
-		// this makes the field genuinely smooth before the blit.
+		// this makes the field genuinely smooth before the blit. The
+		// radius is blurW in bitmap px (screen-anchored — see sizing above),
+		// an integer because boxBlurRound indexes with the loop counter.
 		if (tuning.blur > 0) {
+			const blurPx = Math.max(1, Math.round(blurW / cell));
 			const img = rctx.getImageData(0, 0, bw, bh);
 			const n = bw * bh * 4;
 			const a = new Float32Array(n);
@@ -1187,9 +1212,9 @@ export class GraphCanvasRenderer {
 			}
 			const b = new Float32Array(n);
 			const tmp = new Float32Array(n); // scratch inside each round only
-			boxBlurRound(a, tmp, b, bw, bh, tuning.blur); // a → b
-			boxBlurRound(b, tmp, a, bw, bh, tuning.blur); // b → a
-			boxBlurRound(a, tmp, b, bw, bh, tuning.blur); // a → b (result)
+			boxBlurRound(a, tmp, b, bw, bh, blurPx); // a → b
+			boxBlurRound(b, tmp, a, bw, bh, blurPx); // b → a
+			boxBlurRound(a, tmp, b, bw, bh, blurPx); // a → b (result)
 			// Unpremultiply back into pixels.
 			for (let i = 0; i < n; i += 4) {
 				const alpha = b[i + 3]!;
