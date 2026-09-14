@@ -213,6 +213,16 @@ const HEAD_W = 50.2 * HEAD_SCALE;
  *  overhangs the line's end by this much, so edges shorten by it to land
  *  the tip exactly on the target node's border. */
 const HEAD_TIP_OVERHANG = (50.2 - 27.2) * HEAD_SCALE;
+/** The head floats this far off the target face — the tip kisses nothing
+ *  (owner, round 12). ~half a head length: clearly docked-off, still
+ *  visually attached. */
+const DOCK_GAP = 4;
+/** The shaft stub — the straight run before the head (owner, round 12):
+ *  control points from Q on sit exactly on the approach line, so the
+ *  basis spline renders that stretch perfectly straight and the head
+ *  lands on a straight shaft; the corner where the route squares up onto
+ *  the line is rounded by the curve. ~1.5 head lengths of shaft. */
+const STRAIGHT_RUN = 12;
 const edgeLine = line<{ x: number; y: number }>()
 	.x((p) => p.x)
 	.y((p) => p.y)
@@ -221,9 +231,10 @@ const edgeLine = line<{ x: number; y: number }>()
 /** The edge path — mermaid's own line drawing: dagre's border-intersected
  *  waypoints through d3's curveBasis (mermaid's default flowchart curve —
  *  the same recipe dagre-d3's renderer uses). The final point pulls back
- *  along the last segment by the tip overhang so the head's TIP lands on
- *  the target border while the mouth sits at the path's end. Pure,
- *  exported for tests. */
+ *  along the last segment by the tip overhang + the docking gap so the
+ *  head's TIP floats DOCK_GAP short of the target border with its mouth
+ *  at the path's end, on a straight run (the shaft stub). Straight
+ *  collinear routes render identically. Pure, exported for tests. */
 export function edgePathD(points: Array<{ x: number; y: number }>): string {
 	const pts = points.map((p) => ({ ...p }));
 	if (pts.length >= 2) {
@@ -232,8 +243,18 @@ export function edgePathD(points: Array<{ x: number; y: number }>): string {
 		const dx = last.x - prev.x;
 		const dy = last.y - prev.y;
 		const len = Math.hypot(dx, dy) || 1;
-		const t = Math.min(HEAD_TIP_OVERHANG / len, 0.5);
-		pts[pts.length - 1] = { x: last.x - dx * t, y: last.y - dy * t };
+		const ux = dx / len;
+		const uy = dy / len;
+		// The mouth: tip overhang + the docking gap back from the border.
+		const back = HEAD_TIP_OVERHANG + DOCK_GAP;
+		const M = { x: last.x - ux * back, y: last.y - uy * back };
+		// From Q every control point lies on the approach line — the basis
+		// spline renders Q→M perfectly straight (a B-spline span with
+		// collinear control points IS the line), and the repeated M makes
+		// the end tangent exactly the approach direction, so the head
+		// squares onto its shaft.
+		const Q = { x: M.x - ux * STRAIGHT_RUN, y: M.y - uy * STRAIGHT_RUN };
+		pts.splice(pts.length - 1, 1, Q, M, M);
 	}
 	return edgeLine(pts) ?? "";
 }

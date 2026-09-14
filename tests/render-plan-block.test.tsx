@@ -61,12 +61,17 @@ describe("plan block layout (pure)", () => {
 
 	it("edgePathD draws dagre's route through curveBasis — mouth pulled back from the border", () => {
 		// Straight 3-point route (source border → mid → target border): the
-		// basis curve starts exactly at the border point and the END pulls
-		// back by HEAD_TIP_OVERHANG so the arrowhead's TIP lands on the
-		// border while its mouth sits at the path's end (owner, round 11).
+		// basis curve starts exactly at the border point; the END pulls
+		// back by HEAD_TIP_OVERHANG + the docking gap (92 − 3.538 − 4) so the
+		// head's TIP floats 4 short of the border with its mouth at the
+		// path's end, on a straight shaft (owner, rounds 11–12).
 		const d = edgePathD([{ x: 80, y: 44 }, { x: 80, y: 68 }, { x: 80, y: 92 }]);
 		assert.ok(d.startsWith("M80,44"), "starts at the source border point");
-		assert.ok(d.endsWith("L80,88.462"), "ends pulled back by the tip overhang");
+		assert.ok(d.endsWith("L80,84.462"), "mouth pulled back; tip floats 4 off the border");
+		// The whole run stays on-axis (every x is 80): a collinear route
+		// renders straight — the shaft stub never bends a straight edge.
+		const xs = [...d.matchAll(/(?:[MLC]|,)(-?[\d.]+),/g)].map((m) => m[1]);
+		assert.ok(xs.length > 0 && xs.every((v) => v === "80"), "collinear route renders on-axis");
 	});
 
 	it("wrapTitle wraps greedily and NEVER drops content (boxes grow instead)", () => {
