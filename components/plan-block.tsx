@@ -205,8 +205,11 @@ const HEAD_TIP_OVERHANG = (50.2 - 27.2) * HEAD_SCALE;
 // bleeding over the edges). The IN-CHAT block is monochrome white instead
 // — no status language; the popup/window show the progression.
 const BOX: Record<PlanNodeStatus, string> = {
-	visited: "fill-none stroke-white",
-	current: "fill-none stroke-white",
+	// 50%-opacity app background instead of true transparency: a routed
+	// edge passing behind the box composites UNDER the fill — dimmed to
+	// half, not shown straight through (owner, round 9).
+	visited: "fill-background/50 stroke-white",
+	current: "fill-background/50 stroke-white",
 	// The grayed-out not-yet-visited look stays as-is (owner).
 	upcoming: "fill-card stroke-border",
 };
@@ -215,7 +218,7 @@ const TEXT: Record<PlanNodeStatus, string> = {
 	current: "fill-white text-xs font-medium",
 	upcoming: "fill-muted-foreground/80 text-xs",
 };
-const MONO_BOX = "fill-none stroke-white";
+const MONO_BOX = "fill-background/50 stroke-white";
 const MONO_TEXT = "fill-white text-xs";
 
 /** The diagram itself: positioned nodes + bezier edges. Pure-ish render —
