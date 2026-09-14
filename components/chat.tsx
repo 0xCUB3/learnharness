@@ -42,10 +42,12 @@ const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
 // The dock overlay's gradient band (h-24) — part of the reserved tail.
 const GRADIENT_H = 96;
-// Fold thresholds (owner, scroll round 1): pixel distance from the bottom —
-// position, not velocity. Leave the bottom → the box folds (visual only);
-// reach it again → it re-opens. The dead band absorbs trackpad drift.
-const COLLAPSE_DIST = 64;
+// Fold thresholds (owner, scroll round 1, tuned round 3): pixel distance
+// from the bottom — position, not velocity. Leave the bottom → the box
+// folds (visual only); reach it again → it re-opens. 96 (was 64, owner
+// round 3) tolerates a small peek upward without folding; the dead band
+// vs EXPAND_DIST absorbs trackpad drift.
+const COLLAPSE_DIST = 96;
 const EXPAND_DIST = 16;
 
 /**
