@@ -3,6 +3,12 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { MaximizeIcon, MinusIcon, PlusIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+// The placement engine — literally mermaid's: dagre-d3-es, the fork
+// mermaid 11 ships with (owner, plan-graph round 8: same engine as the
+// mermaid graphs, our SVG skin stays). The deep subpath is how mermaid
+// itself imports it.
+import { graphlib } from "dagre-d3-es";
+import { layout as dagreLayout } from "dagre-d3-es/src/dagre/index.js";
 import type { PlanBlockData, PlanNodeStatus, PlanTree } from "@/src/core";
 import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
 
@@ -21,9 +27,10 @@ import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
  *   are frozen snapshots rendered exactly as carried (never re-derived);
  *   the popup is the live view (user decision, 2026-09).
  *
- * Hand-built SVG everywhere (user decision): a deterministic layered
- * layout fills exactly and stays SSR-testable — no force simulation, no
- * coupling to the graph stream's sigma internals. Pan/zoom in the popup
+ * Hand-built SVG everywhere (user decision): placement runs on dagre
+ * (mermaid's engine — deterministic, synchronous, DOM-free, so SSR and
+ * render tests stay exact); the skin is ours — no coupling to the graph
+ * stream's internals. Pan/zoom in the popup
  * is harvested from the retired tree panel's graph (fit-floor semantics:
  * fully zoomed out IS the fit; panning locks at the floor).
  */
@@ -43,7 +50,9 @@ export interface LayoutNode {
 	title: string;
 }
 
-/** Topological order + longest-path depth (Kahn, authoring tie-break). */
+/** Topological order + longest-path depth (Kahn, authoring tie-break) —
+ *  order + depth semantics kept for tests; placement itself runs on dagre
+ *  now (owner, round 8). */
 export function topoFor(nodes: readonly LayoutNode[], edges: ReadonlyArray<{ from: string; to: string }>) {
 	const index = new Map(nodes.map((n, i) => [n.id, i] as const));
 	const indegree = new Map<string, number>(nodes.map((n) => [n.id, 0] as const));
@@ -82,42 +91,48 @@ export function topoFor(nodes: readonly LayoutNode[], edges: ReadonlyArray<{ fro
 	return { order, depth };
 }
 
-/** Layered positions: depth = row (top-down), authoring order within the
- *  row, each row centered on the widest one. */
+/** Placement — dagre (mermaid's engine, owner round 8): Sugiyama-style
+ *  layered layout, TB, with our geometry (NODE_W boxes, GAP_X/GAP_Y
+ *  separations, zero margin — the caller adds GRAPH_PAD/POPUP_PAD).
+ *  Node sizes are fed in (boxes grow with their wrapped content, round
+ *  7); dagre returns node CENTERS, we hand back top-lefts like before,
+ *  so every consumer (diagram, popup fit, plan window) is unchanged.
+ *  Deterministic + synchronous + DOM-free: SSR and render tests stay
+ *  exact. Dangling edges are ignored defensively — a ghost endpoint
+ *  would spawn an unmeasured node and break the measurer. */
 export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{ from: string; to: string }>) {
-	const { order, depth } = topoFor(nodes, edges);
-	const layers: LayoutNode[][] = [];
-	for (const n of order) {
-		const d = depth.get(n.id) ?? 0;
-		if (!layers[d]) layers[d] = [];
-		layers[d].push(n);
-	}
-	const rowWidth = (l: LayoutNode[]) => l.length * NODE_W + (l.length - 1) * GAP_X;
-	let maxWidth = 0;
-	for (const l of layers) maxWidth = Math.max(maxWidth, rowWidth(l));
 	const x = new Map<string, number>();
 	const y = new Map<string, number>();
-	// Per-node heights: boxes grow to show the FULL wrapped content —
-	// nothing is ever truncated (owner, plan-graph round 7).
 	const nodeH = new Map<string, number>();
-	let cursor = 0;
-	layers.forEach((l) => {
-		// The row's height = its tallest node.
-		let rowH = NODE_H;
-		for (const n of l) {
-			const h = NODE_H + Math.max(0, wrapTitle(n.title).length - 2) * LINE_H;
-			nodeH.set(n.id, h);
-			rowH = Math.max(rowH, h);
+	if (nodes.length === 0) return { x, y, nodeH, width: 0, height: 0 };
+	const ids = new Set(nodes.map((n) => n.id));
+	const g = new graphlib.Graph({ compound: false, multigraph: true });
+	g.setGraph({ rankdir: "TB", nodesep: GAP_X, ranksep: GAP_Y, marginx: 0, marginy: 0 });
+	for (const n of nodes) {
+		const h = NODE_H + Math.max(0, wrapTitle(n.title).length - 2) * LINE_H;
+		nodeH.set(n.id, h);
+		g.setNode(n.id, { width: NODE_W, height: h });
+	}
+	for (const e of edges) {
+		if (ids.has(e.from) && ids.has(e.to)) g.setEdge(e.from, e.to, { label: "", width: 0, height: 0 });
+	}
+	// (the d.ts marks opts required; the runtime ignores it)
+	dagreLayout(g, undefined);
+	for (const n of nodes) {
+		const pos = g.node(n.id);
+		const h = nodeH.get(n.id) ?? NODE_H;
+		if (pos) {
+			x.set(n.id, pos.x - NODE_W / 2);
+			y.set(n.id, pos.y - h / 2);
 		}
-		const start = (maxWidth - rowWidth(l)) / 2;
-		l.forEach((n, i) => {
-			x.set(n.id, start + i * (NODE_W + GAP_X));
-			y.set(n.id, cursor);
-		});
-		cursor += rowH + GAP_Y;
-	});
-	const height = layers.length > 0 ? cursor - GAP_Y : 0;
-	return { x, y, nodeH, width: maxWidth, height };
+	}
+	return {
+		x,
+		y,
+		nodeH,
+		width: Math.max(g.graph().width ?? 0, 1),
+		height: Math.max(g.graph().height ?? 0, 1),
+	};
 }
 
 /** Greedy word wrap to lines of ≤ maxChars — NOTHING is dropped: the
