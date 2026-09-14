@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { ActivitySection } from "@/components/activity-dock";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -285,8 +286,15 @@ function SessionsSidebar() {
 						))
 					)}
 				</div>
-			</div>
-		</aside>
+
+					{/* Background agents (owner, sidebar round): the section is
+					    ALWAYS here — empty means empty (the header sits alone); it
+					    populates and grows when processes run. The session list is
+					    flex-1, so this pins to the bottom. Sidebar closed = the
+					    learner opted out (no ambient signal, user decision). */}
+					<ActivitySection />
+				</div>
+			</aside>
 	);
 }
 

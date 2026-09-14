@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { ActivityDock, formatElapsed, toBlobs, type ActivityFeed } from "../components/activity-dock.tsx";
+import { ActivitySection, formatElapsed, toBlobs, type ActivityFeed } from "../components/activity-dock.tsx";
 import { formatTokens, formatUsd } from "../components/usage-format.ts";
 
-// The dock's pure layer: folds, formatting, and blob order — then the SSR
-// render (blobs, "—" doctrine, the abort affordance, the narrow badge).
+// The section's pure layer: folds, formatting, and blob order — then the SSR
+// render (blobs, "—" doctrine, the abort affordance, the always-present
+// header — the sidebar's background-agents strip).
 
 const NOW = Date.parse("2026-09-09T12:00:00Z");
 
@@ -118,21 +119,25 @@ describe("activity dock pure layer", () => {
 	});
 });
 
-describe("activity dock render", () => {
-	it("renders NOTHING when idle (no jobs, no extractions)", () => {
-		assert.equal(renderToStaticMarkup(<ActivityDock feed={{ jobs: [], extractions: [] }} />), "");
+describe("activity section render", () => {
+	it("renders the ALWAYS-PRESENT header when idle — empty means empty, nothing hides", () => {
+		const html = renderToStaticMarkup(<ActivitySection feed={{ jobs: [], extractions: [] }} />);
+		assert.match(html, /data-testid="activity-section"/);
+		assert.match(html, /Background agents/);
+		assert.doesNotMatch(html, /activity-blob-(job|extraction)/, "no rows while idle");
+		assert.doesNotMatch(html, /activity-total-cost/, "the cost span is population, not decoration");
 	});
 
 	it("renders one blob per running process with cost, elapsed, and the abort affordance", () => {
 		const html = renderToStaticMarkup(
-			<ActivityDock
+			<ActivitySection
 				feed={{
 					jobs: [job({ id: "j1", kind: "demo", activity: "building sandbox…", title: "Chain-rule demo" })],
 					extractions: [{ chatId: "cx", title: "Old lesson", phase: "merging", startedAt: NOW - 60_000 }],
 				}}
 			/>,
 		);
-		assert.match(html, /data-testid="activity-dock"/);
+		assert.match(html, /data-testid="activity-section"/);
 		assert.match(html, /data-testid="activity-blob-job"/);
 		assert.match(html, /data-testid="activity-blob-extraction"/);
 		assert.match(html, /Chain-rule demo/);
@@ -142,7 +147,7 @@ describe("activity dock render", () => {
 		assert.match(html, /activity-blob-cost[^>]*>—</);
 		assert.match(html, /data-testid="activity-abort"/, "END on the blob face, popover-independent");
 		assert.match(html, /\bEnd\b/, "the explicit END button");
-		assert.match(html, /Background activity/);
+		assert.match(html, /Background agents/);
 		// Total cost: nothing priced → "—" in the header.
 		assert.match(html, /activity-total-cost[^>]*>—</);
 	});
@@ -158,7 +163,7 @@ describe("activity dock render", () => {
 			steps: 1,
 		};
 		const html = renderToStaticMarkup(
-			<ActivityDock
+			<ActivitySection
 				feed={{
 					jobs: [
 						job({ id: "a", usage }),
