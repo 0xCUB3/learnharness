@@ -186,13 +186,12 @@ function SessionsSidebar() {
 	const pathname = usePathname();
 	const router = useRouter();
 
-	/* New session: one POST, then hello. Search: a client-side filter over
-	   the poll snapshot — no server round trip. Both were visual-only in
-	   the wave-5 mock; wiring each is a single tiny handler. */
-	const newSession = useCallback(async () => {
-		const res = await fetch("/api/chats", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-		const d = (await res.json().catch(() => null)) as { id?: string } | null;
-		if (d?.id) router.push(`/chat/${d.id}`);
+	/* New session (owner, 2026-09-13): NO POST — the button opens the
+	   sessionless draft view; the session is created only when the first
+	   message is sent (and that message becomes its title). Search: a
+	   client-side filter over the poll snapshot — no server round trip. */
+	const newSession = useCallback(() => {
+		router.push("/chat/new");
 	}, [router]);
 
 	const shown = useMemo(() => {
