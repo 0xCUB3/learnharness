@@ -1,10 +1,11 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
+import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { ChatListItem, Phase3 } from "@/src/core";
 
@@ -181,8 +182,25 @@ export function SessionRow({
 function SessionsSidebar() {
 	const { open, toggle } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
+	const [query, setQuery] = useState("");
 	const pathname = usePathname();
 	const router = useRouter();
+
+	/* New session: one POST, then hello. Search: a client-side filter over
+	   the poll snapshot — no server round trip. Both were visual-only in
+	   the wave-5 mock; wiring each is a single tiny handler. */
+	const newSession = useCallback(async () => {
+		const res = await fetch("/api/chats", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+		const d = (await res.json().catch(() => null)) as { id?: string } | null;
+		if (d?.id) router.push(`/chat/${d.id}`);
+	}, [router]);
+
+	const shown = useMemo(() => {
+		const q = query.trim().toLowerCase();
+		if (!chats) return chats;
+		if (!q) return chats;
+		return chats.filter((c) => c.title.toLowerCase().includes(q));
+	}, [chats, query]);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -213,22 +231,51 @@ function SessionsSidebar() {
 			aria-hidden={!open}
 		>
 			<div className="flex h-full w-72 flex-col border-r bg-background">
+				{/* LH wordmark — the owner's header; close toggle sits at the edge. */}
 				<div className="flex items-center justify-between px-4 py-3">
-					<Link href="/" className="font-semibold tracking-tight hover:opacity-80">
-						Learning Harness
+					<Link href="/" className="text-sm font-bold uppercase tracking-widest hover:opacity-80">
+						LH
 					</Link>
 					<Button variant="ghost" size="icon" aria-label="Close sidebar" onClick={toggle}>
 						<PanelLeftCloseIcon className="size-4" />
 					</Button>
 				</div>
 
+				<button
+					type="button"
+					data-testid="new-session"
+					onClick={() => void newSession()}
+					className="mx-3 mb-1 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				>
+					<PlusIcon className="size-3" />
+					New session
+					<span className="sr-only">create a new session</span>
+				</button>
+
+				<div className="mx-3 mb-1 flex items-center gap-2">
+					<span className="text-xxs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
+					<span className="relative flex-1">
+						<Input
+							data-testid="session-search"
+							value={query}
+							onChange={(e) => setQuery(e.target.value)}
+							placeholder="Search..."
+							aria-label="Search sessions"
+							className="h-6 rounded-sm border-border bg-background pl-6 text-xs placeholder:text-muted-foreground/60"
+						/>
+						<SearchIcon className="pointer-events-none absolute left-1.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground/70" />
+					</span>
+				</div>
+
 				<div className="flex-1 overflow-y-auto p-2">
-					{chats === null ? (
-						<div className="px-2 py-4 text-sm text-muted-foreground">Loading…</div>
-					) : chats.length === 0 ? (
-						<div className="px-2 py-4 text-sm text-muted-foreground">No sessions yet.</div>
+					{shown === null ? (
+						<div className="px-2 py-4 text-xs text-muted-foreground">Loading…</div>
+					) : shown.length === 0 ? (
+						<div className="px-2 py-4 text-xs text-muted-foreground">
+							{query.trim() ? "No sessions match." : "No sessions yet."}
+						</div>
 					) : (
-						chats.map((c) => (
+						shown.map((c) => (
 							<SessionRow
 								key={c.id}
 								chat={c}

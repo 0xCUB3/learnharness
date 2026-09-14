@@ -59,7 +59,7 @@ export function Composer({
 				placeholder="Ask, answer, or steer the lesson…"
 				autoFocus={autoFocus}
 				rows={1}
-				className="field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
+				className="field-sizing-content lh-prose max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 			/>
 			{verdict && !busy ? (
 				// The plan verdict (docs/probe-teach-split.md §4): accept
@@ -70,14 +70,14 @@ export function Composer({
 					<button
 						type="button"
 						onClick={verdict.onAccept}
-						className="flex h-[19px] items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 text-[11px] font-medium text-white transition-colors hover:bg-emerald-500"
+						className="flex h-[19px] items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 text-xs font-medium text-white transition-colors hover:bg-emerald-500"
 					>
 						<CheckIcon className="size-3" /> Accept plan
 					</button>
 					<button
 						type="button"
 						onClick={verdict.onDecline}
-						className="flex h-[19px] items-center justify-center gap-1 rounded-md bg-destructive px-3 text-[11px] font-medium text-destructive-foreground transition-colors hover:opacity-90"
+						className="flex h-[19px] items-center justify-center gap-1 rounded-md bg-destructive px-3 text-xs font-medium text-destructive-foreground transition-colors hover:opacity-90"
 					>
 						<XIcon className="size-3" /> Decline
 					</button>

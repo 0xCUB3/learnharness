@@ -1,5 +1,6 @@
 "use client";
 
+import { GlyphMark } from "@/components/ui/glyph-mark";
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
@@ -50,7 +51,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 							<div
 								key={opt.index}
 								className={cn(
-									"flex items-start gap-2 rounded-lg border px-3 py-1.5",
+									"flex items-center gap-2 rounded-lg border px-3 py-1.5",
 									sel && key && "border-green-500/60 bg-green-500/10",
 									sel && !key && isQuiz && "border-red-500/60 bg-red-500/10",
 									sel && !isQuiz && "border-primary bg-accent",
@@ -58,10 +59,21 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 								)}
 							>
 								{isQuiz && (
-									<span className="w-4 shrink-0">
-										{sel && key && "✓"}
-										{sel && !key && "✗"}
-										{!sel && key && "✓"}
+									// Zapf-Dingbats-derived SVG outlines — the exact LaTeX \ding{51}/
+									// \ding{55} hand-drawn shapes (owner, round 6); see ui/glyph-mark.
+									<span
+										aria-hidden
+										data-mark={sel && key ? "check" : sel && !key ? "x" : !sel && key ? "check" : undefined}
+										className={cn(
+											"flex shrink-0 items-center",
+											sel && key && "text-green-500",
+											sel && !key && "text-red-500",
+											!sel && key && "text-green-500",
+										)}
+									>
+										{/* Owner round 8: a touch smaller than the text (size-4→size-3.5,
+											   ≈14px vs the 16.5px row) while centered. */}
+										{(key || sel) && <GlyphMark kind={key ? "check" : "x"} className="size-3.5" />}
 									</span>
 								)}
 								<span className={cn(!sel && "text-muted-foreground")}>
@@ -76,7 +88,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 					{answer.other && (
 						<div
 							data-testid="answered-other"
-							className="flex items-start gap-2 rounded-lg border border-primary bg-accent px-3 py-1.5"
+							className="flex items-center gap-2 rounded-lg border border-primary bg-accent px-3 py-1.5"
 						>
 							<span>“{answer.other}”</span>
 						</div>
@@ -84,22 +96,27 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				</div>
 			)}
 
-			{answer.text && <div className="mt-2 whitespace-pre-wrap text-sm">“{answer.text}”</div>}
+			{answer.text && <div className="lh-prose mt-2 whitespace-pre-wrap">“{answer.text}”</div>}
 			{answer.dontKnow && isQuiz && <div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>}
 
 			{answer.note && (
 				<div data-testid="your-thinking" className="mt-3 border-l-2 border-primary/40 pl-3">
-					<span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+					<span className="mb-0.5 block text-xxs font-medium uppercase tracking-wide text-muted-foreground">
 						Your thinking
 					</span>
-					<span className="block whitespace-pre-wrap text-sm text-foreground/90">{answer.note}</span>
+					<span className="lh-prose block whitespace-pre-wrap text-foreground/90">{answer.note}</span>
 				</div>
 			)}
 
+			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper
+			    than the option box edges (owner, round 3). Sides flush with everything
+			    else; py-2 stays for vertical air. */}
 			{isQuiz && answer.explanation && (
-				<div className="mt-3 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
 					<span className="font-medium text-foreground">Why: </span>
-					<MessageResponse className="inline">{answer.explanation}</MessageResponse>
+					{/* The markdown wrapper must go truly inline — a block <p> after the
+								   "Why:" label created the oversized leading gap (owner's fix list). */}
+								<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
 				</div>
 			)}
 		</div>

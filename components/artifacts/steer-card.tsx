@@ -81,8 +81,8 @@ function ResearchCompleteBadge({ result }: { result: ResearchResult }) {
 				<span className="font-medium uppercase tracking-wide">Research</span>
 				<span>complete</span>
 				{result.sources.length > 0 && <span>· {result.sources.length} sources</span>}
-				<span className="ml-1 text-[11px] text-muted-foreground/70 group-open:hidden">view brief</span>
-				<span className="ml-1 hidden text-[11px] text-muted-foreground/70 group-open:inline">hide brief</span>
+				<span className="ml-1 text-xs text-muted-foreground/70 group-open:hidden">view brief</span>
+				<span className="ml-1 hidden text-xs text-muted-foreground/70 group-open:inline">hide brief</span>
 			</summary>
 			<div className="mt-2">
 				<ResearchBriefCard output={result} />

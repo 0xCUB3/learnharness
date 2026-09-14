@@ -32,7 +32,14 @@ import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divid
 import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
-const COLUMN = "mx-auto w-full max-w-3xl px-4";
+/**
+ * Width tokens (wave-5 reskin, owner decision): the teaching PROSE spans the
+ * full session width with a thin px-6 margin; the composer/question DOCK is
+ * deliberately narrower (~46rem centered) per the reference. Same ELEMENT,
+ * same place — width polish only.
+ */
+const COLUMN = "mx-auto w-full max-w-none px-6";
+const DOCK = "mx-auto w-full max-w-[46rem] px-4";
 
 /**
  * Server-sync channel for artifact renderers: the CENTRAL jobs poll in Chat
@@ -457,10 +464,16 @@ export function Chat({
 				{/* h-10, not py-2: the toggle (a size-9 icon button) renders only
 				    while the sidebar is CLOSED — an auto-height row would collapse
 				    when it disappears and slide the title + chip up. */}
-				<header className="flex h-10 items-center gap-3 px-3">
+				<header className="relative flex h-10 items-center gap-3 px-3">
 					<SidebarToggle />
-					<div className="min-w-0 flex-1 truncate font-medium">{title}</div>
+					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
+					{/* Soft top fade (owner): the scroller edge under the header eases
+					    in exactly like the dock gradient at the bottom. */}
+					<div
+						aria-hidden
+						className="pointer-events-none absolute inset-x-0 top-full z-10 h-5 bg-gradient-to-b from-background to-transparent"
+					/>
 				</header>
 
 				<div className="relative flex min-h-0 flex-1">
@@ -523,7 +536,7 @@ export function Chat({
 										{m.role === "user" ? (
 											// User text renders plain: the model's LaTeX pipeline is not
 											// applied to learner-authored text ($ stays $, no surprises).
-											<div className="whitespace-pre-wrap">
+											<div className="lh-prose whitespace-pre-wrap">
 												{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
 											</div>
 										) : (
@@ -813,7 +826,7 @@ function DockOverlay({
 		<div className="pointer-events-none sticky bottom-0 mt-auto">
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 			<div className="bg-background pb-4">
-				<div className={COLUMN}>
+				<div className={DOCK}>
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
 							{pending ? (

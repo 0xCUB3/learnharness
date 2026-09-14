@@ -284,7 +284,7 @@ function QuestionDockForm({
 				)}
 
 				{qd.mode !== "text" && (
-					<div className="flex flex-col gap-2 pb-1" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
+					<div className="flex flex-col gap-2 pb-2" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
 						{qd.options.map((opt, i) => {
 							const isSel = sel.selected.has(i);
 							return (
@@ -307,14 +307,18 @@ function QuestionDockForm({
 										)}
 									>
 										{isSel && (
-											<span className={cn(qd.mode === "multi-select" ? "text-[10px]" : "size-1.5 rounded-full bg-current")}>
+											<span className={cn(qd.mode === "multi-select" ? "text-xxs" : "size-1.5 rounded-full bg-current")}>
 												{qd.mode === "multi-select" ? "✓" : ""}
 											</span>
 										)}
 									</span>
 									<span>
 										<MessageResponse>{opt.label}</MessageResponse>
-										{opt.description && <span className="block text-xs text-muted-foreground">{opt.description}</span>}
+										{opt.description && (
+											// Option subtext renders in Source Sans 3 (owner's mockup);
+											// the "I don't know" copy stays JetBrains Mono.
+											<span className="lh-prose block text-xs text-muted-foreground">{opt.description}</span>
+										)}
 									</span>
 								</button>
 							);
@@ -328,11 +332,23 @@ function QuestionDockForm({
 								}
 								aria-pressed={sel.dontKnow}
 								className={cn(
-									"rounded-lg border border-dashed px-3 py-2 text-left text-sm text-muted-foreground transition-colors",
-									sel.dontKnow && "border-primary text-foreground",
+									// Option-row layout + radio circle (owner); the dashed
+									// outline stays — this is the deliberate non-answer.
+									"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm transition-colors",
+									sel.dontKnow ? "border-primary text-foreground" : "text-muted-foreground",
 								)}
 							>
-								I don't know
+								<span
+									className={cn(
+										"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+										sel.dontKnow
+											? "border-primary bg-primary text-primary-foreground"
+											: "border-muted-foreground/40",
+									)}
+								>
+									{sel.dontKnow && <span className="size-1.5 rounded-full bg-current" />}
+								</span>
+								<span>I don't know</span>
 							</button>
 						)}
 
@@ -357,7 +373,7 @@ function QuestionDockForm({
 									)}
 								>
 									{sel.otherSelected && (
-										<span className={cn(qd.mode === "multi-select" ? "text-[10px]" : "size-1.5 rounded-full bg-current")}>
+										<span className={cn(qd.mode === "multi-select" ? "text-xxs" : "size-1.5 rounded-full bg-current")}>
 											{qd.mode === "multi-select" ? "✓" : ""}
 										</span>
 									)}
@@ -371,7 +387,7 @@ function QuestionDockForm({
 										setSel((prev) => (prev.otherSelected ? prev : toggleOther(selectMode, prev)));
 									}}
 									placeholder="Type your own answer…"
-									className="w-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+									className="lh-prose w-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
 									onClick={(e) => e.stopPropagation()}
 								/>
 							</div>
@@ -396,7 +412,7 @@ function QuestionDockForm({
 					data-testid={qd.mode === "text" ? "answer-field" : "thinking-field"}
 					className="rounded-xl border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50"
 				>
-					<div className="px-2.5 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+					<div className="px-2.5 pt-2 text-xxs font-medium uppercase tracking-wide text-muted-foreground">
 						{qd.mode === "text" ? "Your answer" : "Your thinking"}
 					</div>
 					{qd.mode === "text" ? (
@@ -413,7 +429,7 @@ function QuestionDockForm({
 							}}
 							placeholder="Type your answer…"
 							rows={1}
-							className="field-sizing-content max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground"
+							className="field-sizing-content lh-prose max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 						/>
 					) : (
 						<textarea
@@ -430,7 +446,7 @@ function QuestionDockForm({
 							placeholder="Why this answer? What are you unsure about? Say as much as you like — the teacher reads all of this."
 							rows={1}
 							className={cn(
-								"field-sizing-content max-h-48 w-full resize-none bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground/70",
+								"field-sizing-content lh-prose max-h-48 w-full resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground/70",
 								// Phase-scaled prominence: teaching invites depth,
 								// probing stays quick.
 								phase === "teach" ? "min-h-[4.5rem]" : "min-h-10",
@@ -439,7 +455,7 @@ function QuestionDockForm({
 					)}
 					<div className="flex items-center justify-between gap-2 p-1">
 						{qd.mode !== "text" && (
-							<span aria-hidden className="pl-1.5 text-[10px] text-muted-foreground">
+							<span aria-hidden className="pl-1.5 text-xxs text-muted-foreground">
 								⌘/Ctrl + ↵ submits
 							</span>
 						)}

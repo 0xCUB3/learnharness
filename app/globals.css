@@ -3,59 +3,113 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Design tokens — the single place to restyle the app.
- * (The owner has a specific visual design planned; it lands here and in
- * component edits, not in structural changes.)
+ * THE SKIN — wave 5. Design tokens, the single place to restyle the app.
+ *
+ * Mathematical soundness, per the owner's brief:
+ *   - Tailwind's built-in 0.25rem (4px) spacing scale IS the rhythm — every
+ *     padding/margin/gap in the app uses whole units of a 4px base.
+ *   - The type scale below is a declared modular ladder (each --text-* token
+ *     carries its own line-height); components never invent pixel sizes.
+ *   - Radii ladder is 4 / 8 / 12 / 16px multiples of the 4px base.
+ *   - Emphasis colors live in tokens (--lh-ink-strong / --lh-ink-italic) so a
+ *     future settings UI reassigns them (configurable per the owner).
  */
 
+/* Palette (owner's hexes): main #141414, raised #1C1C1C, edges #434343.
+   Mono chrome = JetBrains Mono; prose = Source Sans 3; titles = CMU Serif. */
 :root {
-	--radius: 0.625rem;
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.205 0 0);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.97 0 0);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.922 0 0);
-	--input: oklch(0.922 0 0);
-	--ring: oklch(0.708 0 0);
+	--radius: 8px;
+	--background: #141414;
+	--foreground: #e6e6e6;
+	--card: #1c1c1c;
+	--card-foreground: #e6e6e6;
+	--popover: #1c1c1c;
+	--popover-foreground: #e6e6e6;
+	--primary: #e6e6e6;
+	--primary-foreground: #141414;
+	--secondary: #1c1c1c;
+	--secondary-foreground: #e6e6e6;
+	--muted: #1c1c1c;
+	--muted-foreground: #8d8d8d;
+	--accent: #2a2a2a;
+	--accent-foreground: #e6e6e6;
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: #434343;
+	--input: #434343;
+	--ring: #8d8d8d;
+	/* Emphasis coloring in teaching prose — ready for the settings UI. */
+	--lh-ink-strong: #c96b4a;
+	--lh-ink-italic: #6fa9d6;
+	--lh-prose-size: 16.5px;
+	--lh-prose-leading: 1.5;
 }
 
+/* The app is always dark (<html class="dark">); mirror the same values so
+   the block stays coherent under Tailwind's variant. */
 .dark {
-	--background: oklch(0.145 0 0);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.205 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.922 0 0);
-	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.269 0 0);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
-	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
-	--accent-foreground: oklch(0.985 0 0);
+	--background: #141414;
+	--foreground: #e6e6e6;
+	--card: #1c1c1c;
+	--card-foreground: #e6e6e6;
+	--popover: #1c1c1c;
+	--popover-foreground: #e6e6e6;
+	--primary: #e6e6e6;
+	--primary-foreground: #141414;
+	--secondary: #1c1c1c;
+	--secondary-foreground: #e6e6e6;
+	--muted: #1c1c1c;
+	--muted-foreground: #8d8d8d;
+	--accent: #2a2a2a;
+	--accent-foreground: #e6e6e6;
 	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 10%);
-	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.556 0 0);
+	--border: #434343;
+	--input: #434343;
+	--ring: #8d8d8d;
+	--lh-ink-strong: #c96b4a;
+	--lh-ink-italic: #6fa9d6;
+	--lh-prose-size: 16.5px;
+	--lh-prose-leading: 1.5;
+}
+
+/* CMU Serif bold (titles) — bundled local file, no CDN dependency. */
+@font-face {
+	font-family: "lh-cmu";
+	src: url("/fonts/cmunbx.ttf") format("truetype");
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
 }
 
 @theme inline {
-	--radius-sm: calc(var(--radius) - 4px);
-	--radius-md: calc(var(--radius) - 2px);
-	--radius-lg: var(--radius);
-	--radius-xl: calc(var(--radius) + 4px);
+	/* Fonts: chrome = JetBrains Mono, prose = Source Sans 3, titles = CMU
+	   Serif bold. The JetBrains/SourceSans variables attach in app/layout.tsx. */
+	--font-ui: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
+	--font-prose: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
+	--font-title: "lh-cmu", serif;
+	/* The modular type ladder — each size carries its own line-height.
+	   Component sizes must pull from this ladder. */
+	--text-xxs: 10px;
+	--text-xxs--line-height: 1.4;
+	--text-xs: 11px;
+	--text-xs--line-height: 1.4;
+	--text-sm: 12.5px;
+	--text-sm--line-height: 1.4;
+	--text-base: 14px;
+	--text-base--line-height: 1.45;
+	--text-lg: 16px;
+	--text-lg--line-height: 1.45;
+	--text-xl: 20px;
+	--text-xl--line-height: 1.4;
+	--text-2xl: 25px;
+	--text-2xl--line-height: 1.3;
+	--text-3xl: 32px;
+	--text-3xl--line-height: 1.25;
+	/* Radii ladder — 4/8/12/16 multiples of the 4px base. */
+	--radius-sm: 4px;
+	--radius-md: 8px;
+	--radius-lg: 12px;
+	--radius-xl: 16px;
+	--radius: 8px;
 	--color-background: var(--background);
 	--color-foreground: var(--foreground);
 	--color-card: var(--card);
@@ -83,6 +137,25 @@
 body {
 	background: var(--color-background);
 	color: var(--color-foreground);
+	font-family: var(--font-ui);
+}
+
+/* Teaching prose (the markdown renderer's container gets .lh-prose):
+   Source Sans 3 with the size/leading tokens; emphasis color bound to
+   the settings-ready tokens. */
+.lh-prose {
+	font-family: var(--font-prose);
+	font-size: var(--lh-prose-size);
+	line-height: var(--lh-prose-leading);
+}
+
+.lh-prose :where(strong, b) {
+	color: var(--lh-ink-strong);
+	font-weight: 700;
+}
+
+.lh-prose :where(em, i) {
+	color: var(--lh-ink-italic);
 }
 
 /* Thin dark native scrollbar (app-wide): dark thumb, transparent track. */
