@@ -774,6 +774,47 @@ function DockOverlay({
 	const revealedRef = useRef(revealed);
 	revealedRef.current = revealed;
 
+	// The overlay must not paint over the scroller's scrollbar (owner, scroll
+	// round 2): the scroller reserves symmetric gutters (scrollbar-gutter:
+	// stable both-edges), so inset the overlay's right edge by the gutter —
+	// zero on macOS overlay scrollbars, the real width on classic platforms.
+	const [sbInset, setSbInset] = useState(0);
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		const measure = () => setSbInset(Math.round((el.offsetWidth - el.clientWidth) / 2));
+		measure();
+		window.addEventListener("resize", measure);
+		return () => window.removeEventListener("resize", measure);
+	}, [scrollRef]);
+
+	// Wheel over the dock must still scroll the transcript (owner, scroll
+	// round 2): the overlay is a SIBLING of the scroller, so the browser's
+	// native scroll chaining stops at the overlay (the old in-flow dock
+	// chained for free). Internal scrollers — the question area, textarea
+	// overflow, the model menus — keep native scrolling, including their
+	// own edge chaining; only when nothing under the cursor can take the
+	// delta do we forward it to the transcript.
+	useEffect(() => {
+		const root = blockRef.current;
+		const el = scrollRef.current;
+		if (!root || !el) return;
+		const canScroll = (n: HTMLElement, dir: number) => {
+			if (n.scrollHeight - n.clientHeight < 2) return false; // not scrollable
+			return dir < 0 ? n.scrollTop > 0 : n.scrollTop < n.scrollHeight - n.clientHeight - 0.5;
+		};
+		const onWheel = (e: WheelEvent) => {
+			if (e.deltaY === 0) return;
+			for (let n = e.target as HTMLElement | null; n && n !== root; n = n.parentElement) {
+				if (n instanceof HTMLElement && canScroll(n, e.deltaY)) return; // native
+			}
+			e.preventDefault();
+			el.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1);
+		};
+		root.addEventListener("wheel", onWheel, { passive: false });
+		return () => root.removeEventListener("wheel", onWheel);
+	}, [scrollRef]);
+
 	// ── The reserve: the spacer's height, reported upward ──
 	// Grows immediately (typing, new variants). NEVER drops while a question
 	// is open — a shrinking reserved tail is scroll geometry and the browser
@@ -879,7 +920,7 @@ function DockOverlay({
 	});
 
 	return (
-		<div className="pointer-events-none absolute inset-x-0 bottom-0">
+		<div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ right: sbInset }}>
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 			<div ref={blockRef} className="bg-background pb-4">
 				<div className={DOCK}>
