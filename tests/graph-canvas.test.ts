@@ -150,15 +150,15 @@ describe("sanitizeRegionTuning (dev number inputs)", () => {
 	test("defaults survive untouched; partial input keeps the rest", () => {
 		const t = sanitizeRegionTuning(undefined);
 		assert.deepEqual(t, DEFAULT_REGION_TUNING);
-		const half = sanitizeRegionTuning({ blur: 0 });
-		assert.equal(half.blur, 0);
+		const half = sanitizeRegionTuning({ blur: 7.2 });
+		assert.equal(half.blur, 8); // snaps into the fixed set
 		assert.equal(half.dilation, DEFAULT_REGION_TUNING.dilation);
 	});
 
 	test("garbage clamps: NaN falls back, out-of-range clamps", () => {
 		const t = sanitizeRegionTuning({ dilation: Number.NaN, blur: -5, bitmap: 99999, edgeAlpha: 42 });
 		assert.equal(t.dilation, DEFAULT_REGION_TUNING.dilation); // NaN -> default
-		assert.equal(t.blur, 0);
+		assert.equal(t.blur, 2); // snaps into the fixed set
 		assert.equal(t.bitmap, REGION_BITMAP_OPTIONS[REGION_BITMAP_OPTIONS.length - 1]); // 99999 snaps to the largest option
 		assert.equal(t.edgeAlpha, 1);
 	});

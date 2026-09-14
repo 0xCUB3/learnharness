@@ -88,7 +88,9 @@ export interface RegionTuning {
 	/** Dilation half-width of the round-cap edge strokes, screen px at
 	 *  fit zoom (the expansion of the cluster skeleton). */
 	dilation: number;
-	/** Box-blur radius in bitmap px (3 passes ≈ Gaussian). 0 = off. */
+	/** Box-blur radius in bitmap px (3 passes ≈ Gaussian). Fixed set:
+	 *  see REGION_BLUR_OPTIONS (dropdown in the panel — non-integer
+	 *  radii broke the rendering, so the control is integer-only). */
 	blur: number;
 	/** Max bitmap dimension (cell = worldSpan / this). Fixed set:
 	 *  see REGION_BITMAP_OPTIONS (dropdown in the panel). */
@@ -98,16 +100,22 @@ export interface RegionTuning {
 }
 
 export const REGION_BITMAP_OPTIONS = [128, 192, 256, 384, 512] as const;
+export const REGION_BLUR_OPTIONS = [2, 4, 6, 8, 10] as const;
 
 export const DEFAULT_REGION_TUNING: RegionTuning = {
 	dilation: 28,
-	blur: 10,
+	blur: 6,
 	bitmap: 384,
 	edgeAlpha: 0.35,
 };
 
-/** Clamp/validate a region tuning. `bitmap` snaps to the nearest allowed
- *  option (it's a fixed set — a dropdown, not a free number). */
+/** Nearest member of a fixed option set (dropdowns have no free values). */
+function snapToOption(value: number, options: readonly number[]): number {
+	return options.reduce((best, o) => (Math.abs(o - value) < Math.abs(best - value) ? o : best), options[0] as number);
+}
+
+/** Clamp/validate a region tuning. `bitmap` and `blur` snap to the nearest
+ *  allowed option (they're fixed sets — dropdowns, not free numbers). */
 export function sanitizeRegionTuning(input: Partial<RegionTuning> | null | undefined): RegionTuning {
 	const d = DEFAULT_REGION_TUNING;
 	const num = (v: unknown, fallback: number): number =>
@@ -115,11 +123,8 @@ export function sanitizeRegionTuning(input: Partial<RegionTuning> | null | undef
 	const bitmap = num(input?.bitmap, d.bitmap);
 	return {
 		dilation: Math.min(Math.max(num(input?.dilation, d.dilation), REGION_DILATION_RANGE.min), REGION_DILATION_RANGE.max),
-		blur: Math.min(Math.max(num(input?.blur, d.blur), 0), REGION_BLUR_RANGE.max),
-		bitmap: REGION_BITMAP_OPTIONS.reduce(
-			(best, o) => (Math.abs(o - bitmap) < Math.abs(best - bitmap) ? o : best),
-			REGION_BITMAP_OPTIONS[0] as number,
-		),
+		blur: snapToOption(num(input?.blur, d.blur), REGION_BLUR_OPTIONS),
+		bitmap: snapToOption(bitmap, REGION_BITMAP_OPTIONS),
 		edgeAlpha: Math.min(Math.max(num(input?.edgeAlpha, d.edgeAlpha), REGION_EDGE_ALPHA_RANGE.min), 1),
 	};
 }
@@ -221,11 +226,11 @@ export const LABEL_ZOOM_MAX = 4; // slider far right: labels visible at fit zoom
 // the geometric mean of its ends), coarse 5-step tracks. Signed/zeroed
 // fields get special treatment:
 //   chargeStrength is NEGATIVE — the slider maps |charge| and displays "-x";
-//   clusterPull and region blur have an OFF zone — position 0 is exactly 0
-//   (see toOffSliderPosition), the log range starts one step in.
+//   clusterPull has an OFF zone — position 0 is exactly 0 (see
+//   toOffSliderPosition), the log range starts one step in. Blur used to
+//   have one too; it's a dropdown since 2026-09-13 (non-integers broke).
 
 export const REGION_DILATION_RANGE = { min: 7, max: 112 } as const; // gm = 28
-export const REGION_BLUR_RANGE = { min: 2.5, max: 40 } as const; // gm = 10; 0 = off
 export const REGION_EDGE_ALPHA_RANGE = { min: 0.12, max: 1 } as const; // gm ≈ 0.35
 
 export const CHARGE_RANGE = { min: -480, max: -30 } as const; // |gm| = 120

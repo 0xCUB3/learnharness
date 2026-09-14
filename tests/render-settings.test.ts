@@ -23,7 +23,8 @@ import {
 	LINK_DISTANCE_RANGE,
 	LINK_STRENGTH_RANGE,
 	NODE_SIZE_RANGE,
-	REGION_BLUR_RANGE,
+	REGION_BLUR_OPTIONS,
+	sanitizeRegionTuning,
 	REGION_DILATION_RANGE,
 	REGION_EDGE_ALPHA_RANGE,
 	VELOCITY_DECAY_RANGE,
@@ -109,7 +110,7 @@ describe("sanitizeRenderSettings", () => {
 			physics: { linkStrength: 99, gravity: 7, depthMode: "sideways" },
 		});
 		assert.equal(s.nodeSize, 3);
-		assert.equal(s.regions.blur, 0);
+		assert.equal(s.regions.blur, 2); // snaps into the fixed set {2,4,6,8,10}
 		assert.equal(s.regions.bitmap, 512); // snaps to the nearest fixed option
 		assert.equal(s.regions.edgeAlpha, 1);
 		assert.equal(s.regions.dilation, DEFAULT_REGION_TUNING.dilation);
@@ -188,18 +189,29 @@ describe("slider mapping (log scale, default-centered)", () => {
 		}
 		// Off-zone fields: the default sits at 50 INSIDE the on-part.
 		assert.ok(Math.abs(toOffSliderPosition(DEFAULT_PHYSICS_TUNING.clusterPull, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max) - 50) < 0.6);
-		assert.ok(Math.abs(toOffSliderPosition(DEFAULT_REGION_TUNING.blur, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max) - 50) < 0.6);
 	});
 
 	test("off-slider mapping: position 0 ↔ value 0; the log part round-trips", () => {
-		assert.equal(toOffSliderPosition(0, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max), 0);
-		assert.equal(fromOffSliderPosition(0, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max), 0);
-		const v = fromOffSliderPosition(toOffSliderPosition(10, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max), REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max);
-		assert.ok(Math.abs(v - 10) < 1e-9);
+		assert.equal(toOffSliderPosition(0, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max), 0);
+		assert.equal(fromOffSliderPosition(0, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max), 0);
+		const v = fromOffSliderPosition(toOffSliderPosition(0.15, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max), CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max);
+		assert.ok(Math.abs(v - 0.15) < 1e-9);
 		// One step in (position 5) sits just above the log floor:
 		// min * (max/min)^(5/100), NOT the floor itself (that's position 0,
 		// the off zone).
-		const stepIn = REGION_BLUR_RANGE.min * (REGION_BLUR_RANGE.max / REGION_BLUR_RANGE.min) ** (5 / 100);
-		assert.ok(Math.abs(fromOffSliderPosition(5, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max) - stepIn) < 1e-9);
+		const stepIn = CLUSTER_PULL_RANGE.min * (CLUSTER_PULL_RANGE.max / CLUSTER_PULL_RANGE.min) ** (5 / 100);
+		assert.ok(Math.abs(fromOffSliderPosition(5, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max) - stepIn) < 1e-9);
+	});
+
+	test("blur is a fixed set: the default is 6, non-members snap to the nearest", () => {
+		// Non-integer radii broke the rendering, so the control became a
+		// dropdown — the sanitizer enforces the set for ANY input.
+		assert.equal(DEFAULT_REGION_TUNING.blur, 6);
+		assert.equal(sanitizeRegionTuning({ blur: 3.7 }).blur, 4);
+		assert.equal(sanitizeRegionTuning({ blur: 7.2 }).blur, 8);
+		assert.equal(sanitizeRegionTuning({ blur: -5 }).blur, 2);
+		assert.equal(sanitizeRegionTuning({ blur: 99 }).blur, 10);
+		// Stored blur 0 (the old off zone) snaps back into the set.
+		assert.equal(sanitizeRegionTuning({ blur: 0 }).blur, 2);
 	});
 });

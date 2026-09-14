@@ -83,7 +83,7 @@ import {
 	LINK_STRENGTH_RANGE,
 	NODE_SIZE_RANGE,
 	REGION_BITMAP_OPTIONS,
-	REGION_BLUR_RANGE,
+	REGION_BLUR_OPTIONS,
 	REGION_DILATION_RANGE,
 	REGION_EDGE_ALPHA_RANGE,
 	VELOCITY_DECAY_RANGE,
@@ -625,19 +625,25 @@ export function GraphView() {
 										regions: { ...cur.regions, dilation: fromSliderPosition(p, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max) },
 									}))}
 							/>
-							<SettingSlider
-								label="Blur"
-								min={0}
-								max={100}
-								step={5}
-								value={toOffSliderPosition(regionTuning.blur, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max)}
-								display={regionTuning.blur <= 0 ? "off" : sizeDisplay(regionTuning.blur)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										regions: { ...cur.regions, blur: fromOffSliderPosition(p, REGION_BLUR_RANGE.min, REGION_BLUR_RANGE.max) },
-									}))}
-							/>
+							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+								<span>Blur</span>
+								<select
+									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
+									value={regionTuning.blur}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											regions: { ...cur.regions, blur: Number(e.target.value) },
+										}))
+									}
+								>
+									{REGION_BLUR_OPTIONS.map((o) => (
+										<option key={o} value={o}>
+											{o}
+										</option>
+									))}
+								</select>
+							</label>
 							<SettingSlider
 								label="Edge alpha"
 								min={0}
