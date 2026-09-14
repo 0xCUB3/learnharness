@@ -20,17 +20,27 @@ import { after, describe, it } from "node:test";
 import type { UIMessage } from "ai";
 import type { AuditResult } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
-import { getGraph, graphSnapshot, mergeFindings, pendingQuizAnswers, type GraphDeps } from "../src/core/graph.ts";
+import { clusterContentId, getGraph, graphSnapshot, mergeFindings, pendingQuizAnswers, type GraphDeps } from "../src/core/graph.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
-import { LEDGER_FILES, PATHS } from "../config.ts";
+import { LEDGER_FILES, PATHS, SOURCES_FILE, EMBEDDINGS_FILE } from "../config.ts";
 
 /** The wired fs adapters, exactly what src/server/stores.ts passes in production. */
 const graphDeps = { chatStore, graphStore } as const satisfies GraphDeps;
 
+/** The session merge source for a chat — what the pipeline passes: the live
+ *  transcript + its updatedAt checkpoint stamp. (Notes imports pass
+ *  messages: null — see the notes-merger test below.) */
+function sessionSource(chatId: string): { messages: UIMessage[]; foldedAt: string } {
+	const record = chatStore.getChat(chatId)!;
+	return { messages: record.messages as UIMessage[], foldedAt: record.updatedAt };
+}
+
 // ─── ledger isolation (backup-and-clear of data/graph/*.jsonl) ──────────────
 
-const LEDGER_PATHS = Object.values(LEDGER_FILES);
+// EMBEDDINGS_FILE too: the semantic-cluster source (read by graphSnapshot)
+// — isolated like the rest so this suite never touches the real vectors.
+const LEDGER_PATHS = [...Object.values(LEDGER_FILES), SOURCES_FILE, EMBEDDINGS_FILE];
 const backups: Array<{ file: string; bak: string }> = [];
 const createdChats: string[] = [];
 
@@ -233,7 +243,7 @@ function scopedGraph(chatIds: string[]) {
 
 describe("the merger (mergeFindings)", () => {
 	it("creates nodes from the verdicts, rebuilds quiz events deterministically, records observations", () => {
-		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps);
+		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps, sessionSource(chat1.id));
 		assert.deepEqual(stats, { nodes: 3, edges: 1, events: 6 });
 
 		const graph = scopedGraph([chat1.id]);
@@ -302,7 +312,7 @@ describe("the merger (mergeFindings)", () => {
 	});
 
 	it("is idempotent — re-merging the same verdicts appends nothing", () => {
-		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps);
+		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps, sessionSource(chat1.id));
 		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 0 });
 		const graph = scopedGraph([chat1.id]);
 		assert.equal(graph.nodes.length, 3);
@@ -346,6 +356,7 @@ describe("the merger (mergeFindings)", () => {
 				dropped: [],
 			},
 			graphDeps,
+			sessionSource(chat2.id),
 		);
 		assert.deepEqual(stats, { nodes: 0, edges: 0, events: 1 });
 
@@ -361,6 +372,100 @@ describe("the merger (mergeFindings)", () => {
 		// The mapping records the verdict: (chat2, q1) → the linked node.
 		const m = graphStore.readMappings().find((x) => x.chatId === chat2.id)!;
 		assert.deepEqual(m, { chatId: chat2.id, sourceId: "q1", graphNodeId: alphaId });
+	});
+
+	it("resolves imported-notes ids to their file paths in the snapshot (static provenance)", () => {
+		// The notes front door in miniature: a source record + a merge under
+		// its src id — the snapshot must label it with the file path (a
+		// static entry), never as a chat session.
+		graphStore.upsertSource({ id: "src_snapfixture", filePath: "/vault/learn vim.md", importedAt: "2026-09-13T00:00:00.000Z" });
+		mergeFindings(
+			"src_snapfixture",
+			{
+				propositions: [
+					{
+						id: "p1",
+						name: "Vim registers",
+						statement: "Vim registers map single keys to editing commands.",
+						aliases: [],
+						messages: [],
+						evidence: ["fixture evidence"],
+						understanding: "solid",
+					},
+				],
+				edges: [],
+				attribution: { quiz: {} },
+				dropped: [],
+			},
+			graphDeps,
+			{ messages: null, foldedAt: "2026-09-13T00:00:00.000Z" },
+		);
+		const snap = graphSnapshot(graphDeps);
+		const node = snap.nodes.find((n) => n.statement === "Vim registers map single keys to editing commands.")!;
+		assert.equal(snap.fileSources["src_snapfixture"], "/vault/learn vim.md");
+		assert.deepEqual(snap.nodeSessions[node.id], ["src_snapfixture"], "the file entry joins the node's sessions list");
+		assert.equal(snap.sessions["src_snapfixture"], undefined, "a notes source is never a chat session");
+		// The understanding observation joins under the source id like any session's.
+		assert.equal(snap.nodeObservations[node.id]!["src_snapfixture"], "solid");
+	});
+
+	it("derives semantic clusters in graphSnapshot, joined with persisted labelings", () => {
+		// Three propositions; the cluster comes from the EMBEDDING ledger
+		// (semantic topics, DECIDED 2026-09-13) — the embedder persists the
+		// partition, the snapshot just reads it. Here we play the embedder.
+		const tri = ["Alpha.", "Beta.", "Gamma cluster."] as const;
+		const merge = mergeFindings(
+			"src_clusterfixture",
+			{
+				propositions: tri.map((statement, i) => ({
+					id: `p${i + 1}`,
+					name: `Cluster node ${i + 1}`,
+					statement,
+					aliases: [],
+					messages: [],
+					evidence: ["fixture evidence"],
+				})),
+				edges: [
+					{ from: "p1", to: "p2", type: "follows", messages: [], evidence: ["e"] },
+					{ from: "p2", to: "p3", type: "follows", messages: [], evidence: ["e"] },
+					{ from: "p1", to: "p3", type: "follows", messages: [], evidence: ["e"] },
+				],
+				attribution: { quiz: {} },
+				dropped: [],
+			},
+			graphDeps,
+			{ messages: null, foldedAt: "2026-09-13T00:00:00.000Z" },
+		);
+		assert.equal(merge.nodes, 3);
+		// The embedder's contract: recluster at the end of the batch and
+		// PERSIST the partition in the embeddings ledger.
+		const ids = tri.map((s) => getGraph(graphStore).nodes.find((n) => n.statement === s)!.id);
+		graphStore.writeEmbeddings({
+			model: "test/embedder",
+			dim: 2,
+			vectors: {},
+			clusters: [{ members: ids }],
+			updatedAt: "2026-09-13T00:00:00.000Z",
+		});
+		const snap = graphSnapshot(graphDeps);
+		// Presentation threshold: every cluster is >= 3 members.
+		assert.ok(snap.clusters.every((c) => c.members.length >= 3));
+		// Our trio is exactly one cluster, unlabeled until the namer runs.
+		const mine = snap.clusters.find((c) => c.members.length === 3 && tri.every((s) => c.members.includes(snap.nodes.find((n) => n.statement === s)!.id)));
+		assert.ok(mine, "the 3-clique is a cluster");
+		assert.equal(mine!.label, null);
+		assert.match(mine!.id, /^clu_/);
+		// Mint the labeling the namer would append — the next read joins it.
+		graphStore.appendClusterLabel({
+			id: clusterContentId(mine!.members),
+			label: "Test region",
+			core: mine!.members,
+			createdAt: "2026-09-13T00:00:00.000Z",
+		});
+		const snap2 = graphSnapshot(graphDeps);
+		const claimed = snap2.clusters.find((c) => c.members.length === 3 && tri.every((s) => c.members.includes(snap2.nodes.find((n) => n.statement === s)!.id)))!;
+		assert.equal(claimed.label, "Test region");
+		assert.equal(claimed.id, clusterContentId(mine!.members), "the claimed cluster carries the record's id");
 	});
 
 	it("derives sessions and per-session understanding observations in graphSnapshot", () => {
@@ -408,17 +513,54 @@ describe("the merger (mergeFindings)", () => {
 				dropped: [],
 			},
 			graphDeps,
+			sessionSource(chat3.id),
 		);
 		assert.equal(stats.nodes, 1, "created — the merger does not match strings");
 		assert.equal(getGraph(graphStore).nodes.filter((n) => n.statement === "Alpha intuition").length, 2);
 	});
 
-	it("returns zeros for unknown chats", () => {
-		assert.deepEqual(mergeFindings("chat_does_not_exist", fixtureAudit(), graphDeps), {
-			nodes: 0,
-			edges: 0,
-			events: 0,
+	it("merges the notes front door: source id as chatId, no quiz events, checkpoint at import time", () => {
+		// Raw personal notes carry no transcript — the merger gets no
+		// message parts, so NO quiz events are rebuilt; the understanding
+		// observation still lands, keyed to the source id.
+		const stats = mergeFindings(
+			"src_notesfixture",
+			{
+				propositions: [
+					{
+						id: "p1",
+						name: "Vim normal mode",
+						statement: "Vim starts in Normal mode, where keys are commands.",
+						aliases: [],
+						messages: [], // notes carry no message anchors — the file is the provenance
+						evidence: ["fixture evidence"],
+						understanding: "solid",
+					},
+				],
+				edges: [],
+				attribution: { quiz: {} }, // normalized by the notes pipeline — nothing to attribute
+				dropped: [],
+			},
+			graphDeps,
+			{ messages: null, foldedAt: "2026-09-13T00:00:00.000Z" },
+		);
+		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 1 });
+
+		const node = getGraph(graphStore).nodes.find((n) => n.statement.startsWith("Vim starts"))!;
+		assert.deepEqual(node.provenance, [], "no message anchors — the mapping line carries the source");
+		assert.deepEqual(graphStore.readMappings().find((m) => m.chatId === "src_notesfixture"), {
+			chatId: "src_notesfixture",
+			sourceId: "p1",
+			graphNodeId: node.id,
 		});
+		// The observation event is file-scoped; no quiz events exist.
+		const events = graphStore.readEvents().filter((e) => e.chatId === "src_notesfixture");
+		assert.deepEqual(
+			events.map((e) => [e.kind, e.ref, e.note]),
+			[["observation", "obs:p1", "solid"]],
+		);
+		// The checkpoint stamps the import time.
+		assert.equal(graphStore.readCheckpoints().find((c) => c.chatId === "src_notesfixture")?.foldedAt, "2026-09-13T00:00:00.000Z");
 	});
 });
 
@@ -452,7 +594,7 @@ describe("the trigger helper (pendingQuizAnswers)", () => {
 		assert.equal(pendingQuizAnswers(chat.id, graphDeps), 1, "one answered quiz pending");
 		assert.equal(pendingQuizAnswers("chat_does_not_exist", graphDeps), 0);
 
-		mergeFindings(chat.id, fixtureAudit(), graphDeps);
+		mergeFindings(chat.id, fixtureAudit(), graphDeps, sessionSource(chat.id));
 		// call-s is unattributed here (fixtureAudit has no call-s attribution)
 		// — but it still becomes an event, so nothing stays pending.
 		assert.equal(pendingQuizAnswers(chat.id, graphDeps), 0, "extracted → nothing pending");

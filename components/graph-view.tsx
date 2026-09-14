@@ -3,74 +3,113 @@
 /**
  * The home knowledge-graph view (W4; vision §1 "Rendering (DECIDED)").
  *
- * sigma.js v3 + graphology + forceAtlas2, run-then-freeze: ONE synchronous
- * forceAtlas2.assign (100 iterations, inferSettings) inside a useEffect
- * writes x/y. No layout animation ever starts; the ONLY animation is the
- * short hover fade (enter/leave transitions), strictly bounded in time
- * and cancelled on unmount — idle CPU stays near zero. Physics is
- * placement only: pan/zoom, no dragging, no editing.
+ * ARCHITECTURE (2026-09-13, decided after the research pass —
+ * docs/research/graph-rendering.md, Option B): sigma.js is GONE. The
+ * renderer is now a hand-rolled single Canvas 2D (./graph-canvas.ts) —
+ * a DUMB DRAW FUNCTION over plain data with ONE requestAnimationFrame
+ * loop and a dirty flag. Everything that made the sigma era fragile is
+ * structurally impossible now: hulls cannot lag nodes (one loop, one
+ * camera, one frame), settings changes cannot shift anything (the
+ * camera lives in the renderer and no rebuild ever happens), and the
+ * per-camera-event full-canvas repaints (GPU spikes + coil whine) are
+ * gone (at most one draw per frame, and NO frame at all while idle).
  *
- * Labels render the node `name` — the very short, glanceable label the
- * extractor coins (a glossary-headword-style handle); the full-precision
- * `statement` lives on the detail card. Custom canvas drawers replace
- * sigma's defaults:
- *   - defaultDrawNodeLabel: plain wrapped text, centered below the node,
- *     word-wrapped at a max line width — no truncation, no one-line sprawl.
- *   - defaultDrawNodeHover: NO background box (sigma's default is a
- *     hardcoded white one). Instead the hovered node gets a soft glow
- *     halo in the node's color at a constant radius, flush with the
- *     disc edge, and its name brightens — the "this is clickable,
- *     click for the full fact" affordance. Entering/leaving hover fades
- *     ONE transition factor shared by halo and text alike, so the
- *     halo's opacity and the text's muted→bright cross-fade stay in
- *     sync (no growth, no pulse; interpolating from the current value
- *     means rapid hover toggles glide instead of snapping). Hover
- *     always shows the name, even when labels are zoomed out.
- * Node hit-testing is the disc PLUS a pad: sigma picks nodes from a
- * half-resolution framebuffer (no v3 setting enlarges hitboxes), and the
- * glow halo is bigger than the stock hitbox — touching the halo
- * de-hovered the node, which oscillated (the hover flicker). A
- * NodeCircleProgram subclass (PICKING_VERTEX_SHADER below) adds
- * PICKING_PAD_PX of pickable radius under #ifdef PICKING_MODE only, per
- * the maintainer-endorsed v3 pattern (#1493); the visible disc stays
- * pixel-identical, and the whole halo becomes hoverable/clickable.
- * Labels are zoom-gated GLOBALLY with a fade: all names appear at once
- * when the camera is at fit zoom or closer (ratio <= 1), then fade out
- * together across a short zoom span before label rendering switches off —
- * no per-node size gating, so labels never pop in one by one. (The Obsidian
- * text-fade feel, applied to the whole graph.)
+ * Layout fallback (ledger absent): ONE synchronous incrementalLayout
+ * pass (d3-force, core/layout.ts) inside a useEffect writes world-space
+ * x/y, then the positions are handed to the renderer as data. No layout
+ * animation ever starts; the only animation is the
+ * short hover fade, strictly bounded in time — idle CPU is zero (the
+ * loop schedules no rAF until something actually changes).
  *
- * The search panel (top-right overlay): a search box matching name or
- * statement text — the transitional node-state classes are gone (2026-09-08;
- * nodes render uniformly until the state model ideation lands), so there
- * are no state legend rows or toggles anymore. Filtering flows through
- * sigma's official
- * nodeReducer/edgeReducer settings (`hidden`), so rendering, hover,
- * picking, and labels all respect it; edges drop when either endpoint is
- * hidden, and an open detail card closes if its node is filtered out.
- * Clicking a node opens the detail card anchored just below the node's
- * viewport position (flipping above near the bottom edge); any camera move
- * (pan/zoom) dismisses it. The `requires` edges render as arrows pointing
- * prerequisite → dependent.
+ * The component's job is everything AROUND drawing: fetch + refetch the
+ * snapshot, run the layout, resolve theme colors to hex, filter via the
+ * search box, own the settings panel / detail card / import button /
+ * pipeline chips, and FEED the renderer (data, settings, visibility).
+ * The renderer's contract stays presentation-only — which is exactly
+ * what the upcoming playground and cluster-first layout work needs: a
+ * renderer that draws whatever data it is given, never questioning it.
+ *
+ * Visual semantics, all preserved verbatim from the sigma era:
+ *   - Node labels (the short extractor-coined names) wrap under the
+ *     node; one GLOBAL zoom gate fades them together (no per-node pop).
+ *   - Hover: a soft glow halo in the node's own color at a constant
+ *     radius, opacity cross-faded ~180ms with the name brightening on
+ *     the same factor; the whole halo is hit-testable (picking pad).
+ *   - Cluster hulls (vision §1): soft layered translucent fills + a
+ *     dashed boundary per cluster, stable hue from the cluster id; the
+ *     region label at the centroid fades in over the exact zoom span
+ *     node labels fade out (THE single zoom control) — and is
+ *     toggleable in the settings panel (hulls always draw).
+ *   - The persisted labelZoom setting keeps sigma's camera-ratio
+ *     convention (1 = fit zoom, SMALLER = zoomed in): labels until
+ *     zoom 0.5x means labels appear once zoomed in past 2x fit.
+ *   - Click a node -> the detail card anchored just below it (flipping
+ *     above near the bottom edge); any camera move dismisses it.
+ *     Clicking the empty stage closes it. Search filtering hides nodes
+ *     (and their edges) from rendering, picking, hover, AND labels;
+ *     an open card closes if its node is filtered out.
+ *
+ * Rendering settings (2026-09-13): the gear in the search panel reveals
+ * five sliders (node size, edge width, arrowhead length, label size, the
+ * zoom threshold) plus the cluster-labels checkbox. SERVER-persisted
+ * (data/render-settings.json via /api/graph/render-settings): loaded
+ * once after mount, saved debounced on every user change — one source
+ * of truth shared by every browser. The label-zoom slider is log-scaled
+ * (its useful band 0.25–0.5 sits mid-slider, not crammed at the left)
+ * and displays normalized units where the default 0.5 reads as "1×".
+ * Settings apply by just redrawing — no rebuild, no re-layout, and the
+ * camera never moves.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Loader2Icon, SearchIcon, WaypointsIcon } from "lucide-react";
-import Graph from "graphology";
-import forceAtlas2 from "graphology-layout-forceatlas2";
-import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
-import { seededRandom, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
+import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
+import {
+	ARROW_LENGTH_RANGE,
+	CHARGE_RANGE,
+	CLUSTER_PULL_RANGE,
+	DEPTH_BASE_RADIUS_RANGE,
+	DEPTH_SPACING_RANGE,
+	DEPTH_STRENGTH_RANGE,
+	DEFAULT_RENDER_SETTINGS,
+	EDGE_WIDTH_RANGE,
+	GRAVITY_RANGE,
+	LABEL_SIZE_RANGE,
+	LABEL_ZOOM_MAX,
+	LABEL_ZOOM_MIN,
+	LINK_DISTANCE_RANGE,
+	LINK_STRENGTH_RANGE,
+	NODE_SIZE_RANGE,
+	REGION_BITMAP_OPTIONS,
+	REGION_BLUR_OPTIONS,
+	REGION_DILATION_RANGE,
+	REGION_EDGE_ALPHA_RANGE,
+	VELOCITY_DECAY_RANGE,
+	fromOffSliderPosition,
+	fromSliderPosition,
+	labelZoomDisplay,
+	sanitizeRenderSettings,
+	toOffSliderPosition,
+	toSliderPosition,
+} from "@/src/core";
 
-/** The uniform node look (no state classes — WebGL wants hex, not oklch):
- *  the accent color + the old "known" size, until the state model lands. */
+/** The uniform node look (no state classes — canvas wants hex, not oklch):
+ *  the accent color, until the state model lands. */
 const NODE_COLOR_TOKEN = "--primary";
-const NODE_SIZE = 8;
+
+// ---- Render settings (the settings-panel controls) ------------------------
+//
+// The shape, defaults, sanitizer, and slider mappings live in
+// src/core/render-settings.ts (shared with the server store + tests).
+
+type RenderSettings = GraphRenderSettings;
 
 /**
  * Pure filter predicate for the search panel: a node is visible when the
  * query is empty or matches its name or statement (case-insensitive).
- * Exported for tests; the sigma reducers just consume its verdict.
+ * Exported for tests; the visibility feed just consumes its verdict.
  */
 export function isNodeVisible(node: Pick<GraphNode, "name" | "statement">, query: string): boolean {
 	const q = query.trim().toLowerCase();
@@ -78,225 +117,7 @@ export function isNodeVisible(node: Pick<GraphNode, "name" | "statement">, query
 	return node.name.toLowerCase().includes(q) || node.statement.toLowerCase().includes(q);
 }
 
-// ---- Label drawing (canvas) ---------------------------------------------
-//
-// sigma's defaults draw the label on ONE line to the right of the node with
-// a white box on hover. We replace both: names wrap under the node at a max
-// line width, muted at rest; on hover the node pulses a soft glow in its
-// own state color and the name brightens (no background box).
-
-const LABEL_MAX_WIDTH = 170; // px — wraps long names instead of a wide strip
-const LABEL_GAP = 6; // px between node edge and first label line
-const LABEL_LINE_HEIGHT = 1.3;
-/** Camera ratio at/below which ALL labels appear at once (1 = fit zoom). */
-const LABELS_CAMERA_RATIO = 1;
-/** Zoom span (camera-ratio units) over which labels fade out together. */
-const LABELS_FADE_SPAN = 0.5;
-
-// Hover glow: a soft halo ring in the node's own color at a CONSTANT
-// radius, starting flush at the disc edge (no gap — a gap reads as a
-// false outline/border between node and glow). Only the halo's OPACITY
-// animates (hover enter/leave); it never grows and never pulses.
-const GLOW_PAD = 9; // px the halo extends beyond the node disc (constant)
-const GLOW_ALPHA = 0.45; // halo opacity at the disc edge, fading outward
-const HOVER_FADE_MS = 180; // hover halo opacity fade length
-
-// ---- Padded picking (WebGL) ----------------------------------------------
-//
-// sigma picks nodes by reading a single pixel from a picking framebuffer
-// rendered at HALF the CSS resolution: small nodes get tiny, ragged hit
-// edges, and our glow halo (GLOW_PAD beyond the disc) is NOT pickable, so
-// moving the cursor from the disc onto its own halo de-hovered it — an
-// oscillation loop (the hover flicker). sigma v3 has no setting for hit
-// padding; the maintainer-endorsed pattern (#1493, fixed officially in v4
-// as `nodePickingPadding`) is a node program whose vertex shader enlarges
-// the disc ONLY in the picking shader pass.
-
-/** Extra radius (px) added to each node's PICKABLE disc (picking layer
- *  only — the visible disc is untouched). >= GLOW_PAD so the entire hover
- *  halo is hit-testable. */
-const PICKING_PAD_PX = 10;
-
-/**
- * The node-circle vertex shader, verbatim from sigma 3.0.3
- * (dist/index-fad77a13.esm.js, SHADER_SOURCE$5) with ONE change: under
- * `#ifdef PICKING_MODE` (sigma compiles this source twice — visible render
- * vs picking readback — so the visible pass never takes this branch) the
- * size gains PICKING_PAD_PX of radius, which is the same on-screen unit as
- * `data.size` (the px radius the canvas drawers use for the halo).
- */
-const PICKING_VERTEX_SHADER = /* glsl */ `
-attribute vec4 a_id;
-attribute vec4 a_color;
-attribute vec2 a_position;
-attribute float a_size;
-attribute float a_angle;
-
-uniform mat3 u_matrix;
-uniform float u_sizeRatio;
-uniform float u_correctionRatio;
-
-varying vec4 v_color;
-varying vec2 v_diffVector;
-varying float v_radius;
-varying float v_border;
-
-const float bias = 255.0 / 254.0;
-
-void main() {
-  float pickedSize = a_size;
-#ifdef PICKING_MODE
-  // Picking pass only: enlarge the hitbox by PICKING_PAD_PX of radius.
-  pickedSize += ${PICKING_PAD_PX.toFixed(1)};
-#endif
-  float size = pickedSize * u_correctionRatio / u_sizeRatio * 4.0;
-  vec2 diffVector = size * vec2(cos(a_angle), sin(a_angle));
-  vec2 position = a_position + diffVector;
-  gl_Position = vec4(
-    (u_matrix * vec3(position, 1)).xy,
-    0,
-    1
-  );
-
-  v_diffVector = diffVector;
-  v_radius = size / 2.0;
-
-#ifdef PICKING_MODE
-  // For picking mode, we use the ID as the color:
-  v_color = a_id;
-#else
-  // For normal mode, we use the color:
-  v_color = a_color;
-#endif
-
-  v_color.a *= bias;
-}
-`;
-
-/** "#rrggbb" + alpha → "rgba(...)" (tokenHex only ever emits #rrggbb). */
-function rgbaFromHex(hex: string, alpha: number): string {
-	const r = Number.parseInt(hex.slice(1, 3), 16);
-	const g = Number.parseInt(hex.slice(3, 5), 16);
-	const b = Number.parseInt(hex.slice(5, 7), 16);
-	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-/** Word-wrap for canvas text. Never truncates: overlong single words are
- *  hard-broken by character so no line ever exceeds maxWidth. */
-function wrapLabel(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-	const lines: string[] = [];
-	for (const word of text.split(/\s+/).filter(Boolean)) {
-		const last = lines.length > 0 ? lines[lines.length - 1]! : null;
-		if (last !== null) {
-			const joined = `${last} ${word}`;
-			if (context.measureText(joined).width <= maxWidth) {
-				lines[lines.length - 1] = joined;
-				continue;
-			}
-		}
-		let chunk = "";
-		for (const char of word) {
-			if (chunk && context.measureText(`${chunk}${char}`).width > maxWidth) {
-				lines.push(chunk);
-				chunk = char;
-			} else {
-				chunk += char;
-			}
-		}
-		if (chunk) lines.push(chunk);
-	}
-	return lines;
-}
-
-/** The wrapped node name (the short label), centered below the node — used by both drawers
- *  with identical geometry so hover only changes the color, nothing jumps. */
-function drawName(
-	context: CanvasRenderingContext2D,
-	data: { label?: string | null; x: number; y: number; size: number },
-	settings: { labelSize: number; labelWeight: string; labelFont: string },
-	color: string,
-): void {
-	if (!data.label) return;
-	const size = settings.labelSize;
-	context.save();
-	context.font = `${settings.labelWeight} ${size}px ${settings.labelFont}`;
-	const lines = wrapLabel(context, data.label, LABEL_MAX_WIDTH);
-	context.fillStyle = color;
-	context.textAlign = "center";
-	context.textBaseline = "top";
-	const firstTop = data.y + data.size + LABEL_GAP;
-	for (let i = 0; i < lines.length; i++) {
-		context.fillText(lines[i]!, data.x, firstTop + i * size * LABEL_LINE_HEIGHT);
-	}
-	context.restore();
-}
-
-/** The hovered-state paint at a given transition factor (0 = resting,
- *  1 = fully hovered): a glow halo in the node's own state color at a
- * CONSTANT radius (opacity fades in/out; the halo never grows) starting
- * flush at the disc edge (the evenodd punch-out keeps the disc itself
- * unpainted). The name is drawn at partial alpha in the bright hover
- * color — the muted resting label on the layer beneath shows through,
- * so text and halo cross-fade on the SAME factor and stay in sync. */
-function paintHover(
-	context: CanvasRenderingContext2D,
-	data: { label?: string | null; x: number; y: number; size: number; color: string },
-	settings: { labelSize: number; labelWeight: string; labelFont: string },
-	fade: number,
-	hoverTextColor: string,
-): void {
-	context.save();
-	if (fade > 0.02) {
-		const inner = data.size;
-		const outer = data.size + GLOW_PAD;
-		const glow = context.createRadialGradient(data.x, data.y, inner, data.x, data.y, outer);
-		glow.addColorStop(0, rgbaFromHex(data.color, GLOW_ALPHA * fade));
-		glow.addColorStop(1, rgbaFromHex(data.color, 0));
-		context.fillStyle = glow;
-		context.beginPath();
-		context.arc(data.x, data.y, outer, 0, Math.PI * 2);
-		context.arc(data.x, data.y, inner, 0, Math.PI * 2, true);
-		context.fill("evenodd");
-	}
-	// Same fade factor as the halo: text and glow rise together. The
-	// bright name at partial alpha over the muted resting label beneath is
-	// a smooth muted→bright cross-fade rather than an instant color swap.
-	context.globalAlpha = fade;
-	drawName(context, data, settings, hoverTextColor);
-	context.restore();
-}
-
-/** Mutable hover-transition state shared between the drawers and the
- *  effect's enter/leave animation. */
-interface HoverState {
-	fade: number;
-	/** Set on every sigma-driven hover paint; the leave animation draws
-	 *  through it directly, since sigma stops calling drawHover once the
-	 *  mouse has left the node. */
-	repaint: ((fade: number) => void) | null;
-}
-
-/** Make the pair of canvas label drawers bound to the theme's colors. */
-function makeLabelDrawers(labelColor: string, hoverTextColor: string, hover: HoverState) {
-	const drawLabel: NodeLabelDrawingFunction = (context, data, settings) => {
-		drawName(context, data, settings, labelColor);
-	};
-
-	const drawHover: NodeHoverDrawingFunction = (context, data, settings) => {
-		hover.repaint = (fade) => {
-			context.save();
-			context.setTransform(1, 0, 0, 1, 0, 0);
-			context.clearRect(0, 0, context.canvas.width, context.canvas.height);
-			context.restore();
-			if (fade > 0) paintHover(context, data, settings, fade, hoverTextColor);
-		};
-		paintHover(context, data, settings, hover.fade, hoverTextColor);
-	};
-
-	return { drawLabel, drawHover };
-}
-
-// ---- Color helpers (WebGL/canvas want hex, not oklch) --------------------
+// ---- Color helpers (canvas wants hex, not oklch) ---------------------------
 
 /** Resolve a CSS variable (oklch in this app) to #rrggbb via the canvas. */
 function cssColorToHex(css: string): string {
@@ -322,27 +143,139 @@ function tokenHex(cssVar: string): string {
 
 interface Selection {
 	node: GraphNode;
-	chatIds: string[];
-	/** Node position in container pixels (from graphToViewport at click time). */
+	/** The sources that touched this node: chat ids (deep-linkable sessions)
+	 *  and notes-source ids ("src_…" — imported files, static entries). */
+	sourceIds: string[];
+	/** Node position in container pixels (at click time; camera moves
+	 *  dismiss the card, so it never needs re-anchoring). */
 	anchor: { x: number; y: number };
+}
+
+/** One labeled range row for the rendering-settings panel. */
+/** Compact size display for the log sliders: "2", "1.6", "0.75". */
+function sizeDisplay(v: number): string {
+	return `${v >= 1 ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100}`;
+}
+
+function SettingSlider({
+	label,
+	min,
+	max,
+	step,
+	value,
+	display,
+	onChange,
+}: {
+	label: string;
+	min: number;
+	max: number;
+	step: number;
+	value: number;
+	/** Value display override (e.g. "1.5×" for zoom) — defaults to the raw number. */
+	display?: string;
+	onChange: (v: number) => void;
+}) {
+	return (
+		<label className="flex flex-col gap-1">
+			<span className="flex items-center justify-between text-[11px] text-muted-foreground">
+				{label}
+				<span className="tabular-nums">{display ?? value}</span>
+			</span>
+			<input
+				type="range"
+				min={min}
+				max={max}
+				step={step}
+				value={value}
+				onChange={(e) => onChange(Number(e.target.value))}
+				className="h-1.5 w-full accent-primary"
+			/>
+		</label>
+	);
 }
 
 export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
+	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
-	// Search panel state: the query text.
-	const [query, setQuery] = useState("");
-	// The sigma instance and its graphology graph live inside the mount
-	// effect; refs expose them to the filters effect, and `rendererEpoch`
-	// re-triggers it when a new renderer is constructed.
-	const rendererRef = useRef<import("sigma").default | null>(null);
-	const graphRef = useRef<Graph | null>(null);
-	const [rendererEpoch, setRendererEpoch] = useState(0);
+	// The latest snapshot for the renderer's click callbacks (they are
+	// constructed once, so they read through this ref, never a closure).
+	const snapshotRef = useRef<GraphSnapshot | null>(null);
+	snapshotRef.current = snapshot;
 
-	// The id set that survives the current search — consumed by the sigma
-	// reducers and the "no matches" hint.
+	// Search panel state: the query text + the settings section toggle.
+	const [query, setQuery] = useState("");
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	// Render settings: SERVER-persisted (data/render-settings.json via
+	// /api/graph/render-settings) — sizes AND the region/physics sections
+	// (user-facing since 2026-09-13; the dev-session era is over). Loaded
+	// once after mount; every user change saves back, debounced. Defaults
+	// render until the load resolves — a fraction of a second at worst.
+	const [settings, setSettings] = useState<GraphRenderSettings>(DEFAULT_RENDER_SETTINGS);
+	// The two nested sections, unpacked for the renderer feed effects
+	// below (same names the old session state had).
+	const regionTuning = settings.regions;
+	const physicsTuning = settings.physics;
+	const settingsRef = useRef(settings);
+	settingsRef.current = settings;
+	// True once the user has moved a control this mount: the server copy
+	// must never clobber a (possibly newer) local change.
+	const userTouched = useRef(false);
+	// True once the initial GET settled — saves are held back until then,
+	// so merely mounting never PUTs defaults over the server copy.
+	const serverLoaded = useRef(false);
+	const savePending = useRef(false);
+	const changeSettings = (update: (cur: RenderSettings) => RenderSettings) => {
+		userTouched.current = true;
+		setSettings(update);
+	};
+	const saveToServer = (s: RenderSettings) => {
+		fetch("/api/graph/render-settings", {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(s),
+		}).catch((err) => console.error("[graph] settings save failed:", err));
+	};
+	useEffect(() => {
+		fetch("/api/graph/render-settings")
+			.then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
+			.then((raw) => {
+				// Apply only if the user hasn't already moved a slider —
+				// if they outran the network, their change wins.
+				if (raw !== null && !userTouched.current) setSettings(sanitizeRenderSettings(raw));
+			})
+			.catch(() => {
+				// server unreachable → in-memory defaults keep working
+			})
+			.finally(() => {
+				serverLoaded.current = true;
+				// A change made during the fetch was held back — send now.
+				if (savePending.current) {
+					savePending.current = false;
+					saveToServer(settingsRef.current);
+				}
+			});
+	}, []);
+	useEffect(() => {
+		if (!userTouched.current) return; // mount-run / server-apply: no save
+		if (!serverLoaded.current) {
+			savePending.current = true; // hold until the GET settles
+			return;
+		}
+		const id = setTimeout(() => saveToServer(settings), 400);
+		return () => clearTimeout(id);
+	}, [settings]);
+
+	// The renderer instance lives across snapshot refetches and settings
+	// changes (its camera is never reset by either); `posRef` carries the
+	// frozen layout out of the layout effect.
+	const rendererRef = useRef<GraphCanvasRenderer | null>(null);
+	const posRef = useRef<Map<string, { x: number; y: number }> | null>(null);
+
+	// The id set that survives the current search — consumed by the
+	// visibility feed and the "no matches" hint.
 	const visibleIds = useMemo(() => {
 		const set = new Set<string>();
 		if (snapshot)
@@ -368,6 +301,26 @@ export function GraphView() {
 		};
 	}, [refreshTick]);
 
+	// Notes import (the format-agnostic front door): file picker → POST
+	// /api/graph/import; the runs surface in the status chips below, and the
+	// graph refetches when they finish (the runs-empty transition).
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const [importing, setImporting] = useState(false);
+	const onImportFiles = (files: FileList | null) => {
+		if (!files || files.length === 0) return;
+		setImporting(true);
+		const form = new FormData();
+		for (const file of Array.from(files)) form.append("files", file);
+		fetch("/api/graph/import", { method: "POST", body: form })
+			.then(async (res) => {
+				const body = (await res.json()) as { results: { filePath: string; ok: boolean }[] };
+				const failed = body.results.filter((r) => !r.ok);
+				if (failed.length > 0) console.error("notes import failed for:", failed);
+			})
+			.catch((err) => console.error("import failed:", err))
+			.finally(() => setImporting(false));
+	};
+
 	// Background pipeline status: poll /api/graph/status; when a run
 	// finishes (some -> none), refetch the graph.
 	const [pipelineRuns, setPipelineRuns] = useState<{ chatId: string; title: string; phase: string; startedAt: number }[]>([]);
@@ -392,191 +345,135 @@ export function GraphView() {
 		};
 	}, []);
 
-	// Build the graphology graph, lay it out once, mount sigma.
+	// Layout (Option A): the positions ledger (written by the server's
+	// incremental settle after every merge) IS the layout — the renderer
+	// receives it as frozen data. The local one-shot forceAtlas2 pass runs
+	// ONLY as a fallback when the ledger is absent (a graph never merged
+	// through the pipeline, e.g. tests or a fresh install).
 	useEffect(() => {
 		if (!snapshot || snapshot.nodes.length === 0) return;
-		const container = containerRef.current;
-		if (!container) return;
-
-		const edgeColor = tokenHex("--ring");
-		const labelColor = tokenHex("--muted-foreground");
-		const hoverTextColor = tokenHex("--foreground");
-		const nodeColor = tokenHex(NODE_COLOR_TOKEN);
-		// Mutable hover-transition state: 0 = resting, 1 = fully hovered.
-		const hover: HoverState = { fade: 0, repaint: null };
-		const { drawLabel, drawHover } = makeLabelDrawers(labelColor, hoverTextColor, hover);
-
-		const graph = new Graph();
-		for (const node of snapshot.nodes) {
-			// Seeded start positions (FA2 requires non-zero x/y) keep the
-			// frozen layout stable for a given node set across remounts.
-			const rand = seededRandom(node.id);
-			graph.addNode(node.id, {
-				label: node.name,
-				size: NODE_SIZE,
-				color: nodeColor,
-				x: (rand() - 0.5) * 100,
-				y: (rand() - 0.5) * 100,
-			});
-		}
-		for (const edge of snapshot.edges) {
-			// Snapshot edges are already merged by (from,to,type); the guard
-			// is just belt-and-braces for the simple graphology graph.
-			if (!graph.hasEdge(edge.from, edge.to)) {
-				graph.addEdge(edge.from, edge.to, { type: "arrow", color: edgeColor, size: 1 });
+		// The ledger path: every positioned node uses its resting position;
+		// nodes the ledger doesn't know yet (raced mid-settle) fall through
+		// to seeded scatter below.
+		const ledger = snapshot.positions;
+		if (ledger) {
+			const positions = new Map<string, { x: number; y: number }>();
+			for (const node of snapshot.nodes) {
+				const p = ledger[node.id];
+				if (p) positions.set(node.id, { x: p.x, y: p.y });
+			}
+			if (positions.size > 0) {
+				posRef.current = positions;
+				return () => {
+					posRef.current = null;
+				};
 			}
 		}
-
-		// Run-then-freeze: one synchronous pass, writes x/y, then done.
-		// Barnes-Hut comes on automatically above ~500 nodes (the vision's
-		// first escalation rung — see scripts/bench-graph.ts for the numbers).
-		const settings = {
-			...forceAtlas2.inferSettings(graph),
-			...(graph.order > 500 ? { barnesHutOptimize: true } : {}),
-		};
-		forceAtlas2.assign(graph, { iterations: 100, settings });
-
-		let killed = false;
-		let renderer: import("sigma").default | null = null;
-		// rAF id of the hover fade transition — the ONLY animation (see the
-		// file header). Lives out here so the effect cleanup can cancel it.
-		let hoverAnimId: number | null = null;
-		// Both sigma and its rendering package touch WebGL globals at module
-		// scope, so both load dynamically (SSR-safe; the effect is browser-only).
-		void Promise.all([import("sigma"), import("sigma/rendering")]).then(
-			([{ default: Sigma }, { NodeCircleProgram }]) => {
-				if (killed) return;
-				// Padded picking (see PICKING_VERTEX_SHADER): the visible disc is
-				// pixel-identical to the stock circle program; the PICKABLE disc
-				// gains PICKING_PAD_PX of radius, so the whole hover halo is
-				// hit-testable and small nodes are comfortable to hover/click.
-				// (Maintainer-endorsed pattern for sigma v3; v4 ships this as
-				// the `nodePickingPadding` setting.)
-				const PaddedNodeCircleProgram = class extends NodeCircleProgram {
-					getDefinition() {
-						return {
-							...super.getDefinition(),
-							VERTEX_SHADER_SOURCE: PICKING_VERTEX_SHADER,
-						};
-					}
-				};
-				renderer = new Sigma(graph, container, {
-					nodeProgramClasses: { circle: PaddedNodeCircleProgram },
-					defaultEdgeType: "arrow",
-					// All labels appear/disappear together: no per-node size gating
-					// (threshold 0) and NO sigma label-grid declutter (density →
-					// ∞) — clustered nodes otherwise lose their cells' label
-					// quota and pop in late, un-faded, mid-zoom. The camera-ratio
-					// gate below is the ONLY label culling: every label appears at
-					// the same zoom with the same fade.
-					labelRenderedSizeThreshold: 0,
-					labelDensity: Number.MAX_SAFE_INTEGER,
-					// Match the app typography (Geist via the body's stack).
-					labelFont: getComputedStyle(document.body).fontFamily,
-					labelWeight: "500",
-					labelSize: 12,
-					labelColor: { color: labelColor },
-					renderEdgeLabels: false,
-					defaultDrawNodeLabel: drawLabel,
-					defaultDrawNodeHover: drawHover,
-				});
-				graphRef.current = graph;
-				rendererRef.current = renderer;
-				setRendererEpoch((e) => e + 1);
-				renderer.on("clickNode", ({ node }) => {
-					const graphNode = snapshot.nodes.find((n) => n.id === node);
-					if (!graphNode) return;
-					const pos = graph.getNodeAttributes(node);
-					const anchor = renderer?.graphToViewport({ x: pos.x ?? 0, y: pos.y ?? 0 });
-					setSelected({
-						node: graphNode,
-						chatIds: snapshot.nodeSessions[node] ?? [],
-						anchor: anchor ?? { x: 0, y: 0 },
-					});
-				});
-				// Clicking the empty stage closes the node card.
-				renderer.on("clickStage", () => setSelected(null));
-				// One global label gate with a fade: names are fully visible at fit
-				// zoom or closer, then fade out together across LABELS_FADE_SPAN of
-				// zoom (the labels canvas layer's opacity), and only once fully
-				// faded does label rendering switch off. Any pan/zoom also detaches
-				// the card from its node — close it.
-				const labelsCanvas = renderer.getCanvases().labels;
-				let labelsRendering: boolean | null = null;
-				const syncRenderLabels = (ratio: number) => {
-					// 0 at fit zoom → 1 at the end of the fade span
-					const fade = (ratio - LABELS_CAMERA_RATIO) / LABELS_FADE_SPAN;
-					const alpha = Math.min(Math.max(1 - fade, 0), 1);
-					const shouldRender = alpha > 0;
-					if (shouldRender !== labelsRendering) {
-						labelsRendering = shouldRender;
-						renderer?.setSetting("renderLabels", shouldRender);
-					}
-					if (labelsCanvas) labelsCanvas.style.opacity = alpha.toFixed(3);
-				};
-				syncRenderLabels(renderer.getCamera().getState().ratio);
-				renderer.getCamera().on("updated", (state) => {
-					syncRenderLabels(state.ratio);
-					setSelected(null);
-				});
-				// The hover fade: entering schedules renders (sigma re-invokes
-				// drawHover with the new fade); leaving draws through the captured
-				// repainter, since sigma stops calling drawHover once unhovered.
-				// Both directions are bounded (~HOVER_FADE_MS) and cancel each
-				// other, so idle CPU returns to zero after every transition.
-				const animateHoverTo = (target: number) => {
-					if (hoverAnimId !== null) {
-						cancelAnimationFrame(hoverAnimId);
-						hoverAnimId = null;
-					}
-					const from = hover.fade;
-					if (from === target) {
-						if (target === 0) hover.repaint?.(0);
-						return;
-					}
-					const start = performance.now();
-					const tick = (now: number) => {
-						const t = Math.min((now - start) / HOVER_FADE_MS, 1);
-						hover.fade = from + (target - from) * t;
-						if (target === 0) hover.repaint?.(hover.fade);
-						else renderer?.scheduleRefresh();
-						hoverAnimId = t < 1 ? requestAnimationFrame(tick) : null;
-					};
-					hoverAnimId = requestAnimationFrame(tick);
-				};
-				renderer.on("enterNode", () => animateHoverTo(1));
-				renderer.on("leaveNode", () => animateHoverTo(0));
-				renderer.on("leaveStage", () => animateHoverTo(0));
-			});
-
+		// Bootstrap fallback: the ledger is absent (fresh graph) — run
+		// the SAME engine the server settle uses (d3-force via
+		// incrementalLayout, seeded deterministic) and freeze the result.
+		// Deterministic for a given node set across remounts.
+		posRef.current = incrementalLayout(snapshot.nodes, snapshot.edges, new Map());
 		return () => {
-			killed = true;
-			if (hoverAnimId !== null) cancelAnimationFrame(hoverAnimId);
-			rendererRef.current = null;
-			graphRef.current = null;
-			renderer?.kill();
+			posRef.current = null;
 		};
 	}, [snapshot]);
 
-	// Filtering through sigma's official reducers: hidden nodes drop out of
-	// rendering, picking, hover, AND labels; edges drop when either endpoint
-	// is hidden. Re-runs whenever filters change or a renderer is (re)built
-	// (epoch), so the reducers always close over current values.
+	// Construct the renderer once the canvas exists; destroy when it goes
+	// away (the empty-graph placeholder replaces it). The callbacks are
+	// created once and read through refs, so they never go stale.
+	const isEmpty = snapshot === null || snapshot.nodes.length === 0;
+	useEffect(() => {
+		if (isEmpty) return;
+		const canvas = canvasRef.current;
+		if (!canvas) return;
+		const renderer = new GraphCanvasRenderer(canvas, {
+			onSelect: (nodeId, pos) => {
+				const snap = snapshotRef.current;
+				const node = snap?.nodes.find((n) => n.id === nodeId);
+				if (!snap || !node) return;
+				setSelected({
+					node,
+					sourceIds: snap.nodeSessions[node.id] ?? [],
+					anchor: pos,
+				});
+			},
+			onStageClick: () => setSelected(null),
+			// Any camera move detaches the card from its node — close it.
+			onCameraMove: () => setSelected(null),
+			// Live physics settled: persist the new rest state. Fire-and-
+			// forget — the next snapshot fetch carries the ledger anyway.
+			onCommit: (positions) => {
+				void fetch("/api/graph/positions", {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(positions),
+				}).catch((err) => console.error("[graph] positions commit failed", err));
+			},
+		});
+		rendererRef.current = renderer;
+		return () => {
+			rendererRef.current = null;
+			renderer.destroy();
+		};
+	}, [isEmpty]);
+
+	// Feed #1 — data: positions + edges + clusters + resolved colors. Runs
+	// after the layout effect (same commit, declaration order) and after
+	// the construct effect, so the renderer exists and positions are fresh.
 	useEffect(() => {
 		const renderer = rendererRef.current;
-		const graph = graphRef.current;
-		if (!renderer || !graph) return;
-		renderer.setSetting("nodeReducer", (key, attrs) =>
-			visibleIds.has(key) ? attrs : { ...attrs, hidden: true },
-		);
-		renderer.setSetting("edgeReducer", (key, attrs) => {
-			const source = graph.source(key);
-			const target = graph.target(key);
-			return visibleIds.has(source) && visibleIds.has(target) ? attrs : { ...attrs, hidden: true };
+		const positions = posRef.current;
+		if (!renderer || !snapshot || snapshot.nodes.length === 0 || !positions) return;
+		renderer.setData({
+			nodes: snapshot.nodes.map((n) => ({
+				id: n.id,
+				x: positions.get(n.id)?.x ?? 0,
+				y: positions.get(n.id)?.y ?? 0,
+				label: n.name,
+			})),
+			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to })),
+			clusters: snapshot.clusters.map((c) => ({ id: c.id, label: c.label, members: c.members })),
+			colors: {
+				node: tokenHex(NODE_COLOR_TOKEN),
+				edge: tokenHex("--ring"),
+				label: tokenHex("--muted-foreground"),
+				hoverText: tokenHex("--foreground"),
+			},
+			// Match the app typography (Geist via the body's stack).
+			fontFamily: getComputedStyle(document.body).fontFamily,
 		});
+	}, [snapshot, isEmpty]);
+
+	// Feed #2 — settings: just marks the frame dirty. No rebuild, no
+	// re-layout, no camera touch (the whole point of the new renderer).
+	const deferredSettings = useDeferredValue(settings);
+	useEffect(() => {
+		rendererRef.current?.setSettings(deferredSettings);
+	}, [deferredSettings, isEmpty]);
+
+	// Feed #3 — visibility: hidden nodes drop out of rendering, picking,
+	// hover, AND labels; edges drop when either endpoint is hidden.
+	useEffect(() => {
+		rendererRef.current?.setVisible(query.trim() ? visibleIds : null);
 		// The open detail card cannot outlive its node's visibility.
 		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
-	}, [rendererEpoch, visibleIds]);
+	}, [visibleIds, query]);
+
+	// Feed #4 — region tuning. `isEmpty` in the deps (same as Feed #2):
+	// the settings fetch resolves BEFORE the snapshot creates the renderer,
+	// so the load-time run hits a null renderer and would never re-fire —
+	// the renderer would silently keep the default tuning forever.
+	useEffect(() => {
+		rendererRef.current?.setRegionTuning(regionTuning);
+	}, [regionTuning, isEmpty]);
+
+	// Feed #5 — physics tuning: rebuilds the live sim in place (drag pins
+	// survive; a mid-settle change re-anneals, the honest response). Same
+	// isEmpty dep as Feed #4 — see there.
+	useEffect(() => {
+		rendererRef.current?.setPhysicsTuning(physicsTuning);
+	}, [physicsTuning, isEmpty]);
 
 	// Position the detail card: below the clicked node, flipped above near
 	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
@@ -602,8 +499,6 @@ export function GraphView() {
 		card.style.visibility = "visible";
 	}, [selected]);
 
-	const isEmpty = snapshot === null || snapshot.nodes.length === 0;
-
 	return (
 		<div className="relative h-full w-full">
 			{isEmpty ? (
@@ -619,7 +514,11 @@ export function GraphView() {
 					</div>
 				</div>
 			) : (
-				<div ref={containerRef} className="h-full w-full" />
+				<div ref={containerRef} className="h-full w-full">
+					{/* THE single canvas: every layer (hulls, edges, nodes, both
+					    label systems, hover) draws into it, once per frame. */}
+					<canvas ref={canvasRef} className="block h-full w-full touch-none" />
+				</div>
 			)}
 
 			{/* Legend + filters: search box and per-state toggle rows. */}
@@ -632,14 +531,331 @@ export function GraphView() {
 							onChange={(e) => setQuery(e.target.value)}
 							placeholder="Search nodes…"
 							spellCheck={false}
-							className="h-8 w-full rounded-lg border bg-background pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+							className="h-8 w-full rounded-lg border bg-background pl-8 pr-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
 						/>
+						<button
+							type="button"
+							title="Rendering settings"
+							onClick={() => setSettingsOpen((o) => !o)}
+							className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						>
+							<SettingsIcon className="size-3.5" />
+						</button>
 					</div>
+					{settingsOpen && (
+						<div className="mt-1.5 flex flex-col gap-2 border-t pt-1.5">
+							{/* All sliders: log-scaled 0-100, step 5, so every
+							    DEFAULT sits at 50 (src/core/render-settings.ts). */}
+							<SettingSlider
+								label="Node size"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.nodeSize, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max)}
+								display={sizeDisplay(settings.nodeSize)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, nodeSize: fromSliderPosition(p, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max) }))}
+							/>
+							<SettingSlider
+								label="Edge width"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.edgeWidth, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max)}
+								display={sizeDisplay(settings.edgeWidth)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, edgeWidth: fromSliderPosition(p, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max) }))}
+							/>
+							<SettingSlider
+								label="Arrowhead size"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.arrowLength, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max)}
+								display={sizeDisplay(settings.arrowLength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, arrowLength: fromSliderPosition(p, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max) }))}
+							/>
+							<SettingSlider
+								label="Label size"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.labelSize, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max)}
+								display={sizeDisplay(settings.labelSize)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, labelSize: fromSliderPosition(p, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max) }))}
+							/>
+							{/* Displayed units normalize the default (0.5) to "1×". */}
+							<SettingSlider
+								label="Labels until zoom"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.labelZoom, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX)}
+								display={labelZoomDisplay(settings.labelZoom)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, labelZoom: fromSliderPosition(p, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX) }))}
+							/>
+							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
+								<span>Cluster labels</span>
+								<input
+									type="checkbox"
+									checked={settings.clusterLabels}
+									onChange={(e) => changeSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
+									className="accent-primary"
+								/>
+							</label>
+						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
+						    dropdown for the bitmap resolution (it's a discrete
+						    choice, not a free number). Server-persisted like the
+						    sizes; every range end was sweep-validated on the real
+						    graph. */}
+						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
+							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+								Regions
+							</span>
+							<SettingSlider
+								label="Dilation"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(regionTuning.dilation, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max)}
+								display={sizeDisplay(regionTuning.dilation)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										regions: { ...cur.regions, dilation: fromSliderPosition(p, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max) },
+									}))}
+							/>
+							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+								<span>Blur</span>
+								<select
+									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
+									value={regionTuning.blur}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											regions: { ...cur.regions, blur: Number(e.target.value) },
+										}))
+									}
+								>
+									{REGION_BLUR_OPTIONS.map((o) => (
+										<option key={o} value={o}>
+											{o}
+										</option>
+									))}
+								</select>
+							</label>
+							<SettingSlider
+								label="Edge alpha"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(regionTuning.edgeAlpha, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max)}
+								display={sizeDisplay(regionTuning.edgeAlpha)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										regions: { ...cur.regions, edgeAlpha: fromSliderPosition(p, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max) },
+									}))}
+							/>
+							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+								<span>Bitmap resolution</span>
+								<select
+									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
+									value={regionTuning.bitmap}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											regions: { ...cur.regions, bitmap: Number(e.target.value) },
+										}))
+									}
+								>
+									{REGION_BITMAP_OPTIONS.map((o) => (
+										<option key={o} value={o}>
+											{o}
+										</option>
+									))}
+								</select>
+							</label>
+						</div>
+						{/* Physics: the live sim's forces. Every value feeds the SAME
+						    engine the server settle runs (createGraphSimulation);
+						    changing one rebuilds the sim from the current positions —
+						    drag mid-settle re-anneals, pins survive. Sliders over
+						    sweep-validated ranges (src/core/render-settings.ts):
+						    range ends and all four corners settle cleanly — no NaN,
+						    no explosion, no non-settle. Repulsion is displayed as
+						    the negative it is; cluster pull's far left = off. */}
+						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
+							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+								Physics
+							</span>
+							<label className="flex items-center justify-between gap-2 text-xs">
+								Depth anchor
+								<select
+									className="rounded border bg-background px-1 py-0.5 text-xs"
+									value={physicsTuning.depthMode}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											physics: { ...cur.physics, depthMode: e.target.value as GraphRenderSettings["physics"]["depthMode"] },
+										}))
+									}
+								>
+									<option value="off">Off</option>
+									<option value="vertical">Vertical (up)</option>
+									<option value="radial">Radial (outward)</option>
+								</select>
+							</label>
+							<SettingSlider
+								label="Depth strength"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthStrength, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthStrength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthStrength: fromSliderPosition(p, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Depth spacing"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthSpacing, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthSpacing)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthSpacing: fromSliderPosition(p, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Base ring radius"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthBaseRadius, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthBaseRadius)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthBaseRadius: fromSliderPosition(p, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Node repulsion"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(-physicsTuning.chargeStrength, -CHARGE_RANGE.max, -CHARGE_RANGE.min)}
+								display={`-${Math.round(-physicsTuning.chargeStrength)}`}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, chargeStrength: -fromSliderPosition(p, -CHARGE_RANGE.max, -CHARGE_RANGE.min) },
+									}))}
+							/>
+							<SettingSlider
+								label="Edge attraction"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.linkStrength, LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max)}
+								display={sizeDisplay(physicsTuning.linkStrength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, linkStrength: fromSliderPosition(p, LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Edge length"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.linkDistance, LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max)}
+								display={sizeDisplay(physicsTuning.linkDistance)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, linkDistance: fromSliderPosition(p, LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Central pull"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.gravity, GRAVITY_RANGE.min, GRAVITY_RANGE.max)}
+								display={sizeDisplay(physicsTuning.gravity)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, gravity: fromSliderPosition(p, GRAVITY_RANGE.min, GRAVITY_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Cluster pull"
+								min={0}
+								max={100}
+								step={5}
+								value={toOffSliderPosition(physicsTuning.clusterPull, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max)}
+								display={physicsTuning.clusterPull <= 0 ? "off" : sizeDisplay(physicsTuning.clusterPull)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, clusterPull: fromOffSliderPosition(p, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Friction"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.velocityDecay, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max)}
+								display={sizeDisplay(physicsTuning.velocityDecay)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, velocityDecay: fromSliderPosition(p, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max) },
+									}))}
+							/>
+						</div>
+						</div>
+					)}
 					{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
 						<div className="mt-1.5 border-t px-1.5 pt-1.5 text-[11px] text-muted-foreground">
 							No matching nodes.
 						</div>
 					)}
+					<div className="mt-1.5 border-t pt-1.5">
+						<input
+							ref={fileInputRef}
+							type="file"
+							multiple
+							accept=".md,.markdown,.txt"
+							className="hidden"
+							onChange={(e) => {
+								onImportFiles(e.target.files);
+								e.target.value = ""; // allow re-picking the same file
+							}}
+						/>
+						<button
+							type="button"
+							disabled={importing}
+							onClick={() => fileInputRef.current?.click()}
+							className="flex h-7 w-full items-center justify-center gap-1.5 rounded-lg border text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+						>
+							<UploadIcon className="size-3" />
+							{importing ? "Importing…" : "Import notes…"}
+						</button>
+					</div>
 				</div>
 			)}
 
@@ -670,20 +886,38 @@ export function GraphView() {
 				>
 					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
 					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
-					{selected.chatIds.length > 0 ? (
+					{selected.sourceIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>
-							{selected.chatIds.map((chatId) => {
-								// That session's understanding observation — the
+							{selected.sourceIds.map((sourceId) => {
+								// That source's understanding observation — the
 								// extractor's named-word note (confidence history).
-								const note = snapshot?.nodeObservations?.[selected.node.id]?.[chatId];
+								const note = snapshot?.nodeObservations?.[selected.node.id]?.[sourceId];
+								// An imported-notes file: a STATIC entry — the path,
+								// plain text, never a link (no session to open).
+								if (snapshot?.fileSources?.[sourceId] !== undefined) {
+									return (
+										<div key={sourceId} className="flex items-center gap-1.5">
+											<FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+											<span className="min-w-0 flex-1 truncate px-1 py-1 text-sm text-muted-foreground">
+												{snapshot.fileSources[sourceId]}
+											</span>
+											{note && (
+												<span className="max-w-28 shrink-0 truncate whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+													{note}
+												</span>
+											)}
+										</div>
+									);
+								}
+								// A real session: deep-linkable provenance.
 								return (
-									<div key={chatId} className="flex items-center gap-1.5">
+									<div key={sourceId} className="flex items-center gap-1.5">
 										<Link
-											href={`/chat/${chatId}`}
-											className="min-w-0 flex-1 truncate rounded-md px-2 py-1 text-sm text-foreground transition-colors hover:bg-accent"
+											href={`/chat/${sourceId}`}
+											className="min-w-0 flex-1 truncate rounded-md px-1 py-1 text-sm text-foreground transition-colors hover:bg-accent"
 										>
-											{snapshot?.sessions[chatId] ?? chatId}
+											{snapshot?.sessions[sourceId] ?? sourceId}
 										</Link>
 										{/* The note is a fixed-scale word (solid/shaky/...) — the
 										    session name is the main thing; the chip is bounded so

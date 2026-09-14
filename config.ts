@@ -47,6 +47,9 @@ export const MODELS = {
 	extractor: { model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** The auditor verifies evidence exists; keep it cheap. */
 	auditor: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	/** Names detected communities — one singular call, given member names
+	 * + statements. Purely a labeling flourish; keep it cheap. */
+	labeler: { model: "z-ai/glm-5.3-flash", effort: "low" },
 } satisfies Record<string, ModelSpec>;
 
 export type ModelRole = keyof typeof MODELS;
@@ -71,4 +74,29 @@ export const LEDGER_FILES = {
 	events: path.join(PATHS.graph, "events.jsonl"),
 	mappings: path.join(PATHS.graph, "mappings.jsonl"),
 	sessions: path.join(PATHS.graph, "sessions.jsonl"),
+	/** LLM-named community records (contracts/graph.ts ClusterLabeling). */
+	clusterLabels: path.join(PATHS.graph, "cluster-labels.jsonl"),
 } as const;
+
+/**
+ * Notes-import bookkeeping (NOT a ledger): one JSON map, src-id → NotesSource
+ * record (contracts/graph.ts) — the file path + import time + the run's usage
+ * log. Read-modify-write like a chat file, not append-only like the ledgers.
+ */
+export const SOURCES_FILE = path.join(PATHS.graph, "sources.json");
+/** The layout ledger (read-modify-write like sources.json): nodeId →
+ *  {x,y} resting positions from the incremental settle (core/layout.ts).
+ *  Carries an updatedAt stamp for future live-physics conflict handling. */
+export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
+
+/** The embedding ledger: one L2-normalized vector per node id, all from
+ * ONE model (swapping models re-embeds everything — vectors from
+ * different models live in incompatible spaces). Read-modify-write
+ * JSON like positions/sources. */
+export const EMBEDDINGS_FILE = path.join(PATHS.graph, "embeddings.json");
+
+/**
+ * Graph render settings (the settings-panel controls): one small JSON blob,
+ * read-modify-write. Shared shape/sanitizer: src/core/render-settings.ts.
+ */
+export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");

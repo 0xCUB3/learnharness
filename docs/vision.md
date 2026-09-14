@@ -43,17 +43,59 @@ Every node records every **(chat, message) point** where it came up; every edge 
 
 Three stages, one pipeline — the sole graph writer:
 
-- **Extractor (LLM) — session-only scope.** Sees ONLY the session transcript (tree-blind, with message ids). Reports freely, with verbatim evidence: propositions from anywhere in the session (one reasoning step each; prose counts as much as anything the teacher formalized), edges as the transcript articulates them, message-granular provenance, retroactive quiz attribution, and per proposition an **understanding level** — how strongly the learner accepted/understood it in this session, a CLOSED named-word scale (`solid` / `shaky` / `accepted` / `resisted` / `not yet engaged`; 2026-09-08: schema-enforced — exactly one word, no numbers, no justifications, which are dropped rather than stored). The levels are data for the future state model; their treatment is TBD.
+- **Extractor (LLM) — single-source scope.** Sees ONLY the source text — a session transcript (tree-blind, with message ids) or raw notes (the front door's second prompt, above). Reports freely, with verbatim evidence: propositions from anywhere in the session (one reasoning step each; prose counts as much as anything the teacher formalized), edges as the transcript articulates them, message-granular provenance, retroactive quiz attribution, and per proposition an **understanding level** — how strongly the learner accepted/understood it in this session, a CLOSED named-word scale (`solid` / `shaky` / `accepted` / `resisted` / `not yet engaged`; 2026-09-08: schema-enforced — exactly one word, no numbers, no justifications, which are dropped rather than stored). The levels are data for the future state model; their treatment is TBD.
 - **Auditor (LLM) — the global-graph scope.** Sees the extractor's output AND the existing graph. Two jobs: the faithfulness net (every candidate verified against verbatim evidence — unchanged), and the **identity judgment**: link each proposition to an existing node (recording the session's phrasing as an alias) or create it new. Conservative: duplicates over wrong merges.
 - **Merger (deterministic).** Append-only ledger writes; quiz event kinds/refs rebuilt mechanically from quiz tool parts. Every judgment is an LLM's; everything mechanical stays code.
 
 **Event ledger (amended):** quiz outcomes are rebuilt deterministically from quiz tool parts (correct / miss / don't-know, plus the learner's note). **There is no `taught` event** — no marking-things-done. The extractor's per-proposition understanding levels join the ledger as session-scoped observations (one closed-scale word per node per session). Identity is no longer exact-string matching — it is the auditor's judgment, with aliases as the phrasing record.
 
+### The format-agnostic front door — notes imports (DECIDED 2026-09-13)
+
+The same three-stage pipeline (extractor → auditor → merger) runs over **raw
+personal notes in arbitrary formats** — an Obsidian vault, plain markdown,
+anything textual. The extractor is format-blind by construction (it always
+saw rendered text, never ChatRecord JSON), so the notes path needs only a
+second extractor prompt (general-purpose extraction; the understanding word
+judges the **author's** grasp from their own commentary) and a source
+abstraction: each imported file becomes a `NotesSource` record (deterministic
+id from the path hash — re-imports are idempotent), playing the `chatId` role
+in mappings, checkpoints, and observation events.
+
+Decided edges:
+
+- **No session shaping.** Notes are never bent into teacher/learner
+  transcripts; quiz outcomes inside notes surface only via the extractor's
+  understanding observations (the deterministic quiz-event rebuild is a
+  session-pipeline feature — it needs structured quiz tool parts).
+- **Static provenance.** Imported nodes show the file path in the sessions
+  list as a static entry — never a link. Understanding-assessment levels
+  apply to personal notes as to sessions.
+- **Same single-flight registry and observability** as session runs: live
+  status, usage accounting per stage, true abort. One pipeline instance,
+  two front doors (quiz-triggered sessions; POST /api/graph/import).
+
 ### Understanding is derived (amended 2026-09-02)
 
 Known vs. understood, event ledger as source of truth, derived state recomputed on read — carried over from the design doc in spirit. The state model itself is now an explicit design discussion: **node states should be session-independent and computed from the depth and strength of dependencies** (the `follows`/`supports` topology) plus quiz events and understanding notes. That redesign is pending ideation; the transitional five-class derivation (taught / known / missed / don't-know / candidate) was **removed** (2026-09-08) — the graph view renders state-neutral nodes until the state model is designed. The anchored calibration rubric stays parked until real data.
 
+### Clusters — regions of the world model (DECIDED 2026-09-13, ideation)
+
+When the graph fills up, the canvas needs a readable at-a-glance structure: **clusters** — objective regions of the world model (domains like "Lacanian psychoanalysis" or "photosynthesis"), discovered by **community detection** on the `follows`/`supports` edges. A community = nodes linked to each other far more than to the rest (modularity). Everything about them is **entirely inferred from the graph data** — the extraction/audit pipeline never knows clusters exist.
+
+- **Algorithm: Louvain (modularity maximization), seeded for determinism.** In-stack via graphology's ecosystem, near-linear, scales far beyond our sizes. Determinism gives reproducibility (same graph → same clusters); the seed/graphology choice also keeps the upgrade path open: Louvain's dendrogram contains **hierarchy** — "math ⊃ differential calculus ⊃ chain rule" is one level down — deliberately NOT built now (multi-scale clusters stay parked). Dismissed: Leiden (better resolution guarantees, no JS port), Infomap (heuristic-strong, heavier, weaker JS support), Girvan–Newman (O(n³)), label propagation (unstable), spectral (needs k handed in).
+- **Structure, not layout.** Clusters are a pure function of the *edges*, never of the visual layout. The force-directed layout already places structurally-close nodes together, so cluster hulls will look contiguous — but cluster identity must not inherit the layout's seed dependence and drift.
+- **Derived, cached, auto-updated.** Clusters recompute when the ledger changes, cached against a graph version stamp — same doctrine as states and strengths: derived never stored, nothing hand-maintained.
+- **Size-gated meaning.** Only communities ≥ ~3 nodes render as clusters (threshold tunable on real data) — a visible blob always means "a real domain"; lone nodes and tiny communities stay plain.
+- **Naming: one cheap LLM call per new/changed cluster** — a single call (no agent loop) with the members' names + statements, producing a short domain label. Never part of extraction; a separate, cached seam.
+- **Labeling persistence — the core-survival rule.** Each labeling record (append-only, like everything we persist) stores the label AND the member set it was produced with (the **core**). A recomputed community **keeps** its label while ≥ half its members are from that core; when under half are, it **relabels** with all current nodes (a new record is appended — old records stay as history: an audit trail of how the domains were named over time). Single successor: on splits/merges the strongest-overlap community inherits, the others get fresh labelings; a core with no ≥50% successor simply has no living heir. Cluster color keys to the labeling record — color survives exactly as long as the label does.
+- **Rendering: glow blobs behind everything.** A dashed boundary encloses the cluster's hull; the fill is blurred, low-opacity, and sits *behind* the whole graph (edges and nodes float above it, so the blur naturally fogs the inter-cluster space). Per-cluster stable hue. **Cluster labels are inverse-gated** against the existing camera-ratio span: zoomed out = **domain view** (cluster labels on, node labels off), zoomed in = **proposition view** (node labels on, cluster labels faded) — one symmetric transition between the two views of one canvas.
+- **Boundary geometry: computed at draw time, never stored** — a pure function of the member positions. This is the constraint that keeps future physics/moving nodes (likely not implemented soon) from invalidating anything: convex hull + padding + rounded corners is cheap per-frame; organic metaball hulls are the same family. Secondary until then.
+- **Inter-cluster edges stay visible.** Bridges between domains are meaningful (Nietzsche's will-to-power *follows* Schopenhauer's will) — one of the most informative reads of the clustered view, not clutter.
+- **Honest risk: sparsity.** Community detection wants density contrast, and the current real graph is thin — the 2k-node synthetic benchmark (open question 1) is the *primary* validation of clustering quality, not just of layout/render speed.
+
 ### Rendering (DECIDED — research report 2026-08-22)
+
+**Render settings (2026-09-13):** four basic controls in the graph view — node size, edge width, arrowhead length, and **the zoom-level control** (the label-visibility threshold; 1× = fit zoom) — persisted per browser. The zoom control is deliberately THE single zoom knob: cluster labels gate inversely on it over the same fade span (implemented: node labels fade out over the span as cluster labels fade in — they never coexist). Settings changes rebuild only the renderer: layout positions and the camera never move. (Edge-length / spacing controls deliberately parked until a cluster-aware spacing design exists.)
 
 - **Library: sigma.js v3 + graphology + graphology-layout-forceatlas2.** ~40 KB gzipped all-in — half of vis-network, a third of cytoscape, far below react-force-graph (~250 KB deps) and cosmos.gl (luma.gl stack).
 - **Layout: synchronous run-then-freeze.** `forceAtlas2.assign(graph, { iterations: 100, settings: inferSettings(graph) })` runs once, writes x/y, and no animation loop ever starts — near-zero idle CPU (sigma only redraws on camera/graph events). <150 ms at hundreds of nodes; at ~2k enable `barnesHutOptimize`, then the bundled Web Worker, then server-cached positions — in that order, only if latency bites.
@@ -73,7 +115,7 @@ Every session starts with the learner's knowledge graph as base context for the 
 
 ### Home page
 
-The graph view replaces the current placeholder. v1: all nodes from all sessions, node color/shape by state class (the current five classes are transitional — see "Understanding is derived"), pan/zoom, labels at zoom. Clicking a node → the exact (session, message) points where it came up (message-granular provenance, deep-linked). Everything richer (frontier glow, rot map, blast radius) comes after the state model exists.
+The graph view replaces the current placeholder. v1: all nodes from all sessions, pan/zoom, labels at zoom, state-neutral nodes (see "Understanding is derived"), and — once implemented — cluster glow-blobs with dashed hulls behind the graph, domain↔proposition as the two zoom-gated views (see "Clusters"). Clicking a node → the exact (session, message) points where it came up (message-granular provenance, deep-linked). Everything richer (frontier glow, rot map, blast radius) comes after the state model exists.
 
 ---
 
@@ -213,6 +255,8 @@ The teacher's context window and attention are precious — it has the lesson to
 4. Home-graph v1 interactions beyond pan/zoom (node click → session list? — presumed cheap yes).
 5. Grain mismatch frequency (`subsumes`-style relations) — per original doc, measured by data, not pre-solved.
 6. Aggregation semantics for understanding (min / mean / two-level) — fit on real data, per original doc.
+7. Cluster visual details — boundary aesthetic (convex vs. organic hull), label placement/typography, palette — decide during visual testing with real blobs (§1 Clusters; theory DECIDED 2026-09-13).
+8. Cluster size threshold (~3) — tune on the synthetic benchmark + real data (§1 Clusters).
 
 ---
 

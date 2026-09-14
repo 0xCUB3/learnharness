@@ -22,8 +22,12 @@ import type {
 	ExtractionRunUsage,
 	NodeMapping,
 	PlanTree,
+	Position,
 	SessionCheckpoint,
 	TurnUsage,
+	NotesSource,
+	ClusterLabeling,
+	EmbeddingsLedger,
 } from "./contracts.ts";
 
 // ─── ChatStore — the session record's home (data/chats) ─────────────────────
@@ -80,6 +84,34 @@ export interface GraphStore {
 	/** Append one emission checkpoint. */
 	appendCheckpoint(checkpoint: SessionCheckpoint): void;
 	readCheckpoints(): SessionCheckpoint[];
+
+	/** Append one cluster labeling — idempotent by id (the id hashes the
+	 *  sorted core, so identical member sets dedupe). */
+	appendClusterLabel(labeling: ClusterLabeling): void;
+	readClusterLabels(): ClusterLabeling[];
+
+	/** Upsert one imported-notes source record (config.SOURCES_FILE — a
+	 *  JSON map, not a ledger; an upsert keeps the existing usage log). */
+	upsertSource(source: NotesSource): void;
+	/** Every notes source record, by id order-insensitive. */
+	readSources(): NotesSource[];
+	/** Append one run's usage to a source record — idempotent per
+	 *  startedAt, mirroring ChatRecord.extractions. */
+	appendSourceUsage(id: string, entry: ExtractionRunUsage): void;
+
+	/** The layout ledger (config.POSITIONS_FILE): nodeId → resting {x,y}.
+	 *  WRITTEN ONLY by the incremental settle after a merge (core/layout.ts
+	 *  settleGraphLayout) — read-only for everything else. */
+	readPositions(): Record<string, Position>;
+	/** Replace the whole ledger (the settle is a full-graph computation). */
+	writePositions(positions: Record<string, Position>): void;
+
+	/** The embedding ledger (config.EMBEDDINGS_FILE). WRITTEN ONLY by
+	 *  the embedder (server/embeddings.ts) after a merge — read-only for
+	 *  clustering consumers (snapshot, settle, namer). */
+	readEmbeddings(): EmbeddingsLedger;
+	/** Replace the whole ledger (embedding is a full-batch computation). */
+	writeEmbeddings(ledger: EmbeddingsLedger): void;
 }
 
 // ─── JobStore — background sub-agent jobs (data/jobs) ─────────────────────────

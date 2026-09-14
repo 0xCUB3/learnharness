@@ -20,6 +20,8 @@
 /** Two relations only (DECIDED 2026-09-02): follows = b is derivable from a;
  *  supports = a grounds b without entailing it. No scalars, no encoded
  *  strength — strength is derived at read time from topology. */
+import type { ExtractionRunUsage } from "./chat.ts";
+
 export type EdgeType = "follows" | "supports";
 
 /** What one extraction run merged into the graph ledgers — the merger's
@@ -37,8 +39,30 @@ export interface EmissionStats {
  *  edges record every (chat, message) where they came up, deep-linkable to
  *  the exact transcript point. */
 export interface ProvenancePoint {
+	/** The chat this point anchors to — or a notes source id ("src_…"):
+	 *  imports carry no message anchors (provenance is the file itself,
+	 *  recorded through the mapping line + the source record). */
 	chatId: string;
 	messageId: string;
+}
+
+/** One imported notes file — the format-agnostic front door's bookkeeping
+ *  (DECIDED 2026-09-13): personal notes in ARBITRARY formats run through the
+ *  same extractor → auditor → merger pipeline, with the file itself as the
+ *  provenance anchor. There is no chat: the detail card shows the file path
+ *  as a STATIC entry (not a link), and understanding observations still
+ *  apply (judged from the author's own voice in the notes). The run's usage
+ *  log lives here, mirroring ChatRecord.extractions. Ids are "src_" + hash
+ *  of the file path — deterministic, so re-importing the same file re-runs
+ *  extraction against the same source id (mappings/events dedupe by it). */
+export interface NotesSource {
+	id: string;
+	filePath: string;
+	/** ISO — when this file was imported (the checkpoint's foldedAt). */
+	importedAt: string;
+	/** The run's usage log — same append-only discipline as
+	 *  ChatRecord.extractions, idempotent per startedAt. */
+	extractions?: ExtractionRunUsage[];
 }
 
 export interface GraphNode {
@@ -107,6 +131,8 @@ export interface LedgerEvent {
 	/** null = not yet attributed. */
 	nodeId: string | null;
 	kind: LedgerEventKind;
+	/** The chat that produced this evidence — or a notes source id
+	 *  ("src_…") for imported-notes observations. */
 	chatId: string;
 	at: string;
 	/** Idempotency key: the quiz part's toolCallId, or `obs:<sourceId>` for
@@ -244,11 +270,66 @@ export interface AuditResult {
 }
 
 /** The GET /api/graph payload — everything the home view's PURE renderer needs. */
+/** cluster-labels.jsonl line — one LLM-named community (vision §1,
+ * DECIDED 2026-09-13). Append-only history: records are immutable, never
+ * edited or deleted; dead labelings remain as history. IDENTITY is the
+ * sorted member set ("core"), hashed into the id, so re-naming the same
+ * community dedupes and a labeling survives graph edits as long as at
+ * least half its core survives in some single community (core-survival;
+ * under half → the community is renamed, splits can keep only one
+ * successor). */
+/** The embedding ledger shape (config.EMBEDDINGS_FILE): vectors for
+ *  EVERY embedded node, all produced by one model at one dimensionality. */
+export interface EmbeddingsLedger {
+	/** The embedding model id (e.g. the HF repo) — mismatch = stale
+	 *  vectors, the writer re-embeds everything. */
+	model: string;
+	/** Vector dimensionality (MRL-truncated on write). */
+	dim: number;
+	/** nodeId → L2-normalized vector (cosine similarity = dot product). */
+	vectors: Record<string, number[]>;
+	/** The topic partition over those vectors, computed by the SAME
+	 *  embedder run (the user-decided trigger: recluster at the end of
+	 *  every embedding batch, never per read — the agglomerative pass is
+	 *  ~1.5s at current scale). Consumers (snapshot, settle, namer) read
+	 *  this instead of recomputing. Empty when nothing is embedded. */
+	clusters: Array<{ members: string[] }>;
+	/** ISO timestamp of the last write. */
+	updatedAt: string;
+}
+
+export interface ClusterLabeling {
+	/** "clu_" + content hash of the sorted core. */
+	id: string;
+	/** The short domain label (1–4 words), e.g. "Differential forms". */
+	label: string;
+	/** The member node ids the label was minted for, sorted — the survival core. */
+	core: string[];
+	createdAt: string;
+}
+
+/** One rendered cluster in the snapshot payload (vision §1). Members are
+ * node ids; the renderer draws the hull from member positions at draw
+ * time and gates the label inversely on the node-label zoom control. */
+export interface Cluster {
+	/** The labeling record id when claimed; unlabeled clusters still
+	 * appear (hull, no name) with a member-hash id. */
+	id: string;
+	/** null until the naming call has minted/claimed a labeling. */
+	label: string | null;
+	/** Node ids, sorted. Hull + centroid are renderer concerns. */
+	members: string[];
+}
+
 export interface GraphSnapshot {
 	nodes: GraphNode[];
 	edges: GraphEdge[];
 	/** chatId → title, for every chat that touched the graph. */
 	sessions: Record<string, string>;
+	/** srcId → file path, for every IMPORTED NOTES file that touched the
+	 *  graph (the format-agnostic front door): a static provenance entry —
+	 *  the detail card shows the path as plain text, not a link. */
+	fileSources: Record<string, string>;
 	/** nodeId → chatIds that touched the node (click-through provenance). */
 	nodeSessions: Record<string, string[]>;
 	/** nodeId → chatId → that session's understanding observation (the
@@ -256,6 +337,20 @@ export interface GraphSnapshot {
 	 *  shown next to the session list — the confidence history). Multiple
 	 *  notes for one (node, chat) collapse to the latest. */
 	nodeObservations: Record<string, Record<string, string>>;
+	/** Structural communities (Louvain over follows+supports), size ≥ 3,
+	 * joined with persisted LLM labelings. Purely structural — never
+	 * depends on layout. */
+	clusters: Cluster[];
+	/** Resting layout positions per node id, when a positions ledger
+	 *  exists (core/layout.ts settle writes it). Absent on a fresh graph —
+	 *  the view then falls back to its own one-shot forceAtlas2 pass. */
+	positions?: Record<string, Position>;
+}
+
+/** A node's resting position in layout space (the positions ledger). */
+export interface Position {
+	x: number;
+	y: number;
 }
 
 /** Derive a short chat title from the learner's first message (pure).

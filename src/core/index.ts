@@ -17,8 +17,15 @@
 
 export * from "./contracts.ts";
 export * from "./ports.ts";
+export * from "./render-settings.ts";
 
 export * from "./question-core.ts";
+// clusters.ts (Louvain) is deliberately NOT re-exported: nothing in the
+// shell runs community detection — the snapshot carries the partition
+// from the server. Keeping it out keeps the heavy clustering deps out of the
+// client bundle (verified 2026-09-13: chunks contained it while this
+// line existed). Same logic as layout-settle.ts below.
+export * from "./layout.ts";
 export * from "./plan-tree.ts";
 export * from "./phases.ts";
 export * from "./pending.ts";

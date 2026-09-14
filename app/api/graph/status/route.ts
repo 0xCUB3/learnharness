@@ -12,7 +12,9 @@ export const dynamic = "force-dynamic";
 export async function GET() {
 	const runs = extractionStatuses().map((run) => ({
 		chatId: run.chatId,
-		title: chatStore.getChat(run.chatId)?.title ?? run.chatId,
+		// The run's own label (the file path for notes imports) wins; chat
+		// runs fall back to the chat store's title.
+		title: run.label ?? chatStore.getChat(run.chatId)?.title ?? run.chatId,
 		phase: run.phase,
 		startedAt: run.startedAt,
 		// Live per-stage usage (the money channel): model + per-step CallUsage,

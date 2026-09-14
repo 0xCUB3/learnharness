@@ -15,6 +15,10 @@
  *                                      (chatId, sourceId) → graphNodeId
  *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
  *
+ * Plus config.SOURCES_FILE (sources.json): the imported-notes bookkeeping
+ * (NOT a ledger) — one JSON map, src-id → NotesSource, read-modify-write
+ * like a chat file. The format-agnostic front door (2026-09-13).
+ *
  * Implements core/ports.ts GraphStore. data/graph/* is exclusively this
  * adapter's. Reads are strict against the contracts.ts shapes (the 2026-09-02
  * graph redesign): corrupt lines are skipped, never guessed at — the ledgers
@@ -25,13 +29,18 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { LEDGER_FILES } from "../../config.ts";
+import { EMBEDDINGS_FILE, LEDGER_FILES, POSITIONS_FILE, SOURCES_FILE } from "../../config.ts";
 import type {
+	ClusterLabeling,
+	EmbeddingsLedger,
 	GraphEdge,
 	GraphNode,
+	ExtractionRunUsage,
 	LedgerEvent,
 	LedgerEventKind,
+	NotesSource,
 	NodeMapping,
+	Position,
 	ProvenancePoint,
 	SessionCheckpoint,
 } from "../core/contracts.ts";
@@ -79,6 +88,14 @@ function readValid<T>(file: string, isValid: (v: unknown) => v is T): T[] {
 /** Provenance points are (chatId, messageId) pairs — message-granular. */
 const isProvenancePoint = (v: unknown): v is ProvenancePoint =>
 	isRecord(v) && isString(v.chatId) && isString(v.messageId);
+
+const isClusterLabeling = (v: unknown): v is ClusterLabeling =>
+	isRecord(v) &&
+	isString(v.id) &&
+	isString(v.label) &&
+	Array.isArray(v.core) &&
+	v.core.every(isString) &&
+	isString(v.createdAt);
 
 const isGraphNode = (v: unknown): v is GraphNode =>
 	isRecord(v) &&
@@ -157,4 +174,171 @@ export const graphStore: GraphStore = {
 	readCheckpoints(): SessionCheckpoint[] {
 		return readValid(LEDGER_FILES.sessions, isCheckpoint);
 	},
+
+	// ── cluster labelings (config.LEDGER_FILES.clusterLabels) ──
+
+	/** Idempotent by id: the id is a hash of the sorted core, so re-appending
+	 *  the same member set (re-naming races, idempotent re-runs) is a no-op. */
+	appendClusterLabel(labeling: ClusterLabeling): void {
+		if (this.readClusterLabels().some((l) => l.id === labeling.id)) return;
+		appendLine(LEDGER_FILES.clusterLabels, labeling);
+	},
+	readClusterLabels(): ClusterLabeling[] {
+		return readValid(LEDGER_FILES.clusterLabels, isClusterLabeling);
+	},
+
+	// ── imported-notes bookkeeping (config.SOURCES_FILE — a JSON map) ──
+
+	/** Upsert: keeps the existing record's usage log when re-importing. */
+	upsertSource(source: NotesSource): void {
+		const all = readSourceMap();
+		const prev = all[source.id];
+		all[source.id] = prev ? { ...source, extractions: prev.extractions } : source;
+		writeSourceMap(all);
+	},
+	readSources(): NotesSource[] {
+		return Object.values(readSourceMap());
+	},
+	/** Idempotent per startedAt — same discipline as chats.appendExtractionUsage. */
+	appendSourceUsage(id: string, entry: ExtractionRunUsage): void {
+		const all = readSourceMap();
+		const source = all[id];
+		if (!source) return; // no such source — nothing to bill against
+		source.extractions = source.extractions?.some((r) => r.startedAt === entry.startedAt)
+			? source.extractions
+			: [...(source.extractions ?? []), entry];
+		writeSourceMap(all);
+	},
+
+	// ── the layout ledger (config.POSITIONS_FILE — a JSON map) ──
+	readPositions(): Record<string, Position> {
+		return readPositionMap();
+	},
+	writePositions(positions: Record<string, Position>): void {
+		writePositionMap(positions);
+	},
+	readEmbeddings(): EmbeddingsLedger {
+		return readEmbeddingsLedger();
+	},
+	writeEmbeddings(ledger: EmbeddingsLedger): void {
+		writeEmbeddingsLedger(ledger);
+	},
 };
+
+/** positions.json — { positions, updatedAt }. Read-modify-write, NOT
+ *  append-only: the settle is a full-graph computation, so it replaces the
+ *  whole map. The updatedAt stamp exists for future live-physics conflict
+ *  handling (a browser commit must be able to detect "the graph changed
+ *  underneath me"); reads just return the map. */
+function readPositionMap(): Record<string, Position> {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(POSITIONS_FILE, "utf-8");
+	} catch {
+		return {}; // no ledger yet — nothing has ever settled
+	}
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed) || !isRecord(parsed.positions)) return {};
+		const out: Record<string, Position> = {};
+		for (const [id, value] of Object.entries(parsed.positions)) {
+			if (isPosition(value)) out[id] = { x: value.x, y: value.y };
+		}
+		return out;
+	} catch {
+		return {};
+	}
+}
+
+function writePositionMap(positions: Record<string, Position>): void {
+	fs.mkdirSync(path.dirname(POSITIONS_FILE), { recursive: true });
+	fs.writeFileSync(
+		POSITIONS_FILE,
+		JSON.stringify({ positions, updatedAt: new Date().toISOString() }, null, "\t"),
+		"utf-8",
+	);
+}
+
+/** embeddings.json — the whole EmbeddingsLedger at once. Missing/corrupt
+ *  file reads as an EMPTY ledger (model "") so consumers see "nothing
+ *  embedded yet" rather than an error; the embedder backfills. */
+function readEmbeddingsLedger(): EmbeddingsLedger {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(EMBEDDINGS_FILE, "utf-8");
+	} catch {
+		return { model: "", dim: 0, vectors: {}, clusters: [], updatedAt: "" };
+	}
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed)) return { model: "", dim: 0, vectors: {}, clusters: [], updatedAt: "" };
+		const model = typeof parsed.model === "string" ? parsed.model : "";
+		const dim = typeof parsed.dim === "number" && Number.isFinite(parsed.dim) ? parsed.dim : 0;
+		const vectors: Record<string, number[]> = {};
+		if (isRecord(parsed.vectors)) {
+			for (const [id, value] of Object.entries(parsed.vectors)) {
+				if (
+					Array.isArray(value) &&
+					value.length > 0 &&
+					value.every((x) => typeof x === "number" && Number.isFinite(x))
+				) {
+					vectors[id] = value as number[];
+				}
+			}
+		}
+		const clusters: Array<{ members: string[] }> = [];
+		if (Array.isArray(parsed.clusters)) {
+			for (const c of parsed.clusters) {
+				if (
+					isRecord(c) &&
+					Array.isArray(c.members) &&
+					c.members.length > 0 &&
+					c.members.every((m) => typeof m === "string")
+				) {
+					clusters.push({ members: [...(c.members as string[])] });
+				}
+			}
+		}
+		return { model, dim, vectors, clusters, updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "" };
+	} catch {
+		return { model: "", dim: 0, vectors: {}, clusters: [], updatedAt: "" };
+	}
+}
+
+function writeEmbeddingsLedger(ledger: EmbeddingsLedger): void {
+	fs.mkdirSync(path.dirname(EMBEDDINGS_FILE), { recursive: true });
+	fs.writeFileSync(EMBEDDINGS_FILE, JSON.stringify(ledger, null, "\t"), "utf-8");
+}
+
+const isPosition = (v: unknown): v is Position =>
+	isRecord(v) && typeof v.x === "number" && Number.isFinite(v.x) && typeof v.y === "number" && Number.isFinite(v.y);
+
+/** sources.json — { id: NotesSource }. Read-modify-write, NOT append-only:
+ *  the usage log lives inside the record (like a chat's JSON file). */
+function readSourceMap(): Record<string, NotesSource> {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(SOURCES_FILE, "utf-8");
+	} catch {
+		return {};
+	}
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed)) return {};
+		const out: Record<string, NotesSource> = {};
+		for (const [id, value] of Object.entries(parsed)) {
+			if (isNotesSource(value)) out[id] = value;
+		}
+		return out;
+	} catch {
+		return {};
+	}
+}
+
+function writeSourceMap(map: Record<string, NotesSource>): void {
+	fs.mkdirSync(path.dirname(SOURCES_FILE), { recursive: true });
+	fs.writeFileSync(SOURCES_FILE, JSON.stringify(map, null, "\t"), "utf-8");
+}
+
+const isNotesSource = (v: unknown): v is NotesSource =>
+	isRecord(v) && isString(v.id) && isString(v.filePath) && isString(v.importedAt);

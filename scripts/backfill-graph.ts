@@ -8,13 +8,14 @@
 import { chatStore } from "../src/store/chats.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { createExtractionPipeline } from "../src/agent/subagents/extraction.ts";
+import { embedNewNodes } from "../src/server/embeddings.ts";
 import { getGraph } from "../src/core/graph.ts";
 
 async function main() {
 	const only = process.argv[2]; // optional: extract just one chat id
 	const chats = only ? chatStore.listChats().filter((c) => c.id === only) : chatStore.listChats();
 	console.log(`[backfill] ${chats.length} chats to extract`);
-	const pipeline = createExtractionPipeline({ chatStore, graphStore });
+	const pipeline = createExtractionPipeline({ chatStore, graphStore, embedder: embedNewNodes });
 	for (const chat of chats) {
 		const t0 = Date.now();
 		try {
