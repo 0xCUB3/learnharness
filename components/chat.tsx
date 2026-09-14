@@ -485,13 +485,12 @@ export function Chat({
 					<SidebarToggle />
 					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
-					{/* Soft top fade (owner, round 1 of the fade rework): a long wash
-					    that holds softly under the title then melts away — no full
-					    opacity anywhere, so it supports the header instead of reading
-					    as a bar. */}
+					{/* Soft top fade (owner, round 2): peaks at 60% right under the
+					    title and ramps down to transparent within 40px — supports the
+					    header without a bar edge or a long tail into the chat. */}
 					<div
 						aria-hidden
-						className="pointer-events-none absolute inset-x-0 top-full z-10 h-24 bg-gradient-to-b from-background/65 via-background/25 to-transparent"
+						className="pointer-events-none absolute inset-x-0 top-full z-10 h-10 bg-gradient-to-b from-background/60 to-transparent"
 					/>
 				</header>
 
