@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { contextWindow, sessionCost, turnCost, type ChatSettings, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, prettyModel } from "@/components/usage-format";
 import { ModelControl } from "@/components/model-picker";
@@ -33,6 +33,24 @@ export function StatsBar({
 	onSettingsSaved: (settings: ChatSettings) => void;
 }) {
 	const [open, setOpen] = useState(false);
+	// Same dropdown discipline as the model control (owner, df4433f treatment,
+	// stats round 1): close on any pointerdown outside the bar or on Escape.
+	const barRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (!open) return;
+		const onPointerDown = (e: PointerEvent) => {
+			if (barRef.current && !barRef.current.contains(e.target as Node)) setOpen(false);
+		};
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setOpen(false);
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", onPointerDown);
+			document.removeEventListener("keydown", onKeyDown);
+		};
+	}, [open]);
 	const ctx = contextWindow({ turns });
 	const { cost, unpriced } = sessionCost({ turns });
 	// Honest cost: show dollars only when at least one turn priced;
@@ -48,6 +66,7 @@ export function StatsBar({
 			// (so its transparent gradient area never blocks scrolling) — this row
 			// must re-enable events or every control on it is dead (the model-
 			// control wave caught this live: buttons rendered, clicks never landed).
+			ref={barRef}
 			className="pointer-events-auto relative flex items-center justify-between gap-3 px-3 pt-1.5 text-xs text-muted-foreground"
 		>
 			<button
@@ -77,7 +96,7 @@ export function StatsBar({
 			{open && (
 				<div
 					data-testid="stats-detail"
-					className="absolute bottom-full left-0 z-40 mb-1.5 w-72 rounded-xl border bg-card p-3 text-xs shadow-xl"
+					className="absolute bottom-full left-1/2 z-40 mb-1.5 w-72 -translate-x-1/2 rounded-xl border bg-card p-3 text-xs shadow-xl"
 				>
 					<div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 						Session stats
