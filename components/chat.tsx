@@ -21,8 +21,9 @@ import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
-import { graphContextOfMessage, type ChatSettings } from "@/src/core";
-import { formatTokens } from "@/components/usage-format";
+import { GraphContextMarker } from "@/components/graph-context-marker";
+import { useActivity } from "@/components/activity-dock";
+import { mergeAdopted, type ChatSettings } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia } from "@/components/plan-window";
 import { WaypointsIcon } from "lucide-react";
@@ -82,16 +83,6 @@ const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayout
 
 /** A wake-pipeline steer message: user-role delivery whose metadata marks it
  * as a sub-agent result — rendered as an artifact card, never a bubble. */
-/** The knowledge-context card's one-liner: the numbers the observability
- *  doctrine wants visible at the seam — tokens and proposition count
- *  (parse-don't-cast; a malformed part still renders a quiet generic line). */
-function graphContextLine(message: { parts: ReadonlyArray<{ type: string; data?: unknown }> }): string {
-	const data = graphContextOfMessage(message);
-	return data
-		? `Knowledge context — ~${formatTokens(data.tokens)} · ${data.propositions.length} propositions`
-		: "Knowledge context";
-}
-
 /** The quiet system line (custom-message scheme rendering): centered, muted,
  *  small — the transcript's voice for events that are not speech (wake
  *  scaffolding, the learner's plan verdict). */
@@ -234,6 +225,73 @@ export function Chat({
 			void sendMessage();
 		}
 	}, [chatId, setMessages, sendMessage, status]);
+
+	// ── Append-only record adoption (owner ground rules, 2026-09-15) ──
+	// Content delivered into the record server-side — the knowledge-context
+	// block, sub-agent artifacts, abort notes — must become visible the
+	// moment it persists, mid-turn included: it sits between messages, and
+	// nothing about a running turn should hide it. The full snapshot sync
+	// mid-stream is forbidden (it breaks the SDK's in-place continuation
+	// merge — the stale-snapshot lesson), so adoption here is APPEND-ONLY
+	// (core mergeAdopted): insert the record's new ids in their canonical
+	// order, never rewrite a local one, keep the in-flight tail last. The
+	// full syncFromServer stays the net at idle (reorder, plan blocks, turns).
+	const messagesRef = useRef(messages);
+	messagesRef.current = messages;
+	const adoptAppendOnly = useCallback(async () => {
+		try {
+			const res = await fetch(`/api/chats/${chatId}`);
+			if (!res.ok) return;
+			const record = (await res.json()) as { messages?: TeacherUIMessage[] };
+			if (!Array.isArray(record.messages)) return;
+			const merged = mergeAdopted(messagesRef.current, record.messages);
+			if (merged) setMessages(merged);
+		} catch {
+			/* transient — the idle full sync is the net */
+		}
+	}, [chatId, setMessages]);
+
+	// Turn-start window: the server inserts claimed steers right after our
+	// outgoing message, BEFORE the stream produces anything — so a bounded,
+	// self-terminating window of three record fetches (400ms/1s/2s) catches
+	// the insert and shows the marker during the turn, then stops. No
+	// standing poll — the window exists only for these seconds. The same
+	// instant nudges the activity feed: the knowledge-context job starts at
+	// send (server-side), and the dock must say so immediately.
+	const { refresh: refreshActivity } = useActivity();
+	const turnStartStatusRef = useRef(status);
+	// The window must survive the submitted→streaming flip (the stream starts
+	// in well under 400ms), so the timers are guarded by this ref — dropped at
+	// unmount, left alone otherwise: the window self-terminates after 2s.
+	const adoptionWindowOpenRef = useRef(false);
+	const turnStartTimerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
+	useEffect(() => {
+		const was = turnStartStatusRef.current;
+		turnStartStatusRef.current = status;
+		if (was === "submitted" || status !== "submitted") return;
+		// A turn just started (status flipped ready → submitted): open the
+		// bounded adoption window and nudge the dock's feed.
+		refreshActivity();
+		adoptionWindowOpenRef.current = true;
+		const timers = [400, 1000, 2000].map((ms) =>
+			setTimeout(() => {
+				if (adoptionWindowOpenRef.current) void adoptAppendOnly();
+			}, ms),
+		);
+		// Deliberately no cleanup here: this effect re-runs on every status
+		// flip, which would cancel the window at submitted→streaming.
+		timers.forEach((t) => {
+			turnStartTimerRefs.current.push(t);
+		});
+	}, [status, adoptAppendOnly, refreshActivity]);
+	useEffect(() => {
+		const timers = turnStartTimerRefs;
+		return () => {
+			adoptionWindowOpenRef.current = false;
+			timers.current.forEach(clearTimeout);
+			timers.current = [];
+		};
+	}, []);
 
 	// The live plan popup (wave 4): opened by any transcript plan block, the
 	// top-bar plan chip, and the dock band's marginalia.
@@ -422,14 +480,18 @@ export function Chat({
 					const prev = jobStatusRef.current.get(j.id);
 					if (prev === "running" && j.status !== "running") {
 						// The record is only guaranteed complete when no turn is in
-					// flight — locally or server-side. A coalesced settle fires
-					// mid-turn by design; adopt the record on the first idle tick.
+						// flight — locally or server-side (a coalesced settle fires
+						// mid-turn by design), so the FULL sync waits for idle.
+						// Ground rule (2026-09-15): delivered content shows
+						// immediately anyway — adopt append-only NOW; the idle
+						// sync still settles the record properly.
 						if (localStreamRef.current || data.turnInFlight === true) {
 							pendingSyncRef.current = true;
+							void adoptAppendOnly();
 						} else {
 							void syncFromServer();
+						}
 					}
-				}
 					jobStatusRef.current.set(j.id, j.status);
 				}
 				if (
@@ -455,7 +517,7 @@ export function Chat({
 			cancelled = true;
 			clearInterval(timer);
 		};
-	}, [pollMs, jobPartCount, chatId, syncFromServer]);
+	}, [pollMs, jobPartCount, chatId, syncFromServer, adoptAppendOnly]);
 
 	// Re-attach after mid-turn navigation (the key fix): poll the record until
 	// the orphaned turn finishes (turnInFlight flips false server-side in
@@ -470,10 +532,24 @@ export function Chat({
 			if (cancelled) return;
 			try {
 				const res = await fetch(`/api/chats/${chatId}`);
-				if (res.ok && !((await res.json()) as { turnInFlight?: boolean }).turnInFlight) {
-					setTurnInFlight(false);
-					void syncFromServer();
-					return;
+				if (res.ok) {
+					const record = (await res.json()) as {
+						turnInFlight?: boolean;
+						messages?: TeacherUIMessage[];
+					};
+					// Ground rule (2026-09-15): steer content persisted by the
+					// wake shows NOW, at the wake turn's start — not at its
+					// finish. Append-only is safe here: no local stream runs
+					// under a server-side wake turn.
+					if (Array.isArray(record.messages)) {
+						const merged = mergeAdopted(messagesRef.current, record.messages);
+						if (merged) setMessages(merged);
+					}
+					if (!record.turnInFlight) {
+						setTurnInFlight(false);
+						void syncFromServer();
+						return;
+					}
 				}
 			} catch {
 				/* transient network hiccup — keep polling */
@@ -553,11 +629,11 @@ export function Chat({
 									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} />
 								) : m.role === "user" && m.parts.some((p) => p.type === "data-graph-context") ? (
 								// The prior-knowledge injection's delivery (vision-context-injection.md):
-								// quiet system line, the numbers only — the block itself was for the
-								// model (adapter flattening); the part data stays the audit trail.
-								<SystemLine key={m.id || `m-${mi}`} testId="graph-context">
-									{graphContextLine(m)}
-								</SystemLine>
+								// a quiet, CLICKABLE line (owner observability ask, 2026-09-15) —
+								// the popover shows which propositions were delivered, in delivery
+								// order; the block itself was for the model (adapter flattening),
+								// the part data is the audit trail this reads from.
+								<GraphContextMarker key={m.id || `m-${mi}`} message={m} />
 							) : m.role === "user" && m.parts.some((p) => p.type === "data-probe-handoff") ? (
 								// The probe→teach handoff wake (custom-message scheme): quiet
 								// system line, never a user bubble — the wake is scaffolding,

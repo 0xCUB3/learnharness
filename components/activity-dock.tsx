@@ -110,6 +110,15 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 	return <ActivityContext.Provider value={{ feed, refresh }}>{children}</ActivityContext.Provider>;
 }
 
+/** The activity feed seam for the rest of the shell: the dock's data +
+ *  its refresh nudge. The chat page nudges on turn start (owner ground
+ *  rules, 2026-09-15): a background process that starts at send — the
+ *  knowledge-context injection — must be visible in the dock the moment
+ *  it begins, without the dock polling faster while idle. */
+export function useActivity(): { feed: ActivityFeed; refresh: () => void } {
+	return useContext(ActivityContext);
+}
+
 // ─── Pure presentation helpers (exported for tests) ──────────────────────────
 
 /** One dock blob: the unified view of a job or an extraction run. */

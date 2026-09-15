@@ -146,6 +146,20 @@ export async function handleChatRequest(
 		console.error(`[chat ${chatId}] write-ahead persist failed:`, err);
 	}
 
+	// THE GRAPH READ CHANNEL (vision-context-injection.md): one shot per
+	// chat, at session start — fired HERE, at turn start, not in onFinish:
+	// the injection's only input is the first typed message (the topic),
+	// which the write-ahead persist above just made durable, so it runs
+	// CONCURRENT with the prober's turn (embedding + cosine scan, no model
+	// call) and the dock shows the job the moment the session starts. Its
+	// steer then waits in the wake queue through the turn (waitForIdle) —
+	// exactly the same hold as a sub-agent result finishing mid-turn. All
+	// gates (exactly-one-text-message topic, budget, one-shot) live in the
+	// runner module; for every session past its start this is a no-op.
+	// Extraction stays in onFinish by contrast: it depends on quiz
+	// answers accumulated DURING the turn.
+	triggerGraphContext(graphContext, chatId);
+
 	// MONEY CHANNEL (wave 4): one collector per request, fed by the agent's
 	// message_end events. Every model call's usage lands in the chat record's
 	// append-only turns log at onFinish — idempotent per turn id, so a
@@ -237,9 +251,6 @@ export async function handleChatRequest(
 					});
 				}
 				triggerExtraction(stores, extraction, chatId);
-				// The graph READ channel: one-shot prior-knowledge injection at
-				// session start — a no-op for every session past its start.
-				triggerGraphContext(graphContext, chatId);
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.
 				endTurn(chatId);
