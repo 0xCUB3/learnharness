@@ -1,19 +1,20 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIcon, BotIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { ActivityIcon, BotIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
 import { CONTEXT_LIMITS, jobCost } from "@/src/core";
 import { formatTokens, formatUsd } from "@/components/usage-format";
 
 /**
- * THE ACTIVITY DOCK (wave 4, vision observability): the bottom-right corner
- * of EVERY view, one blob per running BACKGROUND process — session sub-agents
+ * THE BACKGROUND-AGENTS SECTION (owner, sidebar round — the successor of
+ * the retired bottom-right floating dock): the bottom strip of the LEFT
+ * SIDEBAR, one blob per running BACKGROUND process — session sub-agents
  * (research/demo/visual) and global extraction runs. Teaching turns are
- * deliberately NOT here: the dock exists to give background processes the
- * observability the learner can't otherwise see; an in-flight teaching turn
- * is fully visible where it happens (user decision, 2026-09).
+ * deliberately NOT here: the section exists to give background processes
+ * the observability the learner can't otherwise see; an in-flight teaching
+ * turn is fully visible where it happens (user decision, 2026-09).
  *
  * Data: ONE poll of GET /api/activity (jobs across ALL chats, title-joined,
  * oldest-first + extraction runs), folded client-side with core/prices.ts.
@@ -23,13 +24,18 @@ import { formatTokens, formatUsd } from "@/components/usage-format";
  * Absent data renders "—", never zero (the doctrine).
  *
  * Quiet/ambient by design: no entry animations, stable keys, updates land
- * in place — polling never flickers. Idle (no jobs, no extractions) renders
- * NOTHING. Narrow viewports collapse to a count badge → click opens the
- * drawer. Per blob: kind icon, elapsed, cost, context, activity line, and an
- * explicit END button (POST /api/activity/abort — the wave-4 backend is
- * live): 404/409 mean the process is already gone (refresh, no error);
- * real failures degrade to an inline "Abort failed", never a
- * dead control).
+ * in place — polling never flickers. ALWAYS present (owner, sidebar round):
+ * empty means EMPTY — the header sits alone, nothing hides; it populates and
+ * GROWS when processes run (max-h + internal scroll so a pile never crowds
+ * the session list). The sidebar's closed state means the learner opted
+ * out — no ambient signal while closed (user decision: invisibility until
+ * a clearer observability story wants building). Per blob: kind icon,
+ * elapsed, cost, activity line, an explicit END button (POST
+ * /api/activity/abort — the wave-4 backend is live): 404/409 mean the
+ * process is already gone (refresh, no error); real failures degrade to
+ * an inline "Abort failed", never a dead control. Detail (context, model,
+ * steps, session link) EXPANDS INLINE — the section scrolls, so a
+ * floating popover would clip at its bounds.
  */
 
 // ─── Wire shapes (client-safe mirrors of server/observability.ts) ────────────
@@ -181,22 +187,9 @@ export function formatElapsed(ms: number): string {
 	return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
-// ─── The dock ─────────────────────────────────────────────────────────────────
+// ─── The section (the sidebar's bottom strip) ─────────────────────────────────
 
-/** Narrow viewports (< sm) collapse the dock to a count badge → drawer. */
-function useNarrow(): boolean {
-	const [narrow, setNarrow] = useState(false);
-	useEffect(() => {
-		const mq = window.matchMedia("(max-width: 639px)");
-		const apply = () => setNarrow(mq.matches);
-		apply();
-		mq.addEventListener("change", apply);
-		return () => mq.removeEventListener("change", apply);
-	}, []);
-	return narrow;
-}
-
-/** A 1s heartbeat while the dock is on screen — elapsed lines tick. */
+/** A 1s heartbeat while the section is populated — elapsed lines tick. */
 function useNow(active: boolean): number {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
@@ -216,14 +209,12 @@ const KIND_ICON: Record<JobKind, typeof SearchIcon> = {
 /** Abort states per blob id: pending (fired) / failed (backend absent). */
 type AbortState = "pending" | "failed";
 
-export function ActivityDock({ feed: feedProp }: { feed?: ActivityFeed }) {
+export function ActivitySection({ feed: feedProp }: { feed?: ActivityFeed }) {
 	const ctx = useContext(ActivityContext);
 	const feed = feedProp ?? ctx.feed;
 	const refresh = ctx.refresh;
 	const blobs = useMemo(() => toBlobs(feed), [feed]);
-	const narrow = useNarrow();
-	const [drawerOpen, setDrawerOpen] = useState(false);
-	const [openBlob, setOpenBlob] = useState<string | null>(null); // detail popover
+	const [openBlob, setOpenBlob] = useState<string | null>(null); // detail, inline-expanded
 	const [abortStates, setAbortStates] = useState<Record<string, AbortState>>({});
 	const now = useNow(blobs.length > 0);
 	// Refs for stable abort handlers (no re-created closures per tick).
@@ -266,63 +257,38 @@ export function ActivityDock({ feed: feedProp }: { feed?: ActivityFeed }) {
 		}
 	}, []);
 
-	if (blobs.length === 0) return null; // idle: the dock is invisible
-
-	const count = blobs.length;
-	// Narrow: a quiet count badge; the drawer opens on click.
-	if (narrow && !drawerOpen) {
-		return (
-			<button
-				type="button"
-				data-testid="activity-badge"
-				onClick={() => setDrawerOpen(true)}
-				title={`${count} background process${count === 1 ? "" : "es"} running`}
-				aria-label={`${count} background processes running — show activity dock`}
-				className="fixed bottom-3 right-3 z-30 flex items-center gap-1.5 rounded-full border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
-			>
-				<ActivityIcon className="size-3.5 text-primary" />
-				<span className="tabular-nums">{count}</span>
-			</button>
-		);
-	}
-
+	// Sidebar-native skin (owner, sidebar round): part of the sidebar's
+	// surface, not a floating card — the border-t separator matches the
+	// sidebar's own edge line, the header matches the "Sessions" label, the
+	// rows match the session rows' hover. Empty means empty: the header sits
+	// alone (the cost span is population, not decoration).
 	return (
-		<div
-			data-testid="activity-dock"
-			className={cn(
-				"fixed bottom-3 right-3 z-30 flex w-72 flex-col gap-1 rounded-xl border bg-card/95 p-2 shadow-lg backdrop-blur",
-				narrow && "max-h-[60dvh] overflow-y-auto",
-			)}
-		>
-			<div className="flex items-center gap-2 px-1 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				<ActivityIcon className="size-3.5" />
-				Background activity
-				<span className="ml-auto tabular-nums" data-testid="activity-total-cost" title="Total running cost (inferred)">
-					{totalCost === null ? "—" : formatUsd(totalCost)}
+		<section data-testid="activity-section" className="border-t border-border px-3 pb-3 pt-2">
+			<div className="mb-1 flex items-center gap-1.5 text-xxs uppercase tracking-widest text-muted-foreground/70">
+				<ActivityIcon className="size-3" />
+				Background agents
+				{blobs.length > 0 && (
+					<span className="ml-auto tabular-nums" data-testid="activity-total-cost" title="Total running cost (inferred)">
+						{totalCost === null ? "—" : formatUsd(totalCost)}
 				</span>
-				{narrow && (
-					<button
-						type="button"
-						onClick={() => setDrawerOpen(false)}
-						aria-label="Hide activity dock"
-						className="text-muted-foreground transition-colors hover:text-foreground"
-					>
-						<XIcon className="size-3.5" />
-					</button>
 				)}
 			</div>
-			{blobs.map((blob) => (
-				<ActivityBlobRow
-					key={blob.id}
-					blob={blob}
-					now={now}
-					detailOpen={openBlob === blob.id}
-					onToggleDetail={() => setOpenBlob((id) => (id === blob.id ? null : blob.id))}
-					abortState={abortStates[blob.id]}
-					onAbort={() => void abort(blob)}
-				/>
-			))}
-		</div>
+			{blobs.length > 0 && (
+				<div className="flex max-h-[40dvh] flex-col gap-1 overflow-y-auto">
+					{blobs.map((blob) => (
+						<ActivityBlobRow
+							key={blob.id}
+							blob={blob}
+							now={now}
+							detailOpen={openBlob === blob.id}
+							onToggleDetail={() => setOpenBlob((id) => (id === blob.id ? null : blob.id))}
+							abortState={abortStates[blob.id]}
+							onAbort={() => void abort(blob)}
+						/>
+					))}
+			</div>
+			)}
+		</section>
 	);
 }
 
@@ -356,7 +322,7 @@ function ActivityBlobRow({
 	return (
 		<div
 			data-testid={`activity-blob-${blob.process}`}
-			className="relative rounded-lg bg-background/40 px-2 py-1.5 text-xs transition-colors hover:bg-background/70"
+			className="relative rounded-lg px-2 py-1.5 text-xs transition-colors hover:bg-accent"
 		>
 			<button
 				type="button"
@@ -398,7 +364,7 @@ function ActivityBlobRow({
 			{detailOpen && (
 				<div
 					data-testid="activity-blob-detail"
-					className="absolute bottom-full right-0 z-40 mb-1.5 w-72 rounded-xl border bg-card p-3 text-xs shadow-xl"
+					className="mt-1 flex flex-col gap-1 rounded-lg bg-accent/40 p-2 text-muted-foreground"
 				>
 					<div className="mb-1.5 flex items-center gap-2">
 						<Icon className="size-3.5 text-muted-foreground" />

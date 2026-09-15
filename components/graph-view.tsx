@@ -194,6 +194,328 @@ function SettingSlider({
 	);
 }
 
+/**
+ * The rendering-settings gear + its collapsible panel (owner, graph-view
+ * round 2): its own container at the top right, separate from the search
+ * box and the import button — clicking the gear expands/collapses the
+ * panel, which drops below the button, right-aligned with it.
+ */
+function GraphSettingsControl({
+	settings,
+	changeSettings,
+}: {
+	settings: GraphRenderSettings;
+	changeSettings: (update: (cur: RenderSettings) => RenderSettings) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	const regionTuning = settings.regions;
+	const physicsTuning = settings.physics;
+	return (
+		<div className="relative">
+			<button
+				type="button"
+				title="Rendering settings"
+				aria-expanded={open}
+				onClick={() => setOpen((o) => !o)}
+				className={`flex size-11 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
+					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+				}`}
+			>
+				<SettingsIcon className="size-4" />
+			</button>
+			{open && (
+				<div className="absolute right-0 top-full mt-2 w-64 rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
+					<div className="flex flex-col gap-2">
+							{/* All sliders: log-scaled 0-100, step 5, so every
+							    DEFAULT sits at 50 (src/core/render-settings.ts). */}
+							<SettingSlider
+								label="Node size"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.nodeSize, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max)}
+								display={sizeDisplay(settings.nodeSize)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, nodeSize: fromSliderPosition(p, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max) }))}
+							/>
+							<SettingSlider
+								label="Edge width"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.edgeWidth, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max)}
+								display={sizeDisplay(settings.edgeWidth)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, edgeWidth: fromSliderPosition(p, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max) }))}
+							/>
+							<SettingSlider
+								label="Arrowhead size"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.arrowLength, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max)}
+								display={sizeDisplay(settings.arrowLength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, arrowLength: fromSliderPosition(p, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max) }))}
+							/>
+							<SettingSlider
+								label="Label size"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.labelSize, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max)}
+								display={sizeDisplay(settings.labelSize)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, labelSize: fromSliderPosition(p, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max) }))}
+							/>
+							{/* Displayed units normalize the default (0.5) to "1×". */}
+							<SettingSlider
+								label="Labels until zoom"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.labelZoom, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX)}
+								display={labelZoomDisplay(settings.labelZoom)}
+								onChange={(p) =>
+									changeSettings((cur) => ({ ...cur, labelZoom: fromSliderPosition(p, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX) }))}
+							/>
+							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
+								<span>Cluster labels</span>
+								<input
+									type="checkbox"
+									checked={settings.clusterLabels}
+									onChange={(e) => changeSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
+									className="accent-primary"
+								/>
+							</label>
+						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
+						    dropdown for the bitmap resolution (it's a discrete
+						    choice, not a free number). Server-persisted like the
+						    sizes; every range end was sweep-validated on the real
+						    graph. */}
+						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
+							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+								Regions
+							</span>
+							<SettingSlider
+								label="Dilation"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(regionTuning.dilation, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max)}
+								display={sizeDisplay(regionTuning.dilation)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										regions: { ...cur.regions, dilation: fromSliderPosition(p, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max) },
+									}))}
+							/>
+							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+								<span>Blur</span>
+								<select
+									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
+									value={regionTuning.blur}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											regions: { ...cur.regions, blur: Number(e.target.value) },
+										}))
+									}
+								>
+									{REGION_BLUR_OPTIONS.map((o) => (
+										<option key={o} value={o}>
+											{o}
+										</option>
+									))}
+								</select>
+							</label>
+							<SettingSlider
+								label="Edge alpha"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(regionTuning.edgeAlpha, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max)}
+								display={sizeDisplay(regionTuning.edgeAlpha)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										regions: { ...cur.regions, edgeAlpha: fromSliderPosition(p, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max) },
+									}))}
+							/>
+							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+								<span>Bitmap resolution</span>
+								<select
+									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
+									value={regionTuning.bitmap}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											regions: { ...cur.regions, bitmap: Number(e.target.value) },
+										}))
+									}
+								>
+									{REGION_BITMAP_OPTIONS.map((o) => (
+										<option key={o} value={o}>
+											{o}
+										</option>
+									))}
+								</select>
+							</label>
+						</div>
+						{/* Physics: the live sim's forces. Every value feeds the SAME
+						    engine the server settle runs (createGraphSimulation);
+						    changing one rebuilds the sim from the current positions —
+						    drag mid-settle re-anneals, pins survive. Sliders over
+						    sweep-validated ranges (src/core/render-settings.ts):
+						    range ends and all four corners settle cleanly — no NaN,
+						    no explosion, no non-settle. Repulsion is displayed as
+						    the negative it is; cluster pull's far left = off. */}
+						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
+							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+								Physics
+							</span>
+							<label className="flex items-center justify-between gap-2 text-xs">
+								Depth anchor
+								<select
+									className="rounded border bg-background px-1 py-0.5 text-xs"
+									value={physicsTuning.depthMode}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											physics: { ...cur.physics, depthMode: e.target.value as GraphRenderSettings["physics"]["depthMode"] },
+										}))
+									}
+								>
+									<option value="off">Off</option>
+									<option value="vertical">Vertical (up)</option>
+									<option value="radial">Radial (outward)</option>
+								</select>
+							</label>
+							<SettingSlider
+								label="Depth strength"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthStrength, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthStrength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthStrength: fromSliderPosition(p, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Depth spacing"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthSpacing, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthSpacing)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthSpacing: fromSliderPosition(p, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Base ring radius"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthBaseRadius, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthBaseRadius)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthBaseRadius: fromSliderPosition(p, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Node repulsion"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(-physicsTuning.chargeStrength, -CHARGE_RANGE.max, -CHARGE_RANGE.min)}
+								display={`-${Math.round(-physicsTuning.chargeStrength)}`}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, chargeStrength: -fromSliderPosition(p, -CHARGE_RANGE.max, -CHARGE_RANGE.min) },
+									}))}
+							/>
+							<SettingSlider
+								label="Edge attraction"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.linkStrength, LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max)}
+								display={sizeDisplay(physicsTuning.linkStrength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, linkStrength: fromSliderPosition(p, LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Edge length"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.linkDistance, LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max)}
+								display={sizeDisplay(physicsTuning.linkDistance)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, linkDistance: fromSliderPosition(p, LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Central pull"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.gravity, GRAVITY_RANGE.min, GRAVITY_RANGE.max)}
+								display={sizeDisplay(physicsTuning.gravity)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, gravity: fromSliderPosition(p, GRAVITY_RANGE.min, GRAVITY_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Cluster pull"
+								min={0}
+								max={100}
+								step={5}
+								value={toOffSliderPosition(physicsTuning.clusterPull, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max)}
+								display={physicsTuning.clusterPull <= 0 ? "off" : sizeDisplay(physicsTuning.clusterPull)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, clusterPull: fromOffSliderPosition(p, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Friction"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.velocityDecay, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max)}
+								display={sizeDisplay(physicsTuning.velocityDecay)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, velocityDecay: fromSliderPosition(p, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max) },
+									}))}
+							/>
+						</div>
+					</div>
+				</div>
+			)}
+		</div>
+	);
+}
+
 export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -207,7 +529,6 @@ export function GraphView() {
 
 	// Search panel state: the query text + the settings section toggle.
 	const [query, setQuery] = useState("");
-	const [settingsOpen, setSettingsOpen] = useState(false);
 	// Render settings: SERVER-persisted (data/render-settings.json via
 	// /api/graph/render-settings) — sizes AND the region/physics sections
 	// (user-facing since 2026-09-13; the dev-session era is over). Loaded
@@ -522,319 +843,31 @@ export function GraphView() {
 			)}
 
 			{/* Legend + filters: search box and per-state toggle rows. */}
+			{/* Top-right controls — three separate floating containers (owner,
+			    graph-view round 2): the search box, the settings gear (its own
+			    collapsible component), and the import button. */}
 			{!isEmpty && (
-				<div className="absolute right-3 top-3 z-10 w-64 rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
-					<div className="relative">
-						<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-						<input
-							value={query}
-							onChange={(e) => setQuery(e.target.value)}
-							placeholder="Search nodes…"
-							spellCheck={false}
-							className="h-8 w-full rounded-lg border bg-background pl-8 pr-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
-						/>
-						<button
-							type="button"
-							title="Rendering settings"
-							onClick={() => setSettingsOpen((o) => !o)}
-							className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-						>
-							<SettingsIcon className="size-3.5" />
-						</button>
+				<div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+					{/* Search — its own container (icon + input + no-match note). */}
+					<div className="w-56 rounded-xl border bg-card/85 p-1.5 shadow-lg backdrop-blur">
+						<div className="relative">
+							<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+							<input
+								value={query}
+								onChange={(e) => setQuery(e.target.value)}
+								placeholder="Search nodes…"
+								spellCheck={false}
+								className="h-8 w-full rounded-lg border bg-background pl-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+							/>
+						</div>
+						{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
+							<div className="px-1.5 pt-1 text-[11px] text-muted-foreground">
+								No matching nodes.
+							</div>
+						)}
 					</div>
-					{settingsOpen && (
-						<div className="mt-1.5 flex flex-col gap-2 border-t pt-1.5">
-							{/* All sliders: log-scaled 0-100, step 5, so every
-							    DEFAULT sits at 50 (src/core/render-settings.ts). */}
-							<SettingSlider
-								label="Node size"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(settings.nodeSize, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max)}
-								display={sizeDisplay(settings.nodeSize)}
-								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, nodeSize: fromSliderPosition(p, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max) }))}
-							/>
-							<SettingSlider
-								label="Edge width"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(settings.edgeWidth, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max)}
-								display={sizeDisplay(settings.edgeWidth)}
-								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, edgeWidth: fromSliderPosition(p, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max) }))}
-							/>
-							<SettingSlider
-								label="Arrowhead size"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(settings.arrowLength, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max)}
-								display={sizeDisplay(settings.arrowLength)}
-								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, arrowLength: fromSliderPosition(p, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max) }))}
-							/>
-							<SettingSlider
-								label="Label size"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(settings.labelSize, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max)}
-								display={sizeDisplay(settings.labelSize)}
-								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, labelSize: fromSliderPosition(p, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max) }))}
-							/>
-							{/* Displayed units normalize the default (0.5) to "1×". */}
-							<SettingSlider
-								label="Labels until zoom"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(settings.labelZoom, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX)}
-								display={labelZoomDisplay(settings.labelZoom)}
-								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, labelZoom: fromSliderPosition(p, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX) }))}
-							/>
-							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
-								<span>Cluster labels</span>
-								<input
-									type="checkbox"
-									checked={settings.clusterLabels}
-									onChange={(e) => changeSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
-									className="accent-primary"
-								/>
-							</label>
-						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
-						    dropdown for the bitmap resolution (it's a discrete
-						    choice, not a free number). Server-persisted like the
-						    sizes; every range end was sweep-validated on the real
-						    graph. */}
-						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
-							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-								Regions
-							</span>
-							<SettingSlider
-								label="Dilation"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(regionTuning.dilation, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max)}
-								display={sizeDisplay(regionTuning.dilation)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										regions: { ...cur.regions, dilation: fromSliderPosition(p, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max) },
-									}))}
-							/>
-							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-								<span>Blur</span>
-								<select
-									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
-									value={regionTuning.blur}
-									onChange={(e) =>
-										changeSettings((cur) => ({
-											...cur,
-											regions: { ...cur.regions, blur: Number(e.target.value) },
-										}))
-									}
-								>
-									{REGION_BLUR_OPTIONS.map((o) => (
-										<option key={o} value={o}>
-											{o}
-										</option>
-									))}
-								</select>
-							</label>
-							<SettingSlider
-								label="Edge alpha"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(regionTuning.edgeAlpha, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max)}
-								display={sizeDisplay(regionTuning.edgeAlpha)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										regions: { ...cur.regions, edgeAlpha: fromSliderPosition(p, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max) },
-									}))}
-							/>
-							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-								<span>Bitmap resolution</span>
-								<select
-									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
-									value={regionTuning.bitmap}
-									onChange={(e) =>
-										changeSettings((cur) => ({
-											...cur,
-											regions: { ...cur.regions, bitmap: Number(e.target.value) },
-										}))
-									}
-								>
-									{REGION_BITMAP_OPTIONS.map((o) => (
-										<option key={o} value={o}>
-											{o}
-										</option>
-									))}
-								</select>
-							</label>
-						</div>
-						{/* Physics: the live sim's forces. Every value feeds the SAME
-						    engine the server settle runs (createGraphSimulation);
-						    changing one rebuilds the sim from the current positions —
-						    drag mid-settle re-anneals, pins survive. Sliders over
-						    sweep-validated ranges (src/core/render-settings.ts):
-						    range ends and all four corners settle cleanly — no NaN,
-						    no explosion, no non-settle. Repulsion is displayed as
-						    the negative it is; cluster pull's far left = off. */}
-						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
-							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-								Physics
-							</span>
-							<label className="flex items-center justify-between gap-2 text-xs">
-								Depth anchor
-								<select
-									className="rounded border bg-background px-1 py-0.5 text-xs"
-									value={physicsTuning.depthMode}
-									onChange={(e) =>
-										changeSettings((cur) => ({
-											...cur,
-											physics: { ...cur.physics, depthMode: e.target.value as GraphRenderSettings["physics"]["depthMode"] },
-										}))
-									}
-								>
-									<option value="off">Off</option>
-									<option value="vertical">Vertical (up)</option>
-									<option value="radial">Radial (outward)</option>
-								</select>
-							</label>
-							<SettingSlider
-								label="Depth strength"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthStrength, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthStrength)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthStrength: fromSliderPosition(p, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Depth spacing"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthSpacing, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthSpacing)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthSpacing: fromSliderPosition(p, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Base ring radius"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthBaseRadius, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthBaseRadius)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthBaseRadius: fromSliderPosition(p, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Node repulsion"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(-physicsTuning.chargeStrength, -CHARGE_RANGE.max, -CHARGE_RANGE.min)}
-								display={`-${Math.round(-physicsTuning.chargeStrength)}`}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, chargeStrength: -fromSliderPosition(p, -CHARGE_RANGE.max, -CHARGE_RANGE.min) },
-									}))}
-							/>
-							<SettingSlider
-								label="Edge attraction"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.linkStrength, LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max)}
-								display={sizeDisplay(physicsTuning.linkStrength)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, linkStrength: fromSliderPosition(p, LINK_STRENGTH_RANGE.min, LINK_STRENGTH_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Edge length"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.linkDistance, LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max)}
-								display={sizeDisplay(physicsTuning.linkDistance)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, linkDistance: fromSliderPosition(p, LINK_DISTANCE_RANGE.min, LINK_DISTANCE_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Central pull"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.gravity, GRAVITY_RANGE.min, GRAVITY_RANGE.max)}
-								display={sizeDisplay(physicsTuning.gravity)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, gravity: fromSliderPosition(p, GRAVITY_RANGE.min, GRAVITY_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Cluster pull"
-								min={0}
-								max={100}
-								step={5}
-								value={toOffSliderPosition(physicsTuning.clusterPull, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max)}
-								display={physicsTuning.clusterPull <= 0 ? "off" : sizeDisplay(physicsTuning.clusterPull)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, clusterPull: fromOffSliderPosition(p, CLUSTER_PULL_RANGE.min, CLUSTER_PULL_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Friction"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.velocityDecay, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max)}
-								display={sizeDisplay(physicsTuning.velocityDecay)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, velocityDecay: fromSliderPosition(p, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max) },
-									}))}
-							/>
-						</div>
-						</div>
-					)}
-					{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
-						<div className="mt-1.5 border-t px-1.5 pt-1.5 text-[11px] text-muted-foreground">
-							No matching nodes.
-						</div>
-					)}
-					<div className="mt-1.5 border-t pt-1.5">
+					{/* Import notes — its own container. */}
+					<div className="rounded-xl border bg-card/85 p-1.5 shadow-lg backdrop-blur">
 						<input
 							ref={fileInputRef}
 							type="file"
@@ -850,12 +883,16 @@ export function GraphView() {
 							type="button"
 							disabled={importing}
 							onClick={() => fileInputRef.current?.click()}
-							className="flex h-7 w-full items-center justify-center gap-1.5 rounded-lg border text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+							className="flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
 						>
 							<UploadIcon className="size-3" />
 							{importing ? "Importing…" : "Import notes…"}
 						</button>
 					</div>
+					{/* Rendering settings — own component; the gear toggles it. The
+					    gear sits at the far right (owner, round 3) so its panel
+					    drops at the very right edge, over less of the graph. */}
+					<GraphSettingsControl settings={settings} changeSettings={changeSettings} />
 				</div>
 			)}
 

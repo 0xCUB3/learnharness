@@ -9,9 +9,10 @@ import { StatsBar } from "@/components/stats-bar";
 import type { ChatSettings, TurnUsage } from "@/src/core";
 
 /**
- * Home — the knowledge graph is the main view (placeholder until the graph
- * pipeline lands), with the new-session blob docked below it. Sessions live
- * in the toggleable sidebar.
+ * Home — the knowledge graph is the main view, full-bleed edge to edge
+ * (owner, graph-view round 1): the canvas owns the whole column, running
+ * under the header and the new-session dock, both of which float over it
+ * with no gradient scrims. Sessions live in the toggleable sidebar.
  */
 export function Home() {
 	const router = useRouter();
@@ -48,21 +49,28 @@ export function Home() {
 	};
 
 	return (
-		<div className="flex h-dvh flex-col">
-			<header className="flex items-center gap-2 px-3 py-2">
-				<SidebarToggle />
-			</header>
-
-			{/* Graph — the main view (W4: sigma.js render of the derived graph). */}
-			<main className="min-h-0 flex-1 px-4 py-2">
+		<div className="relative h-dvh">
+			{/* Graph — the main view, full-bleed (owner, graph-view round 1): no
+			    padding on any side; the canvas runs from the sidebar to the right
+			    edge and from the bottom to the top, under everything else. */}
+			<main className="absolute inset-0">
 				<GraphView />
 			</main>
 
-			{/* New session — same floating blob as the chat composer. */}
-			<div className="pb-4">
-				{/* Matches chat.tsx's DOCK geometry (max-w-[46rem] px-4) so nothing
-			    shifts when a session starts (owner). */}
-			<div className="mx-auto w-full max-w-[46rem] px-4">
+			{/* Header floats over the graph — pointer-events-none except the
+			    toggle, so the canvas stays draggable/hoverable around it. */}
+			<header className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-2">
+				<div className="pointer-events-auto">
+					<SidebarToggle />
+				</div>
+			</header>
+
+			{/* New session — same floating blob as the chat composer, docked
+			    OVER the graph (no gradient: the graph runs clean under it to the
+			    bottom edge). Matches chat.tsx's DOCK geometry (max-w-[46rem]
+			    px-4) so nothing shifts when a session starts (owner). */}
+			<div className="pointer-events-none absolute inset-x-0 bottom-0 pb-5">
+				<div className="pointer-events-auto mx-auto w-full max-w-[46rem] px-4">
 					<form
 						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
 					onSubmit={(e) => {

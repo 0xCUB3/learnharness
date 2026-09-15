@@ -1,13 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { planWindowViewBox, PlanWindow } from "../components/plan-window.tsx";
-import { blockLayout, NODE_H, NODE_W, type PopupMessage } from "../components/plan-block.tsx";
+import { PlanMarginalia } from "../components/plan-window.tsx";
+import { blockLayout, type PopupMessage } from "../components/plan-block.tsx";
 import type { PlanTree } from "../src/core/contracts.ts";
 
-// The plan window: the ambient live view — a windowed viewBox centered on
-// the current node (auto-pan by derivation, not animation), full plan
-// hidden until a tree exists, click → popup.
+// The plan marginalia: the bare diagram in the dock band's right flank —
+// full plan (padded viewBox, meet-fit), statuses + glow live by derivation,
+// nothing until a tree exists. Positioning and fade live in DockOverlay.
 
 const CHAIN: PlanTree = {
 	nodes: [
@@ -44,68 +44,34 @@ function transcript(tree: PlanTree, taggedNodeId?: string): PopupMessage[] {
 	];
 }
 
-describe("planWindowViewBox (pure)", () => {
-	it("centers the window on the current node", () => {
+describe("PlanMarginalia render", () => {
+	it("renders nothing until a tree exists", () => {
+		assert.equal(renderToStaticMarkup(<PlanMarginalia messages={[]} />), "");
+	});
+
+	it("renders the FULL plan (padded full-extent viewBox), not a windowed crop", () => {
+		const html = renderToStaticMarkup(<PlanMarginalia messages={transcript(CHAIN)} />);
+		// The viewBox covers the whole layout plus the glow-clearing pad —
+		// never the retired window's 2:1 crop.
 		const layout = blockLayout(CHAIN.nodes, CHAIN.edges);
-		const cy = layout.y.get("b")! + NODE_H / 2; // chain: all x = 0
-		const vb = planWindowViewBox(CHAIN, "b").split(" ").map(Number);
-		assert.equal(vb[3], 180); // 2:1 window
-		assert.equal(vb[1]! + 90, cy, "vertical center = node b's center");
-		// layout narrower than the window → centered on the (single-column) layout
-		assert.equal(vb[0]! + 180, layout.width / 2);
+		const pad = 24; // MARGIN_PAD: GRAPH_PAD + 16 (glow halo clearance)
+		const vb = `viewBox="${-pad} ${-pad} ${layout.width + 2 * pad} ${layout.height + 2 * pad}"`;
+		assert.ok(html.includes(vb), `expected ${vb} in the svg`);
+		assert.ok(!/viewBox="-?\d+(\.\d+)? -?\d+(\.\d+)? 360 180"/.test(html), "the windowed viewBox is retired");
+		// Meet-fit mode: the svg fills the band box (h-full w-full), letting
+		// preserveAspectRatio contain the diagram in the flank.
+		assert.ok(html.includes('class="block h-full w-full'), "fill mode classes");
 	});
 
-	it("falls back to the first node while no check has been tagged — clamped at the layout's top edge", () => {
-		const layout = blockLayout(CHAIN.nodes, CHAIN.edges);
-		const vb = planWindowViewBox(CHAIN, null).split(" ").map(Number);
-		// Focusing row 0 would center half-off the layout; the clamp pins the
-		// window to the top edge instead — node a stays fully inside it.
-		assert.equal(vb[1], 0);
-		const aTop = layout.y.get("a")!;
-		assert.ok(aTop >= vb[1] && aTop + NODE_H <= vb[1] + 180, "the first node is inside the window");
-	});
-
-	it("clamps along wide rows — the window never strays past an edge node", () => {
-		const wide: PlanTree = {
-			nodes: [
-				{ id: "r1", title: "R1" },
-				{ id: "r2", title: "R2" },
-				{ id: "r3", title: "R3" },
-				{ id: "t", title: "T" },
-			],
-			edges: [
-				{ from: "r1", to: "t" },
-				{ from: "r2", to: "t" },
-				{ from: "r3", to: "t" },
-			],
-			version: 1,
-		};
-		const layout = blockLayout(wide.nodes, wide.edges);
-		assert.ok(layout.width > 360, "fixture: a row wider than the window");
-		// Rightmost root: window's right edge must not exceed the layout width.
-		const vb = planWindowViewBox(wide, "r3").split(" ").map(Number);
-		assert.ok(vb[0]! + 360 <= layout.width + 0.001, "clamped at the right edge");
-		// Leftmost root: window's left edge must not go negative.
-		const vb2 = planWindowViewBox(wide, "r1").split(" ").map(Number);
-		assert.ok(vb2[0]! >= -0.001, "clamped at the left edge");
-	});
-});
-
-describe("PlanWindow render", () => {
-	it("hidden while no plan exists", () => {
-		assert.equal(renderToStaticMarkup(<PlanWindow messages={[]} onOpen={() => {}} />), "");
-	});
-
-	it("with a plan: renders windowed, glowing current from the latest tagged call; click target present", () => {
-		const html = renderToStaticMarkup(<PlanWindow messages={transcript(CHAIN, "b")} onOpen={() => {}} />);
-		assert.ok(html.includes('data-testid="plan-window"'));
-		assert.ok(html.includes('data-status="current"'));
-		assert.ok(html.includes('data-status="upcoming"'));
-		// the viewBox is windowed (not the full layout extent)
-		assert.ok(/viewBox="-?\d+(\.\d+)? -?\d+(\.\d+)? 360 180"/.test(html));
-		// no current yet → first node is the fallback focus, header says starting
-		const html2 = renderToStaticMarkup(<PlanWindow messages={transcript(CHAIN)} onOpen={() => {}} />);
-		assert.ok(html2.includes("starting"));
-		assert.ok(!html2.includes('data-status="current"'), "nothing current before the first tagged check");
+	it("glows the current node and dims the not-yet-visited (live statuses)", () => {
+		const html = renderToStaticMarkup(<PlanMarginalia messages={transcript(CHAIN, "b")} />);
+		// The yellow blurred halo marks the tagged check's node…
+		assert.ok(html.includes("fill-yellow-400/25"), "glow on the current node");
+		assert.ok(html.includes('data-testid="plan-node-b" data-status="current"'), "b is current");
+		// …and arrows into upcoming nodes carry the dimmed head.
+		assert.ok(
+			html.includes("url(#:r0:-dim)") || /url\(#\S*-dim\)/.test(html),
+			"dimmed arrowhead into the upcoming node",
+		);
 	});
 });

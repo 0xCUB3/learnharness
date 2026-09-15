@@ -23,7 +23,8 @@ import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import type { ChatSettings } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
-import { PlanWindow } from "@/components/plan-window";
+import { PlanMarginalia } from "@/components/plan-window";
+import { WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
@@ -40,6 +41,17 @@ import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
  */
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
+// The DOCK container's fixed width (46rem) and the plan marginalia's
+// geometry (owner, plan-placement round): the bare diagram sits in the
+// dock band's RIGHT flank — MARGIN_GAP from the DOCK container's edge and
+// the same from the column's right edge. The box width is pure CSS, so
+// the diagram shrinks CONTINUOUSLY with the flank; MARGIN_MIN_W is only
+// the fade floor (owner, resize round) — below it the marginalia fades
+// out over the normal transition instead of popping away, and it stays
+// mounted while the question owns the band so widening fades it back.
+const DOCK_W = 46 * 16;
+const MARGIN_GAP = 16;
+const MARGIN_MIN_W = 220;
 // The dock overlay's gradient band (h-24) — part of the reserved tail.
 const GRADIENT_H = 96;
 // Fold thresholds (owner, scroll round 1, tuned round 3): pixel distance
@@ -212,8 +224,12 @@ export function Chat({
 		}
 	}, [chatId, setMessages, sendMessage, status]);
 
-	// The live plan popup (wave 4): opened by any transcript plan block.
+	// The live plan popup (wave 4): opened by any transcript plan block, the
+	// top-bar plan chip, and the dock band's marginalia.
 	const [planOpen, setPlanOpen] = useState(false);
+	// The session's live plan (drives the top-bar chip; the marginalia
+	// derives its own from the same transcript).
+	const planTree = useMemo(() => latestTree(messages), [messages]);
 
 	// ── The plan verdict gate (docs/probe-teach-split.md §4) ──
 	// The plan has been presented (a tree exists) and the session still sits in
@@ -221,8 +237,8 @@ export function Chat({
 	// Accept / Decline buttons. Acceptance is the explicit plan→teach seam
 	// (a data-plan-accepted part on the message); decline asks for revision.
 	const planVerdict = useMemo(
-		() => phaseAt3(messages) === "plan" && latestTree(messages) !== null,
-		[messages],
+		() => phaseAt3(messages) === "plan" && planTree !== null,
+		[messages, planTree],
 	);
 	const sendVerdict = useCallback(
 		(accepted: boolean) => {
@@ -478,19 +494,31 @@ export function Chat({
 		    the transcript reserves its height. */}
 		<div className="flex h-dvh">
 			<div className="flex min-w-0 flex-1 flex-col">
-				{/* h-10, not py-2: the toggle (a size-9 icon button) renders only
-				    while the sidebar is CLOSED — an auto-height row would collapse
-				    when it disappears and slide the title + chip up. */}
-				<header className="relative flex h-10 items-center gap-3 px-3">
+				{/* The top bar is its own block (owner, top-fade round 4): in flow
+				    above the scroller on the plain page background — no gradient. Its
+				    bottom outline (border-b border-border) matches the one that
+				    separates the left sidebar — same width, same color (owner, r5). h-10, not py-2: the toggle (a size-9 icon button)
+				    renders only while the sidebar is CLOSED — an auto-height row
+				    would collapse when it disappears and slide the title + chip up. */}
+				<header className="flex h-10 items-center gap-3 border-b border-border px-3">
 					<SidebarToggle />
 					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
+					{/* The plan chip (owner, plan-placement round): session-level
+					    structure beside the phase chip — access to the full-DAG popup
+					    at every width; the marginalia is the wide-screen glance view. */}
+					{planTree && (
+						<button
+							type="button"
+							data-testid="plan-chip"
+							onClick={() => setPlanOpen(true)}
+							title="Open the full plan"
+							className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+						>
+							<WaypointsIcon className="size-3.5 text-primary" aria-hidden />
+							Plan
+						</button>
+					)}
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
-					{/* Soft top fade (owner): the scroller edge under the header eases
-					    in exactly like the dock gradient at the bottom. */}
-					<div
-						aria-hidden
-						className="pointer-events-none absolute inset-x-0 top-full z-10 h-5 bg-gradient-to-b from-background to-transparent"
-					/>
 				</header>
 
 				<div className="relative flex min-h-0 flex-1">
@@ -633,6 +661,8 @@ export function Chat({
 					chatId={chatId}
 					settings={settings}
 					onSettingsSaved={setSettings}
+					plan={<PlanMarginalia messages={messages} />}
+					onOpenPlan={() => setPlanOpen(true)}
 					requiresReveal={requiresReveal}
 					phase={phases.at(-1) ?? "probe"}
 					turns={turns}
@@ -672,8 +702,6 @@ export function Chat({
 			</div>
 		</div>
 		{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
-		{/* The plan's ambient presence: live, zoomed on the current node; click → popup. */}
-		<PlanWindow messages={messages} onOpen={() => setPlanOpen(true)} />
 		</JobsContext.Provider>
 		</ChatActionsContext.Provider>
 	);
@@ -713,6 +741,8 @@ function DockOverlay({
 	settings,
 	onSettingsSaved,
 	onReserve,
+	plan,
+	onOpenPlan,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
@@ -730,6 +760,11 @@ function DockOverlay({
 	/** Reports the dock's settled height (block + gradient) — ChatView's
 	 *  dockReserve state feeds the transcript's spacer from it. */
 	onReserve: (h: number) => void;
+	/** The plan marginalia's content (the bare diagram) — rendered only
+	 *  while a question owns the band. Null until a plan exists. */
+	plan?: React.ReactNode;
+	/** Opens the full-DAG popup (the marginalia + chip share it). */
+	onOpenPlan: () => void;
 }) {
 	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
 	// Teach-phase mount (session reload with a pending check): the dock starts
@@ -775,6 +810,43 @@ function DockOverlay({
 	requiresRevealRef.current = requiresReveal;
 	const revealedRef = useRef(revealed);
 	revealedRef.current = revealed;
+
+	// The plan marginalia's flank width (owner, plan-placement round): from
+	// the DOCK container's right edge to the block's right edge — the bare
+	// diagram's canvas. Tracked LIVE by a ResizeObserver on the block
+	// (owner, resize round): every geometry change — window resize, sidebar
+	// toggle, scrollbar appearance, the box's own rewrap — reports the real
+	// width instantly, so the fade floor never lags behind reality (the old
+	// render-time measurement went stale during drag-resizes and the mount
+	// decision popped late).
+	const [flankW, setFlankW] = useState(0);
+	const flankWRef = useRef(0);
+	// Part A of the same round (the resize mute): any block size change
+	// stamps this — the fold machine ignores scroll events for a beat after,
+	// because a resize/rewrap re-clamps scrollTop and emits PHANTOM scroll
+	// events mid-transient (the box flickered to the bar and back).
+	const geometryAtRef = useRef(0);
+	useIsoLayoutEffect(() => {
+		const block = blockRef.current;
+		if (!block) return;
+		const measure = () => {
+			const next = Math.round(block.offsetWidth / 2 - DOCK_W / 2 - 2 * MARGIN_GAP);
+			// Stamp the mute on WIDTH changes ONLY: column resizes are the
+			// phantom-scroll source. Height changes are the dock's own doing
+			// (morphs, question rewraps) — stamping those would self-mute the
+			// fold machine and swallow the at-bottom auto re-expand right
+			// after a fold (verified live: the box got stuck collapsed).
+			if (Math.abs(next - flankWRef.current) > 1) {
+				flankWRef.current = next;
+				setFlankW(next);
+				geometryAtRef.current = Date.now();
+			}
+		};
+		measure();
+		const ro = new ResizeObserver(measure);
+		ro.observe(block);
+		return () => ro.disconnect();
+	}, []);
 
 	// The overlay must not paint over the scroller's scrollbar (owner, scroll
 	// round 2): the scroller reserves symmetric gutters (scrollbar-gutter:
@@ -858,6 +930,11 @@ function DockOverlay({
 		if (!el) return;
 		const onScroll = () => {
 			if (!pendingRef.current) return;
+			// Resize mute (owner, resize round): a geometry change re-clamps
+			// scrollTop and the browser emits the clamp as a scroll event —
+			// reading the transient position folded the box to the bar for a
+			// flicker. Real scrolling resumes after the brief mute window.
+			if (Date.now() - geometryAtRef.current < 400) return;
 			const d = el.scrollHeight - el.clientHeight - el.scrollTop;
 			if (expandedRef.current) {
 				if (d > COLLAPSE_DIST && !expandIntentRef.current) setExpanded(false);
@@ -924,7 +1001,7 @@ function DockOverlay({
 	return (
 		<div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ right: sbInset }}>
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-			<div ref={blockRef} className="bg-background pb-4">
+			<div ref={blockRef} className="relative bg-background pb-5">
 				<div className={DOCK}>
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
@@ -954,6 +1031,32 @@ function DockOverlay({
 						onSettingsSaved={onSettingsSaved}
 					/>
 				</div>
+				{/* The plan marginalia (owner, plan-placement round): the bare
+				    diagram in the band's right flank — boundaless, meet-fitted, part
+				    of the lesson's page rather than a floating widget. Mounted only
+				    while a question owns the band (its reserved height is the canvas);
+				    folding the dock fades + blurs it out of existence, so reading
+				    the transcript in full wipes the margin clean. Click → popup.
+				    Width (owner, resize round): the box shrinks continuously with
+				    the flank; below MARGIN_MIN_W it FADES (never pops away — no
+				    mid-question unmount), and widening past the floor fades it
+				    back in. */}
+				{pending && plan && (
+					<button
+						type="button"
+						data-testid="plan-marginalia"
+						onClick={onOpenPlan}
+						title="Open the full plan"
+						style={{ left: `calc(50% + ${DOCK_W / 2 + MARGIN_GAP}px)` }}
+						className={`absolute bottom-5 right-4 top-0 cursor-pointer transition-[filter,opacity] duration-300 ease-out ${
+							expanded && flankW >= MARGIN_MIN_W
+								? "pointer-events-auto opacity-100 blur-0"
+								: "pointer-events-none opacity-0 blur-md"
+						}`}
+					>
+						{plan}
+					</button>
+				)}
 			</div>
 		</div>
 	);
