@@ -753,7 +753,7 @@ export function GraphView() {
 				y: positions.get(n.id)?.y ?? 0,
 				label: n.name,
 			})),
-			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to })),
+			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to, type: e.type })),
 			clusters: snapshot.clusters.map((c) => ({ id: c.id, label: c.label, members: c.members })),
 			colors: {
 				node: tokenHex(NODE_COLOR_TOKEN),
@@ -894,6 +894,19 @@ export function GraphView() {
 					    drops at the very right edge, over less of the graph. */}
 					<GraphSettingsControl settings={settings} changeSettings={changeSettings} />
 				</div>
+			)}
+
+			{/* Edge glyph legend (bottom-right; the pipeline status pills own
+			    the bottom-left). ⟹ follows (the derivation backbone) · →
+			    supports — DECIDED 2026-09-14, docs/vision-edge-glyph.md. */}
+			{!isEmpty && (
+				<div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur">
+				<span className="font-medium text-foreground">⟹</span>
+				<span>follows</span>
+				<span className="text-muted-foreground/60">·</span>
+				<span className="font-medium text-foreground">→</span>
+				<span>supports</span>
+			</div>
 			)}
 
 			{/* Background pipeline status: what is currently running. */}

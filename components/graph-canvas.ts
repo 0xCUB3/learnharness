@@ -64,6 +64,7 @@ import {
 	sanitizeRegionTuning,
 	type PhysicsTuning,
 	type RegionTuning,
+	type EdgeType,
 	INCREMENTAL_GRAVITY,
 	LINK_DISTANCE,
 	type DepthAnchorMode,
@@ -88,6 +89,10 @@ export interface CanvasNode {
 export interface CanvasEdge {
 	from: string;
 	to: string;
+	/** Relation type: `follows` renders the double-shaft glyph (⟹),
+	 *  `supports` the plain single line (DECIDED 2026-09-14,
+	 *  docs/vision-edge-glyph.md). */
+	type: EdgeType;
 }
 
 /** One cluster region: member node ids + the LLM-coined label (or null). */
@@ -165,6 +170,16 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
 const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
 const REGION_LABEL_SIZE = 14;
+
+/** Follows glyph: screen-space distance between the two shaft CENTERLINES,
+ *  in units of the edge stroke width (constant on screen — so the gap is
+ *  too, at every zoom; DECIDED 2026-09-14, docs/vision-edge-glyph.md).
+ *  3× a 1px stroke = 3px centers, 2px of clear space between the shafts. */
+const FOLLOWS_GAP_RATIO = 3;
+/** Rebuild the (zoom-anchored) edge paths when the camera scale drifts
+ *  more than this far from the scale they were built for — a handful of
+ *  cheap rebuilds per zoom gesture, zero per pan/settle frame. */
+const EDGE_PATHS_ZOOM_EPSILON = 0.02;
 
 
 /** One horizontal+vertical box-blur round over PREMULTIPLIED RGBA
@@ -307,6 +322,46 @@ export function arrowGeometry(
 	};
 }
 
+/** The double-shaft glyph for a `follows` edge (⟹ — DECIDED
+ *  2026-09-14, docs/vision-edge-glyph.md): two shafts offset along the
+ *  edge normal by `gap` (a FIXED screen-space distance, world-converted
+ *  by the caller), converging on the shared single arrowhead — both
+ *  shafts meet at the head's base point. `supports` needs no helper
+ *  (the plain single shaft IS arrowGeometry). Pure: DOM-free, tested. */
+export function followsEdgeGeometry(
+	a: Pt,
+	b: Pt,
+	fromRadius: number,
+	toRadius: number,
+	headLength: number,
+	gap: number,
+): { shaftAFrom: Pt; shaftBFrom: Pt; shaftTo: Pt; tip: Pt; left: Pt; right: Pt } | null {
+	const g = arrowGeometry(a, b, fromRadius, toRadius, headLength);
+	if (!g) return null; // degenerate (coincident) — skip
+	const dx = b.x - a.x;
+	const dy = b.y - a.y;
+	const len = Math.hypot(dx, dy);
+	const nx = -dy / len;
+	const ny = dx / len;
+	const half = gap / 2;
+	return {
+		// Parallel tails at the source, ± half-gap along the normal. The
+		// offset starts sit FARTHER from the source center than the axis
+		// start (√(r²+half²) > r) — never clipped by the source disc.
+		shaftAFrom: { x: g.shaftFrom.x + nx * half, y: g.shaftFrom.y + ny * half },
+		shaftBFrom: { x: g.shaftFrom.x - nx * half, y: g.shaftFrom.y - ny * half },
+		// Convergence: both shafts end at the head's base point — the
+		// merge lands exactly where the shared arrowhead begins, clean at
+		// every zoom (a strictly-parallel pair would poke out beside the
+		// head whenever the screen-fixed gap exceeds the head's base
+		// half-width — the head scales with the graph, the gap doesn't).
+		shaftTo: g.shaftTo,
+		tip: g.tip,
+		left: g.left,
+		right: g.right,
+	};
+}
+
 /** Nearest node within maxDist of a screen point (linear scan — µs at
  *  our scale; a spatial grid only earns its keep past ~10k nodes). */
 export function pickNearest<T extends { id: string; x: number; y: number }>(
@@ -370,6 +425,7 @@ interface WorldSizes {
 	glowOuter: number; // hover halo outer radius, world units
 	labelSize: number; // node label font, world units
 	labelGap: number; // node edge → first label line, world units
+	arrowLen: number; // arrowhead length, world units (shared by both glyphs)
 }
 
 /** The pre-wrapped node name, centered below the node in WORLD units —
@@ -466,6 +522,10 @@ export class GraphCanvasRenderer {
 	// changes (geoVersion). Camera moves just re-rasterize the same paths.
 	private geoVersion = 0; // bump = geometry inputs changed
 	private builtVersion = -1; // version the cache was built at
+	/** Edge paths: built for this geoVersion AND this camera scale (the
+	 *  follows gap is screen-anchored). -1/0 force the first build. */
+	private edgeBuiltVersion = -1;
+	private edgeBuiltK = 0;
 	private nodesPath: Path2D | null = null;
 	private shaftsPath: Path2D = new Path2D();
 	private headsPath: Path2D = new Path2D();
@@ -482,7 +542,7 @@ export class GraphCanvasRenderer {
 	private frameCount = 0; // draw counter for the live-sim splat throttle
 	private labelLines = new Map<string, string[]>();
 	private worldLabelFont = "";
-	private world: WorldSizes = { nodeR: 0, glowOuter: 0, labelSize: 0, labelGap: 0 };
+	private world: WorldSizes = { nodeR: 0, glowOuter: 0, labelSize: 0, labelGap: 0, arrowLen: 0 };
 
 	constructor(canvas: HTMLCanvasElement, callbacks: RendererCallbacks) {
 		this.canvas = canvas;
@@ -938,14 +998,14 @@ export class GraphCanvasRenderer {
 		// Screen px at fit zoom → world units.
 		const s = 1 / this.kFit;
 		const nodeR = settings.nodeSize * s;
+		this.worldLabelFont = `${LABEL_WEIGHT} ${settings.labelSize * s}px ${data.fontFamily}`;
 		this.world = {
 			nodeR,
 			glowOuter: nodeR * GLOW_SCALE,
 			labelSize: settings.labelSize * s,
 			labelGap: LABEL_GAP * s,
+			arrowLen: settings.arrowLength * s,
 		};
-		this.worldLabelFont = `${LABEL_WEIGHT} ${settings.labelSize * s}px ${data.fontFamily}`;
-		const arrowLen = settings.arrowLength * s;
 		const visible = this.visible;
 		const isVisible = (id: string) => !visible || visible.has(id);
 
@@ -958,25 +1018,10 @@ export class GraphCanvasRenderer {
 		}
 		this.nodesPath = nodesPath;
 
-		// Edge shafts + arrowheads: tip lands on the target disc edge.
-		const shafts = new Path2D();
-		const heads = new Path2D();
-		for (const e of data.edges) {
-			if (!isVisible(e.from) || !isVisible(e.to)) continue;
-			const a = this.nodeById.get(e.from);
-			const b = this.nodeById.get(e.to);
-			if (!a || !b) continue;
-			const g = arrowGeometry(a, b, nodeR, nodeR, arrowLen);
-			if (!g) continue;
-			shafts.moveTo(g.shaftFrom.x, g.shaftFrom.y);
-			shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
-			heads.moveTo(g.tip.x, g.tip.y);
-			heads.lineTo(g.left.x, g.left.y);
-			heads.lineTo(g.right.x, g.right.y);
-			heads.closePath();
-		}
-		this.shaftsPath = shafts;
-		this.headsPath = heads;
+		// Edge shafts + heads are NOT built here: the follows glyph's gap
+		// is anchored to the CURRENT camera scale (constant on screen), so
+		// buildEdgePaths(k) runs from draw() on its own schedule — geometry
+		// changes AND camera-scale drift (EDGE_PATHS_ZOOM_EPSILON).
 
 		// Cluster regions are NOT built here: they rasterize into their own
 		// low-res bitmap (see buildRegions), on their own rebuild schedule
@@ -994,6 +1039,60 @@ export class GraphCanvasRenderer {
 			if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
 		}
 		ctx.font = prevFont;
+	}
+
+	/** Edge shafts + arrowheads (the relation glyphs). Own build schedule,
+	 *  separate from buildGeometry: the follows glyph's shaft gap is a
+	 *  FIXED screen-space distance (FOLLOWS_GAP_RATIO × stroke width —
+	 *  constant on screen at every zoom, docs/vision-edge-glyph.md), so
+	 *  in world units it scales with 1/k and must be rebuilt as the camera
+	 *  zoom drifts (EDGE_PATHS_ZOOM_EPSILON gates that — pans and settle
+	 *  frames reuse the paths). Cheap either way: ~hundreds of edges ×
+	 *  trivial trig, no rasterization. */
+	private buildEdgePaths(k: number): void {
+		const data = this.data;
+		const settings = this.settings;
+		if (!data || !settings) return;
+		const visible = this.visible;
+		const isVisible = (id: string) => !visible || visible.has(id);
+		const { nodeR, arrowLen } = this.world;
+		// The follows gap in WORLD units: constant on screen (· k stays
+		// FOLLOWS_GAP_RATIO × edgeWidth px at any zoom). Supports ignores it.
+		const gapW = (FOLLOWS_GAP_RATIO * settings.edgeWidth) / k;
+		const shafts = new Path2D();
+		const heads = new Path2D();
+		for (const e of data.edges) {
+			if (!isVisible(e.from) || !isVisible(e.to)) continue;
+			const a = this.nodeById.get(e.from);
+			const b = this.nodeById.get(e.to);
+			if (!a || !b) continue;
+			if (e.type === "follows") {
+				// ⟹: two parallel tails, one shared head.
+				const g = followsEdgeGeometry(a, b, nodeR, nodeR, arrowLen, gapW);
+				if (!g) continue;
+				shafts.moveTo(g.shaftAFrom.x, g.shaftAFrom.y);
+				shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
+				shafts.moveTo(g.shaftBFrom.x, g.shaftBFrom.y);
+				shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
+				heads.moveTo(g.tip.x, g.tip.y);
+				heads.lineTo(g.left.x, g.left.y);
+				heads.lineTo(g.right.x, g.right.y);
+				heads.closePath();
+			} else {
+				// supports: the plain single shaft (the majority relation
+				// stays light — dashed was rejected 2026-09-14).
+				const g = arrowGeometry(a, b, nodeR, nodeR, arrowLen);
+				if (!g) continue;
+				shafts.moveTo(g.shaftFrom.x, g.shaftFrom.y);
+				shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
+				heads.moveTo(g.tip.x, g.tip.y);
+				heads.lineTo(g.left.x, g.left.y);
+				heads.lineTo(g.right.x, g.right.y);
+				heads.closePath();
+			}
+		}
+		this.shaftsPath = shafts;
+		this.headsPath = heads;
 	}
 
 	/** (Re)create the live sim from data.nodes at their current
@@ -1280,6 +1379,17 @@ export class GraphCanvasRenderer {
 		if (!this.nodesPath) return;
 
 		const { x: tx, y: ty, k } = this.transform;
+		// Edge paths: rebuild on geometry changes OR camera-scale drift
+		// (the follows glyph's gap is constant on screen, so its world size
+		// tracks 1/k). Pans and settle frames reuse the cached paths.
+		if (
+			this.edgeBuiltVersion !== this.geoVersion ||
+			Math.abs(k - this.edgeBuiltK) > this.edgeBuiltK * EDGE_PATHS_ZOOM_EPSILON
+		) {
+			this.buildEdgePaths(k);
+			this.edgeBuiltVersion = this.geoVersion;
+			this.edgeBuiltK = k;
+		}
 		// THE camera: one transform, then everything is world coordinates.
 		ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
 

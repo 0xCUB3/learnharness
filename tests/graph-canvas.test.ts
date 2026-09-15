@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { describe, it as test } from "node:test";
 import {
 	arrowGeometry,
+	followsEdgeGeometry,
 	boxBlurRound,
 	fitTransform,
 	labelAlpha,
@@ -110,6 +111,57 @@ describe("arrowGeometry", () => {
 
 	test("null for coincident endpoints (never a NaN arrow)", () => {
 		assert.equal(arrowGeometry({ x: 5, y: 5 }, { x: 5, y: 5 }, 6, 6, 5), null);
+	});
+});
+
+describe("followsEdgeGeometry (the ⟹ double-shaft glyph)", () => {
+	test("tails offset ±half-gap along the edge normal, converging on the shared head base", () => {
+		// Horizontal edge a→b: normal is (0, 1) — offsets are vertical.
+		const g = followsEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 6, 5, 4)!;
+		assert.ok(g);
+		assert.ok(Math.abs(g.shaftAFrom.x - 6) < 1e-9 && Math.abs(g.shaftAFrom.y - 2) < 1e-9);
+		assert.ok(Math.abs(g.shaftBFrom.x - 6) < 1e-9 && Math.abs(g.shaftBFrom.y + 2) < 1e-9);
+		// Both shafts converge on the SAME point: the head's base.
+		assert.deepEqual(g.shaftTo, { x: 89, y: 0 });
+	});
+
+	test("the offset tails sit farther from the source center than the axis start (never clipped by the disc)", () => {
+		const a = { x: 0, y: 0 };
+		const g = followsEdgeGeometry(a, { x: 100, y: 0 }, 6, 6, 5, 4)!;
+		for (const tail of [g.shaftAFrom, g.shaftBFrom]) {
+			assert.ok(Math.hypot(tail.x - a.x, tail.y - a.y) >= 6 - 1e-9);
+		}
+	});
+
+	test("shared head geometry matches the plain arrow (tip/base corners)", () => {
+		const a = { x: 0, y: 0 };
+		const b = { x: 100, y: 0 };
+		const plain = arrowGeometry(a, b, 6, 6, 5)!;
+		const g = followsEdgeGeometry(a, b, 6, 6, 5, 4)!;
+		assert.deepEqual(g.tip, plain.tip);
+		assert.deepEqual(g.left, plain.left);
+		assert.deepEqual(g.right, plain.right);
+	});
+
+	test("works at arbitrary angles (diagonal normal normalized)", () => {
+		// dir (0.6, 0.8) → normal (-0.8, 0.6); half-gap 1.5.
+		const g = followsEdgeGeometry({ x: 0, y: 0 }, { x: 60, y: 80 }, 10, 10, 8, 3)!;
+		assert.ok(g);
+		const ax = 0.6 * 10; // axis start
+		const ay = 0.8 * 10;
+		assert.ok(Math.abs(g.shaftAFrom.x - (ax - 0.8 * 1.5)) < 1e-9);
+		assert.ok(Math.abs(g.shaftAFrom.y - (ay + 0.6 * 1.5)) < 1e-9);
+		assert.ok(Math.abs(g.shaftBFrom.x - (ax + 0.8 * 1.5)) < 1e-9);
+		assert.ok(Math.abs(g.shaftBFrom.y - (ay - 0.6 * 1.5)) < 1e-9);
+	});
+
+	test("null for coincident endpoints (same guard as the plain arrow)", () => {
+		assert.equal(followsEdgeGeometry({ x: 5, y: 5 }, { x: 5, y: 5 }, 6, 6, 5, 4), null);
+	});
+
+	test("zero gap degenerates to the plain single shaft", () => {
+		const g = followsEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 6, 5, 0)!;
+		assert.deepEqual(g.shaftAFrom, g.shaftBFrom);
 	});
 });
 
