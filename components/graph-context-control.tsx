@@ -3,8 +3,8 @@
 import { BookOpenIcon } from "lucide-react";
 import {
 	GRAPH_CONTEXT_TOKENS_DEFAULT,
-	GRAPH_CONTEXT_TOKENS_MAX,
-	GRAPH_CONTEXT_TOKENS_STEP,
+	GRAPH_CONTEXT_TOKENS_STOPS,
+	type ChatSettings,
 } from "@/src/core";
 
 /**
@@ -17,13 +17,15 @@ import {
  * session contributed to the graph asks first what the graph will
  * contribute to the session.
  *
- * One quiet compact row sized to sit in the stats band beside the model +
- * thinking pills: short slider, "tok" readout, the FULL number (owner,
- * 2026-09-15: no k-rounding — 1024 reads as 1024). 0 = off; absent settings
- * show the DEFAULT (1024 — on). The value rides ChatSettings (the same
- * lifted settings the model picker uses), so it persists pre-chat via the
- * same deferred PUT. Sessions never show this control — the injection is
- * one-shot at session start, so mid-session there is nothing to decide.
+ * A DISCRETE 6-position slider (owner, 2026-09-15): off, then powers of four
+ * from 64 — a continuous 0–4096 dial was precision theater (a 128-token
+ * budget is ~2 propositions). The native range input walks positions 0–5
+ * and maps through GRAPH_CONTEXT_TOKENS_STOPS; every stop is a real
+ * decision. Non-stop values from a stale client snap to the nearest stop
+ * for display. The readout shows the FULL number (no k-rounding). The
+ * value rides ChatSettings (the same lifted settings the model picker
+ * uses), so it persists pre-chat via the same deferred PUT. Sessions
+ * never show this control — the injection is one-shot at session start.
  */
 export function GraphContextControl({
 	value,
@@ -34,6 +36,12 @@ export function GraphContextControl({
 	onChange: (tokens: number) => void;
 	testId?: string;
 }) {
+	// Snap for display only: a legacy non-stop value shows its nearest stop
+	// and the next drag lands on a real one.
+	const stop = nearestStop(value);
+	// indexOf on a readonly tuple rejects a plain number; the snap above
+	// always yields a member, so the cast is honest.
+	const index = (GRAPH_CONTEXT_TOKENS_STOPS as readonly number[]).indexOf(stop);
 	return (
 		<div data-testid={testId} className="flex items-center gap-2 text-xs text-muted-foreground">
 			<BookOpenIcon className="size-3 shrink-0" />
@@ -41,16 +49,19 @@ export function GraphContextControl({
 			<input
 				type="range"
 				min={0}
-				max={GRAPH_CONTEXT_TOKENS_MAX}
-				step={GRAPH_CONTEXT_TOKENS_STEP}
-				value={value}
-				onChange={(e) => onChange(Number(e.target.value))}
+				max={GRAPH_CONTEXT_TOKENS_STOPS.length - 1}
+				step={1}
+				value={index}
+				onChange={(e) => {
+					const next = (GRAPH_CONTEXT_TOKENS_STOPS as readonly number[])[Number(e.target.value)];
+					if (next !== undefined) onChange(next);
+				}}
 				aria-label="Prior-knowledge token budget"
 				className="h-1 w-24 shrink-0 accent-primary"
 				data-testid="graph-context-slider"
 			/>
 			<span
-				className="w-14 shrink-0 tabular-nums"
+				className="w-16 shrink-0 tabular-nums"
 				data-testid="graph-context-value"
 			>
 				{value === 0 ? "off" : `${value} tok`}
@@ -59,9 +70,20 @@ export function GraphContextControl({
 	);
 }
 
+/** The nearest stop to any budget value (display snapping). */
+export function nearestStop(value: number): number {
+	let best: number = GRAPH_CONTEXT_TOKENS_STOPS[0] ?? 0;
+	for (const s of GRAPH_CONTEXT_TOKENS_STOPS) {
+		if (Math.abs(s - value) < Math.abs(best - value)) best = s;
+	}
+	return best;
+}
+
 /** The control's effective value for a chat's settings — absent = the
  *  default (on), never 0: the decided default is a modest slice of prior
  *  knowledge for every fresh session. */
-export function effectiveContextTokens(settings: { graphContextTokens?: number } | undefined): number {
+export function effectiveContextTokens(
+	settings: Pick<ChatSettings, "graphContextTokens"> | undefined,
+): number {
 	return settings?.graphContextTokens ?? GRAPH_CONTEXT_TOKENS_DEFAULT;
 }

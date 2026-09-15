@@ -13,7 +13,7 @@ import {
 	steerDelivered,
 	GRAPH_CONTEXT_TOKENS_DEFAULT,
 	GRAPH_CONTEXT_TOKENS_MAX,
-	GRAPH_CONTEXT_TOKENS_STEP,
+	GRAPH_CONTEXT_TOKENS_STOPS,
 	graphContextText,
 	type GraphContextData,
 } from "../src/core/contracts.ts";
@@ -279,10 +279,12 @@ describe("the runner's pure gates", () => {
 		assert.equal(effectiveContextBudget({ graphContextTokens: 2048 }), 2048);
 	});
 
-	it("the decided knobs: default 1024, max 4096, step 128", () => {
+	it("the decided knobs: default 1024, max 16384, discrete powers-of-four stops from 64", () => {
 		assert.equal(GRAPH_CONTEXT_TOKENS_DEFAULT, 1024);
-		assert.equal(GRAPH_CONTEXT_TOKENS_MAX, 4096);
-		assert.equal(GRAPH_CONTEXT_TOKENS_STEP, 128);
+		assert.equal(GRAPH_CONTEXT_TOKENS_MAX, 16384);
+		// The scale revision (owner, 2026-09-15): off then powers of four —
+		// every stop a real decision, no fine-grained dial theater.
+		assert.deepEqual([...GRAPH_CONTEXT_TOKENS_STOPS], [0, 64, 256, 1024, 4096, 16384]);
 	});
 
 	it("contextToolCallId is deterministic per chat (the one-shot dedup key)", () => {

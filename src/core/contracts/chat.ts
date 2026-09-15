@@ -68,12 +68,17 @@ export interface ChatSettings {
 	graphContextTokens?: number;
 }
 
-/** The injection budget's decided knobs (2026-09-14): default 1024 (a
- *  meaningful, modest slice of prior knowledge), hard max 4096, slider
- *  step 128, 0 = off. */
+/** The injection budget's decided knobs (2026-09-14; scale revised
+ *  2026-09-15, owner): default 1024 (a meaningful, modest slice of prior
+ *  knowledge), hard max 16384, 0 = off. The UI is a DISCRETE slider over
+ *  these stops — powers of four from 64 (the fine-grained low end was
+ *  theater: a 128-token budget is ~2 propositions, nobody wants that
+ *  dial); the server still accepts any integer in range (a stale client
+ *  can't brick settings), the stops only govern what the slider sends. */
 export const GRAPH_CONTEXT_TOKENS_DEFAULT = 1024;
-export const GRAPH_CONTEXT_TOKENS_MAX = 4096;
-export const GRAPH_CONTEXT_TOKENS_STEP = 128;
+export const GRAPH_CONTEXT_TOKENS_MAX = 16384;
+/** The slider's positions, left to right: off, then powers of four. */
+export const GRAPH_CONTEXT_TOKENS_STOPS = [0, 64, 256, 1024, 4096, 16384] as const;
 
 // ─── Background-extraction usage (the money channel, extraction side) ────────
 
