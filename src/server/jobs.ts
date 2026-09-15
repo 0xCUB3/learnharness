@@ -34,6 +34,7 @@
 import type { UIMessage } from "ai";
 import {
 	buildAbortSteer,
+	buildGraphContextSteer,
 	buildSubagentSteer,
 	isSubagentFailure,
 	steerDelivered,
@@ -60,6 +61,9 @@ interface QueuedSteer {
 interface WakeState {
 	turnRunner?: TurnRunner;
 	respawn?: JobRespawn;
+	/** Crash recovery for context-injection jobs (they are not sub-agent
+	 *  loops — their runner takes the graph deps; chat-handler wires it). */
+	contextRespawn?: (jobId: string) => void;
 	/** chatId → steers awaiting delivery, in arrival order. */
 	queues: Map<string, QueuedSteer[]>;
 	/** Chats whose pump loop is currently active (serialization per chat). */
@@ -87,6 +91,13 @@ export function setJobRespawn(respawn: JobRespawn): void {
 	state().respawn = respawn;
 }
 
+/** chat-handler wires this at module init: the graph-context runner
+ *  (subagents/graph-context.ts runGraphContextJob — re-runnable from the
+ *  job record alone, which is all crash recovery has). */
+export function setContextRespawn(respawn: (jobId: string) => void): void {
+	state().contextRespawn = respawn;
+}
+
 const POLL_MS = 400;
 /** After the gates open, wait a beat before firing — a client that just
  *  answered a question is about to send its continuation; don't 409 it.
@@ -110,11 +121,14 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** The job a steer belongs to, if it is a job steer (result/abort);
+/** The job a steer belongs to, if it is a job steer (result/abort/context);
  *  probe-handoff steers have no job — null. */
 function jobIdOf(steer: SteerMessage): string | null {
-	const meta = steer.metadata as { subagentResult?: { jobId: string } };
-	return meta.subagentResult?.jobId ?? null;
+	const meta = steer.metadata as {
+		subagentResult?: { jobId: string };
+		graphContext?: { jobId: string };
+	};
+	return meta.subagentResult?.jobId ?? meta.graphContext?.jobId ?? null;
 }
 
 /** Finalize a delivered steer's job bookkeeping — job steers only. */
@@ -220,6 +234,12 @@ export function abortJob(jobId: string): AbortOutcome {
 	if (!job) return { ok: false, reason: "not_found" };
 	if (job.status !== "running") return { ok: false, reason: "not_running" };
 
+	// Context-injection jobs abort SILENTLY: nothing was ever promised in the
+	// lesson (server-initiated scaffolding, unlike a teacher-dispatched
+	// sub-agent), so no abort steer — flipping the record and killing the
+	// run is the whole story. Steps 1–3 below are shared; step 4 is skipped.
+	const isContext = job.kind === "graph-context";
+
 	fireJobAbort(jobId); // no-op when the loop already returned (delivering)
 
 	// Drop any queued steers for this job (their deliver() resolves unfired).
@@ -234,16 +254,22 @@ export function abortJob(jobId: string): AbortOutcome {
 	}
 
 	stores.jobStore.updateJob(jobId, { status: "error", error: "Aborted by learner", activity: "aborted" });
-	void deliverJobResult(buildAbortSteer(job)).catch(() => {
-			/* deliverJobResult marks the job error on unrecoverable failure */
-	});
+	if (!isContext) {
+		void deliverJobResult(buildAbortSteer(job)).catch(() => {
+				/* deliverJobResult marks the job error on unrecoverable failure */
+		});
+	}
 	return { ok: true };
 }
 
 function chatIdOf(steer: SteerMessage): string {
-	// The probe handoff carries its chat directly (no job record exists).
+	// The probe handoff and the context injection carry their chat directly
+	// (the context steer's job record would say it too, but the metadata is
+	// the cheap path — same rule as the handoff).
 	const handoff = (steer.metadata as { probeHandoff?: { chatId: string } }).probeHandoff;
 	if (handoff) return handoff.chatId;
+	const injected = (steer.metadata as { graphContext?: { chatId: string } }).graphContext;
+	if (injected) return injected.chatId;
 	// The chat is resolvable from the job record; the steer's metadata
 	// carries jobId, which indexes the store.
 	const jobId = jobIdOf(steer);
@@ -352,6 +378,12 @@ async function pump(chatId: string): Promise<void> {
 function finalizeJob(jobId: string): void {
 	const job = stores.jobStore.getJob(jobId);
 	if (!job || job.status !== "running") return;
+	// Context-injection jobs have no sub-agent result shape — a delivered
+	// block is a success, full stop (isSubagentFailure would misread it).
+	if (job.kind === "graph-context") {
+		stores.jobStore.updateJob(jobId, { status: "done", activity: "delivered" });
+		return;
+	}
 	const result = job.result;
 	const failed = result ? isSubagentFailure(job.kind, result as never) : true;
 	stores.jobStore.updateJob(jobId, {
@@ -418,6 +450,23 @@ function recoverStaleJobs(): void {
 				if (now - Date.parse(job.updatedAt) < STALE_JOB_MS) continue;
 				if (!stores.chatStore.getChat(job.chatId)) continue;
 				if (isTurnRunning(job.chatId)) continue; // a wake turn may be delivering it right now
+				if (job.kind === "graph-context") {
+					// Context-injection orphans: a stored block re-delivers in its own
+					// steer shape; a job that died before selecting re-runs from the
+					// record (the graph runner — not the sub-agent respawn seam).
+					if (job.result) {
+						stores.jobStore.updateJob(job.id, { activity: "recovering: re-delivering" });
+						void deliverJobResult(
+							buildGraphContextSteer({ chatId: job.chatId, jobId: job.id }, job.result as never),
+						).catch(() => {
+							/* deliverJobResult marks the job error on failure */
+						});
+					} else if (s.contextRespawn) {
+						stores.jobStore.updateJob(job.id, { activity: "recovering: re-running" });
+						s.contextRespawn(job.id);
+					}
+					continue;
+				}
 				if (job.result) {
 					// The wake never fired (or crashed mid-flight): re-deliver.
 					const steer = buildSubagentSteer(job, job.result as never);

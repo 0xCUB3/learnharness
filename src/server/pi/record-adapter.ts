@@ -1,7 +1,8 @@
 import type { UIMessage } from "ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
-import { HANDOFF_TEXT, verdictText } from "../../core/contracts/chat.ts";
+import { graphContextOfMessage } from "../../core/graph-context.ts";
+import { graphContextText, HANDOFF_TEXT, verdictText } from "../../core/contracts/chat.ts";
 
 /**
  * The record → pi-ai transcript adapter (docs/pi-engine-swap.md §4). The
@@ -55,12 +56,19 @@ function zeroUsage() {
 
 /** The model-facing text of a marker-only user message, or null when the
  *  message has no model face at all (UI-only data parts). */
-function systemTextOf(parts: ReadonlyArray<{ type: string; data?: unknown }>): string | null {
-	for (const part of parts) {
+function systemTextOf(message: { parts: ReadonlyArray<{ type: string; data?: unknown }> }): string | null {
+	for (const part of message.parts) {
 		if (part.type === "data-verdict") {
 			return verdictText((part.data as { accepted?: unknown } | undefined)?.accepted === true);
 		}
 		if (part.type === "data-probe-handoff") return HANDOFF_TEXT;
+		// Graph context injection: the block text derives from the part's
+		// validated data (parse-don't-cast — a malformed part has no model
+		// face, and the message then never reaches the provider).
+		if (part.type === "data-graph-context") {
+			const data = graphContextOfMessage({ parts: message.parts });
+			return data ? graphContextText(data) : null;
+		}
 	}
 	return null;
 }
@@ -79,7 +87,7 @@ export function recordToPiMessages(messages: UIMessage[]): Message[] {
 			// wording lives in the adapter's reach (core contracts), never
 			// authored as fake human speech in the transcript.
 			if (texts.length === 0) {
-				const flat = systemTextOf(message.parts);
+				const flat = systemTextOf(message);
 				if (flat === null) continue; // pure UI data part, no model face
 				texts.push(flat);
 			}

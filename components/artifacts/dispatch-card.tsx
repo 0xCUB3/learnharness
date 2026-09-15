@@ -21,6 +21,9 @@ const KIND_LABEL: Record<JobKind, string> = {
 	research: "Research agent",
 	demo: "Demo agent",
 	visual: "Figure agent",
+	// The injection is server-initiated — it has no tool part, so never a
+	// dispatch card. The entry exists only for the exhaustive record.
+	"graph-context": "Knowledge context",
 };
 
 export function DispatchCard({ toolCallId, kind }: { toolCallId: string; kind: JobKind }) {

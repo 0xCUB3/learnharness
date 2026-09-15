@@ -1,6 +1,6 @@
 import { getChat, validateChatSettings, stores } from "@/src/server";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ChatSettings } from "@/src/core";
+import { GRAPH_CONTEXT_TOKENS_MAX, type ChatSettings } from "@/src/core";
 
 /**
  * The per-chat model control (model-control wave): replace-whole settings —
@@ -16,7 +16,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 	if (!getChat(id)) return Response.json({ error: "Not found" }, { status: 404 });
 
 	const body = (await req.json().catch(() => null)) as
-		| { model?: { provider?: unknown; id?: unknown }; thinkingLevel?: unknown }
+		| { model?: { provider?: unknown; id?: unknown }; thinkingLevel?: unknown; graphContextTokens?: unknown }
 		| null;
 	if (!body || typeof body !== "object") {
 		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
@@ -38,6 +38,23 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 			return Response.json({ error: "thinkingLevel must be a string" }, { status: 400 });
 		}
 		settings.thinkingLevel = body.thinkingLevel as ThinkingLevel;
+	}
+	// Graph context injection budget (vision-context-injection.md): integer
+	// tokens, 0 (off) to GRAPH_CONTEXT_TOKENS_MAX, no silent clamping — the
+	// slider is the only writer, and it only ever sends multiples of the step.
+	if (body.graphContextTokens !== undefined) {
+		if (
+			typeof body.graphContextTokens !== "number" ||
+			!Number.isInteger(body.graphContextTokens) ||
+			body.graphContextTokens < 0 ||
+			body.graphContextTokens > GRAPH_CONTEXT_TOKENS_MAX
+		) {
+			return Response.json(
+				{ error: `graphContextTokens must be an integer between 0 and ${GRAPH_CONTEXT_TOKENS_MAX}` },
+				{ status: 400 },
+			);
+		}
+		settings.graphContextTokens = body.graphContextTokens;
 	}
 
 	const verdict = validateChatSettings(settings);

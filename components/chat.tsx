@@ -21,7 +21,8 @@ import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
-import type { ChatSettings } from "@/src/core";
+import { graphContextOfMessage, type ChatSettings } from "@/src/core";
+import { formatTokens } from "@/components/usage-format";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia } from "@/components/plan-window";
 import { WaypointsIcon } from "lucide-react";
@@ -81,6 +82,16 @@ const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayout
 
 /** A wake-pipeline steer message: user-role delivery whose metadata marks it
  * as a sub-agent result — rendered as an artifact card, never a bubble. */
+/** The knowledge-context card's one-liner: the numbers the observability
+ *  doctrine wants visible at the seam — tokens and proposition count
+ *  (parse-don't-cast; a malformed part still renders a quiet generic line). */
+function graphContextLine(message: { parts: ReadonlyArray<{ type: string; data?: unknown }> }): string {
+	const data = graphContextOfMessage(message);
+	return data
+		? `Knowledge context — ~${formatTokens(data.tokens)} · ${data.propositions.length} propositions`
+		: "Knowledge context";
+}
+
 /** The quiet system line (custom-message scheme rendering): centered, muted,
  *  small — the transcript's voice for events that are not speech (wake
  *  scaffolding, the learner's plan verdict). */
@@ -540,7 +551,14 @@ export function Chat({
 									// PROTOCOL" §4). Key fallback: legacy transcripts (pre id-hygiene)
 									// can still hold empty ids — the index keeps keys unique for them.
 									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} />
-								) : m.role === "user" && m.parts.some((p) => p.type === "data-probe-handoff") ? (
+								) : m.role === "user" && m.parts.some((p) => p.type === "data-graph-context") ? (
+								// The prior-knowledge injection's delivery (vision-context-injection.md):
+								// quiet system line, the numbers only — the block itself was for the
+								// model (adapter flattening); the part data stays the audit trail.
+								<SystemLine key={m.id || `m-${mi}`} testId="graph-context">
+									{graphContextLine(m)}
+								</SystemLine>
+							) : m.role === "user" && m.parts.some((p) => p.type === "data-probe-handoff") ? (
 								// The probe→teach handoff wake (custom-message scheme): quiet
 								// system line, never a user bubble — the wake is scaffolding,
 								// the "Planning" divider marks the seam, and the model-facing

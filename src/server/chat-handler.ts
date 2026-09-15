@@ -4,14 +4,15 @@ import { createProberAgent, createTeacherAgent, type TeachingAgent } from "../ag
 import { piEngineFor } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
-import { embedNewNodes } from "./embeddings.ts";
+import { runGraphContextJob, type GraphContextDeps } from "../agent/subagents/graph-context.ts";
+import { EMBEDDING_DIM, EMBEDDING_MODEL, embedNewNodes, embedQuery } from "./embeddings.ts";
 import type { ModelRole } from "../../config.ts";
-import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
+import { claimSteers, deliverJobResult, setContextRespawn, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { createPiTurnResponse } from "./pi/ui-stream.ts";
 import { stores } from "./stores.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
-import { persistTurn, triggerExtraction, withMessageIds } from "./turn-service.ts";
+import { persistTurn, triggerExtraction, triggerGraphContext, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
 
 /**
@@ -48,6 +49,18 @@ export const extraction = createExtractionPipeline({
 	embedder: embedNewNodes,
 });
 
+/** Graph context injection (vision-context-injection.md): the runner's
+ *  deps — same storage ports, the REAL embedder as the query seam (same
+ *  warm singleton as extraction, so vector-space parity holds by
+ *  construction), and the wake pipeline as the delivery seam. */
+export const graphContext: GraphContextDeps = {
+	chatStore: stores.chatStore,
+	jobStore: stores.jobStore,
+	graphStore: stores.graphStore,
+	embedder: { model: EMBEDDING_MODEL, dim: EMBEDDING_DIM, embedQuery },
+	deliver: deliverJobResult,
+};
+
 // Wake-pipeline wiring (contracts.ts "THE ASYNC PROTOCOL" §4): the pipeline
 // fires its server-side teacher turns through THIS composition root, and
 // crash recovery re-spawns orphaned sub-agent loops through THIS runner.
@@ -65,6 +78,7 @@ setTurnRunner(async (chatId, messages) => {
 	return res.status;
 });
 setJobRespawn((jobId) => void jobRunner.runJob(jobId));
+setContextRespawn((jobId) => void runGraphContextJob(graphContext, jobId));
 
 /** The message-shape gate the SDK's UIMessageValidator owned: a malformed
  *  body must fail BEFORE the stream exists — the path where no onFinish will
@@ -223,6 +237,9 @@ export async function handleChatRequest(
 					});
 				}
 				triggerExtraction(stores, extraction, chatId);
+				// The graph READ channel: one-shot prior-knowledge injection at
+				// session start — a no-op for every session past its start.
+				triggerGraphContext(graphContext, chatId);
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.
 				endTurn(chatId);

@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
+import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
 import { PhaseChip } from "@/components/phase-divider";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
@@ -98,6 +99,16 @@ export function DraftShell({
 						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 						<div className="bg-background pb-4">
 							<div className={DOCK}>
+								{/* The session-data strip (vision-context-injection.md) — same
+							    control as the home view, riding the same lifted settings. */}
+								<div className="mb-1.5">
+									<GraphContextControl
+										value={effectiveContextTokens(settings)}
+										onChange={(tokens) =>
+											onSettingsSaved({ ...settings, graphContextTokens: tokens })
+										}
+									/>
+								</div>
 								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 									<Composer
 										busy={busy}

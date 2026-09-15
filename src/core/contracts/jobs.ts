@@ -7,11 +7,11 @@
  * of "ai" (safe everywhere: server, client, tests). See docs/vision.md.
  */
 import type { UIMessage } from "ai";
-import type { CallUsage } from "./chat.ts";
+import type { CallUsage, GraphContextData } from "./chat.ts";
 
 // ─── Async sub-agent jobs (vision §2.5; plan.md Wave 0 protocol) ────────────
 
-export type JobKind = "research" | "demo" | "visual";
+export type JobKind = "research" | "demo" | "visual" | "graph-context";
 export type JobStatus = "running" | "done" | "error";
 
 export interface JobRecord {
@@ -263,7 +263,11 @@ export interface AbortSteerMessage extends UIMessage {
 }
 
 /** Anything the wake pipeline may queue and deliver. */
-export type SteerMessage = SubagentSteerMessage | AbortSteerMessage | ProbeHandoffSteerMessage;
+export type SteerMessage =
+	| SubagentSteerMessage
+	| AbortSteerMessage
+	| ProbeHandoffSteerMessage
+	| GraphContextSteerMessage;
 
 /** Whether a result is the failure shape (html/svg empty, failure brief). */
 export function isSubagentFailure(kind: JobKind, result: ResearchResult | DemoResult | VisualResult): boolean {
@@ -377,6 +381,34 @@ export function buildProbeHandoffSteer(chatId: string): ProbeHandoffSteerMessage
 		role: "user",
 		metadata: { probeHandoff: { chatId } },
 		parts: [{ type: "data-probe-handoff", data: { chatId } }],
+	};
+}
+
+// ─── the graph-context steer (vision-context-injection.md) ───────────────────
+//
+// The injection's delivery: same wake pipeline, same gates — it queues
+// behind a pending quiz and rides the turn after the learner's answer, or
+// fires in the pump's idle window. Marker-only (the custom-message scheme):
+// no text part; the adapter flattens data-graph-context to graphContextText
+// (core/contracts/chat.ts owns the wording). One per chat, ever — the id is
+// deterministic per chat, so re-delivery is idempotent.
+
+export interface GraphContextSteerMessage extends UIMessage {
+	id: `steer_ctx_${string}`;
+	role: "user";
+	metadata: { graphContext: { chatId: string; jobId: string } };
+	parts: [{ type: "data-graph-context"; data: GraphContextData }];
+}
+
+export function buildGraphContextSteer(
+	meta: { chatId: string; jobId: string },
+	data: GraphContextData,
+): GraphContextSteerMessage {
+	return {
+		id: `steer_ctx_${meta.chatId}`,
+		role: "user",
+		metadata: { graphContext: meta },
+		parts: [{ type: "data-graph-context", data }],
 	};
 }
 

@@ -1,6 +1,7 @@
 import type { UIMessage } from "ai";
 import type {
 	DemoToolInput,
+	GraphContextData,
 	PlanVerdictData,
 	PlanBlockData,
 	ProbeDoneInput,
@@ -46,6 +47,10 @@ export type TeacherUIDataParts = {
 	/** The probe→teach handoff wake: the wake pipeline's steer message,
 	 *  carrying ONLY this part (the model-facing text lives in the adapter). */
 	"probe-handoff": { chatId: string };
+	/** The prior-knowledge injection's delivery (vision-context-injection.md):
+	 *  the marker-only steer — the counts for the UI, the full block content
+	 *  for the audit trail; the adapter flattens it to graphContextText. */
+	"graph-context": GraphContextData;
 	/** The abort steer's message-type marker (the abort badge renders off it). */
 	"subagent-aborted": SubagentResultMeta & { aborted: true };
 };

@@ -42,6 +42,24 @@ function embedInput(statement: string): string {
 	return `title: none | text: ${statement}`;
 }
 
+/** EmbeddingGemma's retrieval-QUERY format (model card) — the topic side of
+ *  graph context injection (vision-context-injection.md). Role-asymmetric
+ *  BY DESIGN: queries and documents use different trained templates; the
+ *  requirement is same model + same truncation (one vector space), each
+ *  side in the format the model was trained for. */
+function queryInput(text: string): string {
+	return `task: search result | query: ${text}`;
+}
+
+/** Embed one retrieval query (the session's topic) — same warm singleton,
+ *  same 512-dim MRL truncation as the ledger. The one embedding call the
+ *  injection job makes; tens–~200ms warm. */
+export async function embedQuery(text: string): Promise<number[]> {
+	const extractor = await getPipeline();
+	const output = await extractor([queryInput(text)], { pooling: "mean", normalize: true });
+	return truncateNormalize((output.tolist() as number[][])[0]!);
+}
+
 /** Truncate an L2-normalized vector to EMBEDDING_DIM (MRL: leading dims
  *  carry most of the signal) and re-normalize so cosine = dot product. */
 function truncateNormalize(vec: readonly number[]): number[] {

@@ -89,11 +89,14 @@ interface LoopContext {
  * table mirrors MODELS in config.ts (research→researcher, demo→demoBuilder,
  * visual→visualMaker); the id is taken from config so a price-table sync
  * re-prices jobs for free. Model overrides (tests) still bill under the
- * configured model — usage is what is being captured, not which instance. */
+ * configured model — usage is what is being captured, not which instance.
+ * Context-injection jobs make NO model call ("" — onUsage never fires for
+ * them; the kind is deliberately absent from the runners below). */
 const KIND_MODEL: Record<JobKind, string> = {
 	research: MODELS.researcher.model,
 	demo: MODELS.demoBuilder.model,
 	visual: MODELS.visualMaker.model,
+	"graph-context": "",
 };
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
@@ -128,11 +131,15 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		return jobStore.getJob(jobId)?.status === "running";
 	}
 
-	/** The kind→runner map: one sub-agent loop per job kind. */
+	/** The kind→runner map: one sub-agent loop per SUB-AGENT kind.
+	 *  graph-context is deliberately absent: injection jobs are not
+	 *  sub-agent loops (no model, graph deps instead) — their spawn and
+	 *  crash-respawn seam is subagents/graph-context.ts, and runJob refuses
+	 *  them below rather than guessing wrong. */
 	// Each kind's runner narrows the union input itself (dispatch-time inputs
 	// are kind-correct by construction; transcript fallbacks are cast after).
 	const KIND_RUNNERS: Record<
-		JobKind,
+		Exclude<JobKind, "graph-context">,
 		(jobId: string, input: JobToolInput | undefined, loop: LoopContext) => Promise<void>
 	> = {
 		research: (jobId, input, loop) => runResearchJob(jobId, researchModelOverride.current, input, loop),
@@ -147,6 +154,12 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			return;
 		}
 		if (job.status !== "running") return; // already finished / re-run after crash recovery
+		if (job.kind === "graph-context") {
+			// Not a sub-agent: the injection's own respawn seam
+			// (setContextRespawn → runGraphContextJob) owns these records.
+			console.error(`[job ${jobId}] graph-context job reached the sub-agent runner — wrong seam`);
+			return;
+		}
 		const run = KIND_RUNNERS[job.kind];
 		if (!run) {
 			console.error(`[job ${jobId}] unknown kind: ${job.kind}`);

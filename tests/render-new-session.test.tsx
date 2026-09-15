@@ -84,6 +84,41 @@ describe("DraftShell — the sessionless surface", () => {
 		assert.ok(/rounded-2xl[^>]*pointer-events-auto|pointer-events-auto[^>]*rounded-2xl/.test(html));
 	});
 
+	it("renders the knowledge-context slider at the decided default (absent settings = on, 1024)", () => {
+		const html = renderToStaticMarkup(
+			<DraftShell
+				busy={false}
+				text=""
+				onChange={() => {}}
+				onSend={() => {}}
+				settings={undefined}
+				onSettingsSaved={() => {}}
+			/>,
+		);
+		assert.ok(html.includes('data-testid="graph-context-control"'));
+		// The slider's default position: 1024 of 4096, step 128 (decided).
+		assert.ok(html.includes('min="0"') && html.includes('max="4096"') && html.includes('step="128"'));
+		assert.ok(html.includes("1k tokens"), "the readout shows the default budget, not 0 — default is ON");
+		assert.ok(html.includes("Knowledge context"), "the control is labeled");
+		// Absent settings render the default — never 'off'.
+		assert.ok(!html.includes(">off<"));
+	});
+
+	it("an explicit 0 renders as off — the learner turned the graph off for this session", () => {
+		const html = renderToStaticMarkup(
+			<DraftShell
+				busy={false}
+				text=""
+				onChange={() => {}}
+				onSend={() => {}}
+				settings={{ graphContextTokens: 0 }}
+				onSettingsSaved={() => {}}
+			/>,
+		);
+		assert.ok(html.includes('data-testid="graph-context-value"'));
+		assert.ok(html.includes(">off<"));
+	});
+
 	it("no chat id anywhere — nothing in the markup references a session", () => {
 		const html = renderToStaticMarkup(
 			<DraftShell

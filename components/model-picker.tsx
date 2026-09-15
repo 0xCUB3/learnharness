@@ -245,7 +245,9 @@ export function ModelControl({
 											effectiveLevel !== undefined && m.supportedLevels.includes(effectiveLevel)
 												? effectiveLevel
 												: undefined;
-										void save({ model: { provider: m.provider, id: m.id }, thinkingLevel: nextLevel });
+										// Replace-whole discipline: spread the current settings — a model pick
+									// must not silently clear a sibling override (graphContextTokens).
+									void save({ ...(settings ?? {}), model: { provider: m.provider, id: m.id }, thinkingLevel: nextLevel });
 									}}
 									className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted ${
 										m.id === effectiveId ? "bg-muted/60" : ""
