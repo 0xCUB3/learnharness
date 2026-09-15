@@ -605,7 +605,7 @@ export function Chat({
 							Plan
 						</button>
 					)}
-					<PhaseChip phase={phases.at(-1) ?? "probe"} />
+					<PhaseChip phase={phases.at(-1) ?? "probe"} busy={busy} />
 				</header>
 
 				<div className="relative flex min-h-0 flex-1">

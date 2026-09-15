@@ -1,9 +1,12 @@
 /**
- * Session-row render tests — the picker's status language. One dot, two
- * channels: COLOR = phase (sky/violet/emerald), FILL+MOTION = what's owed
- * (pulsing = teacher working, solid = answer owed, hollow = idle). Pure
- * function of the list item, so SSR of <SessionRow> pins every visible
- * state. Same tsx classic-JSX shim as render-cards.test.tsx.
+ * Session-row render tests — the picker's status language (owner,
+ * minimal-color round): ONE indicator, the braille spinner, present ONLY
+ * while a teach turn is in flight; every other state (idle, question
+ * pending) renders nothing — phases only advance, so phase-as-signal was
+ * decoration, and question-pending is the dominant RESTING state (the
+ * meta line's text carries it). Pure function of the list item, so SSR of
+ * <SessionRow> pins every visible state. Same tsx classic-JSX shim as
+ * render-cards.test.tsx.
  */
 import React from "react";
 (globalThis as Record<string, unknown>).React = React;
@@ -12,7 +15,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SessionRow, timeAgo } from "../components/sidebar.tsx";
-import type { ChatListItem, Phase3 } from "../src/core/index.ts";
+import type { ChatListItem } from "../src/core/index.ts";
 
 function item(overrides: Partial<ChatListItem>): ChatListItem {
 	return {
@@ -33,50 +36,52 @@ function render(chat: ChatListItem, active = false) {
 }
 
 describe("SessionRow", () => {
-	it("no phase strips — the dot alone carries the phase color", () => {
+	it("no phase strips, no phase colors — the retired decoration", () => {
 		const html = render(item({ phase: "teach" }));
 		assert.ok(!html.includes("phase-strip"), "strip removed by design (too busy)");
-		assert.ok(!html.includes("absolute top-2"), "no leftover strip geometry");
+		assert.ok(!html.includes("bg-phase-"), "phase fills are retired app-wide");
+		assert.ok(!html.includes("border-phase-"), "phase rings are retired app-wide");
 	});
 
-	it("idle session: hollow phase-colored ring, perfectly still", () => {
-		for (const phase of ["probe", "plan", "teach"] as Phase3[]) {
+	it("idle session: NO indicator — absence is the state", () => {
+		for (const phase of ["probe", "plan", "teach"] as const) {
 			const html = render(item({ phase }));
-			assert.ok(html.includes("session-dot-idle"), `${phase} idle dot present`);
-			assert.ok(html.includes(`border-phase-${phase}`), `${phase} ring carries its phase color`);
-			assert.ok(!html.includes("lh-dot-breathe"), "idle is never animated");
-			assert.ok(!html.includes("bg-phase-"), "hollow: no fill");
+			assert.ok(!html.includes("session-dot"), "no dots — the status language is spinner-only");
+			assert.ok(!html.includes("braille-spinner"), "idle never shows the spinner");
 		}
 	});
 
-	it("a pending question renders the SOLID phase dot — no animation (the dominant state stays calm)", () => {
+	it("a pending question renders NO indicator — resting state, carried by the meta text", () => {
 		const html = render(item({ phase: "teach", pendingQuestion: true }));
-		assert.ok(html.includes("session-dot-awaiting"), "awaiting dot present");
-		assert.ok(html.includes("bg-phase-teach"), "solid fill in the phase color");
-		assert.ok(!html.includes("lh-dot-breathe"), "motion is reserved for working");
-		assert.ok(!html.includes("bg-attention"), "amber channel is gone");
-		assert.ok(html.includes("Waiting for your answer"), "label");
+		assert.ok(!html.includes("session-dot"), "no dots");
+		assert.ok(!html.includes("braille-spinner"), "motion is reserved for working");
+		assert.ok(html.includes("Waiting for your answer"), "the meta line's text");
 	});
 
-	it("a working session renders the pulsing phase dot", () => {
+	it("a working session (turn in flight) renders the braille spinner — the ONLY indicator", () => {
 		const html = render(item({ phase: "plan", busy: true }));
-		assert.ok(html.includes("session-dot-working"), "working dot present");
-		assert.ok(html.includes("lh-dot-breathe"), "breathing animation");
-		assert.ok(html.includes("bg-phase-plan"), "the pulse is phase-colored");
-		assert.ok(html.includes("Teacher is working"), "label");
+		assert.ok(html.includes('data-testid="braille-spinner"'), "the spinner");
+		assert.ok(html.includes("braille-frame"), "CSS-animated frames");
+		assert.ok((html.match(/class="braille-frame"/g) ?? []).length === 10, "all ten frames");
+		assert.ok(html.includes('data-frame="0"'), "frame 0 leads (static fallback)");
+		assert.ok(html.includes("Teacher is working"), "accessible label");
+		assert.ok(!html.includes("bg-attention"), "no colored state fill — monochrome by design");
 	});
 
-	it("a pending answer outranks 'working' when both are true", () => {
-		const html = render(item({ pendingQuestion: true, busy: true }));
-		assert.ok(html.includes("session-dot-awaiting"));
-		assert.ok(!html.includes("session-dot-working"), "one dot at a time — awaiting wins");
+	it("busy does not double-signal background agents (that is the sidebar section's channel)", () => {
+		// The narrowing lives in the API route (busy = isTurnRunning only);
+		// the row itself just renders busy faithfully. Pinned here so the
+		// contract can't silently re-widen: an extraction-only "working"
+		// row would be a double signal.
+		const html = render(item({ busy: true, pendingQuestion: false }));
+		assert.ok(html.includes("Teacher is working"), "the spinner's label names the turn, not agents");
 	});
 
 	it("the meta line: state replaces the count when the state is the useful fact", () => {
 		const awaiting = render(item({ pendingQuestion: true, updatedAt: "2026-01-02T01:00:00.000Z" }));
 		assert.ok(awaiting.includes("Waiting for your answer · "), "awaiting meta");
 		assert.ok(!awaiting.includes("messages"), "count yields to the state");
-		assert.ok(!awaiting.includes("lh-dot-breathe"), "…and the dot is still solid");
+		assert.ok(!awaiting.includes("braille-spinner"), "…and the spinner stays off");
 
 		const working = render(item({ busy: true }));
 		assert.ok(working.includes("Teacher is working…"), "working meta");

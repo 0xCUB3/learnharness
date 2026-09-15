@@ -232,53 +232,44 @@ body {
 }
 
 /* ============================================================
- * Session status — phase colors + status dots
- * (picker strips, header chip, transcript dividers: one language)
+ * Session status — the braille spinner (the one working indicator)
  * ============================================================ */
 
-/* Phase colors: blue = probing, violet = planning, green = teaching.
-   Tuned per theme (light needs darker, dark lighter). These color the
-   session dots, header chip and transcript dividers — one language. */
-:root {
-	--phase-probe: oklch(0.55 0.17 253);
-	--phase-plan: oklch(0.54 0.19 300);
-	--phase-teach: oklch(0.55 0.14 160);
-}
+/* (owner, minimal-color round) Phase color-coding is RETIRED: phases only
+   advance (every session ends in Teaching), so phase-as-signal was
+   decoration; the --phase-* tokens and every phase-dot state are gone.
+   What state deserved — "a turn is in flight" — is carried by MOTION
+   alone: the terminal braille spinner (components/braille-spinner.tsx),
+   monochrome, existing only while true. */
 
-.dark {
-	--phase-probe: oklch(0.72 0.13 250);
-	--phase-plan: oklch(0.72 0.14 300);
-	--phase-teach: oklch(0.74 0.12 160);
-}
-
-@theme inline {
-	--color-phase-probe: var(--phase-probe);
-	--color-phase-plan: var(--phase-plan);
-	--color-phase-teach: var(--phase-teach);
-}
-
-/* Session dot motion (picker): the ONLY animated state is "teacher is
-   working" — a quiet phase-colored breathing. Pending questions are the
-   dominant resting state and stay perfectly still (solid dot). */
-@keyframes lh-dot-breathe {
+/* One keyframes, all ten frames: each frame <g> holds opacity 1 for its
+   10% slice of the 800ms cycle and 0 elsewhere; frames stagger via
+   positive animation-delay (frame k starts at k×80ms). Static contexts
+   (SSR, reduced motion) show frame 0 — see the base rules below. */
+@keyframes braille-frame {
 	0%,
-	100% {
-		opacity: 0.35;
-		transform: scale(0.75);
+	10% {
+		opacity: 1;
 	}
 
-	50% {
-		opacity: 1;
-		transform: scale(1);
+	10.001%,
+	100% {
+		opacity: 0;
 	}
 }
 
-.lh-dot-breathe {
-	animation: lh-dot-breathe 1.4s ease-in-out infinite;
+.braille-frame {
+	animation: braille-frame 800ms linear infinite;
+	opacity: 0;
+}
+
+/* Static fallback: frame 0 (⠋) is the glyph a non-animated context shows. */
+.braille-frame[data-frame="0"] {
+	opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.lh-dot-breathe {
+	.braille-frame {
 		animation: none;
 	}
 }

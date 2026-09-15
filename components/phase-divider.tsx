@@ -1,14 +1,17 @@
-import { cn } from "@/lib/utils";
+import { BrailleSpinner } from "@/components/braille-spinner";
 import type { Phase3 } from "@/src/core";
 
 /**
- * The in-session phase presentation — the explicit face of what the picker
- * shows as a color strip (one color system everywhere, globals.css
- * --phase-*): the header chip next to the session title, and the dotted
- * boundary rule the transcript draws where the session moves into a new
- * phase. Replaces the old inline plan-divider (artifact registry): the
- * boundary is a MESSAGE-level seam, so chat.tsx renders it at the message
- * where the phase changes, not inside a tool part.
+ * The in-session phase presentation (owner, minimal-color round —
+ * monochrome now): the header chip next to the session title, and the
+ * dotted boundary rule the transcript draws where the session moves into a
+ * new phase. Phase COLOR is retired app-wide (phases only advance, so
+ * color-as-signal was decoration); the label text carries the phase, and
+ * the chip's old dot slot is repurposed for the braille spinner while a
+ * turn is in flight — motion is the honest state signal. Replaces the old
+ * inline plan-divider (artifact registry): the boundary is a MESSAGE-level
+ * seam, so chat.tsx renders it at the message where the phase changes, not
+ * inside a tool part.
  *
  * Quiet register (matches the old divider): hairline rules, small chips —
  * never a banner. Probe never renders a divider: phases only advance, so
@@ -23,14 +26,10 @@ const CHIP_LABEL: Record<Phase3, string> = {
 	teach: "Teaching",
 };
 
-const PHASE_DOT: Record<Phase3, string> = {
-	probe: "bg-phase-probe",
-	plan: "bg-phase-plan",
-	teach: "bg-phase-teach",
-};
-
-/** The header chip: a phase-colored dot + label next to the session title. */
-export function PhaseChip({ phase }: { phase: Phase3 }) {
+/** The header chip: the phase label, monochrome; while a turn is in
+ *  flight the old dot slot shows the braille spinner (motion = the honest
+ *  state signal — see BrailleSpinner). */
+export function PhaseChip({ phase, busy = false }: { phase: Phase3; busy?: boolean }) {
 	return (
 		<span
 			data-testid="phase-chip"
@@ -38,27 +37,19 @@ export function PhaseChip({ phase }: { phase: Phase3 }) {
 			title={`Session phase: ${CHIP_LABEL[phase]}`}
 			className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
 		>
-			<span className={cn("size-1.5 rounded-full", PHASE_DOT[phase])} aria-hidden />
+			{busy && <BrailleSpinner className="h-3.5" />}
 			{CHIP_LABEL[phase]}
 		</span>
 	);
 }
 
-/** Divider rule + chip colors per phase (probe never reaches here). */
-const DIVIDER_RULE: Partial<Record<Phase3, string>> = {
-	plan: "border-phase-plan/50",
-	teach: "border-phase-teach/50",
-};
-const DIVIDER_TEXT: Partial<Record<Phase3, string>> = {
-	plan: "border-phase-plan/50 text-phase-plan",
-	teach: "border-phase-teach/50 text-phase-teach",
-};
-
 /**
- * The transcript boundary: a color-coded dotted rule at the message where
- * the session enters `phase`. The plan seam carries its node count ("Plan ·
- * 4 nodes"); teaching is just the label. Null for probe (defensive — the
- * fold never emits a probe transition after the start).
+ * The transcript boundary: a monochrome dotted rule at the message where
+ * the session enters `phase` (owner, minimal-color round — the label
+ * carries the transition; the phase color never did). The plan seam
+ * carries its node count ("Plan · 4 nodes"); teaching is just the label.
+ * Null for probe (defensive — the fold never emits a probe transition
+ * after the start).
  */
 export function PhaseDivider({ phase, nodeCount }: { phase: Phase3; nodeCount?: number }) {
 	if (phase === "probe") return null;
@@ -68,16 +59,11 @@ export function PhaseDivider({ phase, nodeCount }: { phase: Phase3; nodeCount?: 
 			: CHIP_LABEL[phase];
 	return (
 		<div className="my-4 flex w-full items-center gap-3" data-testid={`phase-divider-${phase}`}>
-			<span className={cn("h-0 flex-1 border-t-2 border-dotted", DIVIDER_RULE[phase])} aria-hidden />
-			<span
-				className={cn(
-					"rounded-full border px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide",
-					DIVIDER_TEXT[phase],
-				)}
-			>
+			<span className="h-0 flex-1 border-t-2 border-dotted border-border/50" aria-hidden />
+			<span className="rounded-full border border-border/80 px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{label}
 			</span>
-			<span className={cn("h-0 flex-1 border-t-2 border-dotted", DIVIDER_RULE[phase])} aria-hidden />
+			<span className="h-0 flex-1 border-t-2 border-dotted border-border/50" aria-hidden />
 		</div>
 	);
 }

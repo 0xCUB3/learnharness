@@ -286,10 +286,12 @@ export interface ChatSummary {
 }
 
 /** The sidebar's session row: a summary + live liveness. The chats list
- *  route attaches `busy` from the turn-liveness registry and the job store
- *  (a running turn OR a background job = the session is working). The store
- *  itself can't see liveness (import law: store never imports server),
- *  hence the split at exactly the record/liveness seam. */
+ *  route attaches `busy` from the turn-liveness registry ONLY — a running
+ *  teach turn (owner, minimal-color round: background jobs no longer
+ *  count; the sidebar's Background agents section is their channel, and
+ *  the row spinner means exactly "a turn is in flight"). The store itself
+ *  can't see liveness (import law: store never imports server), hence the
+ *  split at exactly the record/liveness seam. */
 export interface ChatListItem extends ChatSummary {
 	busy: boolean;
 }

@@ -5,10 +5,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
+import { BrailleSpinner } from "@/components/braille-spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { ChatListItem, Phase3 } from "@/src/core";
+import type { ChatListItem } from "@/src/core";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -67,62 +68,20 @@ export function SidebarToggle() {
 	);
 }
 
-/** Phase colors for the session dot — one system with the header chip
- *  and the transcript dividers (globals.css --phase-*). Static class
- *  strings per phase: Tailwind can't compile dynamic class names. */
-const PHASE_FILL: Record<Phase3, string> = {
-	probe: "bg-phase-probe",
-	plan: "bg-phase-plan",
-	teach: "bg-phase-teach",
-};
-const PHASE_RING: Record<Phase3, string> = {
-	probe: "border-phase-probe",
-	plan: "border-phase-plan",
-	teach: "border-phase-teach",
-};
-
 /**
- * The session dot, left of the title. TWO channels, one dot: COLOR is the
- * phase (probe/plan/teach — sky/violet/emerald), FILL+MOTION is what's
- * owed. Pulsing = the teacher is working (rare, time-sensitive — the only
- * state that deserves motion). Solid = a question awaits the learner's
- * answer (the DOMINANT resting state of real sessions — calm by design,
- * no animation). Hollow = nothing owed, idle. A pending answer outranks
- * "working": if a question is owed, that's the blocking fact.
+ * The row's status indicator (owner, minimal-color round): the braille
+ * spinner, ONLY while a teach turn is in flight — monochrome motion, the
+ * terminal's own glyph, existing exactly as long as the work does and
+ * vanishing the moment it ends. Every other state renders NOTHING:
+ * phases only advance (all sessions end in Teaching — phase-as-signal was
+ * decoration, now retired app-wide), and question-pending is the dominant
+ * RESTING state of real sessions — a resting state has no scan value, so
+ * the meta line's "Waiting for your answer" text carries it. Idle is the
+ * absence of a signal, by design.
  */
-function SessionDot({ phase, pending, busy }: { phase: Phase3; pending: boolean; busy: boolean }) {
-	if (pending) {
-		return (
-			<span
-				data-testid="session-dot-awaiting"
-				title="Waiting for your answer"
-				className={cn("size-2 shrink-0 rounded-full", PHASE_FILL[phase])}
-			>
-				<span className="sr-only">Waiting for your answer</span>
-			</span>
-		);
-	}
-	if (busy) {
-		return (
-			<span
-				data-testid="session-dot-working"
-				title="Teacher is working"
-				className={cn("size-2 shrink-0 rounded-full", PHASE_FILL[phase], "lh-dot-breathe")}
-			>
-				<span className="sr-only">Teacher is working</span>
-			</span>
-		);
-	}
-	return (
-		<span
-			data-testid="session-dot-idle"
-			aria-hidden
-			className={cn(
-				"size-2 shrink-0 rounded-full border-2 bg-transparent",
-				PHASE_RING[phase],
-			)}
-		/>
-	);
+function SessionStatus({ busy }: { busy: boolean }) {
+	if (!busy) return null;
+	return <BrailleSpinner />;
 }
 
 /** Compact "how long ago": "just now", "5m ago", "3h ago", "2d ago",
@@ -150,8 +109,9 @@ function sessionMeta(chat: ChatListItem): string {
 }
 
 /**
- * One session row: the status dot, then title + state-aware meta. Exported
- * for render tests — pure function of the list item.
+ * One session row: the status spinner (only while working), then title +
+ * state-aware meta. Exported for render tests — pure function of the
+ * list item.
  */
 export function SessionRow({
 	chat,
@@ -171,7 +131,7 @@ export function SessionRow({
 				active && "bg-accent font-medium",
 			)}
 		>
-			<SessionDot phase={chat.phase} pending={chat.pendingQuestion} busy={chat.busy} />
+			<SessionStatus busy={chat.busy} />
 			<span className="min-w-0 flex-1">
 				<span className="block truncate">{chat.title}</span>
 				<span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>
