@@ -6,7 +6,6 @@ import {
 	GRAPH_CONTEXT_TOKENS_MAX,
 	GRAPH_CONTEXT_TOKENS_STEP,
 } from "@/src/core";
-import { formatTokens } from "@/components/usage-format";
 
 /**
  * The knowledge-context budget control (vision-context-injection.md) — the
@@ -19,8 +18,8 @@ import { formatTokens } from "@/components/usage-format";
  * contribute to the session.
  *
  * One quiet compact row sized to sit in the stats band beside the model +
- * thinking pills: short slider, "tok" readout (abbreviated — "4.1k tok"
- * stays on one line where "4.1k tokens" wrapped). 0 = off; absent settings
+ * thinking pills: short slider, "tok" readout, the FULL number (owner,
+ * 2026-09-15: no k-rounding — 1024 reads as 1024). 0 = off; absent settings
  * show the DEFAULT (1024 — on). The value rides ChatSettings (the same
  * lifted settings the model picker uses), so it persists pre-chat via the
  * same deferred PUT. Sessions never show this control — the injection is
@@ -54,7 +53,7 @@ export function GraphContextControl({
 				className="w-14 shrink-0 tabular-nums"
 				data-testid="graph-context-value"
 			>
-				{value === 0 ? "off" : `${formatTokens(value)} tok`}
+				{value === 0 ? "off" : `${value} tok`}
 			</span>
 		</div>
 	);

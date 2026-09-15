@@ -104,8 +104,9 @@ describe("DraftShell — the sessionless surface", () => {
 		);
 		// The slider's default position: 1024 of 4096, step 128 (decided).
 		assert.ok(html.includes('min="0"') && html.includes('max="4096"') && html.includes('step="128"'));
-		// The abbreviated readout (owner: "tokens" wrapped at >1k — "tok" stays one line).
-		assert.ok(html.includes("1k tok"), "the readout shows the default budget, not 0 — default is ON");
+		// The readout: "tok" abbreviated, but the FULL number (owner, 2026-09-15:
+		// no k-rounding — 1024 reads as 1024).
+		assert.ok(html.includes("1024 tok"), "the readout shows the default budget, not 0 — default is ON");
 		assert.ok(html.includes("Knowledge context"), "the control is labeled");
 		// Absent settings render the default — never 'off'.
 		assert.ok(!html.includes(">off<"));
