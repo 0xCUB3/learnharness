@@ -1,8 +1,18 @@
 # Vision — The edge glyph: follows vs supports
 
-Ideation settled 2026-09-14. Not yet planned, not yet assigned. Companion: `vision.md` § "Edges" (the relation types) and § "Rendering".
+Ideation settled 2026-09-14. **WITHDRAWN 2026-09-15**: both shipped variants of
+the double-shaft glyph (tails converging on a shared head; two complete arrows
+offset ±half-gap) were rejected by the owner live — the first "two arrows
+feeding one point", the second "two arrows next to each other, not coherent".
+Dashed was already rejected 2026-09-14 (dash patterns crawl under the constant
+screen-space stroke width). **The relation still needs a differentiator —
+approach open.** The constraints below that are NOT glyph-specific still stand.
+Companion: `vision.md` § "Edges" (the relation types) and § "Rendering".
 
-One line: the two relation types become visually distinct — **`follows` renders as a double-shaft arrow** (two parallel tails side by side, the implication glyph ⟹), **`supports` stays a single line**. Arrows keep their existing direction: prerequisite → dependent.
+One line (withdrawn): the two relation types become visually distinct —
+**`follows` renders as a double-shaft arrow** (two parallel tails side by
+side, the implication glyph ⟹), **`supports` stays a single line**. Arrows
+keep their existing direction: prerequisite → dependent.
 
 ---
 
