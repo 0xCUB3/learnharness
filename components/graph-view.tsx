@@ -66,6 +66,7 @@ import Link from "next/link";
 import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
 import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
+import { GraphCoverageControl } from "./graph-coverage.tsx";
 import {
 	ARROW_LENGTH_RANGE,
 	CHARGE_RANGE,
@@ -843,11 +844,15 @@ export function GraphView() {
 			)}
 
 			{/* Legend + filters: search box and per-state toggle rows. */}
-			{/* Top-right controls — three separate floating containers (owner,
+			{/* Top-right controls — separate floating containers (owner,
 			    graph-view round 2): the search box, the settings gear (its own
-			    collapsible component), and the import button. */}
-			{!isEmpty && (
-				<div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+			    collapsible component), the import button, and the coverage
+			    control. Coverage renders even when the graph is EMPTY — an
+			    empty graph with unextracted sessions is exactly when it
+			    matters (extract → the graph gains nodes). */}
+			<div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+				{!isEmpty && (
+					<>
 					{/* Search — its own container (icon + input + no-match note). */}
 					<div className="w-56 rounded-xl border bg-card/85 p-1.5 shadow-lg backdrop-blur">
 						<div className="relative">
@@ -893,8 +898,12 @@ export function GraphView() {
 					    gear sits at the far right (owner, round 3) so its panel
 					    drops at the very right edge, over less of the graph. */}
 					<GraphSettingsControl settings={settings} changeSettings={changeSettings} />
-				</div>
-			)}
+					</>
+				)}
+				{/* Extraction coverage — own container, always present; the
+				    panel re-reads when background runs settle (refreshTick). */}
+				<GraphCoverageControl refreshKey={refreshTick} />
+			</div>
 
 			{/* Background pipeline status: what is currently running. */}
 			{pipelineRuns.length > 0 && (

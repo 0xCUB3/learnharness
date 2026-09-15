@@ -28,6 +28,7 @@ import type { PiEngine } from "../src/agent/models.ts";
 import type {
 	AuditResult,
 	ClusterLabeling,
+	CoverageEntry,
 	ExtractionRunUsage,
 	GraphEdge,
 	GraphNode,
@@ -39,6 +40,7 @@ import type {
 } from "../src/core/contracts.ts";
 import type { GraphStore } from "../src/core/ports.ts";
 import { abortExtraction, createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
+import { batchTag, coverageOf, coverageSlots } from "../src/core/coverage.ts";
 import { clusterNamingSettled, refreshClusterLabels } from "../src/agent/subagents/cluster-namer.ts";
 import { semanticClusters } from "../src/core/semantic-clusters.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -65,6 +67,7 @@ function memoryLedgers() {
 	const events: LedgerEvent[] = [];
 	const mappings: NodeMapping[] = [];
 	const checkpoints: SessionCheckpoint[] = [];
+	const coverage: CoverageEntry[] = [];
 	const sources = new Map<string, NotesSource>();
 	const clusterLabels: ClusterLabeling[] = [];
 	const positions = new Map<string, { x: number; y: number }>();
@@ -86,6 +89,10 @@ function memoryLedgers() {
 		readMappings: () => mappings.map((m) => ({ ...m })),
 		appendCheckpoint: (c: SessionCheckpoint) => void checkpoints.push(c),
 		readCheckpoints: () => checkpoints.map((c) => ({ ...c })),
+		// Extraction coverage (vision-extraction-coverage.md) — append-only;
+		// the chat pipeline checkpoints one entry per covered message.
+		appendCoverage: (e) => void coverage.push({ ...e }),
+		readCoverage: () => coverage.map((e) => ({ ...e })),
 		upsertSource: (s: NotesSource) => {
 			// Mirrors the real store: an upsert KEEPS the existing usage log.
 			const prev = sources.get(s.id);
@@ -356,20 +363,35 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// Events rebuilt deterministically: quizzes in transcript order, then
 		// the observation. check-1's attribution pointed at the DROPPED p2 →
 		// unresolvable → null (the question text is kept for later attribution).
+		// The observation ref is BATCH-TAGGED (obs:<tag>:p1) so a re-run of
+		// the same batch dedupes while a re-opened message's update lands as
+		// a new event (vision-extraction-coverage.md).
 		const events = ledgers.readEvents();
+		const record = chatStore.getChat(chatId)!;
+		const expectedTag = batchTag(coverageSlots(record.messages as UIMessage[]));
 		assert.deepEqual(
 			events.map((e) => [e.kind, e.ref, e.nodeId]),
 			[
 				["miss", "probe-1", existingId],
 				["correct", "check-1", null],
-				["observation", "obs:p1", existingId],
+				["observation", `obs:${expectedTag}:p1`, existingId],
 			],
 		);
 		assert.equal(events[0]!.nodeId, existingId, "probe attributed via the verdict's mapping");
 		assert.equal(events[2]!.note, "solid", "the understanding note joins the ledger");
 
-		// Checkpointed through the record's updatedAt — never the same turns twice.
-		assert.equal(ledgers.readCheckpoints().length, 1);
+		// COVERAGE checkpointed per message (not a whole-chat checkpoint):
+		// one entry per transcript message, fingerprinted content each —
+		// the same turns are never extracted twice.
+		const covered = ledgers.readCoverage();
+		assert.equal(covered.length, record.messages.length);
+		assert.ok(covered.every((c) => c.chatId === chatId && c.fp.length === 64 && c.tokens > 0));
+		assert.equal(ledgers.readCheckpoints().length, 0, "the chat path writes coverage, not the legacy checkpoint");
+		assert.equal(
+			coverageOf(record.messages as UIMessage[], covered, chatId).uncoveredCount,
+			0,
+			"every message is now covered",
+		);
 	});
 
 	it("checkpoints nothing when a stage fails", async () => {
@@ -789,5 +811,227 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		assert.equal(ledgers.readCheckpoints().length, 0, "nothing checkpointed");
 		assert.equal(ledgers.readSources()[0]!.extractions?.length, 1, "partial usage still persisted");
 		assert.equal(ledgers.readSources()[0]!.extractions![0]!.stats, undefined, "never merged → no stats");
+	});
+});
+
+// ── the chunked pipeline (extraction coverage — vision-extraction-coverage.md) ──
+
+/** Pull the pipeline's prompt view out of a model call: the pipeline sends
+ *  `Transcript:\n\n<view>` as the user turn, so the LAST user message's
+ *  text IS what the extractor saw. */
+function capturedView(context: unknown): string {
+	const messages = (context as { messages?: { role: string; content: string }[] }).messages ?? [];
+	const last = [...messages].reverse().find((m) => m.role === "user");
+	return typeof last?.content === "string" ? last.content : "";
+}
+
+/** An extractor step that submits FINDINGS, optionally capturing its view. */
+function findingsStep(capture?: (view: string) => void): FauxResponseStep {
+	return (context) => {
+		capture?.(capturedView(context));
+		return fauxAssistantMessage(
+			[fauxToolCall("submit_findings", FINDINGS as unknown as Record<string, unknown>, { id: "findings-call" })],
+			{ stopReason: "toolUse" },
+		);
+	};
+}
+
+/** An auditor step that passes p1 through (no linkTo — a fresh node), drops p2. */
+function passThroughAuditStep(): FauxResponseStep {
+	return () =>
+		fauxAssistantMessage(
+			[
+				fauxToolCall(
+					"submit_review",
+					{
+						propositions: [{ ...FINDINGS.propositions[0]! }],
+						edges: [],
+						attribution: { quiz: {} },
+						dropped: [{ ref: "p2", reason: "evidence not found" }],
+					} as unknown as Record<string, unknown>,
+					{ id: "review-call" },
+				),
+			],
+			{ stopReason: "toolUse" },
+		);
+}
+
+/** A session with UNCOVERED-multiple-batch mass: five long distinct messages
+ *  (~1200 tok each — 3600+1200 > EXTRACTION.chunkTokens 4096 → batches of
+ *  [m1,m2,m3] and [m4,m5]). */
+function chunkyChat() {
+	const chat = chatStore.createChat("Chunky coverage fixture");
+	createdChats.push(chat.id);
+	// ~1230 tok per message (chars/4): three fill the 4096 budget, the
+	// fourth would overflow — deterministic batches [m1,m2,m3] + [m4,m5].
+	chatStore.saveMessages(
+		chat.id,
+		[1, 2, 3, 4, 5].map((n) => user(`u${n}`, `topic ${n}: ${"detail ".repeat(700)}${n}`)),
+	);
+	return { chatId: chat.id, record: chatStore.getChat(chat.id)! };
+}
+
+describe("the chunked pipeline (extraction coverage)", () => {
+	it("extracts uncovered messages in token-budgeted batches, checkpoints coverage per batch, and no-ops once covered", async () => {
+		const { chatId, record } = chunkyChat();
+		const ledgers = memoryLedgers();
+		const views: string[] = [];
+
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			extractor: fauxEngine([findingsStep((v) => views.push(v)), findingsStep((v) => views.push(v))]),
+			auditor: fauxEngine([passThroughAuditStep(), passThroughAuditStep()]),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+		const stats = await pipeline.runExtraction(chatId);
+
+		// Two batches: the first held messages 1-3, the second 4-5 — a
+		// message is never split, batches are consecutive oldest-first.
+		assert.equal(views.length, 2, "one extractor call per batch");
+		assert.ok(views[0]!.includes("LEARNER [u1]") && views[0]!.includes("LEARNER [u3]"));
+		assert.ok(!views[0]!.includes("LEARNER [u4]"), "the batch stops at the token budget");
+		assert.ok(views[1]!.includes("LEARNER [u4]") && views[1]!.includes("LEARNER [u5]"));
+		assert.ok(!views[1]!.includes("LEARNER [u3]"));
+
+		// p1 was a fresh node in batch 1; batch 2's p1 mapped to the same
+		// node (chat-scoped mapping) — but its understanding note is a NEW
+		// batch-tagged observation.
+		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 2 });
+
+		// Per-batch coverage: every message checkpointed, nothing legacy.
+		const coverage = ledgers.readCoverage();
+		assert.equal(coverage.length, record.messages.length);
+		assert.equal(ledgers.readCheckpoints().length, 0);
+		assert.equal(coverageOf(record.messages as UIMessage[], coverage, chatId).uncoveredCount, 0);
+
+		// A second run is a NO-OP: nothing uncovered → no model calls, no
+		// new usage entry (no money spent on covered ground).
+		const before = views.length;
+		const again = await pipeline.runExtraction(chatId);
+		assert.deepEqual(again, { nodes: 0, edges: 0, events: 0 });
+		assert.equal(views.length, before);
+		assert.equal(chatStore.getChat(chatId)!.extractions?.length, 1, "the no-op run persists no usage");
+	});
+
+	it("aborting after a merged batch keeps it covered; the re-run extracts only the remainder", async () => {
+		const { chatId, record } = chunkyChat();
+		const ledgers = memoryLedgers();
+		const views: string[] = [];
+
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			// Batch 1 submits and merges; batch 2's extractor call HANGS
+			// until the abort fires — the dock's abort button, mid-run.
+			extractor: fauxEngine([
+				findingsStep((v) => views.push(v)),
+				(_context, options) =>
+					new Promise((resolve) => {
+						const sig = options?.signal;
+						if (sig?.aborted) {
+							resolve(fauxAssistantMessage("late"));
+							return;
+						}
+						sig?.addEventListener("abort", () => resolve(fauxAssistantMessage("late")), { once: true });
+					}),
+			]),
+			auditor: fauxEngine([passThroughAuditStep()]),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+		const runPromise = pipeline.runExtraction(chatId);
+		// The abort must land while batch 2's extractor hangs. The faux
+		// stream only resolves on abort, so wait for the batch-1 merge to
+		// show in coverage, then abort.
+		await new Promise<void>((resolve) => {
+			const check = setInterval(() => {
+				if (ledgers.readCoverage().length > 0) {
+					clearInterval(check);
+					resolve();
+				}
+			}, 5);
+		});
+		assert.equal(abortExtraction(chatId), true);
+		const stats = await runPromise;
+
+		// Batch 1's emissions are kept and its messages stay covered.
+		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 1 });
+		assert.equal(ledgers.readCoverage().length, 3, "batch 1 checkpointed its three messages");
+		const cov = coverageOf(record.messages as UIMessage[], ledgers.readCoverage(), chatId);
+		assert.equal(cov.uncoveredCount, 2, "the in-flight batch's messages stay uncovered");
+
+		// The re-run — the manual extract button — picks up ONLY the
+		// remainder: one batch, messages 4-5 alone in the prompt.
+		const reRunViews: string[] = [];
+		const finisher = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			extractor: fauxEngine([findingsStep((v) => reRunViews.push(v))]),
+			auditor: fauxEngine([passThroughAuditStep()]),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+		await finisher.runExtraction(chatId);
+		assert.equal(reRunViews.length, 1);
+		assert.ok(reRunViews[0]!.includes("LEARNER [u4]") && reRunViews[0]!.includes("LEARNER [u5]"));
+		assert.ok(!reRunViews[0]!.includes("LEARNER [u1]"), "the covered remainder never re-enters the prompt");
+		assert.equal(ledgers.readCoverage().length, 5, "the re-run closed the gap");
+	});
+
+	it("a re-opened message re-extracts alone; a data-part attach never re-opens it", async () => {
+		// A small session: one batch covers everything, so re-openings are
+		// the ONLY thing later runs can see.
+		const chat = chatStore.createChat("Re-open fixture");
+		createdChats.push(chat.id);
+		chatStore.saveMessages(chat.id, [user("s1", "short topic one"), user("s2", "short topic two")]);
+		const chatId = chat.id;
+		const ledgers = memoryLedgers();
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			extractor: fauxEngine([findingsStep()]),
+			auditor: fauxEngine([passThroughAuditStep()]),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+		await pipeline.runExtraction(chatId);
+		const messages = () => chatStore.getChat(chatId)!.messages as UIMessage[];
+		assert.equal(coverageOf(messages(), ledgers.readCoverage(), chatId).uncoveredCount, 0);
+
+		// Data parts are invisible to the extraction view — plan-block
+		// attach does NOT re-open a covered message.
+		const withDataPart = messages().map((m) =>
+			m.id === "u2"
+				? { ...m, parts: [...m.parts, { type: "data-plan-blocks", planBlocks: [] } as unknown as UIMessage["parts"][number]] }
+				: m,
+		);
+		chatStore.saveMessages(chatId, withDataPart);
+		const afterAttach = coverageOf(messages(), ledgers.readCoverage(), chatId);
+		assert.equal(afterAttach.uncoveredCount, 0, "data parts don't change the fingerprint");
+
+		// A quiz answer merging into an ASKING message changes its view →
+		// exactly that message re-opens, and the next run extracts it alone.
+		const mutated = messages().map((m) =>
+			m.id === "s1" ? { ...m, parts: [...m.parts, { type: "text", text: "the answer merged in late" }] } : m,
+		) as unknown as UIMessage[];
+		chatStore.saveMessages(chatId, mutated);
+		const afterMerge = coverageOf(messages(), ledgers.readCoverage(), chatId);
+		assert.equal(afterMerge.uncoveredCount, 1, "only the mutated message re-opens");
+
+		const reRunViews: string[] = [];
+		const reOpener = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			extractor: fauxEngine([findingsStep((v) => reRunViews.push(v))]),
+			auditor: fauxEngine([passThroughAuditStep()]),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+		await reOpener.runExtraction(chatId);
+		assert.equal(reRunViews.length, 1, "one batch: the single re-opened message");
+		assert.ok(reRunViews[0]!.includes("LEARNER [s1]") && !reRunViews[0]!.includes("LEARNER [s2]"));
+		assert.equal(coverageOf(messages(), ledgers.readCoverage(), chatId).uncoveredCount, 0, "re-covered");
 	});
 });

@@ -23,6 +23,7 @@ import type {
 	NodeMapping,
 	PlanTree,
 	Position,
+	CoverageEntry,
 	SessionCheckpoint,
 	TurnUsage,
 	NotesSource,
@@ -84,6 +85,11 @@ export interface GraphStore {
 	/** Append one emission checkpoint. */
 	appendCheckpoint(checkpoint: SessionCheckpoint): void;
 	readCheckpoints(): SessionCheckpoint[];
+	/** Message-granular extraction coverage (vision-extraction-coverage.md):
+	 *  append-only; one line per covered message. The chat-extraction
+	 *  checkpoint — "uncovered" is derived from these, never tracked. */
+	appendCoverage(entry: CoverageEntry): void;
+	readCoverage(): CoverageEntry[];
 
 	/** Append one cluster labeling — idempotent by id (the id hashes the
 	 *  sorted core, so identical member sets dedupe). */

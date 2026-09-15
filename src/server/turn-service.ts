@@ -17,7 +17,7 @@
 
 import type { UIMessage } from "ai";
 import { withPlanBlocks } from "../core/plan-blocks.ts";
-import { pendingQuizAnswers } from "../core/graph.ts";
+import { coverageOf } from "../core/coverage.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
 import { EXTRACTION } from "../../config.ts";
 import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
@@ -74,15 +74,17 @@ export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMe
 /**
  * The graph write channel (vision §1 construction): the extraction pipeline
  * (extractor → auditor → merger — the sole graph writer) runs ASYNC once a
- * chat accumulates EXTRACTION.everyNQuizAnswers new answered quizzes since
- * its last checkpoint. Fire-and-forget — never blocks the turn; failures
- * are logged by the pipeline and leave the checkpoint untouched, so the
- * next trigger re-runs the whole thing.
+ * chat's UNCOVERED transcript tokens reach EXTRACTION.chunkTokens
+ * (vision-extraction-coverage.md, 2026-09-15 — replacing the old
+ * every-3-quiz-answers count: content size is the honest signal, and
+ * quiz-less sessions extract too). The pipeline itself extracts only the
+ * uncovered batches. Fire-and-forget — never blocks the turn; failures are
+ * logged by the pipeline and leave coverage untouched, so the next trigger
+ * (or the manual extract button) re-runs what's left.
  *
- * v1 placeholder trigger, deliberately isolated in this one seam: swap
- * here when a better mechanism lands — the pipeline is trigger-agnostic.
- * Skipped under tests: scripted chats are fixtures, not knowledge (the
- * pipeline itself is tested directly with mock models).
+ * Deliberately isolated in this one seam — the pipeline is
+ * trigger-agnostic. Skipped under tests: scripted chats are fixtures, not
+ * knowledge (the pipeline itself is tested directly with mock models).
  */
 export function triggerExtraction(
 	deps: { chatStore: ChatStore; graphStore: GraphStore },
@@ -91,7 +93,10 @@ export function triggerExtraction(
 ): void {
 	if (process.env.NODE_ENV === "test") return;
 	try {
-		if (pendingQuizAnswers(chatId, deps) < EXTRACTION.everyNQuizAnswers) return;
+		const record = deps.chatStore.getChat(chatId);
+		if (!record) return;
+		const covered = coverageOf(record.messages as UIMessage[], deps.graphStore.readCoverage(), chatId);
+		if (covered.uncoveredTokens < EXTRACTION.chunkTokens) return;
 		void extraction.runExtraction(chatId).catch((err) => {
 			console.error(`[chat ${chatId}] extraction pipeline failed:`, err);
 		});

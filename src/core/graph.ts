@@ -40,6 +40,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { isToolUIPart, type UIMessage } from "ai";
+import type { CoverageEntry } from "./contracts/graph.ts";
 import type {
 	AuditResult,
 	Cluster,
@@ -67,14 +68,29 @@ function newGraphNodeId(): string {
 }
 
 /** What one merge run merges FROM (the caller supplies it — the merger never
- *  reads the chat store): a session's transcript + its `updatedAt`
- *  checkpoint, or — for the format-agnostic notes front door (2026-09-13) —
- *  `messages: null`: raw notes carry no tool parts, so no quiz events are
- *  rebuilt (quiz outcomes inside notes surface only through the extractor's
- *  understanding observations), and the checkpoint stamps the import. */
+ *  reads the chat store): a session's transcript + its coverage checkpoint,
+ *  or — for the format-agnostic notes front door (2026-09-13) — `messages:
+ *  null`: raw notes carry no tool parts, so no quiz events are rebuilt (quiz
+ *  outcomes inside notes surface only through the extractor's understanding
+ *  observations), and the whole-file checkpoint stamps the import.
+ *
+ *  Coverage (vision-extraction-coverage.md, settled 2026-09-15): a chat merge
+ *  passes the BATCH it extracted — the caller computed the fingerprints
+ *  before the run, from the same snapshot the merger sees — and step 4
+ *  appends one CoverageEntry per message on success ("covered" means
+ *  exactly this merge happened). `batchTag` prefixes the observation refs so
+ *  re-runs of the SAME batch dedupe while a re-opened (mutated) message's
+ *  fresh understanding observations land as new events; the notes path
+ *  passes neither and keeps the whole-file checkpoint. */
 export interface MergeSource {
 	messages: UIMessage[] | null;
 	foldedAt: string;
+	/** The batch being merged (chat path): one entry per message in
+	 *  `messages`, same order — undefined (notes path / coverage-less
+	 *  callers) → the legacy whole-chat checkpoint is written instead. */
+	coverage?: CoverageEntry[];
+	/** The batch's deterministic tag (core/coverage.ts batchTag) — obs refs. */
+	batchTag?: string;
 }
 
 // ─── transcript scanning (shared by the merger + trigger) ─────────────────────
@@ -241,10 +257,13 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 		}
 	}
 	// Understanding observations: one per proposition carrying a note,
-	// resolved to the node the verdict mapped it to.
+	// resolved to the node the verdict mapped it to. Refs carry the batch
+	// tag when there is one: run-local source ids ("p1"…) shift position
+	// between runs, so a bare obs:p1 could never both dedupe a re-run of
+	// the same batch AND let a re-opened message's fresh level through.
 	for (const p of audit.propositions) {
 		if (p.understanding === undefined || p.understanding.length === 0) continue;
-		const ref = `obs:${p.id}`;
+		const ref = source.batchTag !== undefined ? `obs:${source.batchTag}:${p.id}` : `obs:${p.id}`;
 		if (seenRefs.has(ref)) continue;
 		ledgers.appendEvent({
 			nodeId: mapping.get(p.id) ?? null,
@@ -258,9 +277,17 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 		stats.events++;
 	}
 
-	// 4. Checkpoint: this source is extracted through its foldedAt (the
-	//    chat's updatedAt, or the import time for notes).
-	ledgers.appendCheckpoint({ chatId, foldedAt: source.foldedAt });
+	// 4. Checkpoint — THE COVERAGE DISCIPLINE (vision-extraction-coverage.md):
+	//    only now, after every append succeeded, is the batch covered. The
+	//    chat path appends one CoverageEntry per message (per-batch atomic —
+	//    an abort or failure mid-run leaves earlier batches covered, this
+	//    batch's messages uncovered); the notes path keeps the whole-file
+	//    checkpoint (a file is one shot).
+	if (source.coverage !== undefined) {
+		for (const entry of source.coverage) ledgers.appendCoverage(entry);
+	} else {
+		ledgers.appendCheckpoint({ chatId, foldedAt: source.foldedAt });
+	}
 	return stats;
 }
 
@@ -300,34 +327,6 @@ function quizEvent(
 	// The question text is the attribution input for unattributed quizzes.
 	if (nodeId === null && typeof answer.questionText === "string") event.question = answer.questionText;
 	return event;
-}
-
-// ─── the trigger helper (v1: every N quiz answers — swappable seam) ──────────
-
-/**
- * How many ANSWERED quiz parts in this chat are not yet in the ledger — i.e.
- * new evidence since the last extraction. The v1 trigger (turn-service)
- * fires the pipeline when this crosses EXTRACTION.everyNQuizAnswers. Every
- * answered quiz always becomes an event (attribution only decides nodeId),
- * so ref-not-in-ledger is a correct "not yet processed" marker.
- */
-export function pendingQuizAnswers(chatId: string, deps: GraphDeps): number {
-	const record = deps.chatStore.getChat(chatId);
-	if (!record) return 0;
-	const seenRefs = new Set<string>();
-	for (const event of deps.graphStore.readEvents()) {
-		if (event.chatId === chatId && event.ref) seenRefs.add(event.ref);
-	}
-	let count = 0;
-	for (const part of toolParts(record.messages)) {
-		if (part.name !== "quiz" || part.state !== "output-available") continue;
-		const out = part.output;
-		if (typeof out !== "object" || out === null) continue;
-		const answer = out as Partial<QuestionAnswerData>;
-		if (answer.kind !== "quiz" || answer.dismissed === true) continue; // dismissed = not answered
-		if (!seenRefs.has(part.toolCallId)) count++;
-	}
-	return count;
 }
 
 // ─── derivation (reads only — everything below is recomputable) ─────────────

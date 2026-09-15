@@ -62,7 +62,16 @@ export type ModelRole = keyof typeof MODELS;
  * (server/turn-service.ts) so it can be swapped without touching the
  * pipeline.
  */
-export const EXTRACTION = { everyNQuizAnswers: 3 } as const;
+/**
+ * The extraction trigger (vision-extraction-coverage.md, 2026-09-15): a run
+ * fires when a chat's UNCOVERED transcript tokens reach the chunk budget.
+ * Runs are token-budgeted batches of the oldest uncovered messages — this
+ * knob is the transcript share of the extractor's context (it also carries
+ * the whole graph + instructions), so it bounds both cost and chunk size.
+ * Replaces the old every-3-quiz-answers trigger, which never fired for
+ * quiz-less sessions.
+ */
+export const EXTRACTION = { chunkTokens: 4096 } as const;
 
 /**
  * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction
@@ -74,6 +83,10 @@ export const LEDGER_FILES = {
 	events: path.join(PATHS.graph, "events.jsonl"),
 	mappings: path.join(PATHS.graph, "mappings.jsonl"),
 	sessions: path.join(PATHS.graph, "sessions.jsonl"),
+	/** Per-message extraction coverage (contracts/graph.ts CoverageEntry;
+	 *  the checkpoint's replacement for chat extractions — notes keep
+	 *  sessions.jsonl, whole-file as they are). */
+	coverage: path.join(PATHS.graph, "coverage.jsonl"),
 	/** LLM-named community records (contracts/graph.ts ClusterLabeling). */
 	clusterLabels: path.join(PATHS.graph, "cluster-labels.jsonl"),
 } as const;

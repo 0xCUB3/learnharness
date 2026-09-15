@@ -42,6 +42,7 @@ import type {
 	NodeMapping,
 	Position,
 	ProvenancePoint,
+	CoverageEntry,
 	SessionCheckpoint,
 } from "../core/contracts.ts";
 import type { GraphStore } from "../core/ports.ts";
@@ -133,6 +134,9 @@ const isNodeMapping = (v: unknown): v is NodeMapping =>
 const isCheckpoint = (v: unknown): v is SessionCheckpoint =>
 	isRecord(v) && isString(v.chatId) && isString(v.foldedAt);
 
+const isCoverageEntry = (v: unknown): v is CoverageEntry =>
+	isRecord(v) && isString(v.chatId) && isString(v.fp) && typeof v.tokens === "number" && isString(v.foldedAt);
+
 // ─── the port implementation ────────────────────────────────────────────────
 
 export const graphStore: GraphStore = {
@@ -173,6 +177,13 @@ export const graphStore: GraphStore = {
 	},
 	readCheckpoints(): SessionCheckpoint[] {
 		return readValid(LEDGER_FILES.sessions, isCheckpoint);
+	},
+
+	appendCoverage(entry: CoverageEntry): void {
+		appendLine(LEDGER_FILES.coverage, entry);
+	},
+	readCoverage(): CoverageEntry[] {
+		return readValid(LEDGER_FILES.coverage, isCoverageEntry);
 	},
 
 	// ── cluster labelings (config.LEDGER_FILES.clusterLabels) ──

@@ -18,6 +18,8 @@ import type {
 import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
 import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
+import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/coverage.ts";
+import { EXTRACTION } from "../../../config.ts";
 import { refreshClusterLabels } from "./cluster-namer.ts";
 
 /**
@@ -71,15 +73,6 @@ import { refreshClusterLabels } from "./cluster-namer.ts";
  * (question text + what the learner did — kind/correct are rebuilt by the
  * merger; the extractor only needs enough to attribute.)
  */
-function quizLine(part: { toolCallId: string; input: unknown; output: unknown }): string {
-	const input = part.input as { question?: unknown } | undefined;
-	const out = part.output as Partial<{ questionText: string; correct: boolean; dontKnow: boolean; note: string }> | undefined;
-	const question = typeof input?.question === "string" ? input.question : out?.questionText ?? "(no question)";
-	const outcome = out?.dontKnow === true ? "did not know" : out?.correct === true ? "answered correctly" : "answered incorrectly";
-	const note = typeof out?.note === "string" && out.note ? ` (note: ${out.note})` : "";
-	return `QUIZ [${part.toolCallId}] ${question} — the learner ${outcome}${note}`;
-}
-
 /**
  * The compact transcript both LLM stages see: user/teacher text VERBATIM,
  * each tagged with its message id (provenance anchors — the extractor
@@ -90,25 +83,12 @@ function quizLine(part: { toolCallId: string; input: unknown; output: unknown })
  * are summarized as one line each.
  */
 export function transcriptView(record: ChatRecord): string {
-	const lines: string[] = [];
-	lines.push(`SESSION: ${record.title}`);
-
+	// The shared seam (core/coverage.ts messageViewLines): the LLM's prompt
+	// view and the coverage fingerprint use ONE line builder, so "covered"
+	// means — exactly — what the extractor saw.
+	const lines = [`SESSION: ${record.title}`];
 	record.messages.forEach((message, index) => {
-		const who = message.role === "user" ? "LEARNER" : "TEACHER";
-		const mid = (message as UIMessage).id || `m${index}`;
-		for (const part of (message as UIMessage).parts) {
-			if (part.type === "text" && part.text.trim()) {
-				lines.push(`${who} [${mid}] ${part.text.trim()}`);
-			} else if (part.type.startsWith("tool-")) {
-				const name = part.type.slice("tool-".length);
-				const p = part as unknown as { toolCallId: string; state: string; input: unknown; output: unknown };
-				if (name === "quiz" && p.state === "output-available") {
-					lines.push(quizLine(p));
-				} else if (p.state === "output-available") {
-					lines.push(`(${name} tool result delivered)`);
-				}
-			}
-		}
+		lines.push(...messageViewLines(message as UIMessage, (message as UIMessage).id || `m${index}`));
 	});
 	return lines.join("\n");
 }
@@ -623,12 +603,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		};
 	}
 
-	async function extract(chatId: string): Promise<SessionFindings> {
-		const record = chatStore.getChat(chatId);
-		if (!record) throw new Error(`Chat not found: ${chatId}`);
+	async function extract(chatId: string, view: string): Promise<SessionFindings> {
 		const signal = runningExtractions.get(chatId)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during a sync gap ends the run here
-		const view = transcriptView(record);
 		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} transcript lines)`);
 		const t0 = performance.now();
 
@@ -645,12 +622,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		return findings;
 	}
 
-	async function audit(chatId: string, findings: SessionFindings): Promise<AuditResult> {
-		const record = chatStore.getChat(chatId);
-		if (!record) throw new Error(`Chat not found: ${chatId}`);
+	async function audit(chatId: string, findings: SessionFindings, view: string): Promise<AuditResult> {
 		const signal = runningExtractions.get(chatId)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during the extract→audit gap ends here
-		const view = transcriptView(record);
 		const graph = getGraph(graphStore);
 		console.info(
 			`[extraction ${chatId}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
@@ -708,21 +682,66 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		if (inFlight.has(chatId)) return { nodes: 0, edges: 0, events: 0 };
 		inFlight.add(chatId);
 		const t0 = performance.now();
+		// COVERAGE (vision-extraction-coverage.md, 2026-09-15): extract ONLY
+		// what the per-chat coverage ledger doesn't already hold — never the
+		// whole session. Batches are token-budgeted runs of the oldest
+		// uncovered messages; each merged batch checkpoints its messages'
+		// coverage ATOMICALLY (inside the merger's step 4), so an abort or
+		// error below loses at most the in-flight batch — every earlier
+		// batch stays covered, the rest stays visibly uncovered.
+		let batchesDone = 0;
+		const total: EmissionStats = { nodes: 0, edges: 0, events: 0 };
 		try {
-			console.info(`[extraction ${chatId}] pipeline start`);
-			setPhase(chatId, "extracting", "chat");
-			const findings = await extract(chatId);
-			setPhase(chatId, "auditing", "chat");
-			const auditResult = await audit(chatId, findings);
-			setPhase(chatId, "merging", "chat");
-			// The merger merges from the CURRENT record — events are rebuilt
-			// from the live transcript, never from stale copies.
 			const record = chatStore.getChat(chatId);
 			if (!record) throw new Error(`Chat not found: ${chatId}`);
-			const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore }, {
-				messages: record.messages as UIMessage[],
-				foldedAt: record.updatedAt,
-			});
+			const covered = coverageOf(record.messages as UIMessage[], graphStore.readCoverage(), chatId);
+			if (covered.uncovered.length === 0) {
+				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
+				return { nodes: 0, edges: 0, events: 0 };
+			}
+			const batches = batchRuns(covered.uncovered, EXTRACTION.chunkTokens);
+			console.info(
+				`[extraction ${chatId}] pipeline start — ${covered.uncoveredTokens} uncovered tok, ` +
+					`${covered.uncoveredCount} messages, ${batches.length} batch(es) of ≤${EXTRACTION.chunkTokens} tok`,
+			);
+			for (const batch of batches) {
+				// The batch's prompt view: SESSION header + the batch's lines,
+				// same provenance [id] tags the fingerprints used (coverage
+				// and prompt share ONE line builder — core/coverage.ts).
+				const mids = record.messages.map((m, i) => ((m as UIMessage).id || `m${i}`) as string);
+				const view = [
+					`SESSION: ${record.title}`,
+					...batch.flatMap((slot) => {
+						const idx = record.messages.indexOf(slot.message);
+						return messageViewLines(slot.message, mids[idx] ?? slot.message.id);
+					}),
+				].join("\n");
+				setPhase(chatId, "extracting", "chat");
+				const findings = await extract(chatId, view);
+				setPhase(chatId, "auditing", "chat");
+				const auditResult = await audit(chatId, findings, view);
+				setPhase(chatId, "merging", "chat");
+				// The batch's messages, snapshotted when the run computed
+				// coverage — if a message mutates mid-run (a quiz answer
+				// merges in), the stored fingerprint won't match its new
+				// one and it re-opens: honest by construction.
+				const foldedAt = new Date().toISOString();
+				const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore }, {
+					messages: batch.map((slot) => slot.message),
+					foldedAt,
+					coverage: batch.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
+					batchTag: batchTag(batch),
+				});
+				total.nodes += stats.nodes;
+				total.edges += stats.edges;
+				total.events += stats.events;
+				batchesDone++;
+				console.info(
+					`[extraction ${chatId}] batch ${batchesDone}/${batches.length} merged: ` +
+						`${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events`,
+				);
+			}
+			const stats = total;
 			// Semantic embeddings (DECIDED 2026-09-13): topics come from
 			// MEANING, so embed the new propositions BEFORE the settle and
 			// the namer look at clusters. Failure is non-fatal — clustering
@@ -747,18 +766,23 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			}).catch(() => {});
 			return stats;
 		} catch (err) {
-			persistRunUsage(chatId, Math.round(performance.now() - t0), undefined);
+			persistRunUsage(chatId, Math.round(performance.now() - t0), batchesDone > 0 ? total : undefined);
 			// Aborted (the dock's abort button): a deliberate stop, not a
-			// failure — same ledger discipline as a failure (nothing merged,
-			// nothing checkpointed, partial usage persisted), but the run
-			// reports zero emissions instead of throwing.
+			// failure. Per-batch coverage (above) makes the stop CHEAP: every
+			// merged batch stays covered; only the in-flight one doesn't — it
+			// stays uncovered, and the next trigger or manual run picks it
+			// up. Partial usage is persisted either way.
 			if (err instanceof Error && err.name === "AbortError") {
-				console.info(`[extraction ${chatId}] aborted (${Math.round(performance.now() - t0)}ms) — nothing merged, nothing checkpointed`);
-				return { nodes: 0, edges: 0, events: 0 };
+				console.info(
+					`[extraction ${chatId}] aborted (${Math.round(performance.now() - t0)}ms) — ` +
+						`${batchesDone} merged batch(es) stay covered, the in-flight one does not`,
+				);
+				return total;
 			}
-			// The throw travels to the caller; this line is what makes the
-			// run's log legible end-to-end (no hanging "pipeline start").
-			console.error(`[extraction ${chatId}] pipeline failed (${Math.round(performance.now() - t0)}ms):`, err);
+			// A failure keeps the same discipline: merged batches stay
+			// covered, nothing else is checkpointed, and the throw travels
+			// to the caller (this line keeps the run's log legible).
+			console.error(`[extraction ${chatId}] pipeline failed (${Math.round(performance.now() - t0)}ms) after ${batchesDone} batch(es):`, err);
 			throw err;
 		} finally {
 			inFlight.delete(chatId);

@@ -116,6 +116,24 @@ export interface SessionCheckpoint {
 	foldedAt: string;
 }
 
+/** coverage.jsonl line (vision-extraction-coverage.md, settled 2026-09-15):
+ *  ONE MESSAGE of one chat has been extracted — by content fingerprint over
+ *  exactly what the extraction view sees. The MESSAGE is the unit of
+ *  coverage; "uncovered" is derived (fingerprint the current transcript,
+ *  diff) — never dual-tracked. A quiz answer merging into the asking
+ *  message changes its fingerprint: the message re-opens itself, only
+ *  itself. Chat extractions write these instead of whole-chat checkpoints;
+ *  notes imports keep the checkpoint (a file is one shot). */
+export interface CoverageEntry {
+	chatId: string;
+	/** sha256 of the message's view lines — "covered" means exactly this. */
+	fp: string;
+	/** chars/4 estimate of the message's view — display + budgeting. */
+	tokens: number;
+	/** ISO — when this message's last extraction run merged. */
+	foldedAt: string;
+}
+
 /**
  * Event kinds (DECIDED 2026-09-02): quiz outcomes only — correct / miss /
  * dont-know — plus `observation`, the extractor's per-proposition

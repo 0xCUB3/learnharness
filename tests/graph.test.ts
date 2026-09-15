@@ -20,7 +20,7 @@ import { after, describe, it } from "node:test";
 import type { UIMessage } from "ai";
 import type { AuditResult } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
-import { clusterContentId, getGraph, graphSnapshot, mergeFindings, pendingQuizAnswers, type GraphDeps } from "../src/core/graph.ts";
+import { clusterContentId, getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { LEDGER_FILES, PATHS, SOURCES_FILE, EMBEDDINGS_FILE } from "../config.ts";
@@ -564,55 +564,6 @@ describe("the merger (mergeFindings)", () => {
 	});
 });
 
-// ─── the trigger helper ──────────────────────────────────────────────────────
-
-describe("the trigger helper (pendingQuizAnswers)", () => {
-	it("counts answered quizzes not yet in the ledger — dismissed/ask never count", () => {
-		const chat = fixtureChat("Trigger fixture", [
-			user("u1", "go"),
-			assistant("a1", [
-				quizPart(
-					"call-s",
-					{ question: "QS", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-					answer({ questionId: "call-s", questionText: "QS text", correct: true, answeredAt: "2026-08-22T03:00:00.000Z" }),
-				),
-				quizPart(
-					"call-s2",
-					{ question: "QS2", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-					answer({ questionId: "call-s2", questionText: "QS2 text", dismissed: true }),
-				),
-				{
-					type: "tool-ask_user_question",
-					toolCallId: "call-s3",
-					state: "output-available",
-					input: { question: "free?" },
-					output: answer({ questionId: "call-s3", kind: "ask", questionText: "free?", text: "y" }),
-				},
-			]),
-		]);
-
-		assert.equal(pendingQuizAnswers(chat.id, graphDeps), 1, "one answered quiz pending");
-		assert.equal(pendingQuizAnswers("chat_does_not_exist", graphDeps), 0);
-
-		mergeFindings(chat.id, fixtureAudit(), graphDeps, sessionSource(chat.id));
-		// call-s is unattributed here (fixtureAudit has no call-s attribution)
-		// — but it still becomes an event, so nothing stays pending.
-		assert.equal(pendingQuizAnswers(chat.id, graphDeps), 0, "extracted → nothing pending");
-
-		// A NEW answered quiz raises the count again (the re-trigger path).
-		chatStore.saveMessages(chat.id, [
-			...chatStore.getChat(chat.id)!.messages,
-			assistant("a3", [
-				quizPart(
-					"call-s4",
-					{ question: "QS4", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-					answer({ questionId: "call-s4", questionText: "QS4 text", correct: false, answeredAt: "2026-08-22T03:01:00.000Z" }),
-				),
-			]),
-		]);
-		assert.equal(pendingQuizAnswers(chat.id, graphDeps), 1);
-	});
-});
 
 // ─── store primitives ────────────────────────────────────────────────────────
 

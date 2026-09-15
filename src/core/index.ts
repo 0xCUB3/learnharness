@@ -34,4 +34,5 @@ export * from "./ui-message.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
 export * from "./fuzzy.ts";
+export * from "./coverage.ts";
 export * from "./graph-context.ts";
