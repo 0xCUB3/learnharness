@@ -39,6 +39,8 @@ Every node records every **(chat, message) point** where it came up; every edge 
 
 ### Construction: free-form extraction, fully decoupled from sessions (DECIDED 2026-09-02 — supersedes live emission)
 
+*Coverage settled 2026-09-15 — see `vision-extraction-coverage.md`: the message is the unit of coverage (a covered-fingerprint ledger per chat), runs are token-budgeted batches of the oldest uncovered messages, and the trigger is uncovered tokens ≥ a chunk budget (replacing everyNQuizAnswers — quiz-less sessions extract too).*
+
 **Second amendment, reversing the 2026-08-22 live-emission decision.** The session's plan tree is the teacher's scaffolding for the session experience (§2); the global graph does not depend on it — structurally or otherwise. What the teacher formalizes is session-relative; the graph must not inherit those choices. (The original design doc's post-hoc stance was right after all.)
 
 Three stages, one pipeline — the sole graph writer:
