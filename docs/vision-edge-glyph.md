@@ -21,7 +21,8 @@ Dash patterns break under our **constant screen-space stroke width**: the dash a
 
 The renderer is the custom 2D canvas; edges draw in the edge layer with shafts + arrowheads from `arrowGeometry` (sigma-style head, prerequisite → dependent). For `follows`:
 
-- Both shafts offset along the edge normal by a **fixed screen-space gap**, converging on a **shared single arrowhead**.
+- Both shafts offset along the edge normal by a **fixed screen-space gap**.
+- **REVISED 2026-09-15 (owner rejected the first cut):** the converged variant — two tails merging into one shared arrowhead — read as two arrows feeding a single point, not as parallel strokes. The glyph is two **complete regular arrows** (own shaft + own head each) translated ±half-gap along the normal: parallel shafts AND parallel heads, nothing converges.
 - The gap is proportional to the constant stroke width — a constant visual ratio at every zoom level.
 - **No LOD collapse (withdrawn 2026-09-14).** The earlier idea of collapsing to a single shaft below a stroke-width threshold assumed width shrinks with zoom — it doesn't; stroke width is constant on screen, so the double shaft renders identically at every zoom level. Simpler than proposed: nothing to gate.
 

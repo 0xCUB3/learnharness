@@ -172,10 +172,17 @@ const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
 const REGION_LABEL_SIZE = 14;
 
 /** Follows glyph: screen-space distance between the two shaft CENTERLINES,
- *  in units of the edge stroke width (constant on screen — so the gap is
- *  too, at every zoom; DECIDED 2026-09-14, docs/vision-edge-glyph.md).
- *  3× a 1px stroke = 3px centers, 2px of clear space between the shafts. */
+ *  in units of the edge stroke width — the floor that dominates at fit and
+ *  zoomed-out (constant on screen, like the stroke width; DECIDED
+ *  2026-09-14, docs/vision-edge-glyph.md). 3× a 1px stroke = 3px centers,
+ *  2px of clear space between the shafts. */
 const FOLLOWS_GAP_RATIO = 3;
+/** Follows glyph: head-anchored gap floor, in units of the arrowhead
+ *  length (world). Two complete arrows offset by only the screen gap
+ *  would merge their world-scaled heads into one blob at deep zoom
+ *  (REVISED 2026-09-15); this floor keeps the heads separated once the
+ *  user zooms in past the crossover (~1.5× fit). */
+const FOLLOWS_HEAD_CLEARANCE = 1.2;
 /** Rebuild the (zoom-anchored) edge paths when the camera scale drifts
  *  more than this far from the scale they were built for — a handful of
  *  cheap rebuilds per zoom gesture, zero per pan/settle frame. */
@@ -297,13 +304,22 @@ export function fitTransform(
 /** The arrowhead geometry for a directed edge a→b: shaft endpoints
  *  (clear of both node discs) and the head triangle (tip on the target
  *  disc edge, wideness = 0.8 × head length — the sigma arrow shape). */
+/** One complete arrow glyph: shaft + head triangle. */
+export interface ArrowGeom {
+	shaftFrom: Pt;
+	shaftTo: Pt;
+	tip: Pt;
+	left: Pt;
+	right: Pt;
+}
+
 export function arrowGeometry(
 	a: Pt,
 	b: Pt,
 	fromRadius: number,
 	toRadius: number,
 	headLength: number,
-): { shaftFrom: Pt; shaftTo: Pt; tip: Pt; left: Pt; right: Pt } | null {
+): ArrowGeom | null {
 	const dx = b.x - a.x;
 	const dy = b.y - a.y;
 	const len = Math.hypot(dx, dy);
@@ -323,11 +339,14 @@ export function arrowGeometry(
 }
 
 /** The double-shaft glyph for a `follows` edge (⟹ — DECIDED
- *  2026-09-14, docs/vision-edge-glyph.md): two shafts offset along the
- *  edge normal by `gap` (a FIXED screen-space distance, world-converted
- *  by the caller), converging on the shared single arrowhead — both
- *  shafts meet at the head's base point. `supports` needs no helper
- *  (the plain single shaft IS arrowGeometry). Pure: DOM-free, tested. */
+ *  2026-09-14, docs/vision-edge-glyph.md; REVISED 2026-09-15: the
+ *  converged variant drew two tails merging into one shared head and
+ *  read as two arrows feeding one point — owner rejected it). Two
+ *  COMPLETE regular arrows (own shaft + own head each), translated
+ *  ±half-gap along the edge normal: parallel shafts, parallel heads,
+ *  nothing converges. The gap is a FIXED screen-space distance,
+ *  world-converted by the caller. `supports` needs no helper (the plain
+ *  single arrow IS arrowGeometry). Pure: DOM-free, tested. */
 export function followsEdgeGeometry(
 	a: Pt,
 	b: Pt,
@@ -335,7 +354,7 @@ export function followsEdgeGeometry(
 	toRadius: number,
 	headLength: number,
 	gap: number,
-): { shaftAFrom: Pt; shaftBFrom: Pt; shaftTo: Pt; tip: Pt; left: Pt; right: Pt } | null {
+): { first: ArrowGeom; second: ArrowGeom } | null {
 	const g = arrowGeometry(a, b, fromRadius, toRadius, headLength);
 	if (!g) return null; // degenerate (coincident) — skip
 	const dx = b.x - a.x;
@@ -344,21 +363,27 @@ export function followsEdgeGeometry(
 	const nx = -dy / len;
 	const ny = dx / len;
 	const half = gap / 2;
+	// Translate the whole regular arrow ±half-gap along the normal.
+	// Offset shafts never clip the source disc (their points sit at
+	// distance √(axial²+half²) > fromRadius from the center), and the
+	// offset tips land √(toRadius²+half²) from the target center — a
+	// hair outside its disc edge, the price of parallel heads (accepted).
+	const shift = (p: Pt, s: number): Pt => ({ x: p.x + nx * s, y: p.y + ny * s });
 	return {
-		// Parallel tails at the source, ± half-gap along the normal. The
-		// offset starts sit FARTHER from the source center than the axis
-		// start (√(r²+half²) > r) — never clipped by the source disc.
-		shaftAFrom: { x: g.shaftFrom.x + nx * half, y: g.shaftFrom.y + ny * half },
-		shaftBFrom: { x: g.shaftFrom.x - nx * half, y: g.shaftFrom.y - ny * half },
-		// Convergence: both shafts end at the head's base point — the
-		// merge lands exactly where the shared arrowhead begins, clean at
-		// every zoom (a strictly-parallel pair would poke out beside the
-		// head whenever the screen-fixed gap exceeds the head's base
-		// half-width — the head scales with the graph, the gap doesn't).
-		shaftTo: g.shaftTo,
-		tip: g.tip,
-		left: g.left,
-		right: g.right,
+		first: {
+			shaftFrom: shift(g.shaftFrom, half),
+			shaftTo: shift(g.shaftTo, half),
+			tip: shift(g.tip, half),
+			left: shift(g.left, half),
+			right: shift(g.right, half),
+		},
+		second: {
+			shaftFrom: shift(g.shaftFrom, -half),
+			shaftTo: shift(g.shaftTo, -half),
+			tip: shift(g.tip, -half),
+			left: shift(g.left, -half),
+			right: shift(g.right, -half),
+		},
 	};
 }
 
@@ -1056,9 +1081,16 @@ export class GraphCanvasRenderer {
 		const visible = this.visible;
 		const isVisible = (id: string) => !visible || visible.has(id);
 		const { nodeR, arrowLen } = this.world;
-		// The follows gap in WORLD units: constant on screen (· k stays
-		// FOLLOWS_GAP_RATIO × edgeWidth px at any zoom). Supports ignores it.
-		const gapW = (FOLLOWS_GAP_RATIO * settings.edgeWidth) / k;
+		// The follows gap in WORLD units. Two floors, the max of:
+		//  - screen-anchored: FOLLOWS_GAP_RATIO × edgeWidth px on screen at
+		//    any zoom (dominates zoomed-out/at-fit — the shafts stay
+		//    distinguishable even when the heads shrink to specks);
+		//  - head-anchored: 1.2 × arrowLen (world) — the heads grow with the
+		//    graph, and a screen-fixed gap would let them merge into one
+		//    blob at deep zoom. This floor keeps ≥ 0.4·arrowLen of clear
+		//    space between the two heads once zoomed in past the crossover.
+		// Supports ignores the gap entirely.
+		const gapW = Math.max((FOLLOWS_GAP_RATIO * settings.edgeWidth) / k, FOLLOWS_HEAD_CLEARANCE * arrowLen);
 		const shafts = new Path2D();
 		const heads = new Path2D();
 		for (const e of data.edges) {
@@ -1067,17 +1099,18 @@ export class GraphCanvasRenderer {
 			const b = this.nodeById.get(e.to);
 			if (!a || !b) continue;
 			if (e.type === "follows") {
-				// ⟹: two parallel tails, one shared head.
+				// ⟹: two complete regular arrows offset ±half-gap along
+				// the edge normal — parallel shafts AND parallel heads.
 				const g = followsEdgeGeometry(a, b, nodeR, nodeR, arrowLen, gapW);
 				if (!g) continue;
-				shafts.moveTo(g.shaftAFrom.x, g.shaftAFrom.y);
-				shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
-				shafts.moveTo(g.shaftBFrom.x, g.shaftBFrom.y);
-				shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
-				heads.moveTo(g.tip.x, g.tip.y);
-				heads.lineTo(g.left.x, g.left.y);
-				heads.lineTo(g.right.x, g.right.y);
-				heads.closePath();
+				for (const arrow of [g.first, g.second]) {
+					shafts.moveTo(arrow.shaftFrom.x, arrow.shaftFrom.y);
+					shafts.lineTo(arrow.shaftTo.x, arrow.shaftTo.y);
+					heads.moveTo(arrow.tip.x, arrow.tip.y);
+					heads.lineTo(arrow.left.x, arrow.left.y);
+					heads.lineTo(arrow.right.x, arrow.right.y);
+					heads.closePath();
+				}
 			} else {
 				// supports: the plain single shaft (the majority relation
 				// stays light — dashed was rejected 2026-09-14).
