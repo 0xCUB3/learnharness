@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { contextWindow, sessionCost, turnCost, type ChatSettings, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, prettyModel } from "@/components/usage-format";
 import { ModelControl } from "@/components/model-picker";
@@ -10,6 +10,12 @@ import { ModelControl } from "@/components/model-picker";
  * money/context footprint as one quiet row beneath the composer —
  * LEFT-aligned: context window + session cost; RIGHT-aligned: model +
  * thinking level. Clicking the left side opens the per-turn detail popover.
+ *
+ *  Pre-chat views (home, /chat/new) pass `leftSlot`: with no session there
+ *  IS no session data (the summary would just read "—"), so that left side
+ *  is free real estate — the knowledge-context budget slider lives there
+ *  (vision-context-injection.md), vertically centered beside the model +
+ *  thinking pills by the row's own geometry.
  *
  * All folds come from core/prices.ts (sessionCost, contextWindow, turnCost)
  * — no cost math lives here. Absent data renders "—", never zero (the
@@ -26,11 +32,15 @@ export function StatsBar({
 	chatId,
 	settings,
 	onSettingsSaved,
+	leftSlot,
 }: {
 	turns: TurnUsage[];
 	chatId: string;
 	settings?: ChatSettings;
 	onSettingsSaved: (settings: ChatSettings) => void;
+	/** Pre-chat only: replaces the (empty) session-data summary — home and
+	 *  the /chat/new draft mount the knowledge-context slider here. */
+	leftSlot?: ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
 	// Same dropdown discipline as the model control (owner, df4433f treatment,
@@ -74,6 +84,9 @@ export function StatsBar({
 			    outside-close ref anchors HERE too (owner, round 3): on the whole
 			    bar it wrapped the model control, so clicking model/thinking never
 			    counted as outside — the asymmetry the owner observed. */}
+			{/* The left side: the session-data summary, or — pre-chat — the
+			    caller's slot (the knowledge-context slider) in its place. */}
+			{leftSlot ?? (
 			<div ref={barRef} className="relative">
 				<button
 					type="button"
@@ -141,6 +154,7 @@ export function StatsBar({
 					</div>
 				)}
 			</div>
+			)}
 			{/* The model + thinking control — one controller for the conversation
 			    agents (prober/teacher); the record's `turns` above still folds
 			    the ACTUAL models billed, regardless of what the picker says. */}

@@ -99,16 +99,6 @@ export function DraftShell({
 						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 						<div className="bg-background pb-4">
 							<div className={DOCK}>
-								{/* The session-data strip (vision-context-injection.md) — same
-							    control as the home view, riding the same lifted settings. */}
-								<div className="mb-1.5">
-									<GraphContextControl
-										value={effectiveContextTokens(settings)}
-										onChange={(tokens) =>
-											onSettingsSaved({ ...settings, graphContextTokens: tokens })
-										}
-									/>
-								</div>
 								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 									<Composer
 										busy={busy}
@@ -120,7 +110,23 @@ export function DraftShell({
 										autoFocus
 									/>
 								</div>
-								<StatsBar turns={[]} chatId="" settings={settings} onSettingsSaved={onSettingsSaved} />
+								<StatsBar
+									turns={[]}
+									chatId=""
+									settings={settings}
+									onSettingsSaved={onSettingsSaved}
+									// The session-data slot (owner, 2026-09-15): pre-chat the left
+									// side is free — the knowledge-context budget lives exactly
+									// where session data will sit once a session exists.
+									leftSlot={
+										<GraphContextControl
+											value={effectiveContextTokens(settings)}
+											onChange={(tokens) =>
+												onSettingsSaved({ ...settings, graphContextTokens: tokens })
+											}
+										/>
+									}
+								/>
 							</div>
 						</div>
 					</div>

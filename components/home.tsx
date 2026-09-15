@@ -72,17 +72,6 @@ export function Home() {
 			    px-4) so nothing shifts when a session starts (owner). */}
 			<div className="pointer-events-none absolute inset-x-0 bottom-0 pb-5">
 				<div className="pointer-events-auto mx-auto w-full max-w-[46rem] px-4">
-					{/* The session-data strip (vision-context-injection.md): what the
-					    graph will contribute to the session, decided before the session
-					    starts. Rides the same lifted settings as the model picker. */}
-					<div className="mb-1.5">
-						<GraphContextControl
-							value={effectiveContextTokens(settings)}
-							onChange={(tokens) =>
-								setSettings((s) => ({ ...s, graphContextTokens: tokens }))
-						}
-						/>
-					</div>
 					<form
 						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
 					onSubmit={(e) => {
@@ -114,13 +103,22 @@ export function Home() {
 						</button>
 					</form>
 					{/* Same as the chat view's under-composer stats bar (owner) — no
-					    session yet, so money/context fold as "—"; the model +
-					    thinking control still works (deferred save). */}
+					    session yet, so the free LEFT side carries the knowledge-context
+					    budget (session-data slot), while the RIGHT keeps the model +
+					    thinking control (deferred save). */}
 					<StatsBar
 						turns={[] as TurnUsage[]}
 						chatId=""
 						settings={settings}
 						onSettingsSaved={setSettings}
+						leftSlot={
+							<GraphContextControl
+								value={effectiveContextTokens(settings)}
+								onChange={(tokens) =>
+									setSettings((s) => ({ ...s, graphContextTokens: tokens }))
+								}
+							/>
+						}
 					/>
 				</div>
 			</div>

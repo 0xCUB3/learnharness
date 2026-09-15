@@ -84,7 +84,7 @@ describe("DraftShell — the sessionless surface", () => {
 		assert.ok(/rounded-2xl[^>]*pointer-events-auto|pointer-events-auto[^>]*rounded-2xl/.test(html));
 	});
 
-	it("renders the knowledge-context slider at the decided default (absent settings = on, 1024)", () => {
+	it("renders the knowledge-context slider in the stats bar's left slot, at the decided default (absent settings = on, 1024)", () => {
 		const html = renderToStaticMarkup(
 			<DraftShell
 				busy={false}
@@ -96,9 +96,16 @@ describe("DraftShell — the sessionless surface", () => {
 			/>,
 		);
 		assert.ok(html.includes('data-testid="graph-context-control"'));
+		// INSIDE the stats row (the session-data slot), not a strip above the
+		// composer: the control renders after the stats bar opens.
+		assert.ok(
+			html.indexOf('data-testid="stats-bar"') < html.indexOf('data-testid="graph-context-control"'),
+			"the slider is the stats bar's left slot",
+		);
 		// The slider's default position: 1024 of 4096, step 128 (decided).
 		assert.ok(html.includes('min="0"') && html.includes('max="4096"') && html.includes('step="128"'));
-		assert.ok(html.includes("1k tokens"), "the readout shows the default budget, not 0 — default is ON");
+		// The abbreviated readout (owner: "tokens" wrapped at >1k — "tok" stays one line).
+		assert.ok(html.includes("1k tok"), "the readout shows the default budget, not 0 — default is ON");
 		assert.ok(html.includes("Knowledge context"), "the control is labeled");
 		// Absent settings render the default — never 'off'.
 		assert.ok(!html.includes(">off<"));
