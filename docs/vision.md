@@ -109,6 +109,8 @@ When the graph fills up, the canvas needs a readable at-a-glance structure: **cl
 
 ### The graph as session context (DECIDED 2026-08-22)
 
+*Selection problem V1 settled 2026-09-14 — see `vision-context-injection.md`: semantic-closeness top-K under a per-session token budget, delivered as a steer. The structural-neighborhood and diagnostic-hotspot strategies below stay parked.*
+
 Every session starts with the learner's knowledge graph as base context for the teacher. This is what makes probing *precise* — probe questions can target subtleties and nuances at the boundary of what the learner actually holds, instead of re-discovering it from scratch each session. Personalization compounds across sessions.
 
 **The selection problem (open):** the whole graph may eventually be too much context, and pedagogical relevance ≠ semantic closeness. What matters for a new topic: (a) its **structural neighborhood** — the `follows`-edge subtree the topic stands on, regardless of surface similarity; (b) **diagnostic hotspots** — nodes the ledger marks as shaky / misunderstood / misconceived, anywhere in the graph (a live misconception — events showing the learner holds a node wrong — is always relevant context); (c) the frontier strip near the topic. Candidate strategies, to tune on real data: whole graph while it's small; k-hop structural neighborhood around the topic's nodes; ledger-informed slices (weak/misconceived/floating first); a cheap routing pass that picks subtrees given the session topic.
