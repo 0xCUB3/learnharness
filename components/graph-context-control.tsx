@@ -51,7 +51,7 @@ export function GraphContextControl({
 				data-testid="graph-context-slider"
 			/>
 			<span
-				className="w-14 shrink-0 text-right tabular-nums"
+				className="w-14 shrink-0 tabular-nums"
 				data-testid="graph-context-value"
 			>
 				{value === 0 ? "off" : `${formatTokens(value)} tok`}
