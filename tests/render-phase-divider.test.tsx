@@ -30,16 +30,10 @@ describe("PhaseChip (header)", () => {
 		}
 	});
 
-	it("busy: the old dot slot becomes the braille spinner (motion = turn in flight)", () => {
-		const html = renderToStaticMarkup(<PhaseChip phase="teach" busy />);
-		assert.ok(html.includes('data-testid="braille-spinner"'), "spinner in the chip");
-		assert.ok(html.includes("Teaching"), "label stays");
-		assert.ok((html.match(/class="braille-frame"/g) ?? []).length === 10, "all ten frames");
-	});
-
-	it("idle: no spinner — the chip is the label alone", () => {
+	it("NEVER shows a working spinner — the pill's curve suits text, not glyph cells (owner, round 2)", () => {
 		const html = renderToStaticMarkup(<PhaseChip phase="teach" />);
-		assert.ok(!html.includes("braille-spinner"));
+		assert.ok(!html.includes("braille-spinner"), "the chip is label-only by design");
+		assert.ok(!html.includes("braille-frame"), "no spinner frames leak in");
 	});
 });
 

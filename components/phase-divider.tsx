@@ -1,4 +1,3 @@
-import { BrailleSpinner } from "@/components/braille-spinner";
 import type { Phase3 } from "@/src/core";
 
 /**
@@ -17,6 +16,12 @@ import type { Phase3 } from "@/src/core";
  * never a banner. Probe never renders a divider: phases only advance, so
  * probe is the start of the transcript and "Planning"/"Teaching" are the two
  * visible seams.
+ *
+ * Owner, minimal-color round 2: the chip is LABEL-ONLY, deliberately — a
+ * working-state spinner was tried here and rejected: the pill's curve and
+ * the square braille cell fought for space, and the chat surface already
+ * shows in-flight work (thinking shimmer, the dock). The chip states the
+ * phase; work-state is the sidebar row's spinner.
  */
 
 /** Header-chip labels: the phases as the learner thinks of them. */
@@ -26,18 +31,16 @@ const CHIP_LABEL: Record<Phase3, string> = {
 	teach: "Teaching",
 };
 
-/** The header chip: the phase label, monochrome; while a turn is in
- *  flight the old dot slot shows the braille spinner (motion = the honest
- *  state signal — see BrailleSpinner). */
-export function PhaseChip({ phase, busy = false }: { phase: Phase3; busy?: boolean }) {
+/** The header chip: the phase label, monochrome — label-only by design
+ *  (see the component note: the pill's curve suits text, not glyphs). */
+export function PhaseChip({ phase }: { phase: Phase3 }) {
 	return (
 		<span
 			data-testid="phase-chip"
 			data-phase={phase}
 			title={`Session phase: ${CHIP_LABEL[phase]}`}
-			className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+			className="flex shrink-0 items-center rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
 		>
-			{busy && <BrailleSpinner className="h-3.5" />}
 			{CHIP_LABEL[phase]}
 		</span>
 	);
