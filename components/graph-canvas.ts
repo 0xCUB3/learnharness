@@ -171,22 +171,6 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
 const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
 const REGION_LABEL_SIZE = 14;
 
-// Velocity-weighted region opacity (user 2026-09-16): a node's blob
-// contribution fades as the node moves — the bitmap is only rebuilt
-// every REGION_EVERY-th sim frame, and interpolating position between
-// rebuilds proved sub-perceptual (the churn during fast drags is the
-// SHAPE, not the cadence). Speed is SCREEN px per frame (zoom-
-// independent semantics: "how fast does it LOOK").
-const REGION_VELOCITY_STILL = 1.5; // ≤ this → full blob opacity
-const REGION_VELOCITY_MOVING = 8; // ≥ this → the node's blob is off
-
-/** Linear 1 → 0 ramp between the two thresholds. Pure — unit-tested. */
-export function regionVelocityWeight(speedScreen: number): number {
-	if (speedScreen <= REGION_VELOCITY_STILL) return 1;
-	if (speedScreen >= REGION_VELOCITY_MOVING) return 0;
-	return (REGION_VELOCITY_MOVING - speedScreen) / (REGION_VELOCITY_MOVING - REGION_VELOCITY_STILL);
-}
-
 
 
 /** One horizontal+vertical box-blur round over PREMULTIPLIED RGBA
@@ -506,27 +490,6 @@ export class GraphCanvasRenderer {
 	private regionRect: { minX: number; minY: number; w: number; h: number } | null = null;
 	/** Region labels: cluster centroid + hue, computed at splat build. */
 	private regionMeta: { label: string | null; cx: number; cy: number; hue: number }[] = [];
-	/** Previous FINAL bitmap + its world rect — the fade's "from" state,
-	 *  captured at each rebuild while the live sim runs (see buildRegions). */
-	/** Velocity-weighted splat opacity (user 2026-09-16): a node's blob
-	 *  contribution fades as it moves. Speed = screen px per frame,
-	 *  measured between region rebuilds (position stamps) and EMA-smoothed
-	 *  so the opacity transitions are gradual, never a snap. */
-	private regionPosStamp = new Map<string, { x: number; y: number }>();
-	private regionSpeedEMA = new Map<string, number>();
-	private regionStampFrame = 0;
-	/** The data object the stamps were taken against. geoVersion is NOT
-	 *  usable here: the live sim bumps it EVERY frame, which would clear
-	 *  the stamps on every rebuild and zero all speeds (caught live). A
-	 *  new snapshot object = positions may have teleported; same object =
-	 *  positions only ever move by physics. */
-	private regionStampData: unknown = null;
-	/** True when the last bitmap was built with some node still above the
-	 *  still-velocity threshold: the sim can stop mid-fade, and without a
-	 *  flush the blob would freeze at partial opacity until the next
-	 *  geometry change. draw() keeps rebuilding (and ticking) until the
-	 *  weights converge back to 1. */
-	private regionMotionPending = false;
 	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
 	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
 	/** Gravity center for the live sim (graph bbox centroid at setData). */
@@ -1099,7 +1062,6 @@ export class GraphCanvasRenderer {
 	 *  frames blit the previous bitmap — one sim step of staleness at
 	 *  120fps is invisible). Positions come straight from data.nodes. */
 	private buildRegions(): void {
-		this.regionMotionPending = false;
 		const data = this.data;
 		if (!data || data.clusters.length === 0) {
 			this.regionCanvas = null;
@@ -1228,66 +1190,21 @@ export class GraphCanvasRenderer {
 		rctx.lineCap = "round";
 		rctx.lineWidth = (dilationW * 2) / cell;
 
-		// Velocity weights (user 2026-09-16): position stamps between
-		// rebuilds give each node's speed in SCREEN px per frame
-		// (world distance × current camera scale — zoom-independent
-		// semantics). An EMA (halved each rebuild) smooths the weight
-		// transitions; the first build after a data change has no stamps
-		// (positions teleported, they didn't MOVE) → full weight.
-		//
-		// The blob is a CLUSTER attribute: the strokes/discs around a
-		// still node are mostly its still neighbors' skeleton, so per-node
-		// weighting left the local blob nearly untouched while dragging
-		// (measured live). One fast member — the node being dragged —
-		// therefore fades its WHOLE cluster's blob: weight per cluster =
-		// f(max member speed).
-		const k = this.transform.k;
-		if (this.regionStampData !== data) {
-			this.regionPosStamp.clear();
-			this.regionSpeedEMA.clear();
-			this.regionStampData = data;
-		}
-		const frames = Math.max(1, this.frameCount - this.regionStampFrame);
-		for (const n of data.nodes) {
-			const stamp = this.regionPosStamp.get(n.id);
-			const speed = stamp ? (Math.hypot(n.x - stamp.x, n.y - stamp.y) * k) / frames : 0;
-			const prev = this.regionSpeedEMA.get(n.id);
-			const ema = prev === undefined ? speed : prev * 0.5 + speed * 0.5;
-			this.regionSpeedEMA.set(n.id, ema);
-			this.regionPosStamp.set(n.id, { x: n.x, y: n.y });
-		}
-		this.regionStampFrame = this.frameCount;
-		const clusterW = new Array<number>(data.clusters.length).fill(1);
-		let motionPending = false;
-		data.clusters.forEach((cluster, ci) => {
-			let maxSpeed = 0;
-			for (const id of cluster.members) {
-				const e = this.regionSpeedEMA.get(id);
-				if (e !== undefined && e > maxSpeed) maxSpeed = e;
-			}
-			const w = regionVelocityWeight(maxSpeed);
-			clusterW[ci] = w;
-			if (w < 0.999) motionPending = true;
-		});
-		this.regionMotionPending = motionPending;
-
 		// The region IS the dilated skeleton: intra-cluster edges as
 		// round-cap strokes (Minkowski dilation). NO blanket per-node discs
 		// — they double-counted where nodes sit on edges (user-identified
 		// hot spots, when clusters were edge-based).
-		//
-		// VELOCITY WEIGHTS (user 2026-09-16): each edge strokes with its
-		// own alpha = min of its endpoints' weights, so a fast-moving
-		// node's blob contribution fades out while its still neighbors
-		// keep theirs. This reintroduces per-shape alpha ONLY while
-		// nodes move: at rest every weight is 1 and the alpha channel
-		// is pure coverage again (the 2026-09-14 no-stacking fix). While
-		// things move, two strokes sharing an endpoint can overlap at
-		// < 1 and stack — a transient joint spot on a blob that is
-		// already fading out; accepted.
 		data.clusters.forEach((cluster, ci) => {
 			const hue = clusterHue(cluster.id);
+			// Full-opacity strokes: alpha is applied ONCE at the very end
+			// (dilate at 1 → blur → scale by edgeAlpha). Baking per-stroke
+			// alpha in here made source-over stacking ACCUMULATE it — an
+			// orphan disc overlapping anything read as a darker double-
+			// counted spot (user report 2026-09-14). At alpha 1 the alpha
+			// channel is a pure coverage indicator: overlaps of any count
+			// contribute exactly 1.0.
 			rctx.strokeStyle = `hsla(${hue}, 65%, 60%, 1)`;
+			rctx.beginPath();
 			// Endpoints actually covered by a stroke's round caps.
 			const touched = new Set<string>();
 			for (const e of data.edges) {
@@ -1301,15 +1218,12 @@ export class GraphCanvasRenderer {
 				const a = this.nodeById.get(e.from);
 				const b = this.nodeById.get(e.to);
 				if (!a || !b) continue;
-				rctx.globalAlpha = clusterW[ci] ?? 1;
-				rctx.beginPath();
 				rctx.moveTo((a.x - minX) / cell, (a.y - minY) / cell);
 				rctx.lineTo((b.x - minX) / cell, (b.y - minY) / cell);
-				rctx.stroke();
 				touched.add(e.from);
 				touched.add(e.to);
 			}
-			rctx.globalAlpha = 1;
+			rctx.stroke();
 
 			// Member discs for the SEMANTIC era (DECIDED 2026-09-13): clusters
 			// are now topics by meaning, and many members (orphans, isolated
@@ -1324,12 +1238,10 @@ export class GraphCanvasRenderer {
 				if (touched.has(id) || !isVisible(id)) continue;
 				const n = this.nodeById.get(id);
 				if (!n) continue;
-				rctx.globalAlpha = clusterW[ci] ?? 1;
 				rctx.beginPath();
 				rctx.arc((n.x - minX) / cell, (n.y - minY) / cell, discR, 0, Math.PI * 2);
 				rctx.fill();
 			}
-			rctx.globalAlpha = 1;
 		});
 
 		// THE blur + alpha (in that order, by design — user-decided
@@ -1401,17 +1313,12 @@ export class GraphCanvasRenderer {
 		this.frameCount++;
 		// Regions: rebuild on stale geometry at rest; during the live sim,
 		// every REGION_EVERY-th frame (others blit the last bitmap).
-		// regionMotionPending (velocity weights mid-fade when the sim
-		// stops) forces rebuilds until the weights converge back to 1 —
-		// otherwise the blob would freeze at partial opacity.
 		if (
-			(this.regionBuiltVersion !== this.geoVersion &&
-				(!this.simActive || this.frameCount % REGION_EVERY === 0)) ||
-			this.regionMotionPending
+			this.regionBuiltVersion !== this.geoVersion &&
+			(!this.simActive || this.frameCount % REGION_EVERY === 0)
 		) {
 			this.buildRegions();
 			this.regionBuiltVersion = this.geoVersion;
-			if (this.regionMotionPending) this.markDirty();
 		}
 		if (this.builtVersion !== this.geoVersion) this.buildGeometry();
 		if (!this.nodesPath) return;
