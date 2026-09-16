@@ -292,11 +292,26 @@ function GraphSettingsControl({
 						    dropdown for the bitmap resolution (it's a discrete
 						    choice, not a free number). Server-persisted like the
 						    sizes; every range end was sweep-validated on the real
-						    graph. */}
+						    graph. The enable switch is a COMPUTE switch: off skips
+						    the whole build (splat/blur/readback/blit), not just
+						    the paint. */}
 						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
 							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 								Regions
 							</span>
+							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
+								<span>Background colors</span>
+								<input
+									type="checkbox"
+									checked={settings.regions.enabled}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											regions: { ...cur.regions, enabled: e.target.checked },
+										}))}
+										className="accent-primary"
+								/>
+							</label>
 							<SettingSlider
 								label="Dilation"
 								min={0}

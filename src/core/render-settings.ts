@@ -100,6 +100,11 @@ export interface RegionTuning {
 	 *  of any count never stack (DECIDED 2026-09-14 — per-stroke alpha
 	 *  accumulated through source-over and double-counted orphans). */
 	edgeAlpha: number;
+	/** THE off switch (user 2026-09-15): false = the renderer never runs
+	 *  the region build — no splat, no blur, no readback, no bitmap
+	 *  allocation, no blit. Compute skipped, not just paint hidden.
+	 *  Cluster labels are decoupled and follow `clusterLabels`. */
+	enabled: boolean;
 }
 
 export const REGION_BITMAP_OPTIONS = [128, 192, 256, 384, 512] as const;
@@ -110,6 +115,7 @@ export const DEFAULT_REGION_TUNING: RegionTuning = {
 	blur: 6,
 	bitmap: 384,
 	edgeAlpha: 0.35,
+	enabled: true,
 };
 
 /** Nearest member of a fixed option set (dropdowns have no free values). */
@@ -129,6 +135,9 @@ export function sanitizeRegionTuning(input: Partial<RegionTuning> | null | undef
 		blur: snapToOption(num(input?.blur, d.blur), REGION_BLUR_OPTIONS),
 		bitmap: snapToOption(bitmap, REGION_BITMAP_OPTIONS),
 		edgeAlpha: Math.min(Math.max(num(input?.edgeAlpha, d.edgeAlpha), REGION_EDGE_ALPHA_RANGE.min), 1),
+		// Old persisted files predate the switch: missing → on (the look
+		// users tuned); only an explicit false turns regions off.
+		enabled: typeof input?.enabled === "boolean" ? input.enabled : true,
 	};
 }
 

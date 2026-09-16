@@ -214,4 +214,16 @@ describe("slider mapping (log scale, default-centered)", () => {
 		// Stored blur 0 (the old off zone) snaps back into the set.
 		assert.equal(sanitizeRegionTuning({ blur: 0 }).blur, 2);
 	});
+
+	test("enabled is the compute off switch: only an explicit false turns it off", () => {
+		// Default on; old persisted files predate the field (missing → on);
+		// garbage falls back to on (fail toward the tuned look).
+		assert.equal(DEFAULT_REGION_TUNING.enabled, true);
+		assert.equal(sanitizeRegionTuning({}).enabled, true);
+		assert.equal(sanitizeRegionTuning({ enabled: false }).enabled, false);
+		assert.equal(sanitizeRegionTuning({ enabled: true }).enabled, true);
+		assert.equal(sanitizeRegionTuning({ enabled: "no" as unknown as boolean }).enabled, true);
+		// An explicit false survives even alongside garbage in other fields.
+		assert.equal(sanitizeRegionTuning({ enabled: false, blur: 99, bitmap: 99999 }).enabled, false);
+	});
 });

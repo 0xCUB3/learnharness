@@ -490,6 +490,17 @@ export class GraphCanvasRenderer {
 	private regionRect: { minX: number; minY: number; w: number; h: number } | null = null;
 	/** Region labels: cluster centroid + hue, computed at splat build. */
 	private regionMeta: { label: string | null; cx: number; cy: number; hue: number }[] = [];
+	/** Previous FINAL bitmap + its world rect — the fade's "from" state,
+	 *  captured at each rebuild while the live sim runs (see buildRegions). */
+	private regionPrevCanvas: HTMLCanvasElement | null = null;
+	private regionPrevRect: { minX: number; minY: number; w: number; h: number } | null = null;
+	/** Offscreen scratch the per-frame linear blend renders into (sized
+	 *  to the current bitmap; GPU blits only — no per-pixel CPU work). */
+	private regionBlendCanvas: HTMLCanvasElement | null = null;
+	/** Fade state: true between a rebuild and the moment the blend has
+	 *  fully converged on the new bitmap (REGION_EVERY frames later). */
+	private regionFading = false;
+	private regionFadePhase = 0;
 	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
 	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
 	/** Gravity center for the live sim (graph bbox centroid at setData). */
@@ -598,6 +609,16 @@ export class GraphCanvasRenderer {
 	setRegionTuning(input: Partial<RegionTuning>): void {
 		this.regionTuning = sanitizeRegionTuning(input);
 		this.regionBuiltVersion = -2; // never equals geoVersion → rebuild
+		// Off switch turning off: drop the bitmaps immediately so the
+		// blit (and any in-flight fade) stops on the next frame — the
+		// rebuild itself will skip all compute (buildRegions).
+		if (!this.regionTuning.enabled) {
+			this.regionCanvas = null;
+			this.regionRect = null;
+			this.regionPrevCanvas = null;
+			this.regionPrevRect = null;
+			this.regionFading = false;
+		}
 		this.markDirty();
 	}
 
@@ -1086,6 +1107,51 @@ export class GraphCanvasRenderer {
 			this.regionCanvas = null;
 			this.regionRect = null;
 			this.regionMeta = [];
+			this.regionFading = false;
+			return;
+		}
+
+		// Which cluster is a node in (for intra-cluster edges)?
+		const clusterOf = new Map<string, number>();
+		data.clusters.forEach((c, i) => {
+			for (const id of c.members) clusterOf.set(id, i);
+		});
+
+		// Label anchors ALWAYS compute (cheap — a centroid pass, no canvas):
+		// cluster labels follow their own `clusterLabels` setting and must
+		// survive the region paint being turned off.
+		this.regionMeta = [];
+		data.clusters.forEach((cluster) => {
+			let members = 0;
+			let sumX = 0;
+			let sumY = 0;
+			for (const id of cluster.members) {
+				if (!isVisible(id)) continue;
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				members++;
+				sumX += n.x;
+				sumY += n.y;
+			}
+			if (members > 0) {
+				this.regionMeta.push({
+					label: cluster.label || null,
+					cx: sumX / members,
+					cy: sumY / members,
+					hue: clusterHue(cluster.id),
+				});
+			}
+		});
+
+		// THE off switch (user 2026-09-15): compute is skipped, not just
+		// paint hidden — no splat, no blur, no readback, no bitmap, no
+		// blit. Everything below this return is the bitmap path.
+		if (!tuning.enabled) {
+			this.regionCanvas = null;
+			this.regionRect = null;
+			this.regionPrevCanvas = null;
+			this.regionPrevRect = null;
+			this.regionFading = false;
 			return;
 		}
 
@@ -1129,6 +1195,31 @@ export class GraphCanvasRenderer {
 			rc = document.createElement("canvas");
 			this.regionCanvas = rc;
 		}
+		// Fade capture (user 2026-09-15): while the live sim moves nodes,
+		// the bitmap only rebuilds every REGION_EVERY-th frame — the
+		// in-between frames blit stale pixels and the regions visibly
+		// jump at 1/3 the frame rate. Draw() now linearly blends
+		// prev → cur across the frames after each rebuild. Blur and the
+		// end-alpha are LINEAR operators, so blending the finished
+		// bitmaps with a true lerp equals fade-then-blur-then-alpha — the
+		// user's preferred order — at zero extra blur cost.
+		this.regionFading = false;
+		if (this.simActive && this.regionRect) {
+			if (!this.regionPrevCanvas) this.regionPrevCanvas = document.createElement("canvas");
+			const pc = this.regionPrevCanvas;
+			if (pc.width !== rc.width || pc.height !== rc.height) {
+				pc.width = rc.width;
+				pc.height = rc.height;
+			}
+			const pctx = pc.getContext("2d");
+			if (pctx) {
+				pctx.clearRect(0, 0, pc.width, pc.height);
+				pctx.drawImage(rc, 0, 0);
+				this.regionPrevRect = this.regionRect;
+				this.regionFading = true;
+				this.regionFadePhase = 0;
+			}
+		}
 		if (rc.width !== bw || rc.height !== bh) {
 			rc.width = bw;
 			rc.height = bh; // also clears
@@ -1142,17 +1233,10 @@ export class GraphCanvasRenderer {
 		rctx.lineCap = "round";
 		rctx.lineWidth = (dilationW * 2) / cell;
 
-		// Which cluster is a node in (for intra-cluster edges)?
-		const clusterOf = new Map<string, number>();
-		data.clusters.forEach((c, i) => {
-			for (const id of c.members) clusterOf.set(id, i);
-		});
-
 		// The region IS the dilated skeleton: intra-cluster edges as
 		// round-cap strokes (Minkowski dilation). NO blanket per-node discs
 		// — they double-counted where nodes sit on edges (user-identified
 		// hot spots, when clusters were edge-based).
-		this.regionMeta = [];
 		data.clusters.forEach((cluster, ci) => {
 			const hue = clusterHue(cluster.id);
 			// Full-opacity strokes: alpha is applied ONCE at the very end
@@ -1164,9 +1248,6 @@ export class GraphCanvasRenderer {
 			// contribute exactly 1.0.
 			rctx.strokeStyle = `hsla(${hue}, 65%, 60%, 1)`;
 			rctx.beginPath();
-			let members = 0;
-			let sumX = 0;
-			let sumY = 0;
 			// Endpoints actually covered by a stroke's round caps.
 			const touched = new Set<string>();
 			for (const e of data.edges) {
@@ -1203,19 +1284,6 @@ export class GraphCanvasRenderer {
 				rctx.beginPath();
 				rctx.arc((n.x - minX) / cell, (n.y - minY) / cell, discR, 0, Math.PI * 2);
 				rctx.fill();
-			}
-
-			// Label anchor: member centroid (world coords).
-			for (const id of cluster.members) {
-				if (!isVisible(id)) continue;
-				const n = this.nodeById.get(id);
-				if (!n) continue;
-				members++;
-				sumX += n.x;
-				sumY += n.y;
-			}
-			if (members > 0) {
-				this.regionMeta.push({ label: cluster.label || null, cx: sumX / members, cy: sumY / members, hue });
 			}
 		});
 
@@ -1314,7 +1382,68 @@ export class GraphCanvasRenderer {
 		if (this.regionCanvas && this.regionRect) {
 			const { minX, minY, w, h } = this.regionRect;
 			ctx.imageSmoothingEnabled = true;
-			ctx.drawImage(this.regionCanvas, minX, minY, w, h);
+			if (this.regionFading && this.regionPrevCanvas && this.regionPrevRect) {
+				// Linear fade prev → cur (user 2026-09-15): the bitmap rebuilds
+				// only every REGION_EVERY-th sim frame, so the regions would
+				// otherwise step at 1/3 the frame rate. TRUE LERP, not source-
+				// over: 'lighter' + globalAlpha weights sum the PREMULTIPLIED
+				// pixels — where old and new coverage both sit, the result
+				// stays at full coverage (no alpha stacking, no bright spots
+				// — the exact artifact source-over would add). And since blur
+				// and the end-alpha are linear operators, lerping the finished
+				// bitmaps ≡ the user's preferred fade → blur → alpha order.
+				// Two tiny GPU blits; the expensive path (splat/blur/readback)
+				// still runs only on rebuild frames.
+				const t = (this.regionFadePhase + 1) / REGION_EVERY;
+				if (t >= 1) {
+					// Converged: the blend would reproduce the bitmap
+					// exactly — skip the scratch work, stop the fade.
+					this.regionFading = false;
+					ctx.drawImage(this.regionCanvas, minX, minY, w, h);
+				} else {
+					const bw = this.regionCanvas.width;
+					const bh = this.regionCanvas.height;
+					if (!this.regionBlendCanvas) this.regionBlendCanvas = document.createElement("canvas");
+					const bc = this.regionBlendCanvas;
+					if (bc.width !== bw || bc.height !== bh) {
+						bc.width = bw;
+						bc.height = bh;
+					}
+					const bctx = bc.getContext("2d");
+					if (bctx) {
+						bctx.setTransform(1, 0, 0, 1, 0, 0);
+						bctx.clearRect(0, 0, bw, bh);
+						bctx.globalCompositeOperation = "lighter";
+						bctx.imageSmoothingEnabled = true;
+						// The prev bitmap covers regionPrevRect; map it into THIS
+						// rect's pixel grid (rects shift a little every rebuild).
+						const pr = this.regionPrevRect;
+						bctx.globalAlpha = 1 - t;
+						bctx.drawImage(
+							this.regionPrevCanvas,
+							0,
+							0,
+							this.regionPrevCanvas.width,
+							this.regionPrevCanvas.height,
+							((pr.minX - minX) * bw) / w,
+							((pr.minY - minY) * bh) / h,
+							(pr.w * bw) / w,
+							(pr.h * bh) / h,
+						);
+						bctx.globalAlpha = t;
+						bctx.drawImage(this.regionCanvas, 0, 0);
+						bctx.globalAlpha = 1;
+						bctx.globalCompositeOperation = "source-over";
+						ctx.drawImage(bc, minX, minY, w, h);
+					}
+					this.regionFadePhase++;
+					// The sim may have settled mid-fade; flush the remaining
+					// substeps so the frame never freezes partway blended.
+					this.markDirty();
+				}
+			} else {
+				ctx.drawImage(this.regionCanvas, minX, minY, w, h);
+			}
 		}
 
 		// 3. Edges: shafts + arrowheads from cached paths; width constant on
