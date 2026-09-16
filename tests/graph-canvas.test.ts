@@ -17,6 +17,7 @@ import {
 	fitTransform,
 	labelAlpha,
 	pickNearest,
+	regionVelocityWeight,
 	zoomRatioOf,
 	LABELS_FADE_SPAN,
 } from "../components/graph-canvas.ts";
@@ -224,5 +225,31 @@ describe("sanitizePhysicsTuning (physics controls)", () => {
 		assert.equal(t.gravity, 0.48);
 		assert.equal(t.clusterPull, 0);
 		assert.equal(t.velocityDecay, 0.9);
+	});
+});
+
+describe("regionVelocityWeight", () => {
+	test("still nodes: at or below the still threshold → full opacity", () => {
+		assert.equal(regionVelocityWeight(0), 1);
+		assert.equal(regionVelocityWeight(1.5), 1);
+	});
+
+	test("fast nodes: at or above the moving threshold → blob off", () => {
+		assert.equal(regionVelocityWeight(8), 0);
+		assert.equal(regionVelocityWeight(100), 0);
+	});
+
+	test("linear ramp between the thresholds, monotone decreasing", () => {
+		const mid = regionVelocityWeight((1.5 + 8) / 2);
+		assert.ok(Math.abs(mid - 0.5) < 1e-12);
+		// strictly decreasing across the ramp
+		for (let s = 1.5; s <= 8; s += 0.25) {
+			assert.ok(regionVelocityWeight(s) >= regionVelocityWeight(s + 0.25));
+		}
+		// never leaves [0, 1]
+		for (let s = -10; s <= 50; s += 1.7) {
+			const w = regionVelocityWeight(s);
+			assert.ok(w >= 0 && w <= 1);
+		}
 	});
 });
