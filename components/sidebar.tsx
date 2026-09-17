@@ -133,7 +133,12 @@ export function SessionRow({
 		>
 			<SessionStatus busy={chat.busy} />
 			<span className="min-w-0 flex-1">
-				<span className="block truncate">{chat.title}</span>
+				{/* Titles are the learner's/teacher's WORDS — Source Sans 3, the
+				    same voice the words were typed in (every input is lh-prose);
+				    the meta line below stays JetBrains Mono (machine data). One
+				    rule, finally applied to the picker too (owner, typography
+				    round): mono = chrome, Source Sans = human words. */}
+				<span className="block truncate font-prose">{chat.title}</span>
 				<span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>
 			</span>
 		</button>

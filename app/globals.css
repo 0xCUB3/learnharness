@@ -82,10 +82,16 @@
 
 @theme inline {
 	/* Fonts: chrome = JetBrains Mono, prose = Source Sans 3, titles = CMU
-	   Serif bold. The JetBrains/SourceSans variables attach in app/layout.tsx. */
+	   Serif bold. The JetBrains/SourceSans variables attach in app/layout.tsx.
+	   (owner, typography round) The Tailwind defaults are ALIASED to the app
+	   fonts: `font-mono`/`font-sans` utilities would otherwise fall to the
+	   SYSTEM stacks — a fourth font the app never chose — and streamdown's
+	   code-block chrome + mermaid-error + demo-card all use them. */
 	--font-ui: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
 	--font-prose: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
 	--font-title: "lh-cmu", serif;
+	--font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
+	--font-sans: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
 	/* The modular type ladder — each size carries its own line-height.
 	   Component sizes must pull from this ladder. */
 	--text-xxs: 10px;
