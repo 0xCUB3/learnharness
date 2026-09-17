@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
+import { DictationBar, useDictation } from "@/components/dictation";
 import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
 import { PhaseChip } from "@/components/phase-divider";
 import { SidebarToggle } from "@/components/sidebar";
@@ -74,6 +75,11 @@ export function DraftShell({
 	onSettingsSaved: (s: ChatSettings) => void;
 }) {
 	const canSend = text.trim().length > 0;
+	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
+	// draft text; the strip lives in the stats bar's middle slot.
+	const dictation = useDictation({
+		append: (t) => onChange(text ? text.replace(/\s+$/, "") + " " + t : t),
+	});
 	return (
 		<div className="flex h-dvh">
 			<div className="flex min-w-0 flex-1 flex-col">
@@ -110,9 +116,11 @@ export function DraftShell({
 										onStop={() => {}}
 										canSend={canSend}
 										autoFocus
+										onEscape={dictation.active ? dictation.stop : undefined}
 									/>
 								</div>
 								<StatsBar
+									dictationSlot={<DictationBar dictation={dictation} />}
 									turns={[]}
 									chatId=""
 									settings={settings}

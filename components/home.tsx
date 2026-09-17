@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
+import { DictationBar, useDictation } from "@/components/dictation";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
 import type { ChatSettings, TurnUsage } from "@/src/core";
@@ -18,6 +19,11 @@ import type { ChatSettings, TurnUsage } from "@/src/core";
 export function Home() {
 	const router = useRouter();
 	const [topic, setTopic] = useState("");
+	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
+	// topic draft; the strip lives in the stats bar's middle slot.
+	const dictation = useDictation({
+		append: (t) => setTopic((v) => (v ? v.replace(/\s+$/, "") + " " + t : t)),
+	});
 	const [busy, setBusy] = useState(false);
 	// The model+thinking selection made pre-chat — lifted from the StatsBar's
 	// ModelControl, carried to the chat POST then PUT-on-create (the model
@@ -97,6 +103,12 @@ export function Home() {
 						value={topic}
 						onChange={(e) => setTopic(e.target.value)}
 						onKeyDown={(e) => {
+							// Esc ends dictation (the dictate decisions: click-again or Esc).
+							if (e.key === "Escape" && dictation.active) {
+								e.preventDefault();
+								dictation.stop();
+								return;
+							}
 							if (e.key === "Enter" && !e.shiftKey) {
 								e.preventDefault();
 								void start();
@@ -121,6 +133,7 @@ export function Home() {
 					    budget (session-data slot), while the RIGHT keeps the model +
 					    thinking control (deferred save). */}
 					<StatsBar
+						dictationSlot={<DictationBar dictation={dictation} />}
 						turns={[] as TurnUsage[]}
 						chatId=""
 						settings={settings}

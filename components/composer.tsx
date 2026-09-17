@@ -20,6 +20,7 @@ export function Composer({
 	canSend,
 	autoFocus,
 	verdict,
+	onEscape,
 }: {
 	busy: boolean;
 	value: string;
@@ -32,6 +33,9 @@ export function Composer({
 	 *  word, the send square becomes two stacked buttons — green accept,
 	 *  red decline. Typed text rides the verdict as his note. */
 	verdict?: { onAccept: () => void; onDecline: () => void };
+	/** Escape while a dictation runs stops it (STT wave, 2026-09-17). No-op
+	 *  when absent — Esc otherwise means nothing in the composer. */
+	onEscape?: () => void;
 }) {
 	return (
 		<form
@@ -47,6 +51,13 @@ export function Composer({
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
 				onKeyDown={(e) => {
+					// Esc ends dictation before anything else Esc might someday mean
+					// here (the dictate decisions: click-again or Esc to stop).
+					if (e.key === "Escape" && onEscape) {
+						e.preventDefault();
+						onEscape();
+						return;
+					}
 					// Chat convention: Enter sends, Shift+Enter is a newline.
 					// ⌘/Ctrl+Enter also sends — the universal submit shortcut
 					// across every input in the app (thinking field, answers).

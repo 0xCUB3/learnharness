@@ -33,6 +33,7 @@ export function StatsBar({
 	settings,
 	onSettingsSaved,
 	leftSlot,
+	dictationSlot,
 }: {
 	turns: TurnUsage[];
 	chatId: string;
@@ -41,6 +42,11 @@ export function StatsBar({
 	/** Pre-chat only: replaces the (empty) session-data summary — home and
 	 *  the /chat/new draft mount the knowledge-context slider here. */
 	leftSlot?: ReactNode;
+	/** The dictation strip (STT wave, 2026-09-17): the row's middle is dead
+	 *  space between the session data and the model control — the mic
+	 *  button lives there, and while recording the meter unfurls to fill
+	 *  whatever width the row has (owner placement). */
+	dictationSlot?: ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
 	// Same dropdown discipline as the model control (owner, df4433f treatment,
@@ -154,6 +160,12 @@ export function StatsBar({
 					</div>
 				)}
 			</div>
+			)}
+			{/* The middle slot: dictation (owner, 2026-09-17). flex-1 lets the
+			    meter expand into the row's free width; justify-center keeps the
+			    lone idle mic button visually centered. */}
+			{dictationSlot && (
+				<div className="flex min-w-0 flex-1 items-center justify-center">{dictationSlot}</div>
 			)}
 			{/* The model + thinking control — one controller for the conversation
 			    agents (prober/teacher); the record's `turns` above still folds

@@ -19,6 +19,7 @@ import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
+import { DictationBar, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { GraphContextMarker } from "@/components/graph-context-marker";
@@ -246,6 +247,12 @@ export function Chat({
 		(messages.at(-1)?.parts.some((p) => isToolUIPart(p) && p.state === "input-streaming") ?? false);
 
 	const [text, setText] = useState("");
+	// Voice dictation (STT wave, 2026-09-17): finals append at the end of
+	// the current text (the page owns the separator, dictate-flush style);
+	// interims ghost in the stats bar's middle slot next to the meter.
+	const dictation = useDictation({
+		append: (t) => setText((v) => (v ? v.replace(/\s+$/, "") + " " + t : t)),
+	});
 	// Jobs never gate the composer (contracts.ts "THE ASYNC PROTOCOL" §4): job
 	// tools resolve with an ack mid-turn, so the learner can interject while
 	// sub-agents run — a feature, not a race: the wake pipeline queues steers
@@ -864,6 +871,7 @@ export function Chat({
 					phase={phases.at(-1) ?? "probe"}
 					turns={turns}
 					onReserve={setDockReserve}
+					dictationSlot={<DictationBar dictation={dictation} />}
 					composer={
 						<Composer
 							// Stop applies only to a LOCAL stream: a server-side turn has no
@@ -874,6 +882,7 @@ export function Chat({
 							onSend={onSend}
 							onStop={() => stop()}
 							canSend={canSend}
+							onEscape={dictation.active ? dictation.stop : undefined}
 							verdict={
 								planVerdict
 									? {
@@ -940,6 +949,7 @@ function DockOverlay({
 	onReserve,
 	plan,
 	onOpenPlan,
+	dictationSlot,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
@@ -962,6 +972,9 @@ function DockOverlay({
 	plan?: React.ReactNode;
 	/** Opens the full-DAG popup (the marginalia + chip share it). */
 	onOpenPlan: () => void;
+	/** The dictation strip (STT wave): rendered in the stats bar's middle
+	 *  slot — the mic button + live meter (components/dictation.tsx). */
+	dictationSlot?: React.ReactNode;
 }) {
 	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
 	// Teach-phase mount (session reload with a pending check): the dock starts
@@ -1226,6 +1239,7 @@ function DockOverlay({
 						chatId={chatId}
 						settings={settings}
 						onSettingsSaved={onSettingsSaved}
+						dictationSlot={dictationSlot}
 					/>
 				</div>
 				{/* The plan marginalia (owner, plan-placement round): the bare
