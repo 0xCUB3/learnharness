@@ -34,7 +34,8 @@
  * Zoom-gated labels (the Obsidian text-fade feel): sigma's camera "ratio"
  * convention is kept for the settings' persisted semantics — ratio 1 =
  * fit zoom, SMALLER = zoomed in (ratio = kFit / k). Node labels are
- * fully visible at ratio ≤ labelZoom and fade out across LABELS_FADE_SPAN
+ * fully visible at ratio ≤ labelZoom and fade out across a span
+ * proportional to the gate (LABELS_FADE_RATIO)
  * of ratio; cluster labels fade in over the exact same span (sums to 1)
  * so the two never coexist. All labels gate together — no per-node
  * popping.
@@ -125,8 +126,9 @@ export interface RendererCallbacks {
 	onSelect: (nodeId: string, screenPos: Pt) => void;
 	/** The empty stage was clicked. */
 	onStageClick: () => void;
-	/** Any camera move (pan/zoom) — the caller dismisses anchored UI. */
-	onCameraMove: () => void;
+	/** Any camera move (pan/zoom) — the caller dismisses anchored UI and
+	 *  persists the camera (view state). */
+	onCameraMove: (transform: { k: number; x: number; y: number }) => void;
 	/** The live sim settled after a drag: commit the new rest state
 	 *  (the caller PUTs it to the positions ledger). */
 	onCommit: (positions: Record<string, Position>) => void;
@@ -134,13 +136,20 @@ export interface RendererCallbacks {
 
 // ─── Constants (ported verbatim from the sigma view) ────────────────────────
 
-const LABEL_SIZE = 12; // px — the default label size (settings.labelSize scales it)
+const LABEL_SIZE = 12; // the reference label size the wrap-width ratio is taken against
 const LABEL_WEIGHT = "500";
-const LABEL_MAX_WIDTH = 170; // px — wraps long names instead of a wide strip
-const LABEL_GAP = 2; // px between node edge and first label line (was 6 — user: way too far)
+const LABEL_MAX_WIDTH = 170; // wrap width at the reference label size, world units
+const LABEL_GAP = 2.9; // world units between node edge and first label line (the 2px-at-fit reference ÷ 0.69)
 const LABEL_LINE_HEIGHT = 1.3;
-/** Zoom span (camera-ratio units) over which labels fade together. */
-export const LABELS_FADE_SPAN = 0.5;
+/** The node→cluster label cross-fade spans gate × this (camera-ratio
+ *  units) — PROPORTIONAL since 2026-09-17. The old absolute span (0.5
+ *  ratio) read as a 100% relative change at the old 0.5 gate but a bare
+ *  12% sliver at the tuned 8x gate (ratio 4): "lower zoom levels naturally
+ *  produce a longer transitionary period while higher ones are more
+ *  abrupt" — the user's exact observation. Proportional keeps ONE
+ *  transitionary feel at any gate; at the 8x default the handoff fades
+ *  across a full stop (8x → 12x). */
+export const LABELS_FADE_RATIO = 0.5;
 
 const GLOW_SCALE = 1.7; // halo outer radius = node radius x this (proportional, like blurring a copy of the disc)
 const GLOW_ALPHA = 0.3; // halo opacity at the disc edge, fading outward
@@ -241,10 +250,14 @@ export function boxBlurRound(
 	}
 }
 
-/** All "px" constants above are screen px AT FIT ZOOM. The renderer scales
- *  them into world units (÷ kFit) once per geometry build; camera zoom then
- *  scales nodes/labels/arrowheads with the graph (Obsidian-style), while
- *  edge widths and hull borders stay viewer-relative hairlines (÷ k). */
+/** Geometry constants are WORLD UNITS (the 2026-09-15 pivot): node/
+ *  label/arrowhead sizes come from the settings directly — the same law
+ *  as linkDistance — so the world scale is canonical and never depends on
+ *  the graph's extent or the viewport. Camera zoom scales them with the
+ *  graph (Obsidian-style); edge widths and hull borders stay
+ *  viewer-relative hairlines (÷ k); cluster labels stay screen-fixed
+ *  (px at any zoom). kFit survives ONLY as the label-gate's "1×"
+ *  reference (zoomRatioOf) — a pure LOD threshold, no geometry reads it. */
 
 const clamp01 = (v: number) => Math.min(Math.max(v, 0), 1);
 
@@ -261,11 +274,15 @@ export function zoomRatioOf(kFit: number, k: number): number {
 
 /**
  * Node-label opacity at a given camera ratio: 1 at/below the labelZoom
- * threshold, fading to 0 across LABELS_FADE_SPAN of ratio. Cluster labels
- * use `1 - this` over the same span — the two cross-fade and never
- * coexist at full opacity.
+ * threshold, fading to 0 across a span of labelZoom x LABELS_FADE_RATIO
+ * (see there). Cluster labels use `1 - this` over the same span — the
+ * two cross-fade and never coexist at full opacity.
  */
-export function labelAlpha(ratio: number, labelZoom: number, span = LABELS_FADE_SPAN): number {
+export function labelAlpha(
+	ratio: number,
+	labelZoom: number,
+	span = labelZoom * LABELS_FADE_RATIO,
+): number {
 	return clamp01(1 - (ratio - labelZoom) / span);
 }
 
@@ -499,7 +516,15 @@ export class GraphCanvasRenderer {
 	private worldLabelFont = "";
 	private world: WorldSizes = { nodeR: 0, glowOuter: 0, labelSize: 0, labelGap: 0 };
 
-	constructor(canvas: HTMLCanvasElement, callbacks: RendererCallbacks) {
+	constructor(
+		canvas: HTMLCanvasElement,
+		callbacks: RendererCallbacks,
+		/** The caller's persisted camera (view state — localStorage): when
+		 *  present it REPLACES the first-open fit; the graph opens exactly
+		 *  where the user left it (2026-09-15: a default zoom exists only
+		 *  on first open, ever). Invalid shapes fall back to fit. */
+		initialCamera?: { k: number; x: number; y: number } | null,
+	) {
 		this.canvas = canvas;
 		const ctx = canvas.getContext("2d");
 		if (!ctx) throw new Error("2d context unavailable");
@@ -513,7 +538,8 @@ export class GraphCanvasRenderer {
 			.on("zoom", ({ transform }) => {
 				this.transform = transform;
 				this.markDirty();
-				this.callbacks.onCameraMove();
+				// The transform doubles as the persistence payload (view state).
+				this.callbacks.onCameraMove(transform);
 			});
 		select(canvas)
 			.call(this.zoomBehavior)
@@ -529,19 +555,27 @@ export class GraphCanvasRenderer {
 		canvas.addEventListener("pointerup", this.onPointerUp);
 		canvas.addEventListener("pointerleave", this.onPointerLeave);
 
+		// The persisted camera: replace the default with wherever the user
+		// left the graph. Applied through the zoom behavior so d3's internal
+		// state and ours agree (the same path fit() uses); hasFit so neither
+		// the ResizeObserver nor setData re-fits over it.
+		if (
+			initialCamera &&
+			typeof initialCamera.k === "number" && Number.isFinite(initialCamera.k) && initialCamera.k > 0 &&
+			typeof initialCamera.x === "number" && Number.isFinite(initialCamera.x) &&
+			typeof initialCamera.y === "number" && Number.isFinite(initialCamera.y)
+		) {
+			this.hasFit = true;
+			select(canvas).call(
+				this.zoomBehavior.transform,
+				zoomIdentity.translate(initialCamera.x, initialCamera.y).scale(initialCamera.k),
+			);
+		}
+
 		this.resizeObserver = new ResizeObserver(() => {
 			this.syncSize();
 			if (!this.hasFit) this.fit(); // first real size → fit once
-			else if (this.worldBBox) {
-				// Keep the label-gate's "1×" honest: kFit is viewport-bound,
-				// so a resize changes it even though the camera persists.
-				const w = this.canvas.clientWidth;
-				const h = this.canvas.clientHeight;
-				if (w >= 10 && h >= 10) {
-					this.kFit = fitTransform(this.worldBBox, w, h, 40).k;
-					this.geoVersion++; // resize redefines the fit-zoom scale
-				}
-			}
+			else this.refreshFitZoom(); // the gate's "1×" is viewport-bound
 			// Redraw SYNCHRONOUSLY: syncSize may have reallocated the backing
 			// store (which clears the canvas), and during live window resizes
 			// rAF is starved by relayout — a deferred draw would leave the
@@ -569,6 +603,9 @@ export class GraphCanvasRenderer {
 		}
 		this.worldBBox = { minX, maxX, minY, maxY };
 		if (!this.hasFit && data.nodes.length > 0) this.fit();
+		// The camera may be user-restored (constructor initialCamera) — the
+		// gate's "1×" reference still needs the fresh bbox's fit zoom.
+		else this.refreshFitZoom();
 		// Rebuild the live sim around the fresh nodes. New data means the
 		// server spoke (merge or refetch); any pending commit is moot and
 		// the graph is at rest until the next drag.
@@ -633,7 +670,8 @@ export class GraphCanvasRenderer {
 	}
 
 	/** Frame the whole graph (padding included). Keeps the camera on later
-	 *  setData calls — call fit() only for an explicit re-frame. */
+	 *  setData calls — call fit() only for an explicit re-frame (the
+	 *  first-ever open; afterwards the caller-persisted camera wins). */
 	fit(): void {
 		if (!this.data || this.data.nodes.length === 0 || !this.worldBBox) return;
 		const w = this.canvas.clientWidth;
@@ -642,11 +680,20 @@ export class GraphCanvasRenderer {
 		const t = fitTransform(this.worldBBox, w, h, 40);
 		this.kFit = t.k;
 		this.hasFit = true;
-		this.geoVersion++; // kFit defines the world-unit scale
 		select(this.canvas).call(
 			this.zoomBehavior.transform,
 			zoomIdentity.translate(t.x, t.y).scale(t.k),
 		);
+	}
+
+	/** Refresh the label-gate's "1×" reference from the current bbox +
+	 *  viewport. kFit feeds ONLY zoomRatioOf now (the 2026-09-15 pivot
+	 *  removed it from geometry) — so this never touches geoVersion. */
+	private refreshFitZoom(): void {
+		if (!this.worldBBox) return;
+		const w = this.canvas.clientWidth;
+		const h = this.canvas.clientHeight;
+		if (w >= 10 && h >= 10) this.kFit = fitTransform(this.worldBBox, w, h, 40).k;
 	}
 
 	destroy(): void {
@@ -798,7 +845,10 @@ export class GraphCanvasRenderer {
 		const { x: tx, y: ty, k } = this.transform;
 		// Discs scale with the camera now: their screen radius is
 		// nodeSize × k/kFit; the halo pad stays a constant screen pad.
-		const maxDist = this.settings.nodeSize * (k / this.kFit) + PICKING_PAD;
+		// nodeSize is world units now (2026-09-15): the on-screen hit radius
+		// is the disc's world radius × the camera zoom, plus the constant
+		// screen pad — the whole halo stays hit-testable.
+		const maxDist = this.settings.nodeSize * k + PICKING_PAD;
 		const projected: { id: string; x: number; y: number }[] = [];
 		for (const n of this.data.nodes) {
 			if (this.visible && !this.visible.has(n.id)) continue;
@@ -948,24 +998,24 @@ export class GraphCanvasRenderer {
 		this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 	}
 
-	/** Derive ALL world geometry from data + visibility + settings + kFit.
+	/** Derive ALL world geometry from data + visibility + settings.
 	 *  Runs only when geoVersion moves — never per frame, never per camera
-	 *  change. Zoom/pan pay zero geometry math, only rasterization. */
+	 *  change. Zoom/pan pay zero geometry math, only rasterization. Sizes
+	 *  are WORLD UNITS straight from the settings (the 2026-09-15 pivot —
+	 *  no ÷kFit: the world scale is canonical, viewport-independent). */
 	private buildGeometry(): void {
 		this.builtVersion = this.geoVersion;
 		const data = this.data;
 		const settings = this.settings;
 		if (!data || !settings) return;
 
-		// Screen px at fit zoom → world units.
-		const s = 1 / this.kFit;
-		const nodeR = settings.nodeSize * s;
-		this.worldLabelFont = `${LABEL_WEIGHT} ${settings.labelSize * s}px ${data.fontFamily}`;
+		const nodeR = settings.nodeSize;
+		this.worldLabelFont = `${LABEL_WEIGHT} ${settings.labelSize}px ${data.fontFamily}`;
 		this.world = {
 			nodeR,
 			glowOuter: nodeR * GLOW_SCALE,
-			labelSize: settings.labelSize * s,
-			labelGap: LABEL_GAP * s,
+			labelSize: settings.labelSize,
+			labelGap: LABEL_GAP,
 		};
 		const visible = this.visible;
 		const isVisible = (id: string) => !visible || visible.has(id);
@@ -983,7 +1033,7 @@ export class GraphCanvasRenderer {
 		// relation types draw the same arrow for now — the double-shaft
 		// glyph was rejected (2026-09-15); differentiation is pending a new
 		// approach. CanvasEdge.type is plumbed for whatever comes next.
-		const arrowLen = settings.arrowLength * s;
+		const arrowLen = settings.arrowLength;
 		const shafts = new Path2D();
 		const heads = new Path2D();
 		for (const e of data.edges) {
@@ -1014,7 +1064,7 @@ export class GraphCanvasRenderer {
 		const ctx = this.ctx;
 		const prevFont = ctx.font;
 		ctx.font = this.worldLabelFont;
-		const maxW = LABEL_MAX_WIDTH * (settings.labelSize / LABEL_SIZE) * s;
+		const maxW = LABEL_MAX_WIDTH * (settings.labelSize / LABEL_SIZE);
 		for (const n of data.nodes) {
 			if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
 		}
@@ -1072,7 +1122,8 @@ export class GraphCanvasRenderer {
 		const isVisible = (id: string): boolean => !visible || visible.has(id);
 
 		const tuning = this.regionTuning;
-		const s = 1 / this.kFit;
+		// Dilation is WORLD units (the 2026-09-15 pivot) — the region stroke
+		// half-width comes straight from the setting, no kFit.
 
 		// World rect over VISIBLE cluster members (regions cover members
 		// and their intra-cluster edges — nothing else).
@@ -1140,22 +1191,15 @@ export class GraphCanvasRenderer {
 		// is padded by the stroke half-width (dilation) plus the blur
 		// reach so nothing clips at the bitmap edge.
 		//
-		// SCREEN-ANCHORED RADII (user report 2026-09-14: a tight search
-		// collapsed the blur). The stroke width is anchored to kFit (screen
-		// px at fit zoom — the camera persists, searches don't refit), but
-		// the blur radius was anchored to `cell`, which shrinks with the
-		// FILTERED span: close-together matches → tiny cell → blur reach
-		// (blur·cell·kFit) collapsed on screen while the stroke stayed put.
-		// The blur now uses the stroke's anchoring: its world reach is
-		// blur · cellRef, cellRef being the FULL-graph cell (worldBBox —
-		// the same bbox kFit comes from). Span-independent, and with
-		// nothing filtered cell == cellRef, so the look is unchanged.
-		const dilationW = tuning.dilation * s;
-		const bbox = this.worldBBox;
-		const cellRef = bbox
-			? Math.max(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY) / tuning.bitmap
-			: 0;
-		const blurW = tuning.blur * cellRef;
+		// The blur reach is WORLD units (the 2026-09-15 pivot's last step):
+		// tuning.blur IS the world reach, canonical like dilation — it no
+		// longer scales with the graph's span (the old blurW = blur ×
+		// span/bitmap read 6× softer on a 338-node graph than on a
+		// 13-node one). This also makes the 2026-09-14 search-collapse fix
+		// structural: a world-unit blur cannot be coupled to any cell, so
+		// the old `cellRef` anchor is gone.
+		const dilationW = tuning.dilation;
+		const blurW = tuning.blur;
 		const padWorld = dilationW + blurW * 2;
 		// Cell floor: a single visible node (span 0) zeroed the cell and
 		// blew the bitmap dims to Infinity (getImageData TypeError). The
@@ -1248,9 +1292,11 @@ export class GraphCanvasRenderer {
 		// THEN scale the whole field by edgeAlpha once. Bilinear
 		// upscaling alone is no blur at all (tent ramps — the JPEG look);
 		// this makes the field genuinely smooth before the blit. The
-		// radius is blurW in bitmap px (screen-anchored — see sizing
-		// above), an integer because boxBlurRound indexes with the loop
-		// counter. Radius 0 (blur off) still runs this path — boxBlurRound
+		// radius is the world reach ÷ cell, rounded to an integer
+		// (boxBlurRound indexes with the loop counter) with a 1px floor —
+		// a graph whose cell exceeds the blur reach still gets one pixel
+		// of softening rather than aliasing to zero. Radius 0 (blur off)
+		// still runs this path — boxBlurRound
 		// copies — so the end-alpha applies uniformly with or without
 		// blur.
 		{

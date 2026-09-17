@@ -196,7 +196,7 @@ export interface LayoutEdge {
 }
 
 export const LINK_DISTANCE = 40;
-export const CHARGE_STRENGTH = -120;
+export const CHARGE_STRENGTH = -240; // 2026-09-17: −120 → −240 (user: repulsion default too weak); the default is shared with render-settings (gm-centered in CHARGE_RANGE).
 /** Per-tick anchor re-blend: fraction of an anchored node's displacement
  *  from its previous position that SURVIVES each tick. 0.85 = gentle
  *  evolution where forces are strong, stillness where they are not —

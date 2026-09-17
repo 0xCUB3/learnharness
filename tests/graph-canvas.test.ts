@@ -18,7 +18,7 @@ import {
 	labelAlpha,
 	pickNearest,
 	zoomRatioOf,
-	LABELS_FADE_SPAN,
+	LABELS_FADE_RATIO,
 } from "../components/graph-canvas.ts";
 import {
 	sanitizePhysicsTuning,
@@ -26,6 +26,7 @@ import {
 	DEFAULT_PHYSICS_TUNING,
 	DEFAULT_REGION_TUNING,
 	REGION_BITMAP_OPTIONS,
+	REGION_BLUR_LADDER,
 } from "../src/core/render-settings.ts";
 
 describe("zoomRatioOf (the sigma-compatible camera ratio)", () => {
@@ -38,26 +39,60 @@ describe("zoomRatioOf (the sigma-compatible camera ratio)", () => {
 
 describe("labelAlpha (the single zoom gate)", () => {
 	test("fully visible at/below the threshold, faded out after the span", () => {
+		// Proportional span: at gate 0.5 the span is 0.5 × 0.5 = 0.25.
 		assert.equal(labelAlpha(0.5, 0.5), 1); // at the threshold
 		assert.equal(labelAlpha(0.25, 0.5), 1); // zoomed further in: stays 1
-		assert.equal(labelAlpha(0.75, 0.5), 0.5); // mid-fade
-		assert.equal(labelAlpha(1.0, 0.5), 0); // one span out: gone
+		assert.equal(labelAlpha(0.625, 0.5), 0.5); // mid-fade (span midpoint)
+		assert.equal(labelAlpha(0.75, 0.5), 0); // one proportional span out: gone
 		assert.equal(labelAlpha(2.0, 0.5), 0); // far out: clamped
+	});
+
+	test("the span is PROPORTIONAL to the gate (2026-09-17), not absolute", () => {
+		// The old absolute 0.5-ratio span read as a 100% relative change at
+		// the old 0.5 gate but a bare 12% sliver at the tuned 8× gate (ratio
+		// 4). Proportional = one consistent handoff feel at any gate.
+		assert.equal(LABELS_FADE_RATIO, 0.5);
+		// At the tuned default (gate 4): fades across ratio 4 → 6 (8× → 12×
+		// on screen), one full ladder stop.
+		assert.equal(labelAlpha(4, 4), 1); // at the gate
+		assert.equal(labelAlpha(5, 4), 0.5); // mid-fade
+		assert.equal(labelAlpha(6, 4), 0); // one proportional span out: gone
+		// The relative shape is identical at the old gate: 0.5 → 0.75.
+		assert.equal(labelAlpha(5, 4), 0.5); // mid-fade at the tuned gate, same relative shape
 	});
 
 	test("node labels and cluster labels cross-fade over the exact same span", () => {
 		// The renderer draws cluster labels at 1 - labelAlpha; the two must
 		// always sum to 1 within the fade and never coexist at full opacity.
-		for (const ratio of [0, 0.25, 0.5, 0.6, 0.75, 0.9, 1, 2, 4]) {
-			const node = labelAlpha(ratio, 0.5);
-			const cluster = 1 - node;
-			assert.ok(node + cluster > 0.999 && node + cluster < 1.001, `sum at ratio ${ratio}`);
-			assert.ok(node <= 1 && cluster <= 1, `clamped at ratio ${ratio}`);
+		for (const gate of [0.5, 4]) {
+			for (let ratio = 0; ratio <= 8; ratio += gate / 8) {
+				const node = labelAlpha(ratio, gate);
+				const cluster = 1 - node;
+				assert.ok(node + cluster > 0.999 && node + cluster < 1.001, `sum at gate ${gate} ratio ${ratio}`);
+				assert.ok(node <= 1 && cluster <= 1, `clamped at gate ${gate} ratio ${ratio}`);
+			}
 		}
 	});
+});
 
-	test("the span constant is unchanged from the sigma era (stored settings depend on it)", () => {
-		assert.equal(LABELS_FADE_SPAN, 0.5);
+describe("d3 camera composition (the persisted-camera restore path)", () => {
+	// The renderer restores a persisted camera via
+	// zoomIdentity.translate(x, y).scale(k) — the same composition fit()
+	// uses. d3's Transform.translate() shifts in SCALED space while
+	// .scale() keeps the translation: identity.translate(X, Y).scale(K)
+	// is exactly {k: K, x: X, y: Y}. This pins that law (the persisted
+	// {k, x, y} shape round-trips through the composition) so a d3
+	// upgrade that changes it fails here, not as a wrong camera.
+	test("zoomIdentity.translate(X, Y).scale(K) === {k: K, x: X, y: Y}", async () => {
+		const { zoomIdentity } = await import("d3-zoom");
+		const t = zoomIdentity.translate(120, -40).scale(3.5);
+		assert.equal(t.k, 3.5);
+		assert.equal(t.x, 120);
+		assert.equal(t.y, -40);
+		// And the inverse direction: a stored camera re-applies to the
+		// same screen position for the same world point.
+		const p = t.apply([7, 9]);
+		assert.deepEqual(p, [7 * 3.5 + 120, 9 * 3.5 - 40]);
 	});
 });
 
@@ -152,14 +187,14 @@ describe("sanitizeRegionTuning (dev number inputs)", () => {
 		const t = sanitizeRegionTuning(undefined);
 		assert.deepEqual(t, DEFAULT_REGION_TUNING);
 		const half = sanitizeRegionTuning({ blur: 7.2 });
-		assert.equal(half.blur, 8); // snaps into the fixed set
+		assert.equal(half.blur, 7.5); // snapped to the ladder (2026-09-17)
 		assert.equal(half.dilation, DEFAULT_REGION_TUNING.dilation);
 	});
 
 	test("garbage clamps: NaN falls back, out-of-range clamps", () => {
 		const t = sanitizeRegionTuning({ dilation: Number.NaN, blur: -5, bitmap: 99999, edgeAlpha: 42 });
 		assert.equal(t.dilation, DEFAULT_REGION_TUNING.dilation); // NaN -> default
-		assert.equal(t.blur, 2); // snaps into the fixed set
+		assert.equal(t.blur, REGION_BLUR_LADDER[0]); // snapped to the ladder floor
 		assert.equal(t.bitmap, REGION_BITMAP_OPTIONS[REGION_BITMAP_OPTIONS.length - 1]); // 99999 snaps to the largest option
 		assert.equal(t.edgeAlpha, 1);
 	});

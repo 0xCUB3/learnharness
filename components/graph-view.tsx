@@ -68,26 +68,28 @@ import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/cor
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { GraphCoverageControl } from "./graph-coverage.tsx";
 import {
-	ARROW_LENGTH_RANGE,
+	ARROW_LENGTH_LADDER,
 	CHARGE_RANGE,
-	CLUSTER_LABEL_SIZE_RANGE,
+	CLUSTER_LABEL_SIZE_LADDER,
 	CLUSTER_PULL_RANGE,
 	DEPTH_BASE_RADIUS_RANGE,
 	DEPTH_SPACING_RANGE,
 	DEPTH_STRENGTH_RANGE,
 	DEFAULT_RENDER_SETTINGS,
-	EDGE_WIDTH_RANGE,
+	EDGE_WIDTH_LADDER,
 	GRAVITY_RANGE,
-	LABEL_SIZE_RANGE,
-	LABEL_ZOOM_MAX,
-	LABEL_ZOOM_MIN,
+	LABEL_SIZE_LADDER,
+	LABEL_ZOOM_LADDER,
 	LINK_DISTANCE_RANGE,
 	LINK_STRENGTH_RANGE,
-	NODE_SIZE_RANGE,
+	NODE_SIZE_LADDER,
 	REGION_BITMAP_OPTIONS,
-	REGION_BLUR_OPTIONS,
-	REGION_DILATION_RANGE,
-	REGION_EDGE_ALPHA_RANGE,
+	REGION_BLUR_LADDER,
+	fromLadderPosition,
+	snapToLadder,
+	toLadderPosition,
+	REGION_DILATION_LADDER,
+	REGION_EDGE_ALPHA_LADDER,
 	VELOCITY_DECAY_RANGE,
 	fromOffSliderPosition,
 	fromSliderPosition,
@@ -100,6 +102,10 @@ import {
 /** The uniform node look (no state classes — canvas wants hex, not oklch):
  *  the accent color, until the state model lands. */
 const NODE_COLOR_TOKEN = "--primary";
+
+/** Per-device graph camera persistence (zoom+pan view state). v1 in the
+ *  key: the stored shape is the renderer's d3 transform {k, x, y}. */
+const CAMERA_STORAGE_KEY = "lh.graph.camera.v1";
 
 // ---- Render settings (the settings-panel controls) ------------------------
 //
@@ -233,58 +239,60 @@ function GraphSettingsControl({
 			{open && (
 				<div className="absolute right-0 top-full mt-2 w-64 rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
 					<div className="flex flex-col gap-2">
-							{/* All sliders: log-scaled 0-100, step 5, so every
-							    DEFAULT sits at 50 (src/core/render-settings.ts). */}
+							{/* Size/zoom/region sliders: LADDER-mapped 0-100, step 10 (11
+							    stops, every DEFAULT dead-center at 50, every value a nice
+							    number — src/core/render-settings.ts). Physics keeps the
+							    fine-grained log sliders (step 5). */}
 							<SettingSlider
 								label="Node size"
 								min={0}
 								max={100}
-								step={5}
-								value={toSliderPosition(settings.nodeSize, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max)}
+								step={10}
+								value={toLadderPosition(settings.nodeSize, NODE_SIZE_LADDER)}
 								display={sizeDisplay(settings.nodeSize)}
 								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, nodeSize: fromSliderPosition(p, NODE_SIZE_RANGE.min, NODE_SIZE_RANGE.max) }))}
+									changeSettings((cur) => ({ ...cur, nodeSize: fromLadderPosition(p, NODE_SIZE_LADDER) }))}
 							/>
 							<SettingSlider
 								label="Edge width"
 								min={0}
 								max={100}
-								step={5}
-								value={toSliderPosition(settings.edgeWidth, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max)}
+								step={10}
+								value={toLadderPosition(settings.edgeWidth, EDGE_WIDTH_LADDER)}
 								display={sizeDisplay(settings.edgeWidth)}
 								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, edgeWidth: fromSliderPosition(p, EDGE_WIDTH_RANGE.min, EDGE_WIDTH_RANGE.max) }))}
+									changeSettings((cur) => ({ ...cur, edgeWidth: fromLadderPosition(p, EDGE_WIDTH_LADDER) }))}
 							/>
 							<SettingSlider
 								label="Arrowhead size"
 								min={0}
 								max={100}
-								step={5}
-								value={toSliderPosition(settings.arrowLength, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max)}
+								step={10}
+								value={toLadderPosition(settings.arrowLength, ARROW_LENGTH_LADDER)}
 								display={sizeDisplay(settings.arrowLength)}
 								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, arrowLength: fromSliderPosition(p, ARROW_LENGTH_RANGE.min, ARROW_LENGTH_RANGE.max) }))}
+									changeSettings((cur) => ({ ...cur, arrowLength: fromLadderPosition(p, ARROW_LENGTH_LADDER) }))}
 							/>
 							<SettingSlider
 								label="Label size"
 								min={0}
 								max={100}
-								step={5}
-								value={toSliderPosition(settings.labelSize, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max)}
+								step={10}
+								value={toLadderPosition(settings.labelSize, LABEL_SIZE_LADDER)}
 								display={sizeDisplay(settings.labelSize)}
 								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, labelSize: fromSliderPosition(p, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max) }))}
+									changeSettings((cur) => ({ ...cur, labelSize: fromLadderPosition(p, LABEL_SIZE_LADDER) }))}
 							/>
-							{/* Displayed units normalize the default (0.5) to "1×". */}
+							{/* Display is absolute (ratio / 0.5): "8×" is the tuned default, dead-center. */}
 							<SettingSlider
 								label="Labels until zoom"
 								min={0}
 								max={100}
-								step={5}
-								value={toSliderPosition(settings.labelZoom, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX)}
+								step={10}
+								value={toLadderPosition(settings.labelZoom, LABEL_ZOOM_LADDER)}
 								display={labelZoomDisplay(settings.labelZoom)}
 								onChange={(p) =>
-									changeSettings((cur) => ({ ...cur, labelZoom: fromSliderPosition(p, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX) }))}
+									changeSettings((cur) => ({ ...cur, labelZoom: fromLadderPosition(p, LABEL_ZOOM_LADDER) }))}
 							/>
 						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
 						    dropdown for the bitmap resolution (it's a discrete
@@ -315,49 +323,42 @@ function GraphSettingsControl({
 								disabled={!regionTuning.enabled}
 								min={0}
 								max={100}
-								step={5}
-								value={toSliderPosition(regionTuning.dilation, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max)}
+								step={10}
+								value={toLadderPosition(regionTuning.dilation, REGION_DILATION_LADDER)}
 								display={sizeDisplay(regionTuning.dilation)}
 								onChange={(p) =>
 									changeSettings((cur) => ({
 										...cur,
-										regions: { ...cur.regions, dilation: fromSliderPosition(p, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max) },
+										regions: { ...cur.regions, dilation: fromLadderPosition(p, REGION_DILATION_LADDER) },
 									}))}
 							/>
-							<label
-								className={`flex items-center justify-between gap-2 text-[11px] text-muted-foreground${!regionTuning.enabled ? " opacity-40" : ""}`}
-							>
-								<span>Blur</span>
-								<select
-									disabled={!regionTuning.enabled}
-									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
-									value={regionTuning.blur}
-									onChange={(e) =>
-										changeSettings((cur) => ({
-											...cur,
-											regions: { ...cur.regions, blur: Number(e.target.value) },
-										}))
-									}
-								>
-									{REGION_BLUR_OPTIONS.map((o) => (
-										<option key={o} value={o}>
-											{o}
-										</option>
-									))}
-								</select>
-							</label>
+							<SettingSlider
+								label="Blur"
+								disabled={!regionTuning.enabled}
+								min={0}
+								max={100}
+								step={10}
+								value={toLadderPosition(regionTuning.blur, REGION_BLUR_LADDER)}
+								display={sizeDisplay(regionTuning.blur)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										regions: { ...cur.regions, blur: fromLadderPosition(p, REGION_BLUR_LADDER) },
+									}))
+								}
+							/>
 							<SettingSlider
 								label="Edge alpha"
 								disabled={!regionTuning.enabled}
 								min={0}
 								max={100}
-								step={5}
-								value={toSliderPosition(regionTuning.edgeAlpha, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max)}
+								step={10}
+								value={toLadderPosition(regionTuning.edgeAlpha, REGION_EDGE_ALPHA_LADDER)}
 								display={sizeDisplay(regionTuning.edgeAlpha)}
 								onChange={(p) =>
 									changeSettings((cur) => ({
 										...cur,
-										regions: { ...cur.regions, edgeAlpha: fromSliderPosition(p, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max) },
+										regions: { ...cur.regions, edgeAlpha: fromLadderPosition(p, REGION_EDGE_ALPHA_LADDER) },
 									}))}
 							/>
 							<label
@@ -401,13 +402,13 @@ function GraphSettingsControl({
 								disabled={!settings.clusterLabels}
 								min={0}
 								max={100}
-								step={5}
-								value={toSliderPosition(settings.clusterLabelSize, CLUSTER_LABEL_SIZE_RANGE.min, CLUSTER_LABEL_SIZE_RANGE.max)}
+								step={10}
+								value={toLadderPosition(settings.clusterLabelSize, CLUSTER_LABEL_SIZE_LADDER)}
 								display={sizeDisplay(settings.clusterLabelSize)}
 								onChange={(p) =>
 									changeSettings((cur) => ({
 										...cur,
-										clusterLabelSize: fromSliderPosition(p, CLUSTER_LABEL_SIZE_RANGE.min, CLUSTER_LABEL_SIZE_RANGE.max),
+										clusterLabelSize: fromLadderPosition(p, CLUSTER_LABEL_SIZE_LADDER),
 									}))}
 							/>
 						</div>
@@ -766,33 +767,87 @@ export function GraphView() {
 		if (isEmpty) return;
 		const canvas = canvasRef.current;
 		if (!canvas) return;
-		const renderer = new GraphCanvasRenderer(canvas, {
-			onSelect: (nodeId, pos) => {
-				const snap = snapshotRef.current;
-				const node = snap?.nodes.find((n) => n.id === nodeId);
-				if (!snap || !node) return;
-				setSelected({
-					node,
-					sourceIds: snap.nodeSessions[node.id] ?? [],
-					anchor: pos,
-				});
+		// Persisted camera (2026-09-15): the graph reopens exactly where the
+		// user left it — zoom AND pan, in localStorage (per-device view
+		// state, deliberately NOT the server settings ledger). Absent or
+		// corrupt → undefined → the renderer fits on first open, ever.
+		let initialCamera: { k: number; x: number; y: number } | null = null;
+		try {
+			const stored = localStorage.getItem(CAMERA_STORAGE_KEY);
+			if (stored) {
+				const parsed = JSON.parse(stored) as { k?: unknown; x?: unknown; y?: unknown };
+				if (
+					typeof parsed.k === "number" && Number.isFinite(parsed.k) && parsed.k > 0 &&
+					typeof parsed.x === "number" && Number.isFinite(parsed.x) &&
+					typeof parsed.y === "number" && Number.isFinite(parsed.y)
+				)
+					initialCamera = { k: parsed.k, x: parsed.x, y: parsed.y };
+			}
+		} catch {
+			// Corrupt entry → treat as absent; the renderer fits.
+		}
+		// Debounced camera writes: a pan emits hundreds of transforms per
+		// second; one trailing write per quiet spell is plenty.
+		let cameraTimer: ReturnType<typeof setTimeout> | null = null;
+		let lastCamera: { k: number; x: number; y: number } | null = null;
+		const persistCamera = (t: { k: number; x: number; y: number }) => {
+			lastCamera = t;
+			if (cameraTimer) clearTimeout(cameraTimer);
+			cameraTimer = setTimeout(() => {
+				cameraTimer = null;
+				try {
+					localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify(t));
+				} catch {
+					// Storage full/blocked: camera persistence is best-effort.
+				}
+			}, 250);
+		};
+		const renderer = new GraphCanvasRenderer(
+			canvas,
+			{
+				onSelect: (nodeId, pos) => {
+					const snap = snapshotRef.current;
+					const node = snap?.nodes.find((n) => n.id === nodeId);
+					if (!snap || !node) return;
+					setSelected({
+						node,
+						sourceIds: snap.nodeSessions[node.id] ?? [],
+						anchor: pos,
+					});
+				},
+				onStageClick: () => setSelected(null),
+				// Any camera move detaches the card from its node — close
+				// it, and (debounced) remember where the camera stands.
+				onCameraMove: (t) => {
+					setSelected(null);
+					persistCamera(t);
+				},
+				// Live physics settled: persist the new rest state. Fire-and-
+				// forget — the next snapshot fetch carries the ledger anyway.
+				onCommit: (positions) => {
+					void fetch("/api/graph/positions", {
+						method: "PUT",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(positions),
+					}).catch((err) => console.error("[graph] positions commit failed", err));
+				},
 			},
-			onStageClick: () => setSelected(null),
-			// Any camera move detaches the card from its node — close it.
-			onCameraMove: () => setSelected(null),
-			// Live physics settled: persist the new rest state. Fire-and-
-			// forget — the next snapshot fetch carries the ledger anyway.
-			onCommit: (positions) => {
-				void fetch("/api/graph/positions", {
-					method: "PUT",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(positions),
-				}).catch((err) => console.error("[graph] positions commit failed", err));
-			},
-		});
+			initialCamera,
+		);
 		rendererRef.current = renderer;
 		return () => {
 			rendererRef.current = null;
+			// Flush a pending camera write so an unmount <250ms after a
+			// move still persists the user's last standpoint.
+			if (cameraTimer && lastCamera) {
+				clearTimeout(cameraTimer);
+				cameraTimer = null;
+				try {
+					localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify(lastCamera));
+				} catch {
+					// best-effort
+				}
+			}
 			renderer.destroy();
 		};
 	}, [isEmpty]);
