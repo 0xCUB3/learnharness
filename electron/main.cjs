@@ -200,6 +200,15 @@ function createWindow(url) {
 			sandbox: true,
 			nodeIntegration: false,
 		},
+		// Live-resize + first-paint flash (owner, 2026-09-17): during a resize
+		// the native window surface changes size before Chromium's compositor
+		// has a frame at the new size, and the gap shows the window's NATIVE
+		// background — Electron's default is white, glaring on a dark app.
+		// The app background (#141414) fills the lag instead. `show: false` +
+		// ready-to-show is the same treatment for first paint: the window
+		// appears only once the page has actually rendered.
+		backgroundColor: "#141414",
+		show: false,
 	});
 
 	const allowedOrigin = () => new URL(url).origin;
@@ -226,6 +235,7 @@ function createWindow(url) {
 	});
 
 	void win.loadURL(url);
+	win.once("ready-to-show", () => win.show());
 	return win;
 }
 

@@ -18,6 +18,7 @@
 /* Palette (owner's hexes): main #141414, raised #1C1C1C, edges #434343.
    Mono chrome = JetBrains Mono; prose = Source Sans 3; titles = CMU Serif. */
 :root {
+	color-scheme: dark;
 	--radius: 8px;
 	--background: #141414;
 	--foreground: #e6e6e6;
