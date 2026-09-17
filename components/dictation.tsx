@@ -11,13 +11,13 @@ import { Loader2Icon, MicIcon } from "lucide-react";
  * opens the Deepgram streaming WebSocket DIRECTLY (audio never loops
  * through our server) with a short-lived token minted by /api/stt/token
  * (the real key stays server-side), and streams frames while it listens.
- * Finals append into the composer; interims ghost beside the meter.
+ * Finals append into the PRIMARY INPUT (see below).
  *
  * Ported patterns from the owner's pi `dictate` extension (his words:
  * "very well tuned") — see ~/.pi/agent/extensions/dictate:
  *   - generation counter: every start/stop increments it; all async
  *     handlers no-op when stale, so a dying session's socket can never
- *     tear down the current one (a real bug he hit in the terminal).
+ *     tear down the current one.
  *   - meter: latest-RMS-never-resets — the level ref keeps the last
  *     observed value, so a tick with no fresh audio re-renders the last
  *     level instead of dropping to silence (60ms tick samples the ref).
@@ -25,6 +25,21 @@ import { Loader2Icon, MicIcon } from "lucide-react";
  *     conversational speech as mid-height bars without pegging.
  *   - stop: mic dies FIRST (no more audio enqueues), then CloseStream,
  *     then a 3s safety net in case Deepgram never closes the socket.
+ *   - interim_results=false, endpointing=300: his live-tuned params — no
+ *     partial hypotheses, finals commit ~300ms after a pause (owner
+ *     round 1: live words are distracting and shift the meter; the
+ *     meter's width is FIXED while recording).
+ *
+ * Owner round 1 (2026-09-17, first live mic test):
+ *   - ONE primary transcription input at all times: the pending
+ *     quiz/ask question's field while one waits (text mode → the answer
+ *     field, select modes → "Your thinking"), else the page's composer.
+ *     Implemented as a module-level registry the question form claims on
+ *     mount — see useDictationTarget below.
+ *   - Click → meter IMMEDIATELY (optimistic): the meter strip renders
+ *     from the click, connection + TCC happen behind it. The token mint
+ *     and the mic acquisition run CONCURRENTLY (Promise.all) to shrink
+ *     the real gap.
  *
  * Meter rendering lives in <DictationBar> (own 60ms timer over the level
  * ref) so the 16-renders/sec never touch the page component — only the
@@ -32,12 +47,9 @@ import { Loader2Icon, MicIcon } from "lucide-react";
  */
 
 /*
- * Deepgram streaming params (tuned in the owner's real-use dictate
- * extension + the research pass): nova-3, his endpointing=300 (faster
- * finals after a pause), utterance_end_ms=1000 as the noise-robust
- * backstop, interim_results for the live ghost. Silence streams too
- * (the worklet never pauses), so the 10s idle timeout can't bite — no
- * KeepAlive needed.
+ * Deepgram streaming params (the owner's live-tuned dictate config): nova-3,
+ * endpointing=300, no interims. Silence streams too (the worklet never
+ * pauses), so the socket never idles — no KeepAlive needed.
  */
 const DG_URL =
 	"wss://api.deepgram.com/v1/listen" +
@@ -45,11 +57,9 @@ const DG_URL =
 	"&encoding=linear16" +
 	"&sample_rate=16000" +
 	"&channels=1" +
-	"&interim_results=true" +
 	"&smart_format=true" +
 	"&punctuate=true" +
-	"&endpointing=300" +
-	"&utterance_end_ms=1000";
+	"&endpointing=300";
 
 /** Meter tuning — the owner's tested values, see the file header. */
 const METER_FLOOR_DB = -50;
@@ -66,33 +76,64 @@ export function rmsToMeter(rms: number): number {
 	return Math.max(0, Math.min(1, t));
 }
 
+/**
+ * The primary-input registry: at most ONE non-composer input can claim the
+ * dictation target while mounted — the pending question's answer/thinking
+ * field (question-dock.tsx). The page's `append` (the composer) is the
+ * fallback when nobody claims. Module-level by design: the claimant is a
+ * sibling subtree far from the hook's owner, and there is exactly one
+ * window, one pending question, one target at a time.
+ */
+let questionTarget: ((text: string) => void) | null = null;
+
+/** Join a dictated final onto the current text (shared separator rule). */
+export function joinDictation(current: string, final: string): string {
+	return current ? current.replace(/\s+$/, "") + " " + final : final;
+}
+
+/**
+ * Claim the dictation target while mounted (and `claimed` is true). The
+ * unmount guard is identity-based so dev-mode double-invoked effects
+ * can't clear another claimant.
+ */
+export function useDictationTarget(append: (text: string) => void, claimed: boolean) {
+	useEffect(() => {
+		if (!claimed) return;
+		questionTarget = append;
+		return () => {
+			if (questionTarget === append) questionTarget = null;
+		};
+	}, [append, claimed]);
+}
+
 export type DictationPhase = "idle" | "connecting" | "recording" | "stopping";
 
 export type Dictation = {
 	phase: DictationPhase;
-	/** Terminal-state explanation surfaced next to the mic (cleared on the next start). */
+	/** Terminal-state explanation, shown inside the wide button (cleared on the next start). */
 	error: string | null;
-	/** Live in-flight partial (the ghost); cleared when the final commits. */
-	interim: string;
 	/** Latest observed RMS, 0..1 — sampled by the meter's own tick, never reset. */
 	levelRef: { current: number };
-	/** Recording or finalizing — true from start to stop completion. */
+	/** Not idle — from the click until the stop completes (the optimistic window). */
 	active: boolean;
 	toggle: () => void;
 	stop: () => void;
 };
 
 /**
- * One dictation instance per composer-bearing page. `append` receives each
- * committed utterance (final) — the page joins it into its text state
- * (separator handling is the page's: it owns the current text).
+ * One dictation instance per composer-bearing page. `append` is the
+ * composer fallback; the mounted question form's claim wins while a
+ * question waits.
  */
 export function useDictation({ append }: { append: (text: string) => void }): Dictation {
 	const [phase, setPhase] = useState<DictationPhase>("idle");
 	const [error, setError] = useState<string | null>(null);
-	const [interim, setInterim] = useState("");
 	/** Latest RMS from the worklet — the meter samples this (dictate pattern). */
 	const levelRef = useRef(0);
+	/** The page's fallback append — kept fresh per render so a mid-recording
+	 *  retarget (composer↔question) is honored on the very next final. */
+	const appendRef = useRef(append);
+	appendRef.current = append;
 
 	// Live machinery (non-render values). AudioContext/MediaStream are
 	// closed on stop; the socket is recreated per run.
@@ -121,12 +162,10 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 				ws.close();
 			} catch {}
 		}
-		setInterim("");
 		setPhase("idle");
 	}, []);
 
-	/** Mint a short-lived token — the run's first step, BEFORE the mic: a
-	 *  keyless app fails fast without ever triggering the macOS TCC prompt. */
+	/** Mint a short-lived token (the route holds the real key server-side). */
 	const mintToken = useCallback(async () => {
 		const res = await fetch("/api/stt/token");
 		const data = (await res.json()) as { token?: string; message?: string };
@@ -157,16 +196,12 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 				}
 				if (msg.type === "Results") {
 					const text: string | undefined = msg.channel?.alternatives?.[0]?.transcript;
-					if (msg.is_final) {
-						// The committed utterance: hand to the page, clear the ghost.
-						if (text) append(text);
-						setInterim("");
-					} else if (text) {
-						setInterim(text);
+					// Only finals stream (interim_results=false): each Results
+					// message is a committed utterance — route it to the
+					// primary input, question claim first, composer fallback.
+					if (msg.is_final && text) {
+						(questionTarget ?? appendRef.current)(text);
 					}
-				} else if (msg.type === "UtteranceEnd") {
-					// Backstop: the endpointing VAD missed, the word-gap one didn't.
-					setInterim("");
 				}
 			});
 			ws.addEventListener("close", (ev) => {
@@ -197,7 +232,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 				}
 			});
 		},
-		[append, cleanup, mintToken],
+		[cleanup, mintToken],
 	);
 
 	const start = useCallback(async () => {
@@ -206,25 +241,17 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		reconnectsRef.current = 0;
 		const gen = ++genRef.current;
 
-		// 1. Token first — fail fast, no TCC prompt for a keyless app.
+		// Token + mic CONCURRENTLY (owner round 1: the sequential wait was the
+		// felt delay) — the optimistic meter already covers the gap. 127.0.0.1
+		// is a secure context, so getUserMedia works without TLS; macOS TCC
+		// prompts on first use.
+		const mic = navigator.mediaDevices.getUserMedia({
+			audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+		});
+		let token: string;
 		try {
-			const token = await mintToken();
-			if (gen !== genRef.current) return;
-			openSocket(gen, token);
-		} catch (e) {
-			if (gen !== genRef.current) return;
-			setError(e instanceof Error ? e.message : "token fetch failed");
-			setPhase("idle");
-			return;
-		}
-
-		try {
-			// 2. Mic + capture graph. 127.0.0.1 is a secure context —
-			// getUserMedia works without TLS (research); macOS TCC prompts
-			// on first use.
-			const stream = await navigator.mediaDevices.getUserMedia({
-				audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-			});
+			const [t, stream] = await Promise.all([mintToken(), mic]);
+			token = t;
 			if (gen !== genRef.current) {
 				for (const track of stream.getTracks()) track.stop();
 				return;
@@ -259,7 +286,10 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 						: "mic unavailable";
 			setError(msg);
 			cleanup();
+			return;
 		}
+		if (gen !== genRef.current) return;
+		openSocket(gen, token);
 	}, [openSocket, cleanup, mintToken]);
 
 	const stop = useCallback(() => {
@@ -297,25 +327,30 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		// "stopping" presses are ignored — the flush is in flight.
 	}, [phase, start, stop]);
 
-	return { phase, error, interim, levelRef, active: phase !== "idle", toggle, stop };
+	return { phase, error, levelRef, active: phase !== "idle", toggle, stop };
 }
 
 /**
- * The stats-bar dictation slot (owner placement, 2026-09-17): the mic
- * button rides the middle of the stats row — idle it is just the quiet mic
- * affordance; recording, the meter unfurls to fill the free middle space
- * (width follows what the row has), with the live interim ghost at its
- * flank. Red dot + red mic while live; spinner while Deepgram flushes.
+ * The stats-bar dictation slot (owner placement, round 1): the row's middle
+ * is one strip that is always the full free width —
+ *
+ *   idle      a wide, quiet "Dictate" button (mic + label, grayed out — the
+ *             whole middle is the affordance, per the owner).
+ *   active    optimistic from the CLICK: red stop pill + the fixed-width
+ *             meter (no interim text ever shifts it). Spinner while
+ *             Deepgram flushes the last final.
+ *   error     the wide button again, label swapped for the failure reason
+ *             (full text in the tooltip), cleared on the next click.
  */
 export function DictationBar({ dictation }: { dictation: Dictation }) {
-	const { phase, error, interim, levelRef, toggle, active } = dictation;
+	const { phase, error, levelRef, toggle, active } = dictation;
 	const [levels, setLevels] = useState<number[]>(() => new Array(METER_CELLS).fill(0));
 	const recording = phase === "recording" || phase === "stopping";
 
 	// The meter's own heartbeat — 60ms samples of the level ref into a
 	// rolling ring. Only THIS strip re-renders; the page never does.
 	useEffect(() => {
-		if (!recording) return;
+		if (!active) return;
 		setLevels(new Array(METER_CELLS).fill(0));
 		const id = setInterval(() => {
 			setLevels((ring) => {
@@ -325,52 +360,54 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 			});
 		}, METER_TICK_MS);
 		return () => clearInterval(id);
-	}, [recording, levelRef]);
+	}, [active, levelRef]);
+
+	if (!active) {
+		return (
+			<button
+				type="button"
+				onClick={toggle}
+				title={error ?? "Dictate into the composer"}
+				aria-label={error ? `Dictation failed: ${error}` : "Start dictation"}
+				data-testid="dictation-toggle"
+				className="flex h-7 w-full items-center justify-center gap-1.5 rounded-md border border-border/50 text-xs text-muted-foreground/70 transition-colors hover:border-border hover:text-muted-foreground"
+			>
+				<MicIcon className="size-3.5" />
+				<span className="max-w-full truncate">{error ?? "Dictate"}</span>
+			</button>
+		);
+	}
 
 	return (
-		<div className="flex min-w-0 items-center gap-2" data-testid="dictation-bar">
+		<div className="flex w-full min-w-0 items-center gap-2" data-testid="dictation-bar">
 			<button
 				type="button"
 				onClick={toggle}
 				disabled={phase === "stopping"}
-				title={active ? "Stop dictation (Esc)" : "Dictate"}
-				aria-label={active ? "Stop dictation" : "Start dictation"}
+				title="Stop dictation (Esc)"
+				aria-label="Stop dictation"
 				data-testid="dictation-toggle"
-				className="flex size-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
+				className="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-destructive/10 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
 			>
 				{phase === "stopping" ? (
-					<Loader2Icon className="size-3.5 animate-spin text-muted-foreground" />
+					<Loader2Icon className="size-3.5 animate-spin" />
 				) : (
-					<MicIcon className={active ? "size-3.5 text-destructive" : "size-3.5 text-muted-foreground"} />
+					<MicIcon className="size-3.5" />
 				)}
+				Stop
 			</button>
-			{error && (
-				<span className="max-w-64 truncate text-destructive" title={error}>
-					{error}
-				</span>
-			)}
-			{!error && recording && (
-				<>
-					<span className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive" aria-hidden />
-					{/* Bars flex to the row's free width — the owner's "fill up
-					    the whole middle section" ask: pitch is whatever space
-					    exists between session data and the model control. */}
-					<div className="flex h-4 min-w-0 flex-1 items-center gap-[2px]" data-testid="dictation-meter">
-						{levels.map((v, i) => (
-							<span
-								key={i}
-								className="min-w-[2px] flex-1 rounded-full bg-foreground/40"
-								style={{ height: `${2 + Math.round(v * 14)}px` }}
-							/>
-						))}
-					</div>
-					{interim && (
-						<span className="max-w-[45%] truncate text-muted-foreground/80" data-testid="dictation-interim">
-							{interim}
-						</span>
-					)}
-				</>
-			)}
+			<span className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive" aria-hidden />
+			{/* Fixed width while recording — nothing ever appends text beside it
+			    (no interims, owner round 1). Bars flex to the row's free space. */}
+			<div className="flex h-4 min-w-0 flex-1 items-center gap-[2px]" data-testid="dictation-meter">
+				{levels.map((v, i) => (
+					<span
+						key={i}
+						className="min-w-[2px] flex-1 rounded-full bg-foreground/40"
+						style={{ height: `${2 + Math.round(v * 14)}px` }}
+					/>
+				))}
+			</div>
 		</div>
 	);
 }

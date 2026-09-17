@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
@@ -63,6 +64,9 @@ export interface QuestionDockProps {
 	reveal?: boolean;
 	onExpand: () => void;
 	onSubmit: (output: QuestionAnswerData) => void;
+	/** Escape in a question field stops dictation (STT wave) — threaded
+	 *  from the page that owns the dictation hook. */
+	onEscape?: () => void;
 	/** Session phase at the question — scales the thinking field: probing
 	 *  stays quick (one row), teaching invites dumping (three rows). */
 	phase?: Phase3;
@@ -76,6 +80,7 @@ export function QuestionDock({
 	reveal = false,
 	onExpand,
 	onSubmit,
+	onEscape,
 	phase = "probe",
 }: QuestionDockProps) {
 	// Parse, don't cast (src/core/tool-parts.ts): the model authored this
@@ -109,6 +114,7 @@ export function QuestionDock({
 					input={parsed}
 					phase={phase}
 					onSubmit={onSubmit}
+					onEscape={onEscape}
 				/>
 			</div>
 		</>
@@ -189,6 +195,7 @@ function QuestionDockForm({
 	input,
 	phase = "probe",
 	onSubmit,
+	onEscape,
 }: Omit<QuestionDockProps, "expanded" | "onExpand">) {
 	const kind = toolName === "quiz" ? ("quiz" as const) : ("ask" as const);
 
@@ -242,6 +249,22 @@ function QuestionDockForm({
 	const [other, setOther] = useState("");
 	const [text, setText] = useState("");
 	const selectMode: SelectMode = qd.mode === "multi-select" ? "multi-select" : "single-select";
+
+	// The PRIMARY dictation input (owner, STT round 1): while a question
+	// waits, dictated finals land HERE, never in the hidden composer — text
+	// mode owns "Your answer", select modes own "Your thinking". The claim
+	// is effect-scoped, so the question unmounting releases it and
+	// dictation falls back to the composer automatically.
+	useDictationTarget(
+		useCallback(
+			(t: string) => {
+				if (qd.mode === "text") setText((v) => joinDictation(v, t));
+				else setThinking((v) => joinDictation(v, t));
+			},
+			[qd.mode],
+		),
+		true,
+	);
 
 	const toggle = (idx: number) => setSel(toggleOption(selectMode, sel, idx));
 
@@ -420,6 +443,12 @@ function QuestionDockForm({
 							value={text}
 							onChange={(e) => setText(e.target.value)}
 							onKeyDown={(e) => {
+								// Esc ends dictation (the dictate decisions: click-again or Esc).
+								if (e.key === "Escape" && onEscape) {
+									e.preventDefault();
+									onEscape();
+									return;
+								}
 								// Chat convention: Enter submits, Shift+Enter is a newline;
 								// ⌘/Ctrl+Enter also submits (universal across the app).
 								if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
@@ -436,6 +465,12 @@ function QuestionDockForm({
 							value={thinking}
 							onChange={(e) => setThinking(e.target.value)}
 							onKeyDown={(e) => {
+								// Esc ends dictation (the dictate decisions: click-again or Esc).
+								if (e.key === "Escape" && onEscape) {
+									e.preventDefault();
+									onEscape();
+									return;
+								}
 								// ⌘↵ on macOS, Ctrl↵ elsewhere — the Gmail convention; plain
 								// Enter stays a newline (this field is for dumping).
 								if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {

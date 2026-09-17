@@ -57,5 +57,13 @@ against our codebase. Decisions at the bottom.
 - **Activation: toggle mic** — click to start a dictation run, click again (or Esc) to end; no push-to-talk before the shortcuts milestone.
 - **Wave scope: cloud first, local second** — capture component + Deepgram path ship and get live-smoked as one wave; whisper.cpp follows as a second wave.
 - Renderer never holds the real key (server mints short-lived Deepgram tokens); audio never loops through our server (renderer → wss direct).
-- Interim text ghosts in the composer; finals commit. Engine picker = small popover off the mic button (localStorage for now; settings milestone absorbs it).
+- Engine picker = small popover off the mic button (localStorage for now; settings milestone absorbs it).
 - Bands: 1) capture + mic states (no engine), 2) cloud end-to-end, 3) local end-to-end, 4) smoke + docs.
+
+## Round-1 refinements (owner, 2026-09-17 — first live mic test)
+
+- **No interims.** Live words beside the meter are distracting AND shift the meter around — the meter's width stays fixed while recording. Params now match the pi dictate extension exactly: `interim_results` omitted (false), `endpointing=300`, no `utterance_end_ms`.
+- **One primary transcription input at all times**: while a quiz/ask question waits, finals land in ITS field (text mode → "Your answer", select modes → "Your thinking") — never the hidden composer. Implemented as a module-level claim registry (`useDictationTarget`); the composer is the fallback when nothing claims.
+- **Optimistic meter**: the click enters the meter view immediately (Stop pill + meter within one frame); the token mint and mic acquisition run concurrently (Promise.all) behind it. Esc or click-again stops.
+- **Wide idle button**: the stats-bar middle is one full-width affordance — a quiet bordered "Dictate" button when idle (error text replaces the label on failure), the Stop pill + fixed meter while live.
+- Final-appending keeps the dictate-flush separator rule (`joinDictation`).

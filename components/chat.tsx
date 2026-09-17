@@ -872,6 +872,7 @@ export function Chat({
 					turns={turns}
 					onReserve={setDockReserve}
 					dictationSlot={<DictationBar dictation={dictation} />}
+					dictationStop={dictation.stop}
 					composer={
 						<Composer
 							// Stop applies only to a LOCAL stream: a server-side turn has no
@@ -950,6 +951,7 @@ function DockOverlay({
 	plan,
 	onOpenPlan,
 	dictationSlot,
+	dictationStop,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
@@ -975,6 +977,9 @@ function DockOverlay({
 	/** The dictation strip (STT wave): rendered in the stats bar's middle
 	 *  slot — the mic button + live meter (components/dictation.tsx). */
 	dictationSlot?: React.ReactNode;
+	/** Esc in a pending question's field stops dictation (the strip is the
+	 *  stats bar's; the stop belongs to the page-owned hook, threaded down). */
+	dictationStop?: () => void;
 }) {
 	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
 	// Teach-phase mount (session reload with a pending check): the dock starts
@@ -1225,6 +1230,7 @@ function DockOverlay({
 									phase={phase}
 									onExpand={expandAndReveal}
 									onSubmit={onSubmitAnswer}
+									onEscape={dictationStop}
 								/>
 							) : (
 								composer
