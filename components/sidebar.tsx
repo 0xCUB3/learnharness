@@ -86,7 +86,11 @@ function SessionStatus({ busy }: { busy: boolean }) {
 
 /** Compact "how long ago": "just now", "5m ago", "3h ago", "2d ago",
  *  then a plain date. How long a session has been WAITING matters more
- *  than an absolute timestamp. Pure — exported for tests. */
+ *  than an absolute timestamp. Beyond a week the date renders ISO
+ *  (YYYY-MM-DD, zero-padded) — the international standard: unambiguous
+ *  in any locale and it sorts (owner, typography round 5; the old
+ *  M/D/YYYY was the US convention. A user-locale setting can come later
+ *  — trivial, a format function swap). Pure — exported for tests. */
 export function timeAgo(iso: string, now = new Date()): string {
 	const ms = now.getTime() - new Date(iso).getTime();
 	if (ms < 60_000) return "just now";
@@ -96,16 +100,21 @@ export function timeAgo(iso: string, now = new Date()): string {
 	if (h < 24) return `${h}h ago`;
 	const d = Math.floor(h / 24);
 	if (d < 7) return `${d}d ago`;
-	return new Date(iso).toLocaleDateString();
+	const date = new Date(iso);
+	const mm = String(date.getMonth() + 1).padStart(2, "0");
+	const dd = String(date.getDate()).padStart(2, "0");
+	return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
-/** The row's second line: state replaces the message count when the state
- *  is the more useful fact (most resting sessions are awaiting an answer —
- *  that's what the learner scans for). */
+/** The row's second line: the state when a state exists (waiting/working),
+ *  otherwise just how long ago. The message count is DROPPED (owner,
+ *  typography round 5): it informed no decision — clutter. messageCount
+ *  still rides the API payload, so this is a one-line flip back if it's
+ *  ever wanted. */
 function sessionMeta(chat: ChatListItem): string {
 	if (chat.pendingQuestion) return `Waiting for your answer · ${timeAgo(chat.updatedAt)}`;
 	if (chat.busy) return "Teacher is working…";
-	return `${chat.messageCount} messages · ${new Date(chat.updatedAt).toLocaleDateString()}`;
+	return timeAgo(chat.updatedAt);
 }
 
 /**
@@ -127,8 +136,8 @@ export function SessionRow({
 			type="button"
 			onClick={onOpen}
 			className={cn(
-				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
-				active && "bg-accent font-medium",
+				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
+				active && "bg-accent",
 			)}
 		>
 			<SessionStatus busy={chat.busy} />

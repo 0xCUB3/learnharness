@@ -86,26 +86,30 @@ describe("SessionRow", () => {
 		const working = render(item({ busy: true }));
 		assert.ok(working.includes("Teacher is working…"), "working meta");
 
+		// Owner, typography round 5: the message count is dropped — it
+		// informed no decision. Idle meta is just how long ago.
 		const idle = render(item({ title: "Partial derivatives", messageCount: 7 }));
 		assert.ok(idle.includes("Partial derivatives"));
-		assert.match(idle, /7 messages · \d{1,2}\/\d{1,2}\/\d{4}/, "idle keeps the count");
+		assert.ok(!idle.includes("messages"), "the count is gone (flip-flop: one line in sessionMeta)");
+		assert.match(idle, /\d{4}-\d{2}-\d{2}/, "idle shows the ISO date");
 	});
 
-	it("active row is visually marked", () => {
+	it("active row is visually marked by the background alone (owner, round 5: no weight change)", () => {
 		const html = render(item({}), true);
-		assert.ok(html.includes("font-medium"), "active emphasis");
+		assert.ok(html.includes("bg-accent"), "active background");
+		assert.ok(!html.includes("font-medium"), "weight is not a second channel doing the same job");
 	});
 });
 
 describe("timeAgo", () => {
 	const now = new Date("2026-01-02T12:00:00.000Z");
 
-	it("just now / minutes / hours / days, then falls back to a date", () => {
+	it("just now / minutes / hours / days, then the ISO date (owner, round 5)", () => {
 		assert.equal(timeAgo("2026-01-02T11:59:30.000Z", now), "just now");
 		assert.equal(timeAgo("2026-01-02T11:55:00.000Z", now), "5m ago");
 		assert.equal(timeAgo("2026-01-02T09:00:00.000Z", now), "3h ago");
 		assert.equal(timeAgo("2025-12-31T12:00:00.000Z", now), "2d ago");
-		assert.match(timeAgo("2025-06-02T12:00:00.000Z", now), /\d/, "beyond a week: a date");
+		assert.equal(timeAgo("2025-06-02T12:00:00.000Z", now), "2025-06-02", "beyond a week: ISO — unambiguous, sortable");
 	});
 
 	it("negative drift (clock skew) reads as just now, never a future date", () => {
