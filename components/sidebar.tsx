@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
+import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,15 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	const [mounted, setMounted] = useState(false);
 
 	useEffect(() => {
+		// Electron shell detection (merged chrome, 2026-09-17): keys the
+		// .lh-electron CSS (app/globals.css) that turns the header bands
+		// into the window's drag surface. Post-mount only — server HTML
+		// and first client render must agree (no hydration mismatch),
+		// and in the plain browser the class never appears.
+		if (typeof navigator !== "undefined" && navigator.userAgent.includes("Electron")) {
+			document.documentElement.classList.add("lh-electron");
+		}
+
 		const stored = localStorage.getItem(STORAGE_KEY);
 		// Default: open (first run introduces the sidebar).
 		setOpen(stored === null ? true : stored === "1");
@@ -74,8 +84,8 @@ export function SidebarToggle() {
 	return (
 		<span
 			className={cn(
-				"sidebar-motion relative flex h-9 shrink-0 overflow-hidden duration-200",
-				open ? "w-0 -mr-3" : "w-9 mr-0",
+				"sidebar-motion lh-no-drag relative flex h-9 shrink-0 overflow-hidden duration-200",
+				open ? "w-0 -mr-3" : "w-9 mr-0 lh-closed-toggle",
 			)}
 		>
 			<Button
@@ -245,12 +255,29 @@ function SessionsSidebar() {
 			aria-hidden={!open}
 		>
 			<div className="flex h-full w-72 flex-col border-r bg-background">
-				{/* LH wordmark — the owner's header; close toggle sits at the edge. */}
-				<div className="flex items-center justify-between px-4 py-3">
-					<Link href="/" className="text-sm font-bold uppercase tracking-widest hover:opacity-80">
-						LH
+				{/* LH wordmark — the owner's header; close toggle sits at the edge.
+				    Merged chrome (2026-09-17): in Electron this band is the
+				    window's drag surface and starts after the traffic lights
+				    (.lh-lights-gutter); in the browser those classes are inert. */}
+				<div className="lh-drag lh-lights-gutter flex items-center justify-between px-4 py-3">
+					{/* The owner's mark (2026-09-17) replaces the "LH" text — still the
+					    home link, still vertically centered by the band's items-center.
+					    The 92px .lh-lights-gutter keeps it clear of the traffic lights
+					    with the lights' own edge-inset as the gap. */}
+					<Link
+						href="/"
+						aria-label="Home"
+						className="lh-no-drag shrink-0 rounded-md transition-opacity hover:opacity-80"
+					>
+						<LhMark className="size-6" />
 					</Link>
-					<Button variant="ghost" size="icon" aria-label="Close sidebar" onClick={toggle}>
+					<Button
+						variant="ghost"
+						size="icon"
+						aria-label="Close sidebar"
+						onClick={toggle}
+						className="lh-no-drag"
+					>
 						<PanelLeftCloseIcon className="size-4" />
 					</Button>
 				</div>

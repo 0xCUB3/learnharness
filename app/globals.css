@@ -305,3 +305,39 @@ body {
 		animation: none;
 	}
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Electron merged chrome (owner, 2026-09-17). The system title bar is
+   hidden (titleBarStyle: "hiddenInset" in electron/main.cjs); the app's
+   own 60px header bands are the drag surface. Everything here is inert
+   in the plain browser — it keys off <html class="lh-electron">, which
+   SidebarProvider sets after mount when it detects the Electron shell.
+
+   - .lh-drag        window-drag region (must sit on pointer-receiving els)
+   - .lh-no-drag     carve-out for interactive elements inside a drag band
+   - .lh-lights-gutter  the sidebar LH band's traffic-light gutter: lights
+                       end at x≈68, the wordmark starts at 80px (5rem)
+   - .lh-closed-toggle  same gutter for the sidebar toggle when the sidebar
+                       is closed — the lights are static, the toggle moves
+   - .lh-float-drag  the home header strip floats pointer-events-none over
+                       the graph; only in Electron does it claim events and
+                       become the drag surface for that page
+   ───────────────────────────────────────────────────────────────────────── */
+.lh-electron .lh-drag {
+	-webkit-app-region: drag;
+}
+.lh-electron .lh-no-drag {
+	-webkit-app-region: no-drag;
+}
+/* 92px = measured lights' right edge (~75pt) + the lights' own 16px
+   inset from the window edge — comfortable, symmetric air (owner). */
+.lh-electron .lh-lights-gutter {
+	padding-left: 92px;
+}
+.lh-electron .lh-closed-toggle {
+	margin-left: 92px;
+}
+.lh-electron .lh-float-drag {
+	pointer-events: auto;
+	-webkit-app-region: drag;
+}

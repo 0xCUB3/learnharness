@@ -60,7 +60,7 @@ export function Home() {
 
 			{/* Header floats over the graph — pointer-events-none except the
 			    toggle, so the canvas stays draggable/hoverable around it. */}
-			<header className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-2">
+			<header className="lh-float-drag pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-2">
 				<div className="pointer-events-auto">
 					<SidebarToggle />
 				</div>

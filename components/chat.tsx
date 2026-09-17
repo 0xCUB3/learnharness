@@ -637,7 +637,7 @@ export function Chat({
 				    60px is an ALIGNMENT, not just a size: it equals the sidebar's
 				    LH wordmark band, so the header's border-b continues that
 				    band's bottom edge as one line across the app (owner, round 6). */}
-				<header className="flex h-15 items-center gap-3 border-b border-border px-3">
+				<header className="lh-drag flex h-15 items-center gap-3 border-b border-border px-3">
 					<SidebarToggle />
 					{renaming ? (
 						<input
@@ -651,9 +651,10 @@ export function Chat({
 							onBlur={() => void commitRename(titleDraft)}
 							spellCheck={false}
 							aria-label="Session title"
-							className="min-w-0 flex-1 bg-transparent font-title text-3xl tracking-tight caret-current outline-none"
+							className="lh-no-drag min-w-0 flex-1 bg-transparent font-title text-3xl tracking-tight caret-current outline-none"
 						/>
 					) : (
+					<>
 						<button
 							type="button"
 							title="Rename session"
@@ -661,10 +662,14 @@ export function Chat({
 								setTitleDraft(titleText);
 								setRenaming(true);
 							}}
-							className="min-w-0 flex-1 cursor-text truncate text-left font-title text-3xl tracking-tight"
+							className="lh-no-drag -mx-1.5 min-w-4 shrink cursor-text truncate rounded-md px-1.5 text-left font-title text-3xl tracking-tight transition-colors hover:bg-accent"
 						>
 							{titleText}
-						</button>
+							</button>
+							{/* flex-1 spacer: keeps the chips at the right edge AND stays a
+							    drag surface (no carve-out) — the freed bar is grippable. */}
+							<div className="min-w-4 flex-1" aria-hidden="true" />
+					</>
 					)}
 					{/* The plan chip (owner, plan-placement round): session-level
 					    structure beside the phase chip — access to the full-DAG popup
@@ -675,7 +680,7 @@ export function Chat({
 							data-testid="plan-chip"
 							onClick={() => setPlanOpen(true)}
 							title="Open the full plan"
-							className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+							className="lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground"
 						>
 							<WaypointsIcon className="size-3.5 text-primary" aria-hidden />
 							Plan

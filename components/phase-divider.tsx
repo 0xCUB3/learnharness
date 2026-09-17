@@ -39,7 +39,7 @@ export function PhaseChip({ phase }: { phase: Phase3 }) {
 			data-testid="phase-chip"
 			data-phase={phase}
 			title={`Session phase: ${CHIP_LABEL[phase]}`}
-			className="flex shrink-0 items-center rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+			className="lh-no-drag flex shrink-0 items-center rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
 		>
 			{CHIP_LABEL[phase]}
 		</span>

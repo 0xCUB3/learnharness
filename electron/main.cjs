@@ -42,6 +42,14 @@ function serverEntry() {
 }
 
 // ─── Single instance: two instances would fight over the data dir ─────────
+// Dev shell (LH_DEV_URL) runs BESIDE the packaged app, not instead of it:
+// its own userData so (a) the single-instance lock — checked below — doesn't
+// silently kill it, and (b) it never reads/writes the real app's
+// localStorage, auth.json, or logs. Must run before the lock check.
+if (process.env.LH_DEV_URL) {
+	app.setPath("userData", `${app.getPath("userData")}-dev`);
+}
+
 if (!app.requestSingleInstanceLock()) {
 	app.quit();
 } else {
@@ -176,6 +184,14 @@ function createWindow(url) {
 		width: 1440,
 		height: 900,
 		title: PRODUCT_NAME,
+		// Merged chrome (owner, 2026-09-17): the system title bar is gone;
+		// the app's own 60px header bands ARE the title bar. The traffic
+		// lights float over the sidebar's LH wordmark band, vertically
+		// centered on its 60px line (12px circles: y 24–36), with the LH
+		// wordmark starting at x≈80 (components/sidebar.tsx gutter).
+		// Dragging comes from the renderer's .lh-drag bands (app/globals.css).
+		titleBarStyle: "hiddenInset",
+		trafficLightPosition: { x: 16, y: 24 },
 		webPreferences: {
 			contextIsolation: true,
 			sandbox: true,
