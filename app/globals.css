@@ -313,15 +313,15 @@ body {
    in the plain browser — it keys off <html class="lh-electron">, which
    SidebarProvider sets after mount when it detects the Electron shell.
 
-   - .lh-drag        window-drag region (must sit on pointer-receiving els)
+   - .lh-drag        window-drag region — on a dedicated mask div in
+                       home.tsx placed FIRST in the page DOM (the mask
+                       resolves by DOM order, not z-index: no-drag subtracts
+                       only regions added earlier in the tree)
    - .lh-no-drag     carve-out for interactive elements inside a drag band
    - .lh-lights-gutter  the sidebar LH band's traffic-light gutter: lights
                        end at x≈68, the wordmark starts at 80px (5rem)
    - .lh-closed-toggle  same gutter for the sidebar toggle when the sidebar
                        is closed — the lights are static, the toggle moves
-   - .lh-float-drag  the home header strip floats pointer-events-none over
-                       the graph; only in Electron does it claim events and
-                       become the drag surface for that page
    ───────────────────────────────────────────────────────────────────────── */
 .lh-electron .lh-drag {
 	-webkit-app-region: drag;
@@ -336,8 +336,4 @@ body {
 }
 .lh-electron .lh-closed-toggle {
 	margin-left: 92px;
-}
-.lh-electron .lh-float-drag {
-	pointer-events: auto;
-	-webkit-app-region: drag;
 }
