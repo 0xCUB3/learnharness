@@ -40,7 +40,12 @@
 	/* Emphasis coloring in teaching prose — ready for the settings UI. */
 	--lh-ink-strong: #c96b4a;
 	--lh-ink-italic: #6fa9d6;
-	--lh-prose-size: 16.5px;
+	/* THE READING SIZE = the ladder's 16px rung (--text-lg). Can't be
+	   var()-linked: @theme inline inlines literals into utilities without
+	   emitting runtime vars — so this is the one documented duplication:
+	   change one, change both. (owner, typography round 4: snapped from
+	   the reskin's hand-tuned 16.5 to the ladder's 16.) */
+	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
 }
 
@@ -67,7 +72,12 @@
 	--ring: #8d8d8d;
 	--lh-ink-strong: #c96b4a;
 	--lh-ink-italic: #6fa9d6;
-	--lh-prose-size: 16.5px;
+	/* THE READING SIZE = the ladder's 16px rung (--text-lg). Can't be
+	   var()-linked: @theme inline inlines literals into utilities without
+	   emitting runtime vars — so this is the one documented duplication:
+	   change one, change both. (owner, typography round 4: snapped from
+	   the reskin's hand-tuned 16.5 to the ladder's 16.) */
+	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
 }
 
@@ -93,9 +103,12 @@
 	--font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
 	--font-sans: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
 	/* The modular type ladder — each size carries its own line-height.
-	   Component sizes must pull from this ladder. */
-	--text-xxs: 10px;
-	--text-xxs--line-height: 1.4;
+	   Component sizes must pull from this ladder. (owner, typography
+	   round 4: the 10px rung is merged into 11 — one pixel apart was a
+	   distinction with no visible difference, and 10px sits at the mono
+	   legibility floor; quiet labels get their quiet from color +
+	   tracking, not a notch of size. Reading prose = the 16px rung via
+	   --lh-prose-size.) */
 	--text-xs: 11px;
 	--text-xs--line-height: 1.4;
 	--text-sm: 12.5px;
@@ -166,9 +179,9 @@ body {
 
 /* lh-input (owner, typography round 2): lh-prose's 1.5 READING leading
    makes typing carets tower over the glyphs — the caret fills the line
-   box (24.75px at 16.5px text, ~2.1× the glyph height). Inputs are not
+   box (24px at 16px text, ~2× the glyph height). Inputs are not
    paragraphs: a tighter 1.25 leading brings the caret to the font-metric
-   floor (~21px, as close to the glyphs as Chromium will draw it) while
+   floor (~20px, as close to the glyphs as Chromium will draw it) while
    wrapped lines in growing textareas still read fine. Rendered prose keeps
    1.5 — the two share family and size, they differ only in leading. */
 .lh-input {

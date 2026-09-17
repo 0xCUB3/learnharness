@@ -307,7 +307,7 @@ function QuestionDockForm({
 										)}
 									>
 										{isSel && (
-											<span className={cn(qd.mode === "multi-select" ? "text-xxs" : "size-1.5 rounded-full bg-current")}>
+											<span className={cn(qd.mode === "multi-select" ? "text-xs" : "size-1.5 rounded-full bg-current")}>
 												{qd.mode === "multi-select" ? "✓" : ""}
 											</span>
 										)}
@@ -373,7 +373,7 @@ function QuestionDockForm({
 									)}
 								>
 									{sel.otherSelected && (
-										<span className={cn(qd.mode === "multi-select" ? "text-xxs" : "size-1.5 rounded-full bg-current")}>
+										<span className={cn(qd.mode === "multi-select" ? "text-xs" : "size-1.5 rounded-full bg-current")}>
 											{qd.mode === "multi-select" ? "✓" : ""}
 										</span>
 									)}
@@ -412,7 +412,7 @@ function QuestionDockForm({
 					data-testid={qd.mode === "text" ? "answer-field" : "thinking-field"}
 					className="rounded-xl border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50"
 				>
-					<div className="px-2.5 pt-2 text-xxs font-medium uppercase tracking-wide text-muted-foreground">
+					<div className="px-2.5 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 						{qd.mode === "text" ? "Your answer" : "Your thinking"}
 					</div>
 					{qd.mode === "text" ? (
@@ -455,7 +455,7 @@ function QuestionDockForm({
 					)}
 					<div className="flex items-center justify-between gap-2 p-1">
 						{qd.mode !== "text" && (
-							<span aria-hidden className="pl-1.5 text-xxs text-muted-foreground">
+							<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">
 								⌘/Ctrl + ↵ submits
 							</span>
 						)}
