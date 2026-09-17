@@ -242,8 +242,13 @@ function GraphSettingsControl({
 				<SettingsIcon className="size-4" />
 			</button>
 			{open && (
-				<div className="absolute right-0 top-full mt-2 w-64 rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
-					<div className="flex flex-col gap-2">
+				// Viewport-capped + internally scrollable — the coverage
+				// dropdown's exact pattern (owner, 2026-09-17): max-h keeps a
+				// floor of free space above the window bottom at any height,
+				// and the overflow-y-auto column (which also zeroes the flex
+				// item's min-height) scrolls instead of stretching the page.
+				<div className="absolute right-0 top-full mt-2 flex max-h-[60vh] w-64 flex-col rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
+					<div className="flex flex-col gap-2 overflow-y-auto">
 							{/* Size/zoom/region sliders: LADDER-mapped 0-100, step 10 (11
 							    stops, every DEFAULT dead-center at 50, every value a nice
 							    number — src/core/render-settings.ts). Physics keeps the
