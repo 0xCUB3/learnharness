@@ -529,3 +529,31 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		await drain(ok);
 	});
 });
+
+describe("renameChat (the header's click-to-edit title)", () => {
+	it("persists the title and does NOT bump updatedAt — sidebar order must not churn", () => {
+		const chat = chatStore.createChat("old title");
+		createdChats.push(chat.id);
+		const before = chatStore.getChat(chat.id)!.updatedAt;
+		const renamed = chatStore.renameChat(chat.id, "  new title  ");
+		assert.equal(renamed.title, "new title", "trimmed on the way in");
+		assert.equal(chatStore.getChat(chat.id)!.title, "new title");
+		assert.equal(
+			chatStore.getChat(chat.id)!.updatedAt,
+			before,
+			"a rename is not conversation activity",
+		);
+		assert.equal(
+			chatStore.listChats().find((c) => c.id === chat.id)!.title,
+			"new title",
+			"the sidebar list view sees it",
+		);
+	});
+
+	it("falls back to Untitled session on an all-whitespace title (the honest floor)", () => {
+		const chat = chatStore.createChat("keep me");
+		createdChats.push(chat.id);
+		const renamed = chatStore.renameChat(chat.id, "   ");
+		assert.equal(renamed.title, "Untitled session");
+	});
+});

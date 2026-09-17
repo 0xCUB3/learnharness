@@ -215,6 +215,18 @@ function SessionsSidebar() {
 		}
 	}, []);
 
+	/* Instant rename propagation (2026-09-17): the chat header's rename
+	   commits dispatch lh:chat-renamed; patch the snapshot in place instead
+	   of waiting for the 2.5s poll. */
+	useEffect(() => {
+		const onRenamed = (e: Event) => {
+			const { id, title } = (e as CustomEvent<{ id: string; title: string }>).detail;
+			setChats((prev) => (prev ? prev.map((c) => (c.id === id ? { ...c, title } : c)) : prev));
+		};
+		window.addEventListener("lh:chat-renamed", onRenamed);
+		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
+	}, []);
+
 	useEffect(() => {
 		if (!open) return;
 		void refresh();

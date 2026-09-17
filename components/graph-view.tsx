@@ -67,6 +67,7 @@ import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, Waypoi
 import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { GraphCoverageControl } from "./graph-coverage.tsx";
+import { usePopoverDismiss } from "@/components/popover-dismiss";
 import {
 	ARROW_LENGTH_LADDER,
 	CHARGE_RANGE,
@@ -221,10 +222,14 @@ function GraphSettingsControl({
 	changeSettings: (update: (cur: RenderSettings) => RenderSettings) => void;
 }) {
 	const [open, setOpen] = useState(false);
+	// Click anywhere outside (or Escape) closes the panel (2026-09-17) —
+	// the root wraps button + panel, so the toggle itself keeps working.
+	const rootRef = useRef<HTMLDivElement>(null);
+	usePopoverDismiss(rootRef, open, () => setOpen(false));
 	const regionTuning = settings.regions;
 	const physicsTuning = settings.physics;
 	return (
-		<div className="relative">
+		<div ref={rootRef} className="relative">
 			<button
 				type="button"
 				title="Rendering settings"
@@ -957,12 +962,15 @@ export function GraphView() {
 
 			{/* Legend + filters: search box and per-state toggle rows. */}
 			{/* Top-right controls — separate floating containers (owner,
-			    graph-view round 2): the search box, the settings gear (its own
-			    collapsible component), the import button, and the coverage
-			    control. Coverage renders even when the graph is EMPTY — an
-			    empty graph with unextracted sessions is exactly when it
-			    matters (extract → the graph gains nodes). */}
-			<div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+			    graph-view round 2). Row order (2026-09-17): search,
+			    coverage, import, gear — coverage sits between search and
+			    import; the gear keeps the corner. items-start (not center)
+			    so the search container's no-match note can grow downward
+			    without shifting its siblings — every button is 44px tall,
+			    top alignment pins the row. Coverage renders even when the
+			    graph is EMPTY — an empty graph with unextracted sessions is
+			    exactly when it matters (extract → the graph gains nodes). */}
+			<div className="absolute right-3 top-3 z-10 flex items-start gap-2">
 				{!isEmpty && (
 					<>
 					{/* Search — its own container (icon + input + no-match note). */}
@@ -983,6 +991,16 @@ export function GraphView() {
 							</div>
 						)}
 					</div>
+					</>
+				)}
+				{/* Extraction coverage — between search and import (2026-09-17);
+					always present, even when the graph is EMPTY — an empty graph
+					with unextracted sessions is exactly when it matters (extract
+					→ the graph gains nodes). The panel re-reads when background
+					runs settle (refreshTick). */}
+				<GraphCoverageControl refreshKey={refreshTick} />
+				{!isEmpty && (
+				<>
 					{/* Import notes — its own container. */}
 					<div className="rounded-xl border bg-card/85 p-1.5 shadow-lg backdrop-blur">
 						<input
@@ -1007,14 +1025,11 @@ export function GraphView() {
 						</button>
 					</div>
 					{/* Rendering settings — own component; the gear toggles it. The
-					    gear sits at the far right (owner, round 3) so its panel
-					    drops at the very right edge, over less of the graph. */}
+						    gear sits at the far right (owner, round 3) so its panel
+						    drops at the very right edge, over less of the graph. */}
 					<GraphSettingsControl settings={settings} changeSettings={changeSettings} />
 					</>
 				)}
-				{/* Extraction coverage — own container, always present; the
-				    panel re-reads when background runs settle (refreshTick). */}
-				<GraphCoverageControl refreshKey={refreshTick} />
 			</div>
 
 			{/* Background pipeline status: what is currently running. */}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { ListChecksIcon, Loader2Icon } from "lucide-react";
 import { formatTokens } from "@/components/usage-format";
 
@@ -34,6 +35,10 @@ interface CoverageChat {
 
 export function GraphCoverageControl({ refreshKey = 0 }: { refreshKey?: number }) {
 	const [open, setOpen] = useState(false);
+	// Click anywhere outside (or Escape) closes the panel (2026-09-17) —
+	// the root wraps button + panel, so the toggle itself keeps working.
+	const rootRef = useRef<HTMLDivElement>(null);
+	usePopoverDismiss(rootRef, open, () => setOpen(false));
 	const [chats, setChats] = useState<CoverageChat[]>([]);
 	const [loaded, setLoaded] = useState(false);
 	const [extracting, setExtracting] = useState<string[]>([]); // click-pending ids (optimistic until the poll says running)
@@ -83,7 +88,7 @@ export function GraphCoverageControl({ refreshKey = 0 }: { refreshKey?: number }
 
 	const pending = (chat: CoverageChat) => chat.running || extracting.includes(chat.chatId);
 	return (
-		<div className="relative">
+		<div ref={rootRef} className="relative">
 			<button
 				type="button"
 				title="Extraction coverage — what the knowledge graph has covered"

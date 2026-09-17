@@ -153,6 +153,52 @@ export function Chat({
 	// the orphaned turn finishes — poll for that, don't resurrect.
 	const [turnInFlight, setTurnInFlight] = useState(initiallyInFlight ?? false);
 
+	// Session title: click-to-rename (owner, 2026-09-17). Clicking the header
+	// title opens edit mode with everything selected — typing replaces, arrows
+	// move inside. Enter or a click away commits (PUT /api/chats/:id); Escape
+	// discards. The server never bumps updatedAt on a rename (sidebar order
+	// must not churn), and the sidebar patch is instant via the window event —
+	// its 2.5s poll is only a backstop.
+	const [titleText, setTitleText] = useState(title);
+	const [renaming, setRenaming] = useState(false);
+	const [titleDraft, setTitleDraft] = useState("");
+	const titleInputRef = useRef<HTMLInputElement | null>(null);
+
+	const commitRename = useCallback(
+		async (next: string) => {
+			setRenaming(false);
+			const t = next.trim();
+			if (t === "" || t === titleText) return; // empty commit = discard
+			try {
+				const res = await fetch(`/api/chats/${chatId}`, {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ title: t }),
+				});
+				if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+				setTitleText(t);
+				window.dispatchEvent(
+					new CustomEvent("lh:chat-renamed", { detail: { id: chatId, title: t } }),
+				);
+			} catch (err) {
+				console.error("rename failed:", err); // keep the old title
+			}
+		},
+		[chatId, titleText],
+	);
+
+	// Select-all when edit mode opens: the click means "replace", so the
+	// whole title highlights on entry (owner ask, 2026-09-17).
+	useEffect(() => {
+		if (renaming) {
+			const el = titleInputRef.current;
+			if (el) {
+					el.focus();
+					el.select();
+			}
+		}
+	}, [renaming]);
+
 	// Mount continuation: if the stored transcript ends with a fulfilled tool
 	// (a job result landed while no client was open), resume the lesson — the
 	// SDK's sendAutomaticallyWhen only fires inside addToolOutput, so reloads
@@ -593,7 +639,33 @@ export function Chat({
 				    band's bottom edge as one line across the app (owner, round 6). */}
 				<header className="flex h-15 items-center gap-3 border-b border-border px-3">
 					<SidebarToggle />
-					<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">{title}</div>
+					{renaming ? (
+						<input
+							ref={titleInputRef}
+							value={titleDraft}
+							onChange={(e) => setTitleDraft(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") void commitRename(titleDraft);
+								else if (e.key === "Escape") setRenaming(false);
+							}}
+							onBlur={() => void commitRename(titleDraft)}
+							spellCheck={false}
+							aria-label="Session title"
+							className="min-w-0 flex-1 bg-transparent font-title text-3xl tracking-tight caret-current outline-none"
+						/>
+					) : (
+						<button
+							type="button"
+							title="Rename session"
+							onClick={() => {
+								setTitleDraft(titleText);
+								setRenaming(true);
+							}}
+							className="min-w-0 flex-1 cursor-text truncate text-left font-title text-3xl tracking-tight"
+						>
+							{titleText}
+						</button>
+					)}
 					{/* The plan chip (owner, plan-placement round): session-level
 					    structure beside the phase chip — access to the full-DAG popup
 					    at every width; the marginalia is the wide-screen glance view. */}

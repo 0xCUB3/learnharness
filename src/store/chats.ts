@@ -116,6 +116,19 @@ function saveSettings(id: string, settings: ChatSettings): void {
 	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
 }
 
+/** Rename a session (the header's click-to-edit title, 2026-09-17). Like
+ * saveSettings, a rename is NOT conversation activity: updatedAt stays put
+ * so sidebar order never churns. Same fallback as createChat — the empty
+ * string becomes "Untitled session" (the API gate rejects it first; this
+ * is the honest floor for any other caller). */
+function renameChat(id: string, title: string): ChatRecord {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	record.title = title.trim() || "Untitled session";
+	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+	return record;
+}
+
 /** Persist the session plan tree (plan tools call this in execute). */
 function saveTree(id: string, tree: PlanTree): void {
 	const record = getChat(id);
@@ -133,6 +146,7 @@ export const chatStore: ChatStore = {
 	saveMessages,
 	saveTree,
 	saveSettings,
+	renameChat,
 	appendTurnUsage,
 	appendExtractionUsage,
 };
