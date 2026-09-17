@@ -192,8 +192,9 @@ export const GLOW_BLUR = 5;
 export const GLOW_REACH = GLOW_MARGIN + 3 * GLOW_BLUR;
 /** Node titles render at text-xs (12.5px) in svg units. The in-chat block
  *  scales up to fill the column but NEVER past the chat prose size
- *  (--lh-prose-size, 16.5px) — the width cap that makes that hold. */
-export const TEXT_CAP_SCALE = 16.5 / 12.5;
+ *  (--lh-prose-size, 16px — the ladder's reading rung) — the width cap
+ *  that makes that hold. */
+export const TEXT_CAP_SCALE = 16 / 12.5;
 
 // ─── The owner's arrowhead (plan-graph round 5) ──────────────────────────────
 
@@ -808,7 +809,7 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 							/>
 						</div>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-2">
-							<span className="text-xxs text-muted-foreground/60">Drag to pan · scroll to zoom</span>
+							<span className="text-xs text-muted-foreground/60">Drag to pan · scroll to zoom</span>
 							<div className="flex gap-1">
 								<button
 									type="button"

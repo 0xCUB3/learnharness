@@ -77,9 +77,11 @@ export function DraftShell({
 	return (
 		<div className="flex h-dvh">
 			<div className="flex min-w-0 flex-1 flex-col">
-				<header className="relative flex h-10 items-center gap-3 px-3">
+				{/* h-15 (60px) matches the chat header and the sidebar's LH wordmark
+			    band (owner, round 6). */}
+			<header className="relative flex h-15 items-center gap-3 px-3">
 					<SidebarToggle />
-					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">New session</div>
+					<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">New session</div>
 					<PhaseChip phase="probe" />
 				</header>
 

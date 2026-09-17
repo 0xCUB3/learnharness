@@ -135,7 +135,7 @@ export function CoveragePanel({
 				<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/70">
 					Extraction coverage
 				</span>
-				<span className="text-xxs text-muted-foreground">uncovered first</span>
+				<span className="text-xs text-muted-foreground">uncovered first</span>
 			</div>
 			{!anyUncovered && (
 				<p className="px-1 py-2 text-xs text-muted-foreground">
@@ -156,7 +156,7 @@ function CoverageRow({ chat, busy, onExtract }: { chat: CoverageChat; busy: bool
 		<div className="flex items-center gap-2 rounded-lg px-1 py-1.5 hover:bg-accent/50" data-testid="coverage-row">
 			<div className="min-w-0 flex-1">
 				<div className="truncate text-xs text-foreground">{chat.title}</div>
-				<div className="flex items-baseline gap-1.5 text-xxs text-muted-foreground">
+				<div className="flex items-baseline gap-1.5 text-xs text-muted-foreground">
 					{busy ? (
 						<span className="flex items-center gap-1">
 							<Loader2Icon className="size-3 animate-spin" /> extracting…
@@ -181,7 +181,7 @@ function CoverageRow({ chat, busy, onExtract }: { chat: CoverageChat; busy: bool
 				type="button"
 				disabled={busy || chat.uncoveredTokens === 0}
 				onClick={onExtract}
-				className="shrink-0 rounded-lg border px-2 py-1 text-xxs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+				className="shrink-0 rounded-lg border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
 			>
 				{busy ? "Running" : "Extract"}
 			</button>

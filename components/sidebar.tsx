@@ -5,10 +5,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
+import { BrailleSpinner } from "@/components/braille-spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { ChatListItem, Phase3 } from "@/src/core";
+import type { ChatListItem } from "@/src/core";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -51,83 +52,73 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	return (
 		<SidebarContext.Provider value={{ open, toggle }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
-			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width]")}>{children}</div>
+			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>
 	);
 }
 
-/** Hamburger for page headers — only visible when the sidebar is closed. */
+/** Hamburger for page headers — only visible when the sidebar is closed.
+ *
+ *  Owner, round 6c: the toggle is ALWAYS MOUNTED, owning a slot whose
+ *  width+margin animate in LOCKSTEP with the sidebar's own width
+ *  transition (same duration-200, same easing, both gated on mount) —
+ *  before, it mounted/unmounted in one frame, so its 48px footprint
+ *  (button + gap) popped and dragged the title and chips sideways while
+ *  the sidebar was still mid-slide. When open the slot is exactly zero
+ *  (w-0 -mr-3: width 0, the negative margin cancels the header's gap-3),
+ *  so resting layouts are pixel-identical to the old conditional render.
+ *  The icon fades with the slot and is clipped by it as it collapses —
+ *  no popping in either direction. */
 export function SidebarToggle() {
 	const { open, toggle } = useSidebar();
-	if (open) return null;
 	return (
-		<Button variant="ghost" size="icon" aria-label="Open sidebar" onClick={toggle}>
-			<PanelLeftOpenIcon className="size-5" />
-		</Button>
+		<span
+			className={cn(
+				"sidebar-motion relative flex h-9 shrink-0 overflow-hidden duration-200",
+				open ? "w-0 -mr-3" : "w-9 mr-0",
+			)}
+		>
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label="Open sidebar"
+				aria-hidden={open}
+				tabIndex={open ? -1 : 0}
+				onClick={toggle}
+				className={cn("sidebar-motion duration-200", open ? "pointer-events-none opacity-0" : "opacity-100")}
+			>
+				{/* Owner, round 6: size-4, SAME as the close glyph — the toggle
+				    must not grow when the sidebar is closed (it did: size-5 here).
+				    The small look is the standard, both directions. */}
+				<PanelLeftOpenIcon className="size-4" />
+			</Button>
+		</span>
 	);
 }
 
-/** Phase colors for the session dot — one system with the header chip
- *  and the transcript dividers (globals.css --phase-*). Static class
- *  strings per phase: Tailwind can't compile dynamic class names. */
-const PHASE_FILL: Record<Phase3, string> = {
-	probe: "bg-phase-probe",
-	plan: "bg-phase-plan",
-	teach: "bg-phase-teach",
-};
-const PHASE_RING: Record<Phase3, string> = {
-	probe: "border-phase-probe",
-	plan: "border-phase-plan",
-	teach: "border-phase-teach",
-};
-
 /**
- * The session dot, left of the title. TWO channels, one dot: COLOR is the
- * phase (probe/plan/teach — sky/violet/emerald), FILL+MOTION is what's
- * owed. Pulsing = the teacher is working (rare, time-sensitive — the only
- * state that deserves motion). Solid = a question awaits the learner's
- * answer (the DOMINANT resting state of real sessions — calm by design,
- * no animation). Hollow = nothing owed, idle. A pending answer outranks
- * "working": if a question is owed, that's the blocking fact.
+ * The row's status indicator (owner, minimal-color round): the braille
+ * spinner, ONLY while a teach turn is in flight — monochrome motion, the
+ * terminal's own glyph, existing exactly as long as the work does and
+ * vanishing the moment it ends. Every other state renders NOTHING:
+ * phases only advance (all sessions end in Teaching — phase-as-signal was
+ * decoration, now retired app-wide), and question-pending is the dominant
+ * RESTING state of real sessions — a resting state has no scan value, so
+ * the meta line's "Waiting for your answer" text carries it. Idle is the
+ * absence of a signal, by design.
  */
-function SessionDot({ phase, pending, busy }: { phase: Phase3; pending: boolean; busy: boolean }) {
-	if (pending) {
-		return (
-			<span
-				data-testid="session-dot-awaiting"
-				title="Waiting for your answer"
-				className={cn("size-2 shrink-0 rounded-full", PHASE_FILL[phase])}
-			>
-				<span className="sr-only">Waiting for your answer</span>
-			</span>
-		);
-	}
-	if (busy) {
-		return (
-			<span
-				data-testid="session-dot-working"
-				title="Teacher is working"
-				className={cn("size-2 shrink-0 rounded-full", PHASE_FILL[phase], "lh-dot-breathe")}
-			>
-				<span className="sr-only">Teacher is working</span>
-			</span>
-		);
-	}
-	return (
-		<span
-			data-testid="session-dot-idle"
-			aria-hidden
-			className={cn(
-				"size-2 shrink-0 rounded-full border-2 bg-transparent",
-				PHASE_RING[phase],
-			)}
-		/>
-	);
+function SessionStatus({ busy }: { busy: boolean }) {
+	if (!busy) return null;
+	return <BrailleSpinner />;
 }
 
 /** Compact "how long ago": "just now", "5m ago", "3h ago", "2d ago",
  *  then a plain date. How long a session has been WAITING matters more
- *  than an absolute timestamp. Pure — exported for tests. */
+ *  than an absolute timestamp. Beyond a week the date renders ISO
+ *  (YYYY-MM-DD, zero-padded) — the international standard: unambiguous
+ *  in any locale and it sorts (owner, typography round 5; the old
+ *  M/D/YYYY was the US convention. A user-locale setting can come later
+ *  — trivial, a format function swap). Pure — exported for tests. */
 export function timeAgo(iso: string, now = new Date()): string {
 	const ms = now.getTime() - new Date(iso).getTime();
 	if (ms < 60_000) return "just now";
@@ -137,21 +128,27 @@ export function timeAgo(iso: string, now = new Date()): string {
 	if (h < 24) return `${h}h ago`;
 	const d = Math.floor(h / 24);
 	if (d < 7) return `${d}d ago`;
-	return new Date(iso).toLocaleDateString();
+	const date = new Date(iso);
+	const mm = String(date.getMonth() + 1).padStart(2, "0");
+	const dd = String(date.getDate()).padStart(2, "0");
+	return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
-/** The row's second line: state replaces the message count when the state
- *  is the more useful fact (most resting sessions are awaiting an answer —
- *  that's what the learner scans for). */
+/** The row's second line: the state when a state exists (waiting/working),
+ *  otherwise just how long ago. The message count is DROPPED (owner,
+ *  typography round 5): it informed no decision — clutter. messageCount
+ *  still rides the API payload, so this is a one-line flip back if it's
+ *  ever wanted. */
 function sessionMeta(chat: ChatListItem): string {
 	if (chat.pendingQuestion) return `Waiting for your answer · ${timeAgo(chat.updatedAt)}`;
 	if (chat.busy) return "Teacher is working…";
-	return `${chat.messageCount} messages · ${new Date(chat.updatedAt).toLocaleDateString()}`;
+	return timeAgo(chat.updatedAt);
 }
 
 /**
- * One session row: the status dot, then title + state-aware meta. Exported
- * for render tests — pure function of the list item.
+ * One session row: the status spinner (only while working), then title +
+ * state-aware meta. Exported for render tests — pure function of the
+ * list item.
  */
 export function SessionRow({
 	chat,
@@ -167,13 +164,18 @@ export function SessionRow({
 			type="button"
 			onClick={onOpen}
 			className={cn(
-				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
-				active && "bg-accent font-medium",
+				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
+				active && "bg-accent",
 			)}
 		>
-			<SessionDot phase={chat.phase} pending={chat.pendingQuestion} busy={chat.busy} />
+			<SessionStatus busy={chat.busy} />
 			<span className="min-w-0 flex-1">
-				<span className="block truncate">{chat.title}</span>
+				{/* Titles are the learner's/teacher's WORDS — Source Sans 3, the
+				    same voice the words were typed in (every input is lh-prose);
+				    the meta line below stays JetBrains Mono (machine data). One
+				    rule, finally applied to the picker too (owner, typography
+				    round): mono = chrome, Source Sans = human words. */}
+				<span className="block truncate font-prose text-(length:--lh-prose-size)">{chat.title}</span>
 				<span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>
 			</span>
 		</button>
@@ -253,7 +255,7 @@ function SessionsSidebar() {
 				</button>
 
 				<div className="mx-3 mb-1 flex items-center gap-2">
-					<span className="text-xxs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
+					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
 					<span className="relative flex-1">
 						<Input
 							data-testid="session-search"

@@ -40,7 +40,12 @@
 	/* Emphasis coloring in teaching prose — ready for the settings UI. */
 	--lh-ink-strong: #c96b4a;
 	--lh-ink-italic: #6fa9d6;
-	--lh-prose-size: 16.5px;
+	/* THE READING SIZE = the ladder's 16px rung (--text-lg). Can't be
+	   var()-linked: @theme inline inlines literals into utilities without
+	   emitting runtime vars — so this is the one documented duplication:
+	   change one, change both. (owner, typography round 4: snapped from
+	   the reskin's hand-tuned 16.5 to the ladder's 16.) */
+	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
 }
 
@@ -67,7 +72,12 @@
 	--ring: #8d8d8d;
 	--lh-ink-strong: #c96b4a;
 	--lh-ink-italic: #6fa9d6;
-	--lh-prose-size: 16.5px;
+	/* THE READING SIZE = the ladder's 16px rung (--text-lg). Can't be
+	   var()-linked: @theme inline inlines literals into utilities without
+	   emitting runtime vars — so this is the one documented duplication:
+	   change one, change both. (owner, typography round 4: snapped from
+	   the reskin's hand-tuned 16.5 to the ladder's 16.) */
+	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
 }
 
@@ -82,14 +92,23 @@
 
 @theme inline {
 	/* Fonts: chrome = JetBrains Mono, prose = Source Sans 3, titles = CMU
-	   Serif bold. The JetBrains/SourceSans variables attach in app/layout.tsx. */
+	   Serif bold. The JetBrains/SourceSans variables attach in app/layout.tsx.
+	   (owner, typography round) The Tailwind defaults are ALIASED to the app
+	   fonts: `font-mono`/`font-sans` utilities would otherwise fall to the
+	   SYSTEM stacks — a fourth font the app never chose — and streamdown's
+	   code-block chrome + mermaid-error + demo-card all use them. */
 	--font-ui: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
 	--font-prose: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
 	--font-title: "lh-cmu", serif;
+	--font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
+	--font-sans: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
 	/* The modular type ladder — each size carries its own line-height.
-	   Component sizes must pull from this ladder. */
-	--text-xxs: 10px;
-	--text-xxs--line-height: 1.4;
+	   Component sizes must pull from this ladder. (owner, typography
+	   round 4: the 10px rung is merged into 11 — one pixel apart was a
+	   distinction with no visible difference, and 10px sits at the mono
+	   legibility floor; quiet labels get their quiet from color +
+	   tracking, not a notch of size. Reading prose = the 16px rung via
+	   --lh-prose-size.) */
 	--text-xs: 11px;
 	--text-xs--line-height: 1.4;
 	--text-sm: 12.5px;
@@ -156,6 +175,19 @@ body {
 
 .lh-prose :where(em, i) {
 	color: var(--lh-ink-italic);
+}
+
+/* lh-input (owner, typography round 2): lh-prose's 1.5 READING leading
+   makes typing carets tower over the glyphs — the caret fills the line
+   box (24px at 16px text, ~2× the glyph height). Inputs are not
+   paragraphs: a tighter 1.25 leading brings the caret to the font-metric
+   floor (~20px, as close to the glyphs as Chromium will draw it) while
+   wrapped lines in growing textareas still read fine. Rendered prose keeps
+   1.5 — the two share family and size, they differ only in leading. */
+.lh-input {
+	font-family: var(--font-prose);
+	font-size: var(--lh-prose-size);
+	line-height: 1.25;
 }
 
 /* Thin dark native scrollbar (app-wide): dark thumb, transparent track. */
@@ -232,53 +264,44 @@ body {
 }
 
 /* ============================================================
- * Session status — phase colors + status dots
- * (picker strips, header chip, transcript dividers: one language)
+ * Session status — the braille spinner (the one working indicator)
  * ============================================================ */
 
-/* Phase colors: blue = probing, violet = planning, green = teaching.
-   Tuned per theme (light needs darker, dark lighter). These color the
-   session dots, header chip and transcript dividers — one language. */
-:root {
-	--phase-probe: oklch(0.55 0.17 253);
-	--phase-plan: oklch(0.54 0.19 300);
-	--phase-teach: oklch(0.55 0.14 160);
-}
+/* (owner, minimal-color round) Phase color-coding is RETIRED: phases only
+   advance (every session ends in Teaching), so phase-as-signal was
+   decoration; the --phase-* tokens and every phase-dot state are gone.
+   What state deserved — "a turn is in flight" — is carried by MOTION
+   alone: the terminal braille spinner (components/braille-spinner.tsx),
+   monochrome, existing only while true. */
 
-.dark {
-	--phase-probe: oklch(0.72 0.13 250);
-	--phase-plan: oklch(0.72 0.14 300);
-	--phase-teach: oklch(0.74 0.12 160);
-}
-
-@theme inline {
-	--color-phase-probe: var(--phase-probe);
-	--color-phase-plan: var(--phase-plan);
-	--color-phase-teach: var(--phase-teach);
-}
-
-/* Session dot motion (picker): the ONLY animated state is "teacher is
-   working" — a quiet phase-colored breathing. Pending questions are the
-   dominant resting state and stay perfectly still (solid dot). */
-@keyframes lh-dot-breathe {
+/* One keyframes, all ten frames: each frame <g> holds opacity 1 for its
+   10% slice of the 800ms cycle and 0 elsewhere; frames stagger via
+   positive animation-delay (frame k starts at k×80ms). Static contexts
+   (SSR, reduced motion) show frame 0 — see the base rules below. */
+@keyframes braille-frame {
 	0%,
-	100% {
-		opacity: 0.35;
-		transform: scale(0.75);
+	10% {
+		opacity: 1;
 	}
 
-	50% {
-		opacity: 1;
-		transform: scale(1);
+	10.001%,
+	100% {
+		opacity: 0;
 	}
 }
 
-.lh-dot-breathe {
-	animation: lh-dot-breathe 1.4s ease-in-out infinite;
+.braille-frame {
+	animation: braille-frame 800ms linear infinite;
+	opacity: 0;
+}
+
+/* Static fallback: frame 0 (⠋) is the glyph a non-animated context shows. */
+.braille-frame[data-frame="0"] {
+	opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.lh-dot-breathe {
+	.braille-frame {
 		animation: none;
 	}
 }

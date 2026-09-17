@@ -91,7 +91,7 @@ export function GraphContextList({ data }: { data: GraphContextData }): ReactNod
 					<li key={p.id} className="flex items-baseline gap-2">
 						<span className="shrink-0 tabular-nums text-muted-foreground">{i + 1}.</span>
 						{p.level && (
-							<span className="shrink-0 rounded bg-foreground/10 px-1 py-0.5 text-xxs text-muted-foreground">
+							<span className="shrink-0 rounded bg-foreground/10 px-1 py-0.5 text-xs text-muted-foreground">
 								{p.level}
 							</span>
 						)}

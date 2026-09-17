@@ -190,7 +190,7 @@ export function ModelControl({
 				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
 			>
 				<span className="text-card-foreground">{effectiveId ? prettyModel(effectiveId) : "—"}</span>
-					<span aria-hidden className="text-xxs text-muted-foreground">▾</span>
+					<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>
 			<button
 				type="button"
@@ -208,7 +208,7 @@ export function ModelControl({
 				<span className="text-card-foreground">
 					{effectiveLevel === undefined ? "—" : (LEVEL_LABEL[effectiveLevel] ?? effectiveLevel)}
 				</span>
-				<span aria-hidden className="text-xxs text-muted-foreground">▾</span>
+				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>
 
 			{open === "model" && (
@@ -222,7 +222,7 @@ export function ModelControl({
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
 						placeholder="Search models…"
-						className="lh-prose mb-1.5 w-full rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
+						className="lh-input mb-1.5 w-full rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
 					/>
 					{error && <div className="mb-1.5 text-destructive">{error}</div>}
 					{!catalog && (
@@ -267,7 +267,7 @@ export function ModelControl({
 							</li>
 						))}
 					</ul>
-					<div className="mt-1 border-t px-2 pt-1.5 text-xxs text-muted-foreground">
+					<div className="mt-1 border-t px-2 pt-1.5 text-xs text-muted-foreground">
 						Applies to the next turn · background agents stay config-pinned
 					</div>
 				</div>
@@ -299,7 +299,7 @@ export function ModelControl({
 						</button>
 					))}
 					{error && <div className="mt-1 text-destructive">{error}</div>}
-					<div className="mt-1 border-t px-2 pt-1.5 text-xxs text-muted-foreground">
+					<div className="mt-1 border-t px-2 pt-1.5 text-xs text-muted-foreground">
 						Levels this model actually supports
 					</div>
 				</div>

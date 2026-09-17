@@ -130,9 +130,10 @@ describe("plan block render", () => {
 		assert.ok(!/data-testid="plan-block-full"[^>]*border/.test(html), "no wrapping chrome");
 		// Fills the column UP TO the chat-font cap: the svg is w-full +
 		// mx-auto with maxWidth = extent × TEXT_CAP_SCALE, so node text never
-		// renders past the 16.5px prose size (owner, plan-graph round 1).
+		// renders past the 16px prose size (owner, plan-graph round 1; the
+		// snap 16.5→16 landed in typography round 4).
 		assert.match(html, /<svg[^>]*class="block h-auto w-full mx-auto"/);
-		assert.match(html, /max-width:232\.32px/); // (160+16) × 1.32
+		assert.match(html, /max-width:225\.28px/); // (160+16) × 1.28
 		// Two stacked nodes: 2*NODE_H + GAP_Y = 136 extent + GRAPH_PAD on
 		// every side (strokes/glow never clip at the edges).
 		assert.match(html, /viewBox="-8 -8 176 152"/);
