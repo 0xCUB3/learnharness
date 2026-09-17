@@ -52,22 +52,47 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	return (
 		<SidebarContext.Provider value={{ open, toggle }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
-			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width]")}>{children}</div>
+			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>
 	);
 }
 
-/** Hamburger for page headers — only visible when the sidebar is closed. */
+/** Hamburger for page headers — only visible when the sidebar is closed.
+ *
+ *  Owner, round 6c: the toggle is ALWAYS MOUNTED, owning a slot whose
+ *  width+margin animate in LOCKSTEP with the sidebar's own width
+ *  transition (same duration-200, same easing, both gated on mount) —
+ *  before, it mounted/unmounted in one frame, so its 48px footprint
+ *  (button + gap) popped and dragged the title and chips sideways while
+ *  the sidebar was still mid-slide. When open the slot is exactly zero
+ *  (w-0 -mr-3: width 0, the negative margin cancels the header's gap-3),
+ *  so resting layouts are pixel-identical to the old conditional render.
+ *  The icon fades with the slot and is clipped by it as it collapses —
+ *  no popping in either direction. */
 export function SidebarToggle() {
 	const { open, toggle } = useSidebar();
-	if (open) return null;
 	return (
-		<Button variant="ghost" size="icon" aria-label="Open sidebar" onClick={toggle}>
-			{/* Owner, round 6: size-4, SAME as the close glyph — the toggle
-			    must not grow when the sidebar is closed (it did: size-5 here).
-			    The small look is the standard, both directions. */}
-			<PanelLeftOpenIcon className="size-4" />
-		</Button>
+		<span
+			className={cn(
+				"sidebar-motion relative flex h-9 shrink-0 overflow-hidden duration-200",
+				open ? "w-0 -mr-3" : "w-9 mr-0",
+			)}
+		>
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label="Open sidebar"
+				aria-hidden={open}
+				tabIndex={open ? -1 : 0}
+				onClick={toggle}
+				className={cn("sidebar-motion duration-200", open ? "pointer-events-none opacity-0" : "opacity-100")}
+			>
+				{/* Owner, round 6: size-4, SAME as the close glyph — the toggle
+				    must not grow when the sidebar is closed (it did: size-5 here).
+				    The small look is the standard, both directions. */}
+				<PanelLeftOpenIcon className="size-4" />
+			</Button>
+		</span>
 	);
 }
 
