@@ -70,6 +70,7 @@ import { GraphCoverageControl } from "./graph-coverage.tsx";
 import {
 	ARROW_LENGTH_RANGE,
 	CHARGE_RANGE,
+	CLUSTER_LABEL_SIZE_RANGE,
 	CLUSTER_PULL_RANGE,
 	DEPTH_BASE_RADIUS_RANGE,
 	DEPTH_SPACING_RANGE,
@@ -166,6 +167,7 @@ function SettingSlider({
 	value,
 	display,
 	onChange,
+	disabled,
 }: {
 	label: string;
 	min: number;
@@ -175,9 +177,12 @@ function SettingSlider({
 	/** Value display override (e.g. "1.5×" for zoom) — defaults to the raw number. */
 	display?: string;
 	onChange: (v: number) => void;
+	/** Dependency graying (user 2026-09-17): children dim + lock when
+	 *  their parent toggle/mode is off — consistently across sections. */
+	disabled?: boolean;
 }) {
 	return (
-		<label className="flex flex-col gap-1">
+		<label className={`flex flex-col gap-1${disabled ? " opacity-40" : ""}`}>
 			<span className="flex items-center justify-between text-[11px] text-muted-foreground">
 				{label}
 				<span className="tabular-nums">{display ?? value}</span>
@@ -188,6 +193,7 @@ function SettingSlider({
 				max={max}
 				step={step}
 				value={value}
+				disabled={disabled}
 				onChange={(e) => onChange(Number(e.target.value))}
 				className="h-1.5 w-full accent-primary"
 			/>
@@ -280,26 +286,33 @@ function GraphSettingsControl({
 								onChange={(p) =>
 									changeSettings((cur) => ({ ...cur, labelZoom: fromSliderPosition(p, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX) }))}
 							/>
-							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
-								<span>Cluster labels</span>
-								<input
-									type="checkbox"
-									checked={settings.clusterLabels}
-									onChange={(e) => changeSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
-									className="accent-primary"
-								/>
-							</label>
 						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
 						    dropdown for the bitmap resolution (it's a discrete
 						    choice, not a free number). Server-persisted like the
 						    sizes; every range end was sweep-validated on the real
-						    graph. */}
+						    graph. The enable switch is a COMPUTE switch: off skips
+						    the whole build (splat/blur/readback/blit), not just
+						    the paint. */}
 						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
 							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 								Regions
 							</span>
+							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
+								<span>Background colors</span>
+								<input
+									type="checkbox"
+									checked={settings.regions.enabled}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											regions: { ...cur.regions, enabled: e.target.checked },
+										}))}
+										className="accent-primary"
+								/>
+							</label>
 							<SettingSlider
 								label="Dilation"
+								disabled={!regionTuning.enabled}
 								min={0}
 								max={100}
 								step={5}
@@ -311,9 +324,12 @@ function GraphSettingsControl({
 										regions: { ...cur.regions, dilation: fromSliderPosition(p, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max) },
 									}))}
 							/>
-							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+							<label
+								className={`flex items-center justify-between gap-2 text-[11px] text-muted-foreground${!regionTuning.enabled ? " opacity-40" : ""}`}
+							>
 								<span>Blur</span>
 								<select
+									disabled={!regionTuning.enabled}
 									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
 									value={regionTuning.blur}
 									onChange={(e) =>
@@ -332,6 +348,7 @@ function GraphSettingsControl({
 							</label>
 							<SettingSlider
 								label="Edge alpha"
+								disabled={!regionTuning.enabled}
 								min={0}
 								max={100}
 								step={5}
@@ -343,9 +360,12 @@ function GraphSettingsControl({
 										regions: { ...cur.regions, edgeAlpha: fromSliderPosition(p, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max) },
 									}))}
 							/>
-							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+							<label
+								className={`flex items-center justify-between gap-2 text-[11px] text-muted-foreground${!regionTuning.enabled ? " opacity-40" : ""}`}
+							>
 								<span>Bitmap resolution</span>
 								<select
+									disabled={!regionTuning.enabled}
 									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
 									value={regionTuning.bitmap}
 									onChange={(e) =>
@@ -362,6 +382,34 @@ function GraphSettingsControl({
 									))}
 								</select>
 							</label>
+							{/* Cluster labels moved here 2026-09-16 (user: cluster
+							    stuff lives in the regions section). Decoupled from
+							    the Background colors switch above — labels follow
+							    their own clusterLabels toggle. Size is screen px
+							    (constant at any zoom, unlike node labels). */}
+							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
+								<span>Cluster labels</span>
+								<input
+									type="checkbox"
+									checked={settings.clusterLabels}
+									onChange={(e) => changeSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
+									className="accent-primary"
+								/>
+							</label>
+							<SettingSlider
+								label="Cluster label size"
+								disabled={!settings.clusterLabels}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.clusterLabelSize, CLUSTER_LABEL_SIZE_RANGE.min, CLUSTER_LABEL_SIZE_RANGE.max)}
+								display={sizeDisplay(settings.clusterLabelSize)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										clusterLabelSize: fromSliderPosition(p, CLUSTER_LABEL_SIZE_RANGE.min, CLUSTER_LABEL_SIZE_RANGE.max),
+									}))}
+							/>
 						</div>
 						{/* Physics: the live sim's forces. Every value feeds the SAME
 						    engine the server settle runs (createGraphSimulation);
@@ -370,67 +418,13 @@ function GraphSettingsControl({
 						    sweep-validated ranges (src/core/render-settings.ts):
 						    range ends and all four corners settle cleanly — no NaN,
 						    no explosion, no non-settle. Repulsion is displayed as
-						    the negative it is; cluster pull's far left = off. */}
+						    the negative it is; cluster pull's far left = off.
+						    Order (user 2026-09-17): general forces first; depth
+						    anchor + its gray-out-able controls last. */}
 						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
 							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 								Physics
 							</span>
-							<label className="flex items-center justify-between gap-2 text-xs">
-								Depth anchor
-								<select
-									className="rounded border bg-background px-1 py-0.5 text-xs"
-									value={physicsTuning.depthMode}
-									onChange={(e) =>
-										changeSettings((cur) => ({
-											...cur,
-											physics: { ...cur.physics, depthMode: e.target.value as GraphRenderSettings["physics"]["depthMode"] },
-										}))
-									}
-								>
-									<option value="off">Off</option>
-									<option value="vertical">Vertical (up)</option>
-									<option value="radial">Radial (outward)</option>
-								</select>
-							</label>
-							<SettingSlider
-								label="Depth strength"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthStrength, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthStrength)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthStrength: fromSliderPosition(p, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Depth spacing"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthSpacing, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthSpacing)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthSpacing: fromSliderPosition(p, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Base ring radius"
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthBaseRadius, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthBaseRadius)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthBaseRadius: fromSliderPosition(p, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max) },
-									}))}
-							/>
 							<SettingSlider
 								label="Node repulsion"
 								min={0}
@@ -507,6 +501,69 @@ function GraphSettingsControl({
 									changeSettings((cur) => ({
 										...cur,
 										physics: { ...cur.physics, velocityDecay: fromSliderPosition(p, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max) },
+									}))}
+							/>
+							{/* Depth anchor LAST (user 2026-09-17): general
+							    forces first, then the mode + its conditional
+							    controls at the very bottom — the grayed group reads
+							    as a self-contained sub-section. */}
+							<label className="flex items-center justify-between gap-2 text-xs">
+								Depth anchor
+								<select
+									className="rounded border bg-background px-1 py-0.5 text-xs"
+									value={physicsTuning.depthMode}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											physics: { ...cur.physics, depthMode: e.target.value as GraphRenderSettings["physics"]["depthMode"] },
+										}))
+									}
+								>
+									<option value="off">Off</option>
+									<option value="vertical">Vertical (up)</option>
+									<option value="radial">Radial (outward)</option>
+								</select>
+							</label>
+							<SettingSlider
+								label="Depth strength"
+								disabled={physicsTuning.depthMode === "off"}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthStrength, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthStrength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthStrength: fromSliderPosition(p, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Depth spacing"
+								disabled={physicsTuning.depthMode === "off"}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthSpacing, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthSpacing)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthSpacing: fromSliderPosition(p, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Base ring radius"
+								disabled={physicsTuning.depthMode !== "radial"}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthBaseRadius, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthBaseRadius)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthBaseRadius: fromSliderPosition(p, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max) },
 									}))}
 							/>
 						</div>
@@ -754,7 +811,7 @@ export function GraphView() {
 				y: positions.get(n.id)?.y ?? 0,
 				label: n.name,
 			})),
-			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to })),
+			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to, type: e.type })),
 			clusters: snapshot.clusters.map((c) => ({ id: c.id, label: c.label, members: c.members })),
 			colors: {
 				node: tokenHex(NODE_COLOR_TOKEN),

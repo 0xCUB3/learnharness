@@ -64,6 +64,7 @@ import {
 	sanitizeRegionTuning,
 	type PhysicsTuning,
 	type RegionTuning,
+	type EdgeType,
 	INCREMENTAL_GRAVITY,
 	LINK_DISTANCE,
 	type DepthAnchorMode,
@@ -88,6 +89,10 @@ export interface CanvasNode {
 export interface CanvasEdge {
 	from: string;
 	to: string;
+	/** Relation type: `follows` renders the double-shaft glyph (⟹),
+	 *  `supports` the plain single line (DECIDED 2026-09-14,
+	 *  docs/vision-edge-glyph.md). */
+	type: EdgeType;
 }
 
 /** One cluster region: member node ids + the LLM-coined label (or null). */
@@ -164,7 +169,7 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  live-physics frame pays one tiny blit instead of 32 clusters × 4
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
 const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
-const REGION_LABEL_SIZE = 14;
+
 
 
 /** One horizontal+vertical box-blur round over PREMULTIPLIED RGBA
@@ -282,13 +287,22 @@ export function fitTransform(
 /** The arrowhead geometry for a directed edge a→b: shaft endpoints
  *  (clear of both node discs) and the head triangle (tip on the target
  *  disc edge, wideness = 0.8 × head length — the sigma arrow shape). */
+/** One complete arrow glyph: shaft + head triangle. */
+export interface ArrowGeom {
+	shaftFrom: Pt;
+	shaftTo: Pt;
+	tip: Pt;
+	left: Pt;
+	right: Pt;
+}
+
 export function arrowGeometry(
 	a: Pt,
 	b: Pt,
 	fromRadius: number,
 	toRadius: number,
 	headLength: number,
-): { shaftFrom: Pt; shaftTo: Pt; tip: Pt; left: Pt; right: Pt } | null {
+): ArrowGeom | null {
 	const dx = b.x - a.x;
 	const dy = b.y - a.y;
 	const len = Math.hypot(dx, dy);
@@ -306,6 +320,7 @@ export function arrowGeometry(
 		right: { x: base.x + uy * halfW, y: base.y - ux * halfW },
 	};
 }
+
 
 /** Nearest node within maxDist of a screen point (linear scan — µs at
  *  our scale; a spatial grid only earns its keep past ~10k nodes). */
@@ -582,6 +597,13 @@ export class GraphCanvasRenderer {
 	setRegionTuning(input: Partial<RegionTuning>): void {
 		this.regionTuning = sanitizeRegionTuning(input);
 		this.regionBuiltVersion = -2; // never equals geoVersion → rebuild
+		// Off switch turning off: drop the bitmap immediately so the
+		// blit stops on the next frame — the rebuild itself skips all
+		// compute (buildRegions).
+		if (!this.regionTuning.enabled) {
+			this.regionCanvas = null;
+			this.regionRect = null;
+		}
 		this.markDirty();
 	}
 
@@ -938,14 +960,13 @@ export class GraphCanvasRenderer {
 		// Screen px at fit zoom → world units.
 		const s = 1 / this.kFit;
 		const nodeR = settings.nodeSize * s;
+		this.worldLabelFont = `${LABEL_WEIGHT} ${settings.labelSize * s}px ${data.fontFamily}`;
 		this.world = {
 			nodeR,
 			glowOuter: nodeR * GLOW_SCALE,
 			labelSize: settings.labelSize * s,
 			labelGap: LABEL_GAP * s,
 		};
-		this.worldLabelFont = `${LABEL_WEIGHT} ${settings.labelSize * s}px ${data.fontFamily}`;
-		const arrowLen = settings.arrowLength * s;
 		const visible = this.visible;
 		const isVisible = (id: string) => !visible || visible.has(id);
 
@@ -958,7 +979,11 @@ export class GraphCanvasRenderer {
 		}
 		this.nodesPath = nodesPath;
 
-		// Edge shafts + arrowheads: tip lands on the target disc edge.
+		// Edge shafts + arrowheads: tip lands on the target disc edge. Both
+		// relation types draw the same arrow for now — the double-shaft
+		// glyph was rejected (2026-09-15); differentiation is pending a new
+		// approach. CanvasEdge.type is plumbed for whatever comes next.
+		const arrowLen = settings.arrowLength * s;
 		const shafts = new Path2D();
 		const heads = new Path2D();
 		for (const e of data.edges) {
@@ -1070,6 +1095,47 @@ export class GraphCanvasRenderer {
 			return;
 		}
 
+		// Which cluster is a node in (for intra-cluster edges)?
+		const clusterOf = new Map<string, number>();
+		data.clusters.forEach((c, i) => {
+			for (const id of c.members) clusterOf.set(id, i);
+		});
+
+		// Label anchors ALWAYS compute (cheap — a centroid pass, no canvas):
+		// cluster labels follow their own `clusterLabels` setting and must
+		// survive the region paint being turned off.
+		this.regionMeta = [];
+		data.clusters.forEach((cluster) => {
+			let members = 0;
+			let sumX = 0;
+			let sumY = 0;
+			for (const id of cluster.members) {
+				if (!isVisible(id)) continue;
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				members++;
+				sumX += n.x;
+				sumY += n.y;
+			}
+			if (members > 0) {
+				this.regionMeta.push({
+					label: cluster.label || null,
+					cx: sumX / members,
+					cy: sumY / members,
+					hue: clusterHue(cluster.id),
+				});
+			}
+		});
+
+		// THE off switch (user 2026-09-15): compute is skipped, not just
+		// paint hidden — no splat, no blur, no readback, no bitmap, no
+		// blit. Everything below this return is the bitmap path.
+		if (!tuning.enabled) {
+			this.regionCanvas = null;
+			this.regionRect = null;
+			return;
+		}
+
 		// Bitmap sizing: longest world span maps to `bitmap` px. The rect
 		// is padded by the stroke half-width (dilation) plus the blur
 		// reach so nothing clips at the bitmap edge.
@@ -1123,17 +1189,10 @@ export class GraphCanvasRenderer {
 		rctx.lineCap = "round";
 		rctx.lineWidth = (dilationW * 2) / cell;
 
-		// Which cluster is a node in (for intra-cluster edges)?
-		const clusterOf = new Map<string, number>();
-		data.clusters.forEach((c, i) => {
-			for (const id of c.members) clusterOf.set(id, i);
-		});
-
 		// The region IS the dilated skeleton: intra-cluster edges as
 		// round-cap strokes (Minkowski dilation). NO blanket per-node discs
 		// — they double-counted where nodes sit on edges (user-identified
 		// hot spots, when clusters were edge-based).
-		this.regionMeta = [];
 		data.clusters.forEach((cluster, ci) => {
 			const hue = clusterHue(cluster.id);
 			// Full-opacity strokes: alpha is applied ONCE at the very end
@@ -1145,9 +1204,6 @@ export class GraphCanvasRenderer {
 			// contribute exactly 1.0.
 			rctx.strokeStyle = `hsla(${hue}, 65%, 60%, 1)`;
 			rctx.beginPath();
-			let members = 0;
-			let sumX = 0;
-			let sumY = 0;
 			// Endpoints actually covered by a stroke's round caps.
 			const touched = new Set<string>();
 			for (const e of data.edges) {
@@ -1184,19 +1240,6 @@ export class GraphCanvasRenderer {
 				rctx.beginPath();
 				rctx.arc((n.x - minX) / cell, (n.y - minY) / cell, discR, 0, Math.PI * 2);
 				rctx.fill();
-			}
-
-			// Label anchor: member centroid (world coords).
-			for (const id of cluster.members) {
-				if (!isVisible(id)) continue;
-				const n = this.nodeById.get(id);
-				if (!n) continue;
-				members++;
-				sumX += n.x;
-				sumY += n.y;
-			}
-			if (members > 0) {
-				this.regionMeta.push({ label: cluster.label || null, cx: sumX / members, cy: sumY / members, hue });
 			}
 		});
 
@@ -1313,24 +1356,6 @@ export class GraphCanvasRenderer {
 		ctx.fillStyle = data.colors.node;
 		ctx.fill(this.nodesPath);
 
-		// 5. Cluster region labels — inverse-gated on THE zoom control.
-		// Viewer-relative by design (UI, not graph content): drawn at the
-		// world centroid with a font of REGION_LABEL_SIZE / k, which is a
-		// constant 18px on screen at any zoom.
-		if (settings.clusterLabels && regionAlpha > 0.01) {
-			ctx.save();
-			ctx.globalAlpha = regionAlpha;
-			ctx.font = `${LABEL_WEIGHT} ${REGION_LABEL_SIZE / k}px ${data.fontFamily}`;
-			ctx.textAlign = "center";
-			ctx.textBaseline = "middle";
-			for (const rm of this.regionMeta) {
-				if (!rm.label) continue;
-				ctx.fillStyle = `hsla(${rm.hue}, 55%, 78%, 0.85)`;
-				ctx.fillText(rm.label, rm.cx, rm.cy);
-			}
-			ctx.restore();
-		}
-
 		// 6. Node labels — one global gate, faded together. World-scaled
 		// with the graph (they grow as you zoom in, Obsidian-style).
 		if (nodeAlpha > 0.01) {
@@ -1368,6 +1393,27 @@ export class GraphCanvasRenderer {
 				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, data.colors.hoverText);
 				ctx.restore();
 			}
+		}
+
+		// 8. Cluster region labels — THE TOPMOST layer (user 2026-09-16:
+		// node labels and hover names drew over them before; region labels
+		// must never be occluded by content). Inverse-gated on THE zoom
+		// control (visible zoomed-out, fading as node labels come in).
+		// Viewer-relative by design (UI, not graph content): drawn at the
+		// world centroid with a font of clusterLabelSize / k — a constant
+		// size on screen at any zoom (user-tunable since 2026-09-16).
+		if (settings.clusterLabels && regionAlpha > 0.01) {
+			ctx.save();
+			ctx.globalAlpha = regionAlpha;
+			ctx.font = `${LABEL_WEIGHT} ${settings.clusterLabelSize / k}px ${data.fontFamily}`;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "middle";
+			for (const rm of this.regionMeta) {
+				if (!rm.label) continue;
+				ctx.fillStyle = `hsla(${rm.hue}, 55%, 78%, 0.85)`;
+				ctx.fillText(rm.label, rm.cx, rm.cy);
+			}
+			ctx.restore();
 		}
 	}
 }

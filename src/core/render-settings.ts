@@ -34,6 +34,10 @@ export interface GraphRenderSettings {
 	labelSize: number;
 	/** Toggle for the cluster region labels (hulls always draw). */
 	clusterLabels: boolean;
+	/** Cluster label font size, px on screen (camera-compensated —
+	 *  constant at any zoom, unlike labelSize which scales with the
+	 *  graph). Defaults to the old REGION_LABEL_SIZE constant (14). */
+	clusterLabelSize: number;
 	/** Region rendering (the blurred cluster tints). Server-persisted
 	 *  since 2026-09-13 (user request) — was session-only dev state. */
 	regions: RegionTuning;
@@ -65,6 +69,12 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 		labelSize: num(r.labelSize, DEFAULT_RENDER_SETTINGS.labelSize, LABEL_SIZE_RANGE.min, LABEL_SIZE_RANGE.max),
 		clusterLabels:
 			typeof r.clusterLabels === "boolean" ? r.clusterLabels : DEFAULT_RENDER_SETTINGS.clusterLabels,
+		clusterLabelSize: num(
+			r.clusterLabelSize,
+			DEFAULT_RENDER_SETTINGS.clusterLabelSize,
+			CLUSTER_LABEL_SIZE_RANGE.min,
+			CLUSTER_LABEL_SIZE_RANGE.max,
+		),
 		// Nested sections (2026-09-13): old files lack them → defaults.
 		regions: sanitizeRegionTuning(r.regions),
 		physics: sanitizePhysicsTuning(r.physics),
@@ -100,6 +110,11 @@ export interface RegionTuning {
 	 *  of any count never stack (DECIDED 2026-09-14 — per-stroke alpha
 	 *  accumulated through source-over and double-counted orphans). */
 	edgeAlpha: number;
+	/** THE off switch (user 2026-09-15): false = the renderer never runs
+	 *  the region build — no splat, no blur, no readback, no bitmap
+	 *  allocation, no blit. Compute skipped, not just paint hidden.
+	 *  Cluster labels are decoupled and follow `clusterLabels`. */
+	enabled: boolean;
 }
 
 export const REGION_BITMAP_OPTIONS = [128, 192, 256, 384, 512] as const;
@@ -110,6 +125,7 @@ export const DEFAULT_REGION_TUNING: RegionTuning = {
 	blur: 6,
 	bitmap: 384,
 	edgeAlpha: 0.35,
+	enabled: true,
 };
 
 /** Nearest member of a fixed option set (dropdowns have no free values). */
@@ -129,6 +145,9 @@ export function sanitizeRegionTuning(input: Partial<RegionTuning> | null | undef
 		blur: snapToOption(num(input?.blur, d.blur), REGION_BLUR_OPTIONS),
 		bitmap: snapToOption(bitmap, REGION_BITMAP_OPTIONS),
 		edgeAlpha: Math.min(Math.max(num(input?.edgeAlpha, d.edgeAlpha), REGION_EDGE_ALPHA_RANGE.min), 1),
+		// Old persisted files predate the switch: missing → on (the look
+		// users tuned); only an explicit false turns regions off.
+		enabled: typeof input?.enabled === "boolean" ? input.enabled : true,
 	};
 }
 
@@ -205,6 +224,7 @@ export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 	labelZoom: 0.5,
 	labelSize: 2,
 	clusterLabels: true,
+	clusterLabelSize: 14,
 	regions: DEFAULT_REGION_TUNING,
 	physics: DEFAULT_PHYSICS_TUNING,
 };
@@ -220,6 +240,9 @@ export const NODE_SIZE_RANGE = { min: 0.5, max: 8 } as const;
 export const EDGE_WIDTH_RANGE = { min: 0.25, max: 4 } as const;
 export const ARROW_LENGTH_RANGE = { min: 0.5, max: 8 } as const;
 export const LABEL_SIZE_RANGE = { min: 0.5, max: 8 } as const;
+// Screen-px at ANY zoom (drawn at size / k). 14 = geometric mean — old
+// REGION_LABEL_SIZE default, so the panel slider starts dead-center.
+export const CLUSTER_LABEL_SIZE_RANGE = { min: 7, max: 28 } as const;
 export const LABEL_ZOOM_MIN = 0.0625; // slider far left: labels only very deep in
 export const LABEL_ZOOM_MAX = 4; // slider far right: labels visible at fit zoom
 
