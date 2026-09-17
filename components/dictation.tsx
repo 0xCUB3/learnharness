@@ -30,6 +30,18 @@ import { Loader2Icon, MicIcon } from "lucide-react";
  *     round 1: live words are distracting and shift the meter; the
  *     meter's width is FIXED while recording).
  *
+ * Owner round 2 (2026-09-17, second live test):
+ *   - DEFERRED transcript: finals accumulate in a buffer during the run
+ *     and flush into the primary input ONCE, when the dictation ends
+ *     (click-again/Esc → Deepgram flushes its last finals → socket close
+ *     → one joined append). Nothing textual renders while recording —
+ *     only the meter. Live output may return as a toggleable setting at
+ *     the settings milestone; deferred is the only behavior for now.
+ *   - ADAPTIVE meter: the strip's cell count derives from its measured
+ *     width (4px pitch, 8–48 cells, ResizeObserver) so narrow rows (draft/
+ *     home, where the knowledge-context slider eats the middle) show
+ *     fewer bars instead of overflowing under their neighbors.
+ *
  * Owner round 1 (2026-09-17, first live mic test):
  *   - ONE primary transcription input at all times: the pending
  *     quiz/ask question's field while one waits (text mode → the answer
@@ -143,10 +155,24 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	const genRef = useRef(0); // stale-handler guard (dictate pattern)
 	const safetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const reconnectsRef = useRef(0);
+	/** The deferred transcript (owner round 2): finals land here during the
+	 *  run and flush into the primary input once, at teardown. */
+	const bufferRef = useRef<string[]>([]);
+
+	/** Flush the buffered transcript into the primary input — question claim
+	 *  first, composer fallback. Called exactly once per run, at cleanup; the
+	 *  buffer clears itself so double-cleanup is a no-op. */
+	const flush = useCallback(() => {
+		if (bufferRef.current.length === 0) return;
+		const text = bufferRef.current.join(" ");
+		bufferRef.current = [];
+		(questionTarget ?? appendRef.current)(text);
+	}, []);
 
 	/** Full teardown of one run's machinery. Idempotent; generation-guarded by callers. */
 	const cleanup = useCallback(() => {
 		genRef.current++;
+		flush(); // the deferred transcript appears when the run ends (owner round 2)
 		if (safetyRef.current) {
 			clearTimeout(safetyRef.current);
 			safetyRef.current = null;
@@ -196,12 +222,10 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 				}
 				if (msg.type === "Results") {
 					const text: string | undefined = msg.channel?.alternatives?.[0]?.transcript;
-					// Only finals stream (interim_results=false): each Results
-					// message is a committed utterance — route it to the
-					// primary input, question claim first, composer fallback.
-					if (msg.is_final && text) {
-						(questionTarget ?? appendRef.current)(text);
-					}
+					// Only finals stream (interim_results=false). DEFERRED (owner
+					// round 2): they buffer here and reach the input once, at
+					// teardown — the meter is the only live feedback.
+					if (msg.is_final && text) bufferRef.current.push(text);
 				}
 			});
 			ws.addEventListener("close", (ev) => {
@@ -239,6 +263,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		setError(null);
 		setPhase("connecting");
 		reconnectsRef.current = 0;
+		bufferRef.current = []; // fresh run, fresh buffer (round 2)
 		const gen = ++genRef.current;
 
 		// Token + mic CONCURRENTLY (owner round 1: the sequential wait was the
@@ -346,6 +371,11 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 	const { phase, error, levelRef, toggle, active } = dictation;
 	const [levels, setLevels] = useState<number[]>(() => new Array(METER_CELLS).fill(0));
 	const recording = phase === "recording" || phase === "stopping";
+	/** Adaptive cell count (owner round 2): derived from the meter's
+	 *  measured width — narrow rows (draft/home beside the knowledge-context
+	 *  slider) show fewer bars instead of overflowing under neighbors. */
+	const [cellCount, setCellCount] = useState(METER_CELLS);
+	const meterRef = useRef<HTMLDivElement | null>(null);
 
 	// The meter's own heartbeat — 60ms samples of the level ref into a
 	// rolling ring. Only THIS strip re-renders; the page never does.
@@ -361,6 +391,25 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 		}, METER_TICK_MS);
 		return () => clearInterval(id);
 	}, [active, levelRef]);
+
+	// Fit the cell count to the available width (4px pitch per cell:
+	// 2px bar + 2px gap, clamped 8..48). The meter div's width is set by
+	// the row's free space — cells carry no minimum width — so measuring
+	// it once per activation + on resize keeps the strip honest in the
+	// draft/home rows where the slider leaves little middle.
+	useEffect(() => {
+		if (!active) return;
+		const el = meterRef.current;
+		if (!el) return;
+		const fit = () => {
+			const w = el.clientWidth;
+			setCellCount(Math.max(8, Math.min(METER_CELLS, Math.floor(w / 4))));
+		};
+		fit();
+		const ro = new ResizeObserver(fit);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [active]);
 
 	if (!active) {
 		return (
@@ -398,12 +447,13 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 			</button>
 			<span className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive" aria-hidden />
 			{/* Fixed width while recording — nothing ever appends text beside it
-			    (no interims, owner round 1). Bars flex to the row's free space. */}
-			<div className="flex h-4 min-w-0 flex-1 items-center gap-[2px]" data-testid="dictation-meter">
-				{levels.map((v, i) => (
+			    (no interims, owner round 1). Cells carry no minimum width; the
+			    COUNT adapts to the measured row space (owner round 2). */}
+			<div ref={meterRef} className="flex h-4 min-w-0 flex-1 items-center gap-[2px]" data-testid="dictation-meter">
+				{levels.slice(-cellCount).map((v, i) => (
 					<span
 						key={i}
-						className="min-w-[2px] flex-1 rounded-full bg-foreground/40"
+						className="min-w-0 flex-1 rounded-full bg-foreground/40"
 						style={{ height: `${2 + Math.round(v * 14)}px` }}
 					/>
 				))}

@@ -67,3 +67,8 @@ against our codebase. Decisions at the bottom.
 - **Optimistic meter**: the click enters the meter view immediately (Stop pill + meter within one frame); the token mint and mic acquisition run concurrently (Promise.all) behind it. Esc or click-again stops.
 - **Wide idle button**: the stats-bar middle is one full-width affordance — a quiet bordered "Dictate" button when idle (error text replaces the label on failure), the Stop pill + fixed meter while live.
 - Final-appending keeps the dictate-flush separator rule (`joinDictation`).
+
+## Round-2 refinements (owner, 2026-09-17 — second live test)
+
+- **Deferred transcript**: finals buffer during the run and flush into the primary input ONCE at the end (socket-close → one joined append). Nothing textual renders while recording. Live output may return as a toggleable setting at the settings milestone; deferred is the default.
+- **Adaptive meter**: cell count derives from the meter's measured width (4px pitch, clamped 8–48, ResizeObserver; cells have no minimum width). Draft/home rows beside the knowledge-context slider show ~20 cells; chat shows the full 48. No more overflowing under neighbors.
