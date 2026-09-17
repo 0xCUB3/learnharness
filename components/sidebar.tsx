@@ -63,7 +63,10 @@ export function SidebarToggle() {
 	if (open) return null;
 	return (
 		<Button variant="ghost" size="icon" aria-label="Open sidebar" onClick={toggle}>
-			<PanelLeftOpenIcon className="size-5" />
+			{/* Owner, round 6: size-4, SAME as the close glyph — the toggle
+			    must not grow when the sidebar is closed (it did: size-5 here).
+			    The small look is the standard, both directions. */}
+			<PanelLeftOpenIcon className="size-4" />
 		</Button>
 	);
 }
