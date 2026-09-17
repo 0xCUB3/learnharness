@@ -969,8 +969,12 @@ export function GraphView() {
 			    without shifting its siblings — every button is 44px tall,
 			    top alignment pins the row. Coverage renders even when the
 			    graph is EMPTY — an empty graph with unextracted sessions is
-			    exactly when it matters (extract → the graph gains nodes). */}
-			<div className="absolute right-3 top-3 z-10 flex items-start gap-2">
+			    exactly when it matters (extract → the graph gains nodes).
+			    lh-no-drag (2026-09-17): home.tsx's floating drag strip
+			    underlays this row — Electron's drag mask ignores z-index,
+			    so without an explicit carve-out the controls were
+			    unclickable in the desktop app (owner report). */}
+			<div className="lh-no-drag absolute right-3 top-3 z-10 flex items-start gap-2">
 				{!isEmpty && (
 					<>
 					{/* Search — its own container (icon + input + no-match note). */}
@@ -1055,7 +1059,10 @@ export function GraphView() {
 					// Positioned imperatively in the layout effect above; hidden
 					// until placed so the flip never flashes in the wrong spot.
 					style={{ visibility: "hidden", left: 0, top: 0 }}
-					className="absolute z-10 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
+					// lh-no-drag: the card is placed anywhere on the canvas —
+					// when it lands in the top strip it must stay interactive
+					// over home.tsx's drag surface (2026-09-17).
+					className="lh-no-drag absolute z-10 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
 				>
 					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
 					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>

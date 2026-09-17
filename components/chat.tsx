@@ -637,22 +637,44 @@ export function Chat({
 				    60px is an ALIGNMENT, not just a size: it equals the sidebar's
 				    LH wordmark band, so the header's border-b continues that
 				    band's bottom edge as one line across the app (owner, round 6). */}
-				<header className="lh-drag flex h-15 items-center gap-3 border-b border-border px-3">
+				<header
+					// While renaming the bar is NOT a drag surface: app-region:drag
+					// would eat the mousedown, so click-to-escape (below) could
+					// never fire. Rename mode is interactive mode (owner ask).
+					className={
+						renaming
+							? "flex h-15 items-center gap-3 border-b border-border px-3"
+							: "lh-drag flex h-15 items-center gap-3 border-b border-border px-3"
+					}
+					onMouseDown={(e) => {
+						// Escape hitbox: any mousedown outside the input itself blurs
+						// it, running the existing onBlur commit path. The input is
+						// shrink-to-fit (field-sizing), so the rest of the bar is
+						// this spacer + inert chips — all click-to-exit (owner ask).
+						if (renaming && e.target !== titleInputRef.current) titleInputRef.current?.blur();
+					}}
+				>
 					<SidebarToggle />
 					{renaming ? (
-						<input
-							ref={titleInputRef}
-							value={titleDraft}
-							onChange={(e) => setTitleDraft(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") void commitRename(titleDraft);
-								else if (e.key === "Escape") setRenaming(false);
-							}}
-							onBlur={() => void commitRename(titleDraft)}
-							spellCheck={false}
-							aria-label="Session title"
-							className="lh-no-drag min-w-0 flex-1 bg-transparent font-title text-3xl tracking-tight caret-current outline-none"
-						/>
+						<>
+							<input
+								ref={titleInputRef}
+								value={titleDraft}
+								onChange={(e) => setTitleDraft(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") void commitRename(titleDraft);
+									else if (e.key === "Escape") setRenaming(false);
+								}}
+								onBlur={() => void commitRename(titleDraft)}
+								spellCheck={false}
+								aria-label="Session title"
+								className="lh-no-drag min-w-[8ch] max-w-[70%] shrink-0 bg-transparent font-title text-3xl tracking-tight caret-current outline-none [field-sizing:content]"
+							/>
+							{/* flex-1 spacer during rename too, so the chips stay at
+							    the right edge; clicks here commit via the header
+							    mousedown handler. */}
+							<div className="min-w-4 flex-1" aria-hidden="true" />
+						</>
 					) : (
 					<>
 						<button

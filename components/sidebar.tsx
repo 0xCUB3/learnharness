@@ -264,10 +264,12 @@ function SessionsSidebar() {
 					    home link, still vertically centered by the band's items-center.
 					    The 92px .lh-lights-gutter keeps it clear of the traffic lights
 					    with the lights' own edge-inset as the gap. */}
+					{/* Hover mirrors the ghost toggle buttons (owner ask, 2026-09-17):
+					    same size-9 chip geometry, same hover:bg-accent treatment. */}
 					<Link
 						href="/"
 						aria-label="Home"
-						className="lh-no-drag shrink-0 rounded-md transition-opacity hover:opacity-80"
+						className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
 					>
 						<LhMark className="size-6" />
 					</Link>
