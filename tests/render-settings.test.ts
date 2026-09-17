@@ -10,6 +10,7 @@ import { describe, it as test } from "node:test";
 import {
 	ARROW_LENGTH_RANGE,
 	CHARGE_RANGE,
+	CLUSTER_LABEL_SIZE_RANGE,
 	CLUSTER_PULL_RANGE,
 	DEFAULT_RENDER_SETTINGS,
 	DEPTH_BASE_RADIUS_RANGE,
@@ -53,6 +54,7 @@ describe("sanitizeRenderSettings", () => {
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize);
 		assert.equal(s.labelZoom, DEFAULT_RENDER_SETTINGS.labelZoom);
 		assert.equal(s.clusterLabels, DEFAULT_RENDER_SETTINGS.clusterLabels);
+		assert.equal(s.clusterLabelSize, DEFAULT_RENDER_SETTINGS.clusterLabelSize); // old files → 14
 	});
 
 	test("out-of-range values clamp; wrong types reset", () => {
@@ -63,6 +65,7 @@ describe("sanitizeRenderSettings", () => {
 			labelZoom: 100,
 			labelSize: "big" as unknown as number,
 			clusterLabels: "yes" as unknown as boolean,
+			clusterLabelSize: "huge" as unknown as number,
 		});
 		assert.equal(s.nodeSize, NODE_SIZE_RANGE.max); // clamped to max
 		assert.equal(s.edgeWidth, EDGE_WIDTH_RANGE.min); // clamped to min
@@ -70,6 +73,19 @@ describe("sanitizeRenderSettings", () => {
 		assert.equal(s.labelZoom, LABEL_ZOOM_MAX);
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize); // NaN-safe reset
 		assert.equal(s.clusterLabels, DEFAULT_RENDER_SETTINGS.clusterLabels);
+		assert.equal(s.clusterLabelSize, DEFAULT_RENDER_SETTINGS.clusterLabelSize); // NaN-safe reset
+	});
+
+	test("clusterLabelSize clamps to its own range (slider law)", () => {
+		// Default 14 is the geometric mean of [7, 28] → dead-center slider.
+		assert.equal(
+			Math.sqrt(CLUSTER_LABEL_SIZE_RANGE.min * CLUSTER_LABEL_SIZE_RANGE.max),
+			DEFAULT_RENDER_SETTINGS.clusterLabelSize,
+		);
+		const s = sanitizeRenderSettings({ clusterLabelSize: 999 });
+		assert.equal(s.clusterLabelSize, CLUSTER_LABEL_SIZE_RANGE.max);
+		const s2 = sanitizeRenderSettings({ clusterLabelSize: 1 });
+		assert.equal(s2.clusterLabelSize, CLUSTER_LABEL_SIZE_RANGE.min);
 	});
 
 	test("the low ends accept small sizes (log-slider floors)", () => {
@@ -88,6 +104,7 @@ describe("sanitizeRenderSettings", () => {
 			labelZoom: 0.25,
 			labelSize: 4,
 			clusterLabels: false,
+			clusterLabelSize: 20,
 			regions: DEFAULT_REGION_TUNING,
 			physics: DEFAULT_PHYSICS_TUNING,
 		};

@@ -69,6 +69,7 @@ import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts
 import {
 	ARROW_LENGTH_RANGE,
 	CHARGE_RANGE,
+	CLUSTER_LABEL_SIZE_RANGE,
 	CLUSTER_PULL_RANGE,
 	DEPTH_BASE_RADIUS_RANGE,
 	DEPTH_SPACING_RANGE,
@@ -279,15 +280,6 @@ function GraphSettingsControl({
 								onChange={(p) =>
 									changeSettings((cur) => ({ ...cur, labelZoom: fromSliderPosition(p, LABEL_ZOOM_MIN, LABEL_ZOOM_MAX) }))}
 							/>
-							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
-								<span>Cluster labels</span>
-								<input
-									type="checkbox"
-									checked={settings.clusterLabels}
-									onChange={(e) => changeSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
-									className="accent-primary"
-								/>
-							</label>
 						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
 						    dropdown for the bitmap resolution (it's a discrete
 						    choice, not a free number). Server-persisted like the
@@ -376,6 +368,33 @@ function GraphSettingsControl({
 									))}
 								</select>
 							</label>
+							{/* Cluster labels moved here 2026-09-16 (user: cluster
+							    stuff lives in the regions section). Decoupled from
+							    the Background colors switch above — labels follow
+							    their own clusterLabels toggle. Size is screen px
+							    (constant at any zoom, unlike node labels). */}
+							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
+								<span>Cluster labels</span>
+								<input
+									type="checkbox"
+									checked={settings.clusterLabels}
+									onChange={(e) => changeSettings((cur) => ({ ...cur, clusterLabels: e.target.checked }))}
+									className="accent-primary"
+								/>
+							</label>
+							<SettingSlider
+								label="Cluster label size"
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(settings.clusterLabelSize, CLUSTER_LABEL_SIZE_RANGE.min, CLUSTER_LABEL_SIZE_RANGE.max)}
+								display={sizeDisplay(settings.clusterLabelSize)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										clusterLabelSize: fromSliderPosition(p, CLUSTER_LABEL_SIZE_RANGE.min, CLUSTER_LABEL_SIZE_RANGE.max),
+									}))}
+							/>
 						</div>
 						{/* Physics: the live sim's forces. Every value feeds the SAME
 						    engine the server settle runs (createGraphSimulation);

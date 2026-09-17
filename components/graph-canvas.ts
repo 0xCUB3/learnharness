@@ -169,7 +169,6 @@ const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel
  *  live-physics frame pays one tiny blit instead of 32 clusters × 4
  *  offset polygons re-rasterized at DPR 2 (the old GPU coil-whine). */
 const REGION_EVERY = 3; // live-sim frames: rebuild every Nth, blit the rest
-const REGION_LABEL_SIZE = 14;
 
 
 
@@ -1357,24 +1356,6 @@ export class GraphCanvasRenderer {
 		ctx.fillStyle = data.colors.node;
 		ctx.fill(this.nodesPath);
 
-		// 5. Cluster region labels — inverse-gated on THE zoom control.
-		// Viewer-relative by design (UI, not graph content): drawn at the
-		// world centroid with a font of REGION_LABEL_SIZE / k, which is a
-		// constant 18px on screen at any zoom.
-		if (settings.clusterLabels && regionAlpha > 0.01) {
-			ctx.save();
-			ctx.globalAlpha = regionAlpha;
-			ctx.font = `${LABEL_WEIGHT} ${REGION_LABEL_SIZE / k}px ${data.fontFamily}`;
-			ctx.textAlign = "center";
-			ctx.textBaseline = "middle";
-			for (const rm of this.regionMeta) {
-				if (!rm.label) continue;
-				ctx.fillStyle = `hsla(${rm.hue}, 55%, 78%, 0.85)`;
-				ctx.fillText(rm.label, rm.cx, rm.cy);
-			}
-			ctx.restore();
-		}
-
 		// 6. Node labels — one global gate, faded together. World-scaled
 		// with the graph (they grow as you zoom in, Obsidian-style).
 		if (nodeAlpha > 0.01) {
@@ -1412,6 +1393,27 @@ export class GraphCanvasRenderer {
 				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, data.colors.hoverText);
 				ctx.restore();
 			}
+		}
+
+		// 8. Cluster region labels — THE TOPMOST layer (user 2026-09-16:
+		// node labels and hover names drew over them before; region labels
+		// must never be occluded by content). Inverse-gated on THE zoom
+		// control (visible zoomed-out, fading as node labels come in).
+		// Viewer-relative by design (UI, not graph content): drawn at the
+		// world centroid with a font of clusterLabelSize / k — a constant
+		// size on screen at any zoom (user-tunable since 2026-09-16).
+		if (settings.clusterLabels && regionAlpha > 0.01) {
+			ctx.save();
+			ctx.globalAlpha = regionAlpha;
+			ctx.font = `${LABEL_WEIGHT} ${settings.clusterLabelSize / k}px ${data.fontFamily}`;
+			ctx.textAlign = "center";
+			ctx.textBaseline = "middle";
+			for (const rm of this.regionMeta) {
+				if (!rm.label) continue;
+				ctx.fillStyle = `hsla(${rm.hue}, 55%, 78%, 0.85)`;
+				ctx.fillText(rm.label, rm.cx, rm.cy);
+			}
+			ctx.restore();
 		}
 	}
 }
