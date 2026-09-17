@@ -98,6 +98,16 @@ export function rmsToMeter(rms: number): number {
  */
 let questionTarget: ((text: string) => void) | null = null;
 
+/* Is a dictation run live on this page? The Esc chain (keyboard wave A,
+ * components/keyboard-shortcuts.tsx) needs a SYNCHRONOUS answer — the
+ * stop handler can't report back through a CustomEvent. Set at start(),
+ * cleared in cleanup() (every terminal path runs through cleanup). */
+let dictationActiveFlag = false;
+
+export function isDictationActive(): boolean {
+	return dictationActiveFlag;
+}
+
 /** Join a dictated final onto the current text (shared separator rule). */
 export function joinDictation(current: string, final: string): string {
 	return current ? current.replace(/\s+$/, "") + " " + final : final;
@@ -172,6 +182,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	/** Full teardown of one run's machinery. Idempotent; generation-guarded by callers. */
 	const cleanup = useCallback(() => {
 		genRef.current++;
+		dictationActiveFlag = false;
 		flush(); // the deferred transcript appears when the run ends (owner round 2)
 		if (safetyRef.current) {
 			clearTimeout(safetyRef.current);
@@ -260,6 +271,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	);
 
 	const start = useCallback(async () => {
+		dictationActiveFlag = true;
 		setError(null);
 		setPhase("connecting");
 		reconnectsRef.current = 0;
@@ -351,6 +363,18 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		else if (phase === "recording" || phase === "connecting") stop();
 		// "stopping" presses are ignored — the flush is in flight.
 	}, [phase, start, stop]);
+
+	// Shortcut seams (keyboard wave A): ⌘D toggles from anywhere on the
+	// page; the Esc chain's stop lands here too. Each page owns ONE hook
+	// instance, and only the mounted page's listener is attached.
+	useEffect(() => {
+		window.addEventListener("lh:kbd-toggle-dictation", toggle);
+		return () => window.removeEventListener("lh:kbd-toggle-dictation", toggle);
+	}, [toggle]);
+	useEffect(() => {
+		window.addEventListener("lh:kbd-stop-dictation", stop);
+		return () => window.removeEventListener("lh:kbd-stop-dictation", stop);
+	}, [stop]);
 
 	return { phase, error, levelRef, active: phase !== "idle", toggle, stop };
 }

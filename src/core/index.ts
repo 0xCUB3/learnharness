@@ -34,5 +34,7 @@ export * from "./ui-message.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
 export * from "./fuzzy.ts";
+// keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
+export * from "./keyboard.ts";
 export * from "./coverage.ts";
 export * from "./graph-context.ts";

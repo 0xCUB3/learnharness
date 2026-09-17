@@ -127,7 +127,12 @@ export function ModelControl({
 			}
 		};
 		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") setOpen(null);
+			if (e.key === "Escape") {
+				// Claim the Esc (keyboard wave A): the window-level chain must
+				// not ALSO stop dictation / abort the turn under this menu.
+				e.stopPropagation();
+				setOpen(null);
+			}
 		};
 		document.addEventListener("pointerdown", onPointerDown);
 		document.addEventListener("keydown", onKeyDown);
@@ -167,6 +172,30 @@ export function ModelControl({
 		},
 		[chatId, onSaved],
 	);
+
+	// Shortcut seams (keyboard wave A): ⌘K opens the model menu (the
+	// universal command convention); Shift+Tab cycles the thinking level
+	// up the ladder (wrapping) — the owner's replacement for browser
+	// tab-focus. Both work from any focus, including mid-typing.
+	useEffect(() => {
+		const onOpenPicker = () => {
+			setOpen("model");
+			setQuery("");
+			setError(null);
+		};
+		window.addEventListener("lh:kbd-open-model-picker", onOpenPicker);
+		return () => window.removeEventListener("lh:kbd-open-model-picker", onOpenPicker);
+	}, []);
+
+	useEffect(() => {
+		const onCycleThinking = () => {
+			if (levels.length === 0) return;
+			const idx = effectiveLevel === undefined ? -1 : levels.indexOf(effectiveLevel);
+			void save({ ...(settings ?? {}), thinkingLevel: levels[(idx + 1) % levels.length] });
+		};
+		window.addEventListener("lh:kbd-cycle-thinking", onCycleThinking);
+		return () => window.removeEventListener("lh:kbd-cycle-thinking", onCycleThinking);
+	}, [levels, effectiveLevel, save, settings]);
 
 	// The filtered, ranked model list.
 	const results = (catalog?.models ?? [])

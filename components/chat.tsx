@@ -200,6 +200,28 @@ export function Chat({
 		}
 	}, [renaming]);
 
+	// ── Keyboard seams (shortcut wave A, 2026-09-17) ──
+	// F2 opens the title rename (the chat header owns the editing state).
+	useEffect(() => {
+		const onRename = () => {
+			setTitleDraft(titleText);
+			setRenaming(true);
+		};
+		window.addEventListener("lh:kbd-rename-session", onRename);
+		return () => window.removeEventListener("lh:kbd-rename-session", onRename);
+	}, [titleText]);
+
+	// The Esc chain's last link: abort the turn. Honest scope (the composer's
+	// Stop has the same rule): only a LOCAL stream has a client request to
+	// stop — a server-side wake turn aborts nothing (the stop would be a
+	// no-op lie), so Esc is simply inert while one runs.
+	useEffect(() => {
+		const onAbort = () => {
+			if (localStreamRef.current) stop();
+		};
+		window.addEventListener("lh:kbd-abort-turn", onAbort);
+		return () => window.removeEventListener("lh:kbd-abort-turn", onAbort);
+	}, [stop]);
 	// Mount continuation: if the stored transcript ends with a fulfilled tool
 	// (a job result landed while no client was open), resume the lesson — the
 	// SDK's sendAutomaticallyWhen only fires inside addToolOutput, so reloads
@@ -670,7 +692,12 @@ export function Chat({
 								onChange={(e) => setTitleDraft(e.target.value)}
 								onKeyDown={(e) => {
 									if (e.key === "Enter") void commitRename(titleDraft);
-									else if (e.key === "Escape") setRenaming(false);
+									// stopPropagation claims the Esc (keyboard wave A):
+									// closing rename must not also abort a turn.
+									else if (e.key === "Escape") {
+										e.stopPropagation();
+										setRenaming(false);
+									}
 								}}
 								onBlur={() => void commitRename(titleDraft)}
 								spellCheck={false}

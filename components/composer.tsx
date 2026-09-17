@@ -53,8 +53,11 @@ export function Composer({
 				onKeyDown={(e) => {
 					// Esc ends dictation before anything else Esc might someday mean
 					// here (the dictate decisions: click-again or Esc to stop).
+					// stopPropagation claims the Esc (keyboard wave A): the
+					// window-level chain must not also abort a turn under us.
 					if (e.key === "Escape" && onEscape) {
 						e.preventDefault();
+						e.stopPropagation();
 						onEscape();
 						return;
 					}

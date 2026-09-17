@@ -1,12 +1,13 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
+import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -110,6 +111,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			return !v;
 		});
 	}, [narrow, open]);
+
+	// ⌘B (keyboard wave A): the global shortcut dispatches lh:toggle-sidebar;
+	// the context is the one place that owns open state, so it listens here.
+	useEffect(() => {
+		const onToggle = () => toggle();
+		window.addEventListener("lh:toggle-sidebar", onToggle);
+		return () => window.removeEventListener("lh:toggle-sidebar", onToggle);
+	}, [toggle]);
 
 	return (
 		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
@@ -216,18 +225,24 @@ export function SessionRow({
 	chat,
 	active,
 	onOpen,
+	kbdSelected = false,
 }: {
 	chat: ChatListItem;
 	active: boolean;
 	onOpen: () => void;
+	/** Keyboard-cycle highlight (shortcut wave A: Alt+↑/↓ + Alt+Enter) —
+	 *  visually distinct from the active session, which stays filled. */
+	kbdSelected?: boolean;
 }) {
 	return (
 		<button
 			type="button"
 			onClick={onOpen}
+			data-testid={kbdSelected ? "session-row-kbd" : undefined}
 			className={cn(
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
 				active && "bg-accent",
+				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
 		>
 			<SessionStatus busy={chat.busy} />
@@ -288,6 +303,70 @@ function SessionsSidebar() {
 		window.addEventListener("lh:chat-renamed", onRenamed);
 		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
 	}, []);
+
+	/* ── Keyboard seams (shortcut wave A, 2026-09-17) ── The sidebar owns
+	   every session-list interaction, so the shortcuts land here: ⌘⇧F
+	   focuses the search field; Alt+↑/↓ cycle the list (opening the sidebar
+	   if it's closed — the keys work from anywhere, like the toggle does);
+	   Alt+Enter opens the selected session. The selection is a row index
+	   into `shown`, so a typed query narrows the cycle to the matches.
+	   Mouse and keyboard coexist: hovering doesn't claim, a click or an
+	   open clears the selection. */
+	const [kbdIndex, setKbdIndex] = useState<number | null>(null);
+	const searchRef = useRef<HTMLInputElement>(null);
+	const listRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		const onFocusSearch = () => {
+			if (!open) toggle();
+			// A clipped (overflow-hidden) input still focuses — the sidebar's
+			// slide-in doesn't gate the keystroke.
+			requestAnimationFrame(() => searchRef.current?.focus());
+		};
+		window.addEventListener("lh:kbd-sessions-search", onFocusSearch);
+		return () => window.removeEventListener("lh:kbd-sessions-search", onFocusSearch);
+	}, [open, toggle]);
+
+	useEffect(() => {
+		const cycle = (dir: 1 | -1) => {
+			setKbdIndex((i) => {
+				const n = shown?.length ?? 0;
+				if (n === 0) return null;
+				if (i === null) return dir === 1 ? 0 : n - 1;
+				return (i + dir + n) % n;
+			});
+		};
+		const onPrev = () => {
+			if (!open) toggle();
+			cycle(-1);
+		};
+		const onNext = () => {
+			if (!open) toggle();
+			cycle(1);
+		};
+		const onOpenSelected = () => {
+			setKbdIndex((i) => {
+				const target = i !== null ? shown?.[i] : undefined;
+				if (target) router.push(`/chat/${target.id}`);
+				return target ? null : i;
+			});
+		};
+		window.addEventListener("lh:kbd-cycle-session-prev", onPrev);
+		window.addEventListener("lh:kbd-cycle-session-next", onNext);
+		window.addEventListener("lh:kbd-open-session", onOpenSelected);
+		return () => {
+			window.removeEventListener("lh:kbd-cycle-session-prev", onPrev);
+			window.removeEventListener("lh:kbd-cycle-session-next", onNext);
+			window.removeEventListener("lh:kbd-open-session", onOpenSelected);
+		};
+	}, [open, toggle, shown, router]);
+
+	// Keep the kbd-selected row in view (the rows are the container's only
+	// buttons, so the index matches).
+	useEffect(() => {
+		if (kbdIndex === null) return;
+		listRef.current?.querySelectorAll("button")[kbdIndex]?.scrollIntoView({ block: "nearest" });
+	}, [kbdIndex]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -351,6 +430,7 @@ function SessionsSidebar() {
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
 					<span className="relative flex-1">
 						<Input
+							ref={searchRef}
 							data-testid="session-search"
 							value={query}
 							onChange={(e) => setQuery(e.target.value)}
@@ -362,7 +442,7 @@ function SessionsSidebar() {
 					</span>
 				</div>
 
-				<div className="flex-1 overflow-y-auto p-2">
+				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
 					{shown === null ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">Loading…</div>
 					) : shown.length === 0 ? (
@@ -370,12 +450,16 @@ function SessionsSidebar() {
 							{query.trim() ? "No sessions match." : "No sessions yet."}
 						</div>
 					) : (
-						shown.map((c) => (
+						shown.map((c, i) => (
 							<SessionRow
 								key={c.id}
 								chat={c}
 								active={pathname === `/chat/${c.id}`}
-								onOpen={() => router.push(`/chat/${c.id}`)}
+								kbdSelected={i === kbdIndex}
+								onOpen={() => {
+									setKbdIndex(null);
+									router.push(`/chat/${c.id}`);
+								}}
 							/>
 						))
 					)}
@@ -398,6 +482,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 		<>
 			<SessionsSidebar />
 			<main className="min-w-0 flex-1">{children}</main>
+			{/* The single document-level keydown listener (keyboard wave A) —
+			    after the content in the tree, but it's window-level so order only
+			    matters for the events it dispatches, never for DOM priority. */}
+			<KeyboardShortcuts />
 		</>
 	);
 }

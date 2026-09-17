@@ -103,9 +103,12 @@ export function Home() {
 						value={topic}
 						onChange={(e) => setTopic(e.target.value)}
 						onKeyDown={(e) => {
-							// Esc ends dictation (the dictate decisions: click-again or Esc).
+							// Esc ends dictation (the dictate decisions: click-again or
+							// Esc) — stopPropagation claims it (keyboard wave A) so
+							// the window chain doesn't also abort a turn.
 							if (e.key === "Escape" && dictation.active) {
 								e.preventDefault();
+								e.stopPropagation();
 								dictation.stop();
 								return;
 							}

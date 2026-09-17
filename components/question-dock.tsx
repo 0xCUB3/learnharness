@@ -443,9 +443,12 @@ function QuestionDockForm({
 							value={text}
 							onChange={(e) => setText(e.target.value)}
 							onKeyDown={(e) => {
-								// Esc ends dictation (the dictate decisions: click-again or Esc).
+								// Esc ends dictation (the dictate decisions: click-again
+								// or Esc) — stopPropagation claims it (keyboard wave
+								// A) so the window chain doesn't also abort a turn.
 								if (e.key === "Escape" && onEscape) {
 									e.preventDefault();
+									e.stopPropagation();
 									onEscape();
 									return;
 								}
@@ -465,9 +468,12 @@ function QuestionDockForm({
 							value={thinking}
 							onChange={(e) => setThinking(e.target.value)}
 							onKeyDown={(e) => {
-								// Esc ends dictation (the dictate decisions: click-again or Esc).
+								// Esc ends dictation (the dictate decisions: click-again
+								// or Esc) — stopPropagation claims it (keyboard wave
+								// A) so the window chain doesn't also abort a turn.
 								if (e.key === "Escape" && onEscape) {
 									e.preventDefault();
+									e.stopPropagation();
 									onEscape();
 									return;
 								}
