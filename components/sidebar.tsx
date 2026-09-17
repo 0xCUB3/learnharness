@@ -21,6 +21,34 @@ import type { ChatListItem } from "@/src/core";
 
 const STORAGE_KEY = "lh:sidebar-open";
 
+/*
+ * Narrow-window behavior (owner, 2026-09-17): below SIDEBAR_AUTOCLOSE the
+ * sidebar would squeeze the page below the 640px window floor (the two
+ * numbers compose: 640 + 288 sidebar = 928), so it auto-closes — and
+ * auto-RESTORES when the window widens again (owner choice: the sidebar
+ * pops back, not a manual re-open). The whole behavior is one expression:
+ * rendered = pref && !narrow, where pref is the persisted user choice.
+ * Manual closes persist and stay closed; auto-close does not touch the
+ * preference. Opening the sidebar while narrow asks the Electron shell to
+ * widen the window to the threshold (window.lh.expandWindow, IPC in
+ * electron/main.cjs) — the resize listener flips `narrow` and the sidebar
+ * appears. In the plain browser there is no window to widen and no
+ * suppression — a narrow tab opens the sidebar if the user says so.
+ *
+ * Mirrors SIDEBAR_AUTOCLOSE in electron/main.cjs — keep in sync.
+ */
+const SIDEBAR_AUTOCLOSE = 928;
+
+// Module scope, guarded for SSR (the server has no navigator).
+const IS_ELECTRON = typeof navigator !== "undefined" && navigator.userAgent.includes("Electron");
+
+declare global {
+	interface Window {
+		/** Preload bridge (electron/preload.cjs) — Electron only, absent in the browser. */
+		lh?: { expandWindow: () => void };
+	}
+}
+
 const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
 	open: false,
 	toggle: () => {},
@@ -34,6 +62,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	// Start closed so server and client first-render agree (no hydration
 	// mismatch); the stored value is applied after mount.
 	const [open, setOpen] = useState(false);
+	const [narrow, setNarrow] = useState(false);
 	const [mounted, setMounted] = useState(false);
 
 	useEffect(() => {
@@ -42,7 +71,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		// into the window's drag surface. Post-mount only — server HTML
 		// and first client render must agree (no hydration mismatch),
 		// and in the plain browser the class never appears.
-		if (typeof navigator !== "undefined" && navigator.userAgent.includes("Electron")) {
+		if (IS_ELECTRON) {
 			document.documentElement.classList.add("lh-electron");
 		}
 
@@ -52,15 +81,38 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		setMounted(true);
 	}, []);
 
+	// Narrow-window auto-close/auto-restore (see SIDEBAR_AUTOCLOSE note):
+	// fires only on actual resizes — a boolean compare, no layout work.
+	// Both this and the mount effect land before the first paint, so a
+	// narrow window never flashes the open sidebar on load.
+	useEffect(() => {
+		if (!IS_ELECTRON) return; // plain-browser tabs open freely
+		const onResize = () => setNarrow(window.innerWidth < SIDEBAR_AUTOCLOSE);
+		onResize();
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, []);
+
 	const toggle = useCallback(() => {
+		// Opening while narrow (auto-closed, or the user's own closed-at-
+		// narrow): ask the shell to widen to the threshold — the resize
+		// listener flips `narrow` and the sidebar appears. The preference
+		// persists like any other open, so a restart at a narrow width
+		// still auto-restores when widened.
+		if (narrow && !open) {
+			localStorage.setItem(STORAGE_KEY, "0");
+			setOpen(true);
+			window.lh?.expandWindow();
+			return;
+		}
 		setOpen((v) => {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, []);
+	}, [narrow, open]);
 
 	return (
-		<SidebarContext.Provider value={{ open, toggle }}>
+		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
 			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>

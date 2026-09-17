@@ -973,8 +973,12 @@ export function GraphView() {
 			    lh-no-drag (2026-09-17): home.tsx's floating drag strip
 			    underlays this row — Electron's drag mask ignores z-index,
 			    so without an explicit carve-out the controls were
-			    unclickable in the desktop app (owner report). */}
-			<div className="lh-no-drag absolute right-3 top-3 z-10 flex items-start gap-2">
+			    unclickable in the desktop app (owner report). max-w + flex-wrap
+			    (narrow-window wave, 2026-09-17): below the sidebar auto-close
+			    threshold the row wraps to a second line instead of overflowing
+			    left over the header toggle cluster (92px gutter + 36px button);
+			    9rem keeps one clear column of air alongside it. */}
+			<div className="lh-no-drag absolute right-3 top-3 z-10 flex max-w-[calc(100%-9rem)] flex-wrap items-start gap-2">
 				{!isEmpty && (
 					<>
 					{/* Search — its own container (icon + input + no-match note). */}

@@ -21,12 +21,16 @@
  *     settings milestone builds the UI.
  */
 
-const { app, BrowserWindow, Menu, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, session, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+
+// Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
+// renderer owns the number; this is the IPC widen target).
+const SIDEBAR_AUTOCLOSE = 928;
 
 const PRODUCT_NAME = "LearnHarness";
 const AUTH_FILE = () => path.join(app.getPath("userData"), "auth.json");
@@ -199,6 +203,7 @@ function createWindow(url) {
 			contextIsolation: true,
 			sandbox: true,
 			nodeIntegration: false,
+			preload: path.join(__dirname, "preload.cjs"),
 		},
 		// Live-resize + first-paint flash (owner, 2026-09-17): during a resize
 		// the native window surface changes size before Chromium's compositor
@@ -209,6 +214,14 @@ function createWindow(url) {
 		// appears only once the page has actually rendered.
 		backgroundColor: "#141414",
 		show: false,
+		// Narrow-window behavior (owner, 2026-09-17): 640px is the floor —
+		// below it even a wrapped chrome row gets cramped and the chat header
+		// (lights gutter 92 + toggle + title) runs out of room. The sidebar
+		// auto-closes below 928 = 640 + 288 (sidebar) in the renderer
+		// (components/sidebar.tsx, SIDEBAR_AUTOCLOSE); its "lh:expand-window"
+		// IPC widens the window back to that threshold.
+		minWidth: 640,
+		minHeight: 600,
 	});
 
 	const allowedOrigin = () => new URL(url).origin;
@@ -293,6 +306,19 @@ async function main() {
 	}
 
 	installMenu();
+
+	// Sidebar-at-narrow-window (owner, 2026-09-17): the renderer auto-closes
+	// the sidebar below SIDEBAR_AUTOCLOSE (928px); opening it again at that
+	// width asks the window to widen instead — the layout never has to
+	// accommodate a narrow window + open sidebar. Top-left stays fixed, the
+	// window grows right. No-op when already wide.
+	ipcMain.on("lh:expand-window", (event) => {
+		const win = BrowserWindow.fromWebContents(event.sender);
+		if (!win) return;
+		const { x, y, width, height } = win.getBounds();
+		const target = SIDEBAR_AUTOCLOSE;
+		if (width < target) win.setBounds({ x, y, width: target, height });
+	});
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
 	});
