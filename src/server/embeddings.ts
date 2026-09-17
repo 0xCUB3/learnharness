@@ -18,7 +18,9 @@
  * the whole ledger stale and this module re-embeds from scratch (minutes
  * at current scale).
  */
-import { pipeline, type FeatureExtractionPipeline } from "@huggingface/transformers";
+import * as fs from "node:fs";
+import { env, pipeline, type FeatureExtractionPipeline } from "@huggingface/transformers";
+import { PATHS } from "../../config.ts";
 import type { EmbeddingsLedger, GraphNode } from "../core/contracts.ts";
 import { semanticClusters, SEMANTIC_SIM_THRESHOLD } from "../core/semantic-clusters.ts";
 
@@ -29,6 +31,15 @@ export const EMBEDDING_DIM = 512;
 /** Batch size bounds peak memory; propositions are tiny so 32 per call
  *  keeps the pipeline warm without thrashing. */
 const EMBED_BATCH = 32;
+
+// Model cache routing (Electron seam, 2026-09-17): the default cacheDir
+// lives inside node_modules — read-only inside a packaged .app bundle.
+// When LH_DATA_DIR is set the cache follows the data seam (userData);
+// in dev it stays at the package default (the model is already there).
+if (PATHS.modelCache) {
+	fs.mkdirSync(PATHS.modelCache, { recursive: true });
+	env.cacheDir = PATHS.modelCache;
+}
 
 let pipelinePromise: Promise<FeatureExtractionPipeline> | null = null;
 

@@ -4,14 +4,33 @@ import { fileURLToPath } from "node:url";
 /** Repository root (this file is at <root>/config.ts). */
 export const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * THE data-location seam (the Electron contract, 2026-09-17): LH_DATA_DIR
+ * relocates every MUTABLE record — chat sessions, graph ledgers, the
+ * embedding model cache — when set. The desktop shell points it at
+ * userData so nothing is written inside the read-only .app bundle
+ * (macOS translocation guarantees the bundle is read-only anyway).
+ * Unset (plain web dev / repo work) it resolves to the repo's data/,
+ * byte-for-byte as before. Read-only assets (prompts) stay ROOT-anchored
+ * on purpose: they ship inside the app bundle by design.
+ */
+const DATA_ROOT = process.env.LH_DATA_DIR
+	? path.resolve(process.env.LH_DATA_DIR)
+	: path.join(ROOT, "data");
+
 export const PATHS = {
 	root: ROOT,
 	/** Teacher system prompt — the agent's instructions (src/agent/). */
 	teacherPrompt: path.join(ROOT, "src", "agent", "system-prompt.md"),
-	data: path.join(ROOT, "data"),
+	data: DATA_ROOT,
 	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
-	chats: path.join(ROOT, "data", "chats"),
-	graph: path.join(ROOT, "data", "graph"),
+	chats: path.join(DATA_ROOT, "chats"),
+	graph: path.join(DATA_ROOT, "graph"),
+	/** transformers.js model cache (server-side embeddings, ~300MB).
+	 * null in dev = keep the package default (the model is already
+	 * downloaded there); under LH_DATA_DIR the packaged app must never
+	 * try to cache inside its own bundle. */
+	modelCache: process.env.LH_DATA_DIR ? path.join(DATA_ROOT, "models") : null,
 } as const;
 
 // ─── Models ────────────────────────────────────────────────────────────────

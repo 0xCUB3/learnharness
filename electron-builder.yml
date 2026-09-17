@@ -1,0 +1,49 @@
+# electron-builder config — LearnHarness desktop (macOS arm64 first).
+#
+# Shape (fact-checked 2026-09-17):
+#   - the app's real server (.next/standalone, curated by
+#     scripts/build-server.mjs) ships via extraResources — OUTSIDE the asar,
+#     because native .node/dylib can't dlopen from a read-only archive and
+#     server.js process.chdir()s into its own dir;
+#   - the asar holds only the shell (electron/main.cjs + package.json);
+#   - signing/notarization config is laid now but inert until a Developer
+#     ID certificate exists (identity: null = unsigned local build, which
+#     runs fine for personal use — Gatekeeper only gates quarantined apps).
+appId: com.learnharness.LearnHarness
+productName: LearnHarness
+directories:
+  output: dist
+files:
+  # Only the shell goes into the asar.
+  - electron/**/*
+  - package.json
+extraResources:
+  # Copy from the PARENT dir (.next), not .next/standalone itself:
+  # electron-builder hard-excludes a copy's root node_modules and the
+  # default no-filter pattern is a literal path match (empirically both
+  # node_modules/ and .next/ were silently dropped → server died on
+  # "Cannot find module 'next'"). With `from: .next` the filter's
+  # relative paths start with standalone/, dodging the root-node_modules
+  # rule, and the explicit wildcard (minimatch dot:true) reaches
+  # standalone/.next and standalone/node_modules.
+  - from: .next
+    to: server
+    filter:
+      - "standalone/**/*"
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  category: public.app-category.education
+  # Laid for the STT milestone (researcher-verified): the TCC mic prompt
+  # reads this string; macOS asks regardless of Electron's own handlers.
+  extendInfo:
+    NSMicrophoneUsageDescription: "LearnHarness uses the microphone only for speech-to-text input into your sessions."
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  # Unsigned until a Developer ID certificate exists (research-confirmed:
+  # local builds run fine; distribution needs signing + notarization).
+  identity: null
+dmg:
+  title: "${productName} ${version}"

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened-runtime entitlements (applied once the app is signed).
+	     Laid now (2026-09-17) so the STT milestone doesn't rebuild packaging:
+	     - allow-jit / allow-unsigned-executable-memory: Electron's V8 needs
+	       both under hardened runtime (standard Electron entitlements);
+	     - audio-input: macOS mic for the STT milestone (the Developer-ID
+	       variant — com.apple.security.device.microphone is the App-Store
+	       sandbox variant and does NOT apply to Developer ID apps). -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

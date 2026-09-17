@@ -4,13 +4,16 @@
 	"description": "A standalone learning harness: a teacher agent (AI SDK) with quiz/ask interactions, session artifacts, and a derived knowledge graph of what the learner knows.",
 	"type": "module",
 	"private": true,
+	"main": "electron/main.cjs",
 	"scripts": {
 		"dev": "next dev",
 		"build": "next build",
 		"start": "next start",
 		"test": "NODE_ENV=test tsx --test tests/*.test.ts tests/*.test.tsx",
 		"lint": "eslint .",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"desktop:dev": "concurrently -k \"next dev\" \"LH_DEV_URL=http://localhost:3000 electron .\"",
+		"desktop:dist": "next build && node scripts/build-server.mjs && electron-builder --mac --arm64"
 	},
 	"dependencies": {
 		"@ai-sdk/react": "^4.0.79",
@@ -66,6 +69,9 @@
 		"@types/react-dom": "^19.2.4",
 		"@types/turndown": "^5.0.6",
 		"@typescript-eslint/parser": "^8.68.0",
+		"concurrently": "^10.0.5",
+		"electron": "^44.4.1",
+		"electron-builder": "^26.15.3",
 		"eslint": "^9.39.5",
 		"eslint-import-resolver-typescript": "^4.4.5",
 		"eslint-plugin-import": "^2.32.0",
