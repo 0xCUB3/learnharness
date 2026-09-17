@@ -30,7 +30,17 @@ against our codebase. Decisions at the bottom.
 
 **Alternatives (why still Deepgram)**: OpenAI live-transcribe $0.017/min (~3.5×), no word timestamps/confidence, 60-min session cap. AssemblyAI Universal-Streaming $0.0025/min is cheaper but smaller ecosystem. Speechmatics best for non-English but ~2×. GCP is service-account-shaped — bad BYOK fit. Verdict: Deepgram stays the pragmatic default.
 
+## Cloud: Deepgram (the default) — landed
+
+**Live-verified facts (2026-09-17, cloud wave)**
+
+- The **grant response field is `access_token`**, not `token` — `POST /v1/auth/grant` returns `{ "access_token": "<jwt>" }`.
+- **Minted JWTs authenticate over the WebSocket via the `bearer` subprotocol**: `new WebSocket(url, ["bearer", jwt])`. The `token` subprotocol is for **raw API keys only** (the pi dictate extension's path) — `["token", jwt]` is rejected at the handshake (TLS-level close, no 401).
+- **The key needs ≥ Member permission** (console → API Keys → Create Key → *Advanced* options → permissions dropdown → Member). A default key can transcribe but gets `FORBIDDEN` from `/auth/grant`.
+- **Env precedence gotcha**: a real `DEEPGRAM_API_KEY` exported in the shell (e.g. `.zshrc`) **beats `.env.local`** in both `next dev` and the desktop shell's `authEnv()` seam. Stale exports silently override the file — don't export the key in shell rc files; `.env.local`/auth.json are the canonical seams.
+
 ## Local: whisper.cpp (the Advanced option)
+
 
 **Verified facts**
 

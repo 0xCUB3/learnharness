@@ -137,7 +137,10 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	/** Open the Deepgram socket and wire its messages. `gen` guards staleness. */
 	const openSocket = useCallback(
 		(gen: number, token: string) => {
-			const ws = new WebSocket(DG_URL, ["token", token]);
+			// Minted JWTs authenticate via the "bearer" subprotocol — ["token",
+			// jwt] is rejected at the handshake (verified live; "token" is for
+			// raw API keys only, as in the owner's pi dictate extension).
+			const ws = new WebSocket(DG_URL, ["bearer", token]);
 			wsRef.current = ws;
 
 			ws.addEventListener("open", () => {

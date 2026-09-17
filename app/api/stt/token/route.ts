@@ -35,11 +35,11 @@ export async function GET() {
 				{ status: 502 },
 			);
 		}
-		const data = (await res.json()) as { token?: string };
-		if (!data.token) {
+		const data = (await res.json()) as { access_token?: string };
+		if (!data.access_token) {
 			return Response.json({ message: "Deepgram grant returned no token" }, { status: 502 });
 		}
-		return Response.json({ token: data.token });
+		return Response.json({ token: data.access_token });
 	} catch {
 		return Response.json({ message: "Deepgram unreachable" }, { status: 502 });
 	}
