@@ -81,7 +81,7 @@ export function DraftShell({
 			    band (owner, round 6). */}
 			<header className="relative flex h-15 items-center gap-3 px-3">
 					<SidebarToggle />
-					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">New session</div>
+					<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">New session</div>
 					<PhaseChip phase="probe" />
 				</header>
 

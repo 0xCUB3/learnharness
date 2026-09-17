@@ -593,7 +593,7 @@ export function Chat({
 				    band's bottom edge as one line across the app (owner, round 6). */}
 				<header className="flex h-15 items-center gap-3 border-b border-border px-3">
 					<SidebarToggle />
-					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
+					<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">{title}</div>
 					{/* The plan chip (owner, plan-placement round): session-level
 					    structure beside the phase chip — access to the full-DAG popup
 					    at every width; the marginalia is the wide-screen glance view. */}
