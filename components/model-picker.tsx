@@ -222,7 +222,7 @@ export function ModelControl({
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
 						placeholder="Search models…"
-						className="lh-prose mb-1.5 w-full rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
+						className="lh-input mb-1.5 w-full rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
 					/>
 					{error && <div className="mb-1.5 text-destructive">{error}</div>}
 					{!catalog && (

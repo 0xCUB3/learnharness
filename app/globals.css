@@ -164,6 +164,19 @@ body {
 	color: var(--lh-ink-italic);
 }
 
+/* lh-input (owner, typography round 2): lh-prose's 1.5 READING leading
+   makes typing carets tower over the glyphs — the caret fills the line
+   box (24.75px at 16.5px text, ~2.1× the glyph height). Inputs are not
+   paragraphs: a tighter 1.25 leading brings the caret to the font-metric
+   floor (~21px, as close to the glyphs as Chromium will draw it) while
+   wrapped lines in growing textareas still read fine. Rendered prose keeps
+   1.5 — the two share family and size, they differ only in leading. */
+.lh-input {
+	font-family: var(--font-prose);
+	font-size: var(--lh-prose-size);
+	line-height: 1.25;
+}
+
 /* Thin dark native scrollbar (app-wide): dark thumb, transparent track. */
 * {
 	scrollbar-width: thin;
