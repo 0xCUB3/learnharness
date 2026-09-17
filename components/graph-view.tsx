@@ -166,6 +166,7 @@ function SettingSlider({
 	value,
 	display,
 	onChange,
+	disabled,
 }: {
 	label: string;
 	min: number;
@@ -175,9 +176,12 @@ function SettingSlider({
 	/** Value display override (e.g. "1.5×" for zoom) — defaults to the raw number. */
 	display?: string;
 	onChange: (v: number) => void;
+	/** Dependency graying (user 2026-09-17): children dim + lock when
+	 *  their parent toggle/mode is off — consistently across sections. */
+	disabled?: boolean;
 }) {
 	return (
-		<label className="flex flex-col gap-1">
+		<label className={`flex flex-col gap-1${disabled ? " opacity-40" : ""}`}>
 			<span className="flex items-center justify-between text-[11px] text-muted-foreground">
 				{label}
 				<span className="tabular-nums">{display ?? value}</span>
@@ -188,6 +192,7 @@ function SettingSlider({
 				max={max}
 				step={step}
 				value={value}
+				disabled={disabled}
 				onChange={(e) => onChange(Number(e.target.value))}
 				className="h-1.5 w-full accent-primary"
 			/>
@@ -306,6 +311,7 @@ function GraphSettingsControl({
 							</label>
 							<SettingSlider
 								label="Dilation"
+								disabled={!regionTuning.enabled}
 								min={0}
 								max={100}
 								step={5}
@@ -317,9 +323,12 @@ function GraphSettingsControl({
 										regions: { ...cur.regions, dilation: fromSliderPosition(p, REGION_DILATION_RANGE.min, REGION_DILATION_RANGE.max) },
 									}))}
 							/>
-							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+							<label
+								className={`flex items-center justify-between gap-2 text-[11px] text-muted-foreground${!regionTuning.enabled ? " opacity-40" : ""}`}
+							>
 								<span>Blur</span>
 								<select
+									disabled={!regionTuning.enabled}
 									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
 									value={regionTuning.blur}
 									onChange={(e) =>
@@ -338,6 +347,7 @@ function GraphSettingsControl({
 							</label>
 							<SettingSlider
 								label="Edge alpha"
+								disabled={!regionTuning.enabled}
 								min={0}
 								max={100}
 								step={5}
@@ -349,9 +359,12 @@ function GraphSettingsControl({
 										regions: { ...cur.regions, edgeAlpha: fromSliderPosition(p, REGION_EDGE_ALPHA_RANGE.min, REGION_EDGE_ALPHA_RANGE.max) },
 									}))}
 							/>
-							<label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+							<label
+								className={`flex items-center justify-between gap-2 text-[11px] text-muted-foreground${!regionTuning.enabled ? " opacity-40" : ""}`}
+							>
 								<span>Bitmap resolution</span>
 								<select
+									disabled={!regionTuning.enabled}
 									className="rounded-md border bg-background px-1.5 py-0.5 text-xs tabular-nums text-foreground"
 									value={regionTuning.bitmap}
 									onChange={(e) =>
@@ -384,6 +397,7 @@ function GraphSettingsControl({
 							</label>
 							<SettingSlider
 								label="Cluster label size"
+								disabled={!settings.clusterLabels}
 								min={0}
 								max={100}
 								step={5}
@@ -427,6 +441,7 @@ function GraphSettingsControl({
 							</label>
 							<SettingSlider
 								label="Depth strength"
+								disabled={physicsTuning.depthMode === "off"}
 								min={0}
 								max={100}
 								step={5}
@@ -440,6 +455,7 @@ function GraphSettingsControl({
 							/>
 							<SettingSlider
 								label="Depth spacing"
+								disabled={physicsTuning.depthMode === "off"}
 								min={0}
 								max={100}
 								step={5}
@@ -453,6 +469,7 @@ function GraphSettingsControl({
 							/>
 							<SettingSlider
 								label="Base ring radius"
+								disabled={physicsTuning.depthMode !== "radial"}
 								min={0}
 								max={100}
 								step={5}
