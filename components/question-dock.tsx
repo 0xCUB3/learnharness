@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { joinDictation, useDictationTarget } from "@/components/dictation";
@@ -67,6 +67,9 @@ export interface QuestionDockProps {
 	/** Escape in a question field stops dictation (STT wave) — threaded
 	 *  from the page that owns the dictation hook. */
 	onEscape?: () => void;
+	/** The keyboard machine (wave B) is armed only while the dock is
+	 *  expanded — the collapsed bar keeps its native Enter-to-expand. */
+	active?: boolean;
 	/** Session phase at the question — scales the thinking field: probing
 	 *  stays quick (one row), teaching invites dumping (three rows). */
 	phase?: Phase3;
@@ -113,6 +116,7 @@ export function QuestionDock({
 					toolCallId={toolCallId}
 					input={parsed}
 					phase={phase}
+					active={expanded}
 					onSubmit={onSubmit}
 					onEscape={onEscape}
 				/>
@@ -194,9 +198,10 @@ function QuestionDockForm({
 	toolCallId,
 	input,
 	phase = "probe",
+	active,
 	onSubmit,
 	onEscape,
-}: Omit<QuestionDockProps, "expanded" | "onExpand">) {
+}: Omit<QuestionDockProps, "expanded" | "onExpand" | "reveal">) {
 	const kind = toolName === "quiz" ? ("quiz" as const) : ("ask" as const);
 
 	// Canonical QuestionData, built once per question. Quiz options are
@@ -289,8 +294,73 @@ function QuestionDockForm({
 	// answer and the reasoning behind it, side by side.
 	const selectOther = () => setSel(toggleOther(selectMode, sel));
 
+	/* ── The keyboard machine (shortcut wave B, 2026-09-17) ──
+	   ↑/↓ walk EVERY answerable row in order — options first, then the
+	   quiz's "I don't know" or the ask's "Other…" (whichever exists).
+	   Space acts on the walked row exactly like a click (multi toggles,
+	   single displaces; Other also focuses its input for typing), Enter
+	   submits once an answer exists. Two guards keep native behavior
+	   intact: keys from a TYPING SURFACE keep their meaning (arrows move
+	   the caret, space types), and keys from INSIDE the dock keep the
+	   DOM's semantics (Enter on a focused row/button clicks it). The
+	   listener is document-level and lives only while the dock is
+	   expanded — collapsed, the bar's native Enter expands it. */
+	const [kbdIdx, setKbdIdx] = useState<number | null>(null);
+	const rootRef = useRef<HTMLDivElement>(null);
+	const otherInputRef = useRef<HTMLInputElement>(null);
+	// One row past the options is the trailing row: quiz → don't-know,
+	// ask → Other (a question never has both).
+	const optionCount = qd.mode === "text" ? 0 : qd.options.length;
+	const rowCount = qd.mode === "text" ? 0 : optionCount + 1;
+
+	const kbdAct = (idx: number) => {
+		if (idx < optionCount) toggle(idx);
+		else if (kind === "quiz")
+			setSel((prev) => ({ ...prev, selected: new Set(), otherSelected: false, dontKnow: !prev.dontKnow }));
+		else {
+			selectOther();
+			otherInputRef.current?.focus();
+		}
+	};
+
+	useEffect(() => {
+		if (!active || rowCount === 0) return;
+		const onKeyDown = (e: KeyboardEvent) => {
+			const t = e.target as HTMLElement | null;
+			if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+			// Keys from inside the dock keep DOM semantics (Enter clicks a
+			// focused row; Space presses a focused button).
+			if (t && rootRef.current?.contains(t)) return;
+			if (e.key === "ArrowDown") {
+				e.preventDefault();
+				setKbdIdx((i) => (i === null ? 0 : (i + 1) % rowCount));
+			} else if (e.key === "ArrowUp") {
+				e.preventDefault();
+				setKbdIdx((i) => (i === null ? rowCount - 1 : (i - 1 + rowCount) % rowCount));
+			} else if (e.key === " ") {
+				if (kbdIdx === null) return; // plain Space keeps scrolling the page
+				e.preventDefault();
+				kbdAct(kbdIdx);
+			} else if (e.key === "Enter") {
+				if (kbdIdx === null || !canSubmit) return;
+				e.preventDefault();
+				submit();
+			}
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	});
+
+	// Keep the walked row visible (the question area scrolls internally).
+	useEffect(() => {
+		if (kbdIdx === null) return;
+		rootRef.current
+			?.querySelector(`[data-kbdrow="${kbdIdx}"]`)
+			?.scrollIntoView({ block: "nearest" });
+	}, [kbdIdx]);
+
 	return (
-		<div data-testid="question-dock">
+		<div ref={rootRef} data-testid="question-dock">
 			{/* Question area — scrolls internally if very tall; the bottom row stays put. */}
 			<div className="max-h-[55dvh] overflow-y-auto px-4 pt-3">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -316,10 +386,12 @@ function QuestionDockForm({
 									type="button"
 									role={qd.mode === "multi-select" ? "checkbox" : "radio"}
 									aria-checked={isSel}
+									data-kbdrow={i}
 									onClick={() => toggle(i)}
 									className={cn(
 										"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
 										isSel ? "border-primary bg-accent" : "hover:bg-accent/50",
+										i === kbdIdx && !isSel && "ring-1 ring-border bg-accent/40",
 									)}
 								>
 									<span
@@ -353,12 +425,14 @@ function QuestionDockForm({
 								onClick={() =>
 									setSel((prev) => ({ ...prev, selected: new Set(), otherSelected: false, dontKnow: !prev.dontKnow }))
 								}
+								data-kbdrow={optionCount}
 								aria-pressed={sel.dontKnow}
 								className={cn(
 									// Option-row layout + radio circle (owner); the dashed
 									// outline stays — this is the deliberate non-answer.
 									"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm transition-colors",
 									sel.dontKnow ? "border-primary text-foreground" : "text-muted-foreground",
+									kbdIdx === optionCount && !sel.dontKnow && "ring-1 ring-border bg-accent/40",
 								)}
 							>
 								<span
@@ -380,10 +454,12 @@ function QuestionDockForm({
 								role={qd.mode === "multi-select" ? "checkbox" : "radio"}
 								aria-checked={sel.otherSelected}
 								data-testid="other-option"
+								data-kbdrow={optionCount}
 								onClick={selectOther}
 								className={cn(
 									"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
 									sel.otherSelected ? "border-primary bg-accent" : "border-dashed hover:bg-accent/50",
+									kbdIdx === optionCount && !sel.otherSelected && "ring-1 ring-border bg-accent/40",
 								)}
 							>
 								<span
@@ -402,6 +478,7 @@ function QuestionDockForm({
 									)}
 								</span>
 								<input
+									ref={otherInputRef}
 									value={other}
 									onChange={(e) => {
 										setOther(e.target.value);

@@ -109,7 +109,7 @@ export function Home() {
 							if (e.key === "Escape" && dictation.active) {
 								e.preventDefault();
 								e.stopPropagation();
-								dictation.stop();
+								dictation.cancel();
 								return;
 							}
 							if (e.key === "Enter" && !e.shiftKey) {

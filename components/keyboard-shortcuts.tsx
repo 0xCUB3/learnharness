@@ -9,7 +9,8 @@
  *   Shift+Tab cycles the thinking level instead.
  * - Esc is a layered dismiss: topmost popover first (popovers stopPropagation
  *   on their own Esc — usePopoverDismiss + ModelControl), then dictation
- *   stop, then abort of an in-flight turn.
+ *   CANCEL (discard the transcript, owner 2026-09-17 round 3), then abort of
+ *   an in-flight turn.
  * - Global actions dispatch lh:kbd-<action> window events; surfaces that are
  *   mounted listen (the lh:chat-renamed pattern). A surface that isn't
  *   mounted simply doesn't listen — an F2 on the graph view is a no-op, not
@@ -71,7 +72,7 @@ export function KeyboardShortcuts() {
 				// abort seam in Chat decides what's honestly stoppable).
 				if (isDictationActive()) {
 					e.preventDefault();
-					window.dispatchEvent(new CustomEvent("lh:kbd-stop-dictation"));
+					window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation"));
 					return;
 				}
 				window.dispatchEvent(new CustomEvent("lh:kbd-abort-turn"));

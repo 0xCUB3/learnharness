@@ -345,11 +345,11 @@ function SessionsSidebar() {
 			cycle(1);
 		};
 		const onOpenSelected = () => {
-			setKbdIndex((i) => {
-				const target = i !== null ? shown?.[i] : undefined;
-				if (target) router.push(`/chat/${target.id}`);
-				return target ? null : i;
-			});
+			const target = kbdIndex !== null ? shown?.[kbdIndex] : undefined;
+			if (target) {
+				router.push(`/chat/${target.id}`);
+				setKbdIndex(null);
+			}
 		};
 		window.addEventListener("lh:kbd-cycle-session-prev", onPrev);
 		window.addEventListener("lh:kbd-cycle-session-next", onNext);
@@ -359,7 +359,9 @@ function SessionsSidebar() {
 			window.removeEventListener("lh:kbd-cycle-session-next", onNext);
 			window.removeEventListener("lh:kbd-open-session", onOpenSelected);
 		};
-	}, [open, toggle, shown, router]);
+		// kbdIndex is read (not upserted) so Alt+Enter pushes OUTSIDE any
+		// state updater — a router.push inside one is setState-in-render.
+	}, [open, toggle, shown, router, kbdIndex]);
 
 	// Keep the kbd-selected row in view (the rows are the container's only
 	// buttons, so the index matches).

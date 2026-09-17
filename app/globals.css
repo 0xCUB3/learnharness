@@ -338,16 +338,3 @@ body {
 .lh-electron .lh-closed-toggle {
 	margin-left: 92px;
 }
-
-/* ─────────────────────────────────────────────────────────────────────────
-   Keyboard focus ring (shortcut wave A, 2026-09-17). Browser Tab-focus
-   navigation is ABANDONED by owner decision (Tab is suppressed at the
-   window level — see components/keyboard-shortcuts.tsx; Shift+Tab cycles
-   the thinking level instead), so this ring should almost never appear.
-   It exists as belt-and-braces: if focus ever lands somewhere via script,
-   it glows in the app's own accent, not Chromium's default blue.
-   ───────────────────────────────────────────────────────────────────────── */
-:focus-visible {
-	outline: 1.5px solid color-mix(in srgb, var(--lh-ink-strong, #c96b4a) 75%, transparent);
-	outline-offset: 1px;
-}

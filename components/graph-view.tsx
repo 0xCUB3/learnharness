@@ -598,6 +598,14 @@ export function GraphView() {
 
 	// Search panel state: the query text + the settings section toggle.
 	const [query, setQuery] = useState("");
+	// ⌘F (shortcut wave C): the find event focuses the node search —
+	// surface-scoped, dispatched as lh:kbd-find (only this page listens).
+	const searchInputRef = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		const onFind = () => searchInputRef.current?.focus();
+		window.addEventListener("lh:kbd-find", onFind);
+		return () => window.removeEventListener("lh:kbd-find", onFind);
+	}, []);
 	// Render settings: SERVER-persisted (data/render-settings.json via
 	// /api/graph/render-settings) — sizes AND the region/physics sections
 	// (user-facing since 2026-09-13; the dev-session era is over). Loaded
@@ -991,6 +999,7 @@ export function GraphView() {
 						<div className="relative">
 							<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 							<input
+								ref={searchInputRef}
 								value={query}
 								onChange={(e) => setQuery(e.target.value)}
 								placeholder="Search nodes…"

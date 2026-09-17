@@ -1,0 +1,80 @@
+# Keyboard shortcuts
+
+Decided 2026-09-17 (owner key-map review after the first draft; the whole
+app must be usable with the keyboard only — voice first, keyboard as the
+second pillar of input).
+
+## Architecture
+
+- **Registry**: `src/core/keyboard.ts` — `KEYBOARD_ACTIONS` holds every
+  action: `{ id, label, scope, binding }`. The cheat sheet renders FROM
+  the registry, so it can never list a non-functional shortcut.
+- **Provider**: `components/keyboard-shortcuts.tsx` — one window-level
+  keydown listener (bubble phase, mounted once in AppShell). Normalizes
+  keys to `mod+d`-style strings, resolves overrides, dispatches
+  `lh:kbd-<action-id>` window CustomEvents. Surfaces listen for their
+  own events (matching the pre-existing `lh:chat-renamed` seam style).
+- **Persistence**: overrides live under localStorage `lh:keymap` as
+  `{actionId: binding}` merged over defaults. No editor yet — the
+  settings milestone owns key map editing.
+- **displayOnly entries**: the registry also lists SURFACE-owned keys
+  (the question dock's row machine) for the cheat sheet only —
+  `effectiveKeymap` skips them so bare arrows can never leak to pages
+  where the surface isn't mounted.
+
+## Rules
+
+- **Tab is dead everywhere** (owner decision: browser tab-focus
+  navigation abandoned). Shift+Tab cycles the thinking level — also
+  while typing in a field (modifier combos are the only keys that fire
+  from typing surfaces; bare keys never do).
+- **Esc priority chain**: topmost popover → cheat sheet → cancel
+  dictation (DISCARD — the transcript flush is Cmd+D/Stop only, owner
+  round) → abort turn (local stream only — a server-side wake turn has
+  no client request to abort). Every element/document-level Esc handler
+  that acts calls `e.stopPropagation()` so the window chain never
+  double-fires.
+- **Focus ring**: browser Tab-focus is gone, so `:focus-visible` stays
+  unstyled (an earlier experimental outline was live-rejected — inputs
+  showed a red ring on plain click-focus).
+
+## Key map (Wave A — global)
+
+| Action | Binding | Seam |
+|---|---|---|
+| Toggle dictation | ⌘D | `lh:kbd-toggle-dictation` (dictation.tsx) |
+| Model selector | ⌘K | `lh:kbd-open-model-picker` (model-picker.tsx) |
+| Cycle thinking level | Shift+Tab | `lh:kbd-cycle-thinking` (model-picker.tsx) |
+| Toggle sidebar | ⌘B | `lh:toggle-sidebar` (sidebar.tsx) |
+| Sessions search | ⌘⇧F | `lh:kbd-sessions-search` (sidebar.tsx) |
+| Cycle session | ⌥↑ / ⌥↓ | `lh:kbd-cycle-session-prev/next` (sidebar.tsx) |
+| Open selected session | ⌥Enter | `lh:kbd-open-session` (sidebar.tsx) |
+| Jump to graph (home) | ⌘G | router.push in keyboard-shortcuts.tsx |
+| New session | ⌘N | router.push in keyboard-shortcuts.tsx |
+| Rename session | F2 | `lh:kbd-rename-session` (chat.tsx) |
+| Cheat sheet | ? | keyboard-shortcuts.tsx |
+| Find (graph: node search) | ⌘F | `lh:kbd-find` (graph-view.tsx; chat transcript search rides the same event when that feature lands) |
+
+## Question dock row machine (Wave B)
+
+While a question is expanded, the dock owns ↑/↓/Space/Enter:
+
+- **↑/↓** walk every answerable row in order — options first, then the
+  quiz's "I don't know" / the ask's "Other…" (never both). Wraps. The
+  walked row gets a subtle ring (`bg-accent/40`) and scrollIntoView.
+- **Space** acts on the walked row exactly like a click: multi toggles,
+  single displaces; Other also focuses its inline input for typing.
+- **Enter** submits once an answer exists (`canSubmit`).
+- Guards: keys from a typing surface keep their native meaning (arrows
+  move the caret, space types — the thinking field is never hijacked),
+  and keys from inside the dock keep DOM semantics (Enter on a focused
+  button clicks it). The listener lives only while the dock is expanded
+  — collapsed, the bar's native Enter expands it.
+
+## Status
+
+- Wave A (global plumbing + shortcuts above) — landed, CDP-verified.
+- Wave B (question row machine) — landed, CDP-verified.
+- Wave C remainder: ⌘F chat transcript search (new feature, needs its own
+  design pass), ⌘I import notes on graph. ⌘F graph node search shipped
+  early (owner live-tested the gap).

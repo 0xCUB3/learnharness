@@ -116,7 +116,7 @@ export function DraftShell({
 										onStop={() => {}}
 										canSend={canSend}
 										autoFocus
-										onEscape={dictation.active ? dictation.stop : undefined}
+										onEscape={dictation.active ? dictation.cancel : undefined}
 									/>
 								</div>
 								<StatsBar

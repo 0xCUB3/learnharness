@@ -138,8 +138,14 @@ export type Dictation = {
 	levelRef: { current: number };
 	/** Not idle — from the click until the stop completes (the optimistic window). */
 	active: boolean;
+	/** End + KEEP the transcript: flush the deferred buffer into the primary
+	 *  input (the Stop pill and ⌘D). */
 	toggle: () => void;
 	stop: () => void;
+	/** End + DISCARD the transcript: no flush, immediate teardown. The Esc
+	 *  semantics (owner, 2026-09-17 round 3): Esc is a cancel, not a stop —
+	 *  before, it flushed exactly like the toggle did. */
+	cancel: () => void;
 };
 
 /**
@@ -358,6 +364,15 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		}
 	}, [phase, cleanup]);
 
+	const cancel = useCallback(() => {
+		if (phase === "idle") return;
+		// Discard first, teardown second — cleanup() flushes, and the now-empty
+		// buffer makes that flush a no-op. Also kills a "stopping" run: the
+		// flush already underway is abandoned (its timer is cleared inside).
+		bufferRef.current = [];
+		cleanup();
+	}, [phase, cleanup]);
+
 	const toggle = useCallback(() => {
 		if (phase === "idle") void start();
 		else if (phase === "recording" || phase === "connecting") stop();
@@ -365,18 +380,19 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	}, [phase, start, stop]);
 
 	// Shortcut seams (keyboard wave A): ⌘D toggles from anywhere on the
-	// page; the Esc chain's stop lands here too. Each page owns ONE hook
-	// instance, and only the mounted page's listener is attached.
+	// page; the Esc chain lands here as a CANCEL (owner, round 3). Each
+	// page owns ONE hook instance, and only the mounted page's listener is
+	// attached.
 	useEffect(() => {
 		window.addEventListener("lh:kbd-toggle-dictation", toggle);
 		return () => window.removeEventListener("lh:kbd-toggle-dictation", toggle);
 	}, [toggle]);
 	useEffect(() => {
-		window.addEventListener("lh:kbd-stop-dictation", stop);
-		return () => window.removeEventListener("lh:kbd-stop-dictation", stop);
-	}, [stop]);
+		window.addEventListener("lh:kbd-cancel-dictation", cancel);
+		return () => window.removeEventListener("lh:kbd-cancel-dictation", cancel);
+	}, [cancel]);
 
-	return { phase, error, levelRef, active: phase !== "idle", toggle, stop };
+	return { phase, error, levelRef, active: phase !== "idle", toggle, stop, cancel };
 }
 
 /**

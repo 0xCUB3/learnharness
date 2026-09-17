@@ -31,7 +31,12 @@ export type KeyAction =
 	| "jump-graph"
 	| "new-session"
 	| "rename-session"
-	| "cheat-sheet";
+	| "cheat-sheet"
+	| "find"
+	| "question-next-row"
+	| "question-prev-row"
+	| "question-pick-row"
+	| "question-submit";
 
 /** Where the cheat sheet groups an action (display only — dispatch is
  *  global; a seam that isn't mounted simply no-ops). */
@@ -43,6 +48,10 @@ export interface KeyActionDef {
 	label: string;
 	scope: KeyScope;
 	binding: string;
+	/** Display-only (cheat sheet) — contextual keys a SURFACE owns (the
+	 *  question dock's row machine); never dispatched from the registry,
+	 *  so they can't leak to pages where the surface isn't mounted. */
+	displayOnly?: boolean;
 }
 
 export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
@@ -57,7 +66,18 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "jump-graph", label: "Graph view", scope: "global", binding: "mod+g" },
 	{ id: "new-session", label: "New session", scope: "global", binding: "mod+n" },
 	{ id: "rename-session", label: "Rename session", scope: "chat", binding: "f2" },
+	// ⌘F is surface-scoped (owner key map): the graph focuses node search; a
+	// chat-scoped transcript search rides the same event when it lands (the
+	// graph's listener simply isn't mounted on chat pages).
+	{ id: "find", label: "Find (graph: node search)", scope: "graph", binding: "mod+f" },
 	{ id: "cheat-sheet", label: "Shortcut cheat sheet", scope: "global", binding: "?" },
+	// The question dock's row machine (wave B) — displayOnly: the dock owns
+	// the keys while a question is expanded; the registry never dispatches
+	// them, so bare arrows stay free everywhere else.
+	{ id: "question-next-row", label: "Question · next row", scope: "chat", binding: "arrowdown", displayOnly: true },
+	{ id: "question-prev-row", label: "Question · previous row", scope: "chat", binding: "arrowup", displayOnly: true },
+	{ id: "question-pick-row", label: "Question · pick row", scope: "chat", binding: "space", displayOnly: true },
+	{ id: "question-submit", label: "Question · submit", scope: "chat", binding: "enter", displayOnly: true },
 ];
 
 const STORAGE_KEY = "lh:keymap";
@@ -83,6 +103,7 @@ export function effectiveKeymap(): Map<string, KeyAction> {
 	const overrides = loadOverrides();
 	const map = new Map<string, KeyAction>();
 	for (const def of KEYBOARD_ACTIONS) {
+		if (def.displayOnly) continue; // surface-owned, never dispatched
 		const binding = overrides[def.id] ?? def.binding;
 		if (typeof binding === "string" && binding) map.set(binding, def.id);
 	}
@@ -148,6 +169,7 @@ const KEY_GLYPH: Record<string, string> = {
 	enter: "↵",
 	tab: "⇥",
 	escape: "Esc",
+	space: "Space",
 };
 
 /** Format a binding for display: "mod+shift+f" → "⌘⇧F". */
