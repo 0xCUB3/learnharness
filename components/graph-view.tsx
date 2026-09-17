@@ -417,70 +417,13 @@ function GraphSettingsControl({
 						    sweep-validated ranges (src/core/render-settings.ts):
 						    range ends and all four corners settle cleanly — no NaN,
 						    no explosion, no non-settle. Repulsion is displayed as
-						    the negative it is; cluster pull's far left = off. */}
+						    the negative it is; cluster pull's far left = off.
+						    Order (user 2026-09-17): general forces first; depth
+						    anchor + its gray-out-able controls last. */}
 						<div className="mt-1.5 flex flex-col gap-1.5 border-t pt-1.5">
 							<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 								Physics
 							</span>
-							<label className="flex items-center justify-between gap-2 text-xs">
-								Depth anchor
-								<select
-									className="rounded border bg-background px-1 py-0.5 text-xs"
-									value={physicsTuning.depthMode}
-									onChange={(e) =>
-										changeSettings((cur) => ({
-											...cur,
-											physics: { ...cur.physics, depthMode: e.target.value as GraphRenderSettings["physics"]["depthMode"] },
-										}))
-									}
-								>
-									<option value="off">Off</option>
-									<option value="vertical">Vertical (up)</option>
-									<option value="radial">Radial (outward)</option>
-								</select>
-							</label>
-							<SettingSlider
-								label="Depth strength"
-								disabled={physicsTuning.depthMode === "off"}
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthStrength, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthStrength)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthStrength: fromSliderPosition(p, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Depth spacing"
-								disabled={physicsTuning.depthMode === "off"}
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthSpacing, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthSpacing)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthSpacing: fromSliderPosition(p, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max) },
-									}))}
-							/>
-							<SettingSlider
-								label="Base ring radius"
-								disabled={physicsTuning.depthMode !== "radial"}
-								min={0}
-								max={100}
-								step={5}
-								value={toSliderPosition(physicsTuning.depthBaseRadius, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max)}
-								display={sizeDisplay(physicsTuning.depthBaseRadius)}
-								onChange={(p) =>
-									changeSettings((cur) => ({
-										...cur,
-										physics: { ...cur.physics, depthBaseRadius: fromSliderPosition(p, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max) },
-									}))}
-							/>
 							<SettingSlider
 								label="Node repulsion"
 								min={0}
@@ -557,6 +500,69 @@ function GraphSettingsControl({
 									changeSettings((cur) => ({
 										...cur,
 										physics: { ...cur.physics, velocityDecay: fromSliderPosition(p, VELOCITY_DECAY_RANGE.min, VELOCITY_DECAY_RANGE.max) },
+									}))}
+							/>
+							{/* Depth anchor LAST (user 2026-09-17): general
+							    forces first, then the mode + its conditional
+							    controls at the very bottom — the grayed group reads
+							    as a self-contained sub-section. */}
+							<label className="flex items-center justify-between gap-2 text-xs">
+								Depth anchor
+								<select
+									className="rounded border bg-background px-1 py-0.5 text-xs"
+									value={physicsTuning.depthMode}
+									onChange={(e) =>
+										changeSettings((cur) => ({
+											...cur,
+											physics: { ...cur.physics, depthMode: e.target.value as GraphRenderSettings["physics"]["depthMode"] },
+										}))
+									}
+								>
+									<option value="off">Off</option>
+									<option value="vertical">Vertical (up)</option>
+									<option value="radial">Radial (outward)</option>
+								</select>
+							</label>
+							<SettingSlider
+								label="Depth strength"
+								disabled={physicsTuning.depthMode === "off"}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthStrength, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthStrength)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthStrength: fromSliderPosition(p, DEPTH_STRENGTH_RANGE.min, DEPTH_STRENGTH_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Depth spacing"
+								disabled={physicsTuning.depthMode === "off"}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthSpacing, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthSpacing)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthSpacing: fromSliderPosition(p, DEPTH_SPACING_RANGE.min, DEPTH_SPACING_RANGE.max) },
+									}))}
+							/>
+							<SettingSlider
+								label="Base ring radius"
+								disabled={physicsTuning.depthMode !== "radial"}
+								min={0}
+								max={100}
+								step={5}
+								value={toSliderPosition(physicsTuning.depthBaseRadius, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max)}
+								display={sizeDisplay(physicsTuning.depthBaseRadius)}
+								onChange={(p) =>
+									changeSettings((cur) => ({
+										...cur,
+										physics: { ...cur.physics, depthBaseRadius: fromSliderPosition(p, DEPTH_BASE_RADIUS_RANGE.min, DEPTH_BASE_RADIUS_RANGE.max) },
 									}))}
 							/>
 						</div>
