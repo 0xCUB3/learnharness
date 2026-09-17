@@ -584,10 +584,14 @@ export function Chat({
 				{/* The top bar is its own block (owner, top-fade round 4): in flow
 				    above the scroller on the plain page background — no gradient. Its
 				    bottom outline (border-b border-border) matches the one that
-				    separates the left sidebar — same width, same color (owner, r5). h-10, not py-2: the toggle (a size-9 icon button)
-				    renders only while the sidebar is CLOSED — an auto-height row
-				    would collapse when it disappears and slide the title + chip up. */}
-				<header className="flex h-10 items-center gap-3 border-b border-border px-3">
+				    separates the left sidebar — same width, same color (owner, r5).
+				    h-15 (60px), not py-2: the toggle (a size-9 icon button) renders
+				    only while the sidebar is CLOSED — an auto-height row would
+				    collapse when it disappears and slide the title + chip up.
+				    60px is an ALIGNMENT, not just a size: it equals the sidebar's
+				    LH wordmark band, so the header's border-b continues that
+				    band's bottom edge as one line across the app (owner, round 6). */}
+				<header className="flex h-15 items-center gap-3 border-b border-border px-3">
 					<SidebarToggle />
 					<div className="min-w-0 flex-1 truncate font-title text-2xl tracking-tight">{title}</div>
 					{/* The plan chip (owner, plan-placement round): session-level
