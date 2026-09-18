@@ -33,7 +33,7 @@ second pillar of input).
   round) → abort turn (local stream only — a server-side wake turn has
   no client request to abort). Every element/document-level Esc handler
   that acts calls `e.stopPropagation()` so the window chain never
-  double-fires.
+  double-fires. The session search claims Esc to blur back to normal.
 - **Focus ring**: browser Tab-focus is gone, so `:focus-visible` stays
   unstyled (an earlier experimental outline was live-rejected — inputs
   showed a red ring on plain click-focus).
@@ -55,21 +55,29 @@ second pillar of input).
 | Cheat sheet | ? | keyboard-shortcuts.tsx |
 | Find (graph: node search) | ⌘F | `lh:kbd-find` (graph-view.tsx; chat transcript search rides the same event when that feature lands) |
 
-## Question dock row machine (Wave B)
+## Question dock row machine (Wave B, owner rounds 2026-09-17)
 
-While a question is expanded, the dock owns ↑/↓/Space/Enter:
+While a question is expanded, the dock owns ↑/↓/Space/Enter/Tab:
 
 - **↑/↓** walk every answerable row in order — options first, then the
-  quiz's "I don't know" / the ask's "Other…" (never both). Wraps. The
-  walked row gets a subtle ring (`bg-accent/40`) and scrollIntoView.
+  quiz's "I don't know" / the ask's "Other…" (never both) — **clamped at
+  the ends, no wrap** (owner: faster to navigate when the walk stops).
+  The walked row gets a subtle ring (`bg-accent/40`) and scrollIntoView.
 - **Space** acts on the walked row exactly like a click: multi toggles,
   single displaces; Other also focuses its inline input for typing.
 - **Enter** submits once an answer exists (`canSubmit`).
+- **Tab (plain)** toggles focus between the thinking field and the
+  answer rows — nothing else (owner round 3). From the thinking side it
+  focuses the walked (or first) row; from the rows it returns to the
+  thinking field. Focus follows the walk while the user is in the rows,
+  so focused and walked never diverge. Shift+Tab is NOT the dock's —
+  the global thinking-level cycle owns it everywhere.
 - Guards: keys from a typing surface keep their native meaning (arrows
   move the caret, space types — the thinking field is never hijacked),
-  and keys from inside the dock keep DOM semantics (Enter on a focused
-  button clicks it). The listener lives only while the dock is expanded
-  — collapsed, the bar's native Enter expands it.
+  and modifier combos are never the dock's — Alt+arrows cycle sessions
+  without ALSO walking the question rows (owner round 3). The listener
+  lives only while the dock is expanded — collapsed, the bar's native
+  Enter expands it.
 
 ## Status
 

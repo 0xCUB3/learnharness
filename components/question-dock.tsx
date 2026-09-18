@@ -294,20 +294,25 @@ function QuestionDockForm({
 	// answer and the reasoning behind it, side by side.
 	const selectOther = () => setSel(toggleOther(selectMode, sel));
 
-	/* ── The keyboard machine (shortcut wave B, 2026-09-17) ──
+	/* ── The keyboard machine (shortcut wave B, owner rounds 2026-09-17) ──
 	   ↑/↓ walk EVERY answerable row in order — options first, then the
-	   quiz's "I don't know" or the ask's "Other…" (whichever exists).
-	   Space acts on the walked row exactly like a click (multi toggles,
-	   single displaces; Other also focuses its input for typing), Enter
-	   submits once an answer exists. Two guards keep native behavior
+	   quiz's "I don't know" or the ask's "Other…" (whichever exists) —
+	   CLAMPED at the ends, no wrap (owner: faster to navigate when the
+	   walk stops at the last row). Space acts on the walked row exactly
+	   like a click (multi toggles, single displaces; Other also focuses
+	   its input for typing), Enter submits once an answer exists.
+	   Tab toggles FOCUS between the thinking field and the answer rows
+	   (owner round 3) — nothing else; Shift+Tab is NOT ours (the global
+	   thinking-level cycle owns it). Two guards keep native behavior
 	   intact: keys from a TYPING SURFACE keep their meaning (arrows move
-	   the caret, space types), and keys from INSIDE the dock keep the
-	   DOM's semantics (Enter on a focused row/button clicks it). The
-	   listener is document-level and lives only while the dock is
+	   the caret, space types), and modifier combos are never ours
+	   (Alt+arrows cycle sessions — they must not ALSO walk the rows).
+	   The listener is document-level and lives only while the dock is
 	   expanded — collapsed, the bar's native Enter expands it. */
 	const [kbdIdx, setKbdIdx] = useState<number | null>(null);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const otherInputRef = useRef<HTMLInputElement>(null);
+	const thinkingRef = useRef<HTMLTextAreaElement>(null);
 	// One row past the options is the trailing row: quiz → don't-know,
 	// ask → Other (a question never has both).
 	const optionCount = qd.mode === "text" ? 0 : qd.options.length;
@@ -323,20 +328,52 @@ function QuestionDockForm({
 		}
 	};
 
+	// Focus the walked row's focusable element — the Other row is a div,
+	// so its inline input is the focus target there.
+	const focusRow = (idx: number) => {
+		const row = rootRef.current?.querySelector(`[data-kbdrow="${idx}"]`) as HTMLElement | null;
+		if (!row) return;
+		const el = (row.querySelector("input") as HTMLElement | null) ?? row;
+		el.focus();
+	};
+
 	useEffect(() => {
 		if (!active || rowCount === 0) return;
 		const onKeyDown = (e: KeyboardEvent) => {
 			const t = e.target as HTMLElement | null;
-			if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-			// Keys from inside the dock keep DOM semantics (Enter clicks a
-			// focused row; Space presses a focused button).
-			if (t && rootRef.current?.contains(t)) return;
+			const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+			// Alt/Cmd/Ctrl combos are never ours (Alt+arrows cycle sessions
+			// globally — they must not ALSO walk the question rows).
+			const modded = e.altKey || e.metaKey || e.ctrlKey;
+			// Plain Tab toggles focus: rows → thinking, anything else → the
+			// walked (or first) row. Shift+Tab falls through (the global
+			// thinking-level cycle owns it), so the shift check matters.
+			if (e.key === "Tab" && !e.shiftKey && !modded) {
+				e.preventDefault();
+				e.stopPropagation();
+				if (t?.closest?.("[data-kbdrow]")) thinkingRef.current?.focus();
+				else {
+					const idx = kbdIdx ?? 0;
+					setKbdIdx(idx);
+					focusRow(idx);
+				}
+				return;
+			}
+			// Keys from a typing surface keep their meaning (arrows move
+			// the caret, space types).
+			if (typing || modded) return;
 			if (e.key === "ArrowDown") {
 				e.preventDefault();
-				setKbdIdx((i) => (i === null ? 0 : (i + 1) % rowCount));
+				const next = Math.min((kbdIdx ?? -1) + 1, rowCount - 1);
+				setKbdIdx(next);
+				// Focus follows the walk while the user is IN the rows (Tab
+				// put them there) so focused and walked never diverge.
+				if (t?.closest?.("[data-kbdrow]")) focusRow(next);
 			} else if (e.key === "ArrowUp") {
 				e.preventDefault();
-				setKbdIdx((i) => (i === null ? rowCount - 1 : (i - 1 + rowCount) % rowCount));
+				const next = Math.max((kbdIdx ?? rowCount) - 1, 0);
+				setKbdIdx(next);
+				if (t?.closest?.("[data-kbdrow]")) focusRow(next);
 			} else if (e.key === " ") {
 				if (kbdIdx === null) return; // plain Space keeps scrolling the page
 				e.preventDefault();
@@ -542,6 +579,7 @@ function QuestionDockForm({
 						/>
 					) : (
 						<textarea
+							ref={thinkingRef}
 							value={thinking}
 							onChange={(e) => setThinking(e.target.value)}
 							onKeyDown={(e) => {

@@ -436,6 +436,15 @@ function SessionsSidebar() {
 							data-testid="session-search"
 							value={query}
 							onChange={(e) => setQuery(e.target.value)}
+							// Esc leaves the search (owner, keyboard wave): blur back
+							// to normal, and claim the key so the window Esc chain
+							// (dictation / abort) doesn't also fire.
+							onKeyDown={(e) => {
+								if (e.key === "Escape") {
+									e.stopPropagation();
+									e.currentTarget.blur();
+								}
+							}}
 							placeholder="Search..."
 							aria-label="Search sessions"
 							className="h-6 rounded-sm border-border bg-background pl-6 text-xs placeholder:text-muted-foreground/60"
