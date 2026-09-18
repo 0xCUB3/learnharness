@@ -152,14 +152,14 @@ describe("activity section render", () => {
 		assert.match(html, /activity-total-cost[^>]*>—</);
 	});
 
-	it("renders a graph-context job as 'Knowledge context' — the dock's fourth kind", () => {
+	it("renders a graph-context job as 'Graph context' — the dock's fourth kind", () => {
 		const html = renderToStaticMarkup(
 			<ActivitySection
 				feed={{ jobs: [job({ id: "jctx", kind: "graph-context", activity: "selecting propositions", title: "Water cycle" })], extractions: [] }}
 			/>,
 		);
 		assert.match(html, /data-testid="activity-blob-job"/);
-		assert.match(html, /Knowledge context/);
+		assert.match(html, /Graph context/);
 		assert.match(html, /selecting propositions/);
 		assert.match(html, /data-testid="activity-abort"/, "END kills the injection like any job");
 	});

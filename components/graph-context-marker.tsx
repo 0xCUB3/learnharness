@@ -47,8 +47,8 @@ export function GraphContextMarker({
 	}, [open]);
 
 	const summary = data
-		? `Knowledge context — ~${formatTokens(data.tokens)} · ${data.propositions.length} propositions`
-		: "Knowledge context";
+		? `Graph context — ~${formatTokens(data.tokens)} · ${data.propositions.length} propositions`
+		: "Graph context";
 
 	return (
 		<div ref={ref} data-testid={testId} className="relative flex items-center justify-center py-1">

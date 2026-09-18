@@ -27,7 +27,7 @@ function markerMessage(): TeacherUIMessage {
 describe("GraphContextMarker", () => {
 	it("renders the quiet summary line with token + proposition counts", () => {
 		const html = renderToStaticMarkup(<GraphContextMarker message={markerMessage()} />);
-		assert.ok(html.includes("Knowledge context — ~537"));
+		assert.ok(html.includes("Graph context — ~537"));
 		assert.ok(html.includes("3 propositions"));
 		assert.ok(html.includes('data-testid="graph-context"'));
 		assert.ok(html.includes("<button"), "the line is clickable");
@@ -37,8 +37,8 @@ describe("GraphContextMarker", () => {
 		const html = renderToStaticMarkup(
 			<GraphContextMarker message={{ parts: [{ type: "data-graph-context", data: { nope: true } }] }} />,
 		);
-		assert.ok(html.includes("Knowledge context</"));
-		assert.ok(!html.includes("Knowledge context —"), "no counts on a malformed part");
+		assert.ok(html.includes("Graph context</"));
+		assert.ok(!html.includes("Graph context —"), "no counts on a malformed part");
 	});
 });
 

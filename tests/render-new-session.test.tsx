@@ -109,7 +109,7 @@ describe("DraftShell — the sessionless surface", () => {
 		// The readout: "tok" abbreviated, but the FULL number (owner, 2026-09-15:
 		// no k-rounding — 1024 reads as 1024).
 		assert.ok(html.includes("1024 tok"), "the readout shows the default budget, not 0 — default is ON");
-		assert.ok(html.includes("Knowledge context"), "the control is labeled");
+		assert.ok(html.includes("Graph context"), "the control is labeled");
 		// Absent settings render the default — never 'off'.
 		assert.ok(!html.includes(">off<"));
 	});

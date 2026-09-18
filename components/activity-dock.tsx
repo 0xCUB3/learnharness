@@ -329,7 +329,7 @@ function ActivityBlobRow({
 					: blob.jobKind === "visual"
 						? "Figure maker"
 						: blob.jobKind === "graph-context"
-							? "Knowledge context"
+							? "Graph context"
 							: "Sub-agent";
 	return (
 		<div

@@ -45,7 +45,7 @@ export function GraphContextControl({
 	return (
 		<div data-testid={testId} className="flex items-center gap-2 text-xs text-muted-foreground">
 			<BookOpenIcon className="size-3 shrink-0" />
-			<span className="shrink-0">Knowledge context</span>
+			<span className="shrink-0">Graph context</span>
 			<input
 				type="range"
 				min={0}
