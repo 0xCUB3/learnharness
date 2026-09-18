@@ -321,7 +321,7 @@ export function ModelControl({
 									data-idx={i}
 									onClick={() => pickModel(m)}
 									className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted ${
-										i === menuIdx ? "bg-accent/40" : ""
+										i === menuIdx ? "bg-accent/40 ring-1 ring-inset ring-border" : ""
 									}${m.id === effectiveId && i !== menuIdx ? " bg-muted/60" : ""}`}
 								>
 									<span className="flex items-center justify-between gap-2">
