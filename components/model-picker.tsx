@@ -100,8 +100,13 @@ export function ModelControl({
 	const [open, setOpen] = useState<"model" | "thinking" | null>(null);
 	const [query, setQuery] = useState("");
 	const [error, setError] = useState<string | null>(null);
+	/** The arrow-walked result (owner polish, 2026-09-17): arrows move it
+	 *  through `results` while focus STAYS in the search field; Enter
+	 *  picks it (or the first result when nothing is walked). */
+	const [menuIdx, setMenuIdx] = useState<number | null>(null);
 	const searchRef = useRef<HTMLInputElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const listRef = useRef<HTMLUListElement>(null);
 
 	const defaults = catalog?.defaults;
 	const effectiveId = settings?.model?.id ?? defaults?.model.id ?? fallbackModelId;
@@ -114,6 +119,11 @@ export function ModelControl({
 	useEffect(() => {
 		if (open === "model") searchRef.current?.focus();
 	}, [open]);
+	// Keep the arrow-walked result visible in the scrolling list.
+	useEffect(() => {
+		if (open !== "model" || menuIdx === null) return;
+		listRef.current?.querySelector(`[data-idx="${menuIdx}"]`)?.scrollIntoView({ block: "nearest" });
+	}, [menuIdx, open]);
 
 	// The intuitive dropdown contract (owner, stats-control round 1): any
 	// click outside the open menu — or an Esc keypress — closes it. Only the
@@ -182,6 +192,7 @@ export function ModelControl({
 			setOpen("model");
 			setQuery("");
 			setError(null);
+			setMenuIdx(null);
 		};
 		window.addEventListener("lh:kbd-open-model-picker", onOpenPicker);
 		return () => window.removeEventListener("lh:kbd-open-model-picker", onOpenPicker);
@@ -196,6 +207,19 @@ export function ModelControl({
 		window.addEventListener("lh:kbd-cycle-thinking", onCycleThinking);
 		return () => window.removeEventListener("lh:kbd-cycle-thinking", onCycleThinking);
 	}, [levels, effectiveLevel, save, settings]);
+
+	// Selecting a model (click and Enter share one path): keep the
+	// thinking level only when the new model supports it — otherwise
+	// drop it (config fallback clamps honestly; a carry-over would 400).
+	// Replace-whole discipline: spread the current settings — a model pick
+	// must not silently clear a sibling override (graphContextTokens).
+	const pickModel = (m: ModelCatalogEntry) => {
+		const nextLevel =
+			effectiveLevel !== undefined && m.supportedLevels.includes(effectiveLevel)
+				? effectiveLevel
+				: undefined;
+		void save({ ...(settings ?? {}), model: { provider: m.provider, id: m.id }, thinkingLevel: nextLevel });
+	};
 
 	// The filtered, ranked model list.
 	const results = (catalog?.models ?? [])
@@ -213,6 +237,7 @@ export function ModelControl({
 					setOpen((o) => (o === "model" ? null : "model"));
 					setQuery("");
 					setError(null);
+					setMenuIdx(null);
 				}}
 				aria-expanded={open === "model"}
 				title="Conversation model — applies next turn"
@@ -249,7 +274,34 @@ export function ModelControl({
 						ref={searchRef}
 						data-testid="model-search"
 						value={query}
-						onChange={(e) => setQuery(e.target.value)}
+						onChange={(e) => {
+							setQuery(e.target.value);
+							setMenuIdx(null); // new query → the walk restarts on Enter/↓
+						}}
+						// The menu keyboard machine (owner polish): focus STAYS in the
+						// search field — ↑/↓ walk the filtered results (clamped, no
+						// wrap), Enter picks the walked row (or the first result when
+						// nothing is walked). stopPropagation keeps these keys out of
+						// every other listener while the menu is open.
+						onKeyDown={(e) => {
+							if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+								e.preventDefault();
+								e.stopPropagation();
+								if (results.length === 0) return;
+								setMenuIdx((i) =>
+									e.key === "ArrowDown"
+										? Math.min((i ?? -1) + 1, results.length - 1)
+										: Math.max((i ?? results.length) - 1, 0),
+								);
+							} else if (e.key === "Enter") {
+								const chosen = results[menuIdx ?? 0];
+								if (chosen) {
+									e.preventDefault();
+									e.stopPropagation();
+									pickModel(chosen);
+								}
+							}
+						}}
 						placeholder="Search models…"
 						className="lh-input mb-1.5 w-full rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
 					/>
@@ -260,27 +312,17 @@ export function ModelControl({
 					{catalog && results.length === 0 && (
 						<div className="px-2 py-3 text-center text-muted-foreground">No models match.</div>
 					)}
-					<ul data-testid="model-list" className="flex max-h-72 flex-col overflow-y-auto">
-						{results.map((m) => (
+					<ul ref={listRef} data-testid="model-list" className="flex max-h-72 flex-col overflow-y-auto">
+						{results.map((m, i) => (
 							<li key={`${m.provider}/${m.id}`}>
 								<button
 									type="button"
 									data-testid={`model-option-${m.id.replace(/[^a-z0-9-]/gi, "_")}`}
-									onClick={() => {
-										// Keep the thinking level only when the new model
-										// supports it — otherwise drop it (config fallback
-										// clamps honestly; a carry-over would 400).
-										const nextLevel =
-											effectiveLevel !== undefined && m.supportedLevels.includes(effectiveLevel)
-												? effectiveLevel
-												: undefined;
-										// Replace-whole discipline: spread the current settings — a model pick
-									// must not silently clear a sibling override (graphContextTokens).
-									void save({ ...(settings ?? {}), model: { provider: m.provider, id: m.id }, thinkingLevel: nextLevel });
-									}}
-									className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted ${
-										m.id === effectiveId ? "bg-muted/60" : ""
-									}`}
+									data-idx={i}
+									onClick={() => pickModel(m)}
+									className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted ${
+										i === menuIdx ? "bg-muted ring-1 ring-border" : ""
+									}${m.id === effectiveId && i !== menuIdx ? " bg-muted/60" : ""}`}
 								>
 									<span className="flex items-center justify-between gap-2">
 										<span className="truncate text-card-foreground">{m.name}</span>

@@ -435,6 +435,11 @@ export class GraphCanvasRenderer {
 	private transform: ZoomTransform = zoomIdentity;
 	/** Set once the first fit happens; the camera then survives setData. */
 	private hasFit = false;
+	/** Last-synced CSS size — the resize anchor computes the world point
+	 *  under the PRE-resize viewport center from these (ResizeObserver
+	 *  callbacks already see the NEW size in clientWidth/Height). */
+	private viewW = 0;
+	private viewH = 0;
 	/** The k that frames the whole graph — the label-gate's "1×". */
 	private kFit = 1;
 	/** World-space bounds of the current nodes — fit() and the resize-time
@@ -573,9 +578,28 @@ export class GraphCanvasRenderer {
 		}
 
 		this.resizeObserver = new ResizeObserver(() => {
+			// The world point under the pre-resize viewport center — the
+			// visual anchor the new transform must preserve. Capture it
+			// BEFORE syncSize (which updates viewW/H to the new size).
+			const prevW = this.viewW;
+			const prevH = this.viewH;
+			const { x: tx, y: ty, k } = this.transform;
+			const wx = (prevW / 2 - tx) / k;
+			const wy = (prevH / 2 - ty) / k;
 			this.syncSize();
 			if (!this.hasFit) this.fit(); // first real size → fit once
-			else this.refreshFitZoom(); // the gate's "1×" is viewport-bound
+			else {
+				this.refreshFitZoom(); // the gate's "1×" is viewport-bound
+				// Center-anchor (2026-09-17, owner): same world point under
+				// the NEW center. Applied through the zoom behavior like every
+				// camera move (d3 state, persistence, card-dismiss all agree).
+				if (prevW > 0 && prevH > 0 && this.viewW > 0 && this.viewH > 0) {
+					select(canvas).call(
+						this.zoomBehavior.transform,
+						zoomIdentity.translate(this.viewW / 2 - wx * k, this.viewH / 2 - wy * k).scale(k),
+					);
+				}
+			}
 			// Redraw SYNCHRONOUSLY: syncSize may have reallocated the backing
 			// store (which clears the canvas), and during live window resizes
 			// rAF is starved by relayout — a deferred draw would leave the
@@ -996,6 +1020,8 @@ export class GraphCanvasRenderer {
 			this.canvas.height = bh;
 		}
 		this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		this.viewW = w;
+		this.viewH = h;
 	}
 
 	/** Derive ALL world geometry from data + visibility + settings.

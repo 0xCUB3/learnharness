@@ -55,6 +55,18 @@ second pillar of input).
 | Cheat sheet | ? | keyboard-shortcuts.tsx |
 | Find (graph: node search) | ⌘F | `lh:kbd-find` (graph-view.tsx; chat transcript search rides the same event when that feature lands) |
 
+## Model menu keyboard machine (owner polish, 2026-09-17)
+
+While the model menu is open, focus stays in the search field and the
+menu owns ↑/↓/Enter inside the input's own handler:
+
+- **↑/↓** walk the filtered results — clamped, no wrap. First ↓ starts at
+  the first row; first ↑ at the last. The walked row gets a muted ring and
+  scrollIntoView.
+- **Enter** picks the walked row, or the **first result** when nothing is
+  walked yet (owner decision). Typing a new query resets the walk.
+- Clicking and Enter share one `pickModel` path; Esc still closes the menu.
+
 ## Question dock row machine (Wave B, owner rounds 2026-09-17)
 
 While a question is expanded, the dock owns ↑/↓/Space/Enter/Tab:

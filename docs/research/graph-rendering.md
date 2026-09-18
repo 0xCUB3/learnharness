@@ -225,3 +225,17 @@ LinLog-only FA2 (one afternoon), then the two-level pipeline
   (geometry already unit-tested in `components/cluster-geometry.ts`).
 - Label-gate hysteresis: small dead-band in log-zoom to avoid threshold flicker.
 - Whether layout runs server-side at extraction (persisted as data) or in-browser.
+
+## Center-anchor on window resize (2026-09-17)
+
+The camera translate is measured from the canvas's TOP-LEFT corner, so a
+window resize used to keep the top-left pinned and the graph appeared to
+slide by half the size delta (owner report). The resize observer now
+captures the world point under the PRE-resize viewport center (from the
+last-synced `viewW/H` — the ResizeObserver already sees the new size in
+clientWidth/Height), then re-anchors the translate so that same world
+point lands under the NEW center (applied through the zoom behavior, so
+d3 state, camera persistence, and card-dismiss all behave like any
+camera move). Zoom (k) is untouched; `refreshFitZoom` metadata is
+viewport-bound and recomputed as before. Verified by canvas pixel
+sampling: 7/7 center-area samples identical across a 300×200 shrink.

@@ -33,6 +33,8 @@ export type KeyAction =
 	| "rename-session"
 	| "cheat-sheet"
 	| "find"
+	| "model-menu-walk"
+	| "model-menu-pick"
 	| "question-focus"
 	| "question-next-row"
 	| "question-prev-row"
@@ -76,6 +78,8 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	// the keys while a question is expanded; the registry never dispatches
 	// them, so bare arrows stay free everywhere else.
 	{ id: "question-focus", label: "Question · focus thinking ↔ rows", scope: "chat", binding: "tab", displayOnly: true },
+	{ id: "model-menu-walk", label: "Model menu · walk results", scope: "global", binding: "arrowup", displayOnly: true },
+	{ id: "model-menu-pick", label: "Model menu · pick result", scope: "global", binding: "enter", displayOnly: true },
 	{ id: "question-next-row", label: "Question · next row", scope: "chat", binding: "arrowdown", displayOnly: true },
 	{ id: "question-prev-row", label: "Question · previous row", scope: "chat", binding: "arrowup", displayOnly: true },
 	{ id: "question-pick-row", label: "Question · pick row", scope: "chat", binding: "space", displayOnly: true },
