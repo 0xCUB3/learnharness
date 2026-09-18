@@ -6,7 +6,7 @@ import { Conversation, ConversationContent, ConversationEmptyState } from "@/com
 import { Composer } from "@/components/composer";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
-import { useDraftSettings } from "@/components/draft-settings";
+import { useDefaultSettings } from "@/components/default-settings";
 import { PhaseChip } from "@/components/phase-divider";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
@@ -124,6 +124,7 @@ export function DraftShell({
 									dictationSlot={<DictationBar dictation={dictation} />}
 									turns={[]}
 									chatId=""
+									noDefaultModel
 									settings={settings}
 									onSettingsSaved={onSettingsSaved}
 									// The session-data slot (owner, 2026-09-15): pre-chat the left
@@ -147,17 +148,17 @@ export function DraftShell({
 	);
 }
 
-export function NewSession() {
+export function NewSession({ initialSettings }: { initialSettings: ChatSettings | null }) {
 	const router = useRouter();
 	const [text, setText] = useState("");
 	const [busy, setBusy] = useState(false);
-	// The pre-chat model+thinking+context selection — the SHARED draft
-	// record (draft-settings wave, 2026-09-18): /chat/new and the home
-	// topic dock read and write ONE persisted choice, so what the learner
-	// last left the controls on is what shows on return. ModelControl with
-	// an empty chatId never PUTs — it hands the choice up; it still rides
-	// the session POST then PUT-on-create.
-	const { settings, save: saveDraft } = useDraftSettings();
+	// THE default settings (owner, 2026-09-18): this surface and the home
+	// topic dock ARE the settings page for the default model — no baked-in
+	// default exists; the user's last choice (server-rendered in via
+	// initialSettings, shared with home through data/default-settings.json)
+	// IS the default. ModelControl with an empty chatId never PUTs — it
+	// hands the choice up; it still rides the session POST then PUT-on-create.
+	const { settings, save: saveDraft } = useDefaultSettings(initialSettings);
 
 	const send = useCallback(() => {
 		if (!text.trim() || busy) return;

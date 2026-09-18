@@ -11,7 +11,7 @@ import type { ChatSettings } from "@/src/core";
  * by construction (agents are stateless per turn).
  *
  * The body parsing itself is shared with the draft route
- * (src/server/settings-body.ts, draft-settings wave 2026-09-18).
+ * (src/server/settings-body.ts, default-settings wave 2026-09-18).
  */
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;

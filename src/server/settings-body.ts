@@ -2,7 +2,7 @@
  * The shared settings-PUT body parser — the one seam both settings routes
  * use (per-chat: app/api/chats/[id]/settings; pre-session draft:
  * app/api/settings/draft). Extracted verbatim from the per-chat route
- * (draft-settings wave, 2026-09-18): identical parse, identical errors.
+ * (default-settings wave, 2026-09-18): identical parse, identical errors.
  *
  * Replace-whole semantics: the client sends the complete desired object;
  * absent fields are absent overrides ({} clears everything). No merges, so

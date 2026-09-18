@@ -11,7 +11,7 @@ export * from "./commit-positions.ts";
 export * from "./jobs.ts";
 export * from "./stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
-export { readDraftSettings, writeDraftSettings } from "../store/draft-settings.ts";
+export { readDefaultSettings, writeDefaultSettings } from "../store/default-settings.ts";
 export * from "./settings-body.ts";
 export * from "./turn-liveness.ts";
 export * from "./observability.ts";

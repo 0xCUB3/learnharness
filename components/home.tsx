@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
-import { useDraftSettings } from "@/components/draft-settings";
+import { useDefaultSettings } from "@/components/default-settings";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
@@ -17,7 +17,7 @@ import type { ChatSettings, TurnUsage } from "@/src/core";
  * under the header and the new-session dock, both of which float over it
  * with no gradient scrims. Sessions live in the toggleable sidebar.
  */
-export function Home() {
+export function Home({ initialSettings }: { initialSettings: ChatSettings | null }) {
 	const router = useRouter();
 	const [topic, setTopic] = useState("");
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
@@ -26,13 +26,13 @@ export function Home() {
 		append: (t) => setTopic((v) => (v ? v.replace(/\s+$/, "") + " " + t : t)),
 	});
 	const [busy, setBusy] = useState(false);
-	// The model+thinking+context selection made pre-chat — the SHARED draft
-	// record (draft-settings wave, 2026-09-18): both new-session surfaces
-	// (this topic dock and /chat/new) read and write ONE persisted choice,
-	// so what the learner last left the controls on is what shows on return.
+	// THE default settings (owner, 2026-09-18): this topic dock IS the
+	// settings page for the default model — no baked-in default exists; the
+	// user's last choice (server-rendered in via initialSettings, shared
+	// with /chat/new through data/default-settings.json) IS the default.
 	// Still carried to the chat POST then PUT-on-create (the model picker
 	// defers its save when chatId is empty; see components/model-picker).
-	const { settings, save: saveDraft } = useDraftSettings();
+	const { settings, save: saveDraft } = useDefaultSettings(initialSettings);
 
 	const start = async () => {
 		const t = topic.trim();
@@ -143,6 +143,7 @@ export function Home() {
 						dictationSlot={<DictationBar dictation={dictation} />}
 						turns={[] as TurnUsage[]}
 						chatId=""
+						noDefaultModel
 						settings={settings}
 						onSettingsSaved={saveDraft}
 						leftSlot={

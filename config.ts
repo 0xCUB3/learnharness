@@ -134,9 +134,11 @@ export const EMBEDDINGS_FILE = path.join(PATHS.graph, "embeddings.json");
 export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");
 
 /**
- * DRAFT (pre-session) settings — the model + thinking + knowledge-context
- * selections shared by the two new-session surfaces (the home graph view
- * and /chat/new). One small JSON blob, read-modify-write, written only
- * through the validated app/api/settings/draft route.
+ * DEFAULT settings — THE default model + thinking level + knowledge-context
+ * budget (owner, 2026-09-18): the new-session surfaces' controls are the
+ * settings page for the default model. There is NO baked-in default —
+ * BYOK first boot shows "no model" until the user picks one, and their
+ * last choice IS the default from then on. One small JSON blob,
+ * read-modify-write, written only through app/api/settings/defaults.
  */
-export const DRAFT_SETTINGS_FILE = path.join(DATA_ROOT, "draft-settings.json");
+export const DEFAULT_SETTINGS_FILE = path.join(DATA_ROOT, "default-settings.json");

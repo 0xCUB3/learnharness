@@ -86,6 +86,7 @@ export function ModelControl({
 	settings,
 	onSaved,
 	fallbackModelId,
+	noDefaultModel,
 }: {
 	chatId: string;
 	/** The record's current settings (undefined = config pin). */
@@ -95,6 +96,11 @@ export function ModelControl({
 	/** The last turn's actual model (from the turns log) — the label until
 	 *  the catalog (with config's defaults) finishes loading. */
 	fallbackModelId?: string;
+	/** Default-surfaces only (owner, 2026-09-18): NO baked-in default —
+	 *  unset settings render "no model"/"—" (BYOK first boot), never the
+	 *  config pin. Chat surfaces keep the catalog-default fallback (the
+	 *  engine runs the pin, so the control shows what will run). */
+	noDefaultModel?: boolean;
 }) {
 	const catalog = useModelCatalog();
 	const [open, setOpen] = useState<"model" | "thinking" | null>(null);
@@ -109,9 +115,12 @@ export function ModelControl({
 	const listRef = useRef<HTMLUListElement>(null);
 
 	const defaults = catalog?.defaults;
-	const effectiveId = settings?.model?.id ?? defaults?.model.id ?? fallbackModelId;
-	const effectiveLevel =
-		settings?.thinkingLevel ?? defaults?.thinkingLevel;
+	const effectiveId = noDefaultModel
+		? settings?.model?.id
+		: (settings?.model?.id ?? defaults?.model.id ?? fallbackModelId);
+	const effectiveLevel = noDefaultModel
+		? settings?.thinkingLevel
+		: (settings?.thinkingLevel ?? defaults?.thinkingLevel);
 	const entry = catalog?.models.find((m) => m.id === effectiveId);
 	const levels = entry?.supportedLevels ?? [];
 
@@ -250,6 +259,9 @@ export function ModelControl({
 				type="button"
 				data-testid="stats-thinking"
 				onClick={() => {
+					// No model yet (noDefaultModel first boot) → nothing to set a
+					// level FOR: the click is a no-op, never an empty menu.
+					if (entry === undefined) return;
 					setOpen((o) => (o === "thinking" ? null : "thinking"));
 					setError(null);
 				}}
