@@ -129,7 +129,10 @@ export async function handleChatRequest(
 	// appended after the learner's answer (conversion-safe: the answer carries
 	// its output). Claiming happens after beginTurn, so this turn owns the
 	// registry and the write-ahead persist below makes the claim durable.
-	const steers = claimSteers(chatId);
+	// The incoming body is passed too: a pump-fired wake turn ALREADY CARRIES
+	// its steer, so claimSteers finalizes that entry instead of appending a
+	// second copy (duplicate-key bug, 2026-09-18).
+	const steers = claimSteers(chatId, body.messages as UIMessage[]);
 	const outgoing = (
 		steers.length > 0 ? [...(body.messages as UIMessage[]), ...steers] : body.messages
 	) as UIMessage[];

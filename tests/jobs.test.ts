@@ -778,6 +778,40 @@ describe("claimSteers + pump duplicate-guard (continuation coalescing)", () => {
 		assert.deepEqual(claimSteers("chat_never_existed"), []);
 	});
 
+	it("pump path: a steer already carried by the incoming turn body is finalized, never appended again (duplicate-key bug, 2026-09-18)", async () => {
+		const { chatId, jobId, steer } = setup();
+		// Own runner: this chat's gates are OPEN, so the pump would otherwise
+		// fire whatever runner the NEXT test registers (leaked counter).
+		let fired = 0;
+		setTurnRunner(async () => {
+			fired++;
+			return 200;
+		});
+		// The wake pump's request ALREADY carries the steer (it dequeues only
+		// after the turn returns), and the record does not — the exact window
+		// the chat handler claims in.
+		const delivery = deliverJobResult(steer);
+		await delay(300); // the pump is inside waitForIdle's grace (750ms)
+		const incoming = [...(chatStore.getChat(chatId)!.messages as never[]), steer];
+		const claimed = claimSteers(chatId, incoming);
+		assert.equal(claimed.length, 0, "the already-carried steer is not re-claimed");
+		assert.equal(jobStore.getJob(jobId)!.status, "done", "job still finalizes — the turn delivers it");
+		await delivery;
+		assert.deepEqual(claimSteers(chatId), [], "queue is drained");
+		// The handler persists the outgoing write-ahead immediately after the
+		// claim — the pump's post-idle re-check reads the RECORD (not the
+		// queue), so without this the wake would double-fire at grace-end.
+		const record2 = chatStore.getChat(chatId)!;
+		chatStore.saveMessages(chatId, [...record2.messages, ...incoming] as never);
+		await delay(800); // the pump's grace elapses — the delivered steer is skipped
+		assert.equal(fired, 0, "the claimed-and-carried steer never double-fires a wake");
+		// The handler's outgoing = incoming + claimed: with claimed empty the
+		// write-ahead holds exactly ONE copy of the steer id.
+		const outgoing = [...incoming, ...claimed] as never[];
+		const ids = outgoing.map((m: { id: string }) => m.id);
+		assert.equal(ids.filter((id) => id === steer.id).length, 1, "exactly one steer copy persists");
+	});
+
 	it("pump duplicate-guard: a steer coalesced into the record while the gates were closed is never double-fired", async () => {
 		const { chatId, jobId, steer } = setup();
 		let fired = 0;

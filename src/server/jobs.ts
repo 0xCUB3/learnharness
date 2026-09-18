@@ -173,8 +173,19 @@ export function deliverJobResult(steer: SteerMessage): Promise<void> {
  * are finalized, not returned. The pump re-checks steerDelivered right
  * before firing, so a claim racing the pump converges to exactly one
  * delivery either way.
+ *
+ * incoming (the turn's request body — the wake pump fires turns that
+ * ALREADY CARRY the steer it dequeues only after the turn returns 200, so
+ * the entry is still queued here): a steer already in the incoming list is
+ * being delivered by THIS VERY TURN — finalized and resolved, but never
+ * appended again. Without this the write-ahead persist would hold two
+ * copies of the same steer id (a live React duplicate-key warning the
+ * owner hit 2026-09-18; withMessageIds only heals it at onFinish).
  */
-export function claimSteers(chatId: string): SteerMessage[] {
+export function claimSteers(
+	chatId: string,
+	incoming?: ReadonlyArray<UIMessage>,
+): SteerMessage[] {
 	const s = state();
 	const queue = s.queues.get(chatId);
 	if (!queue || queue.length === 0) return [];
@@ -182,8 +193,13 @@ export function claimSteers(chatId: string): SteerMessage[] {
 	if (!record) return []; // the handler validated the chat; defensive only
 	const claimed: SteerMessage[] = [];
 	for (const entry of queue) {
-		if (steerDelivered(record.messages, entry.steer.id)) {
-			// A wake already landed it — just finish the bookkeeping.
+		if (
+			steerDelivered(record.messages, entry.steer.id) ||
+			incoming?.some((m) => m.id === entry.steer.id)
+		) {
+			// A wake already landed it — or this turn's own request already
+			// carries it (the pump path): the delivery is done either way,
+			// just finish the bookkeeping. NEVER append twice.
 			finalizeSteer(entry.steer);
 		} else {
 			claimed.push(entry.steer);
