@@ -24,3 +24,9 @@ This repo is developed in parallel using git worktrees. You are one stream; the 
 - **Don't merge yourself.** When your wave is done: stop, summarize (what changed, what you deliberately didn't touch, open questions), and wait for the master to merge and rebase you.
 
 <!-- END:lh-workflow -->
+
+# No guessing (master directive — applies to every stream)
+
+All design authority belongs to the human. **Never guess a design or implementation decision.** If anything is ambiguous — naming, behavior, data shapes, UX, defaults, scope boundaries, prompt wording — STOP and ask with the ask-user-question tool before proceeding. If you are "a little unsure," you are unsure: ask. A wrong guess is far more expensive than a question. Ask early, ask specific, one question per call.
+
+Concretely: first investigate and plan rigorously (asking the user design questions along the way), get the plan approved by the user, and only then implement. Implementation should be mechanical execution of an approved plan — not interpretation.
