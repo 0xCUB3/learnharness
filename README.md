@@ -1,12 +1,12 @@
 # learning-harness
 
-A standalone learning harness: a **teacher agent** (Next.js + Vercel AI SDK, models via OpenRouter), graded quiz/ask interactions, a formal **session plan tree** the teacher authors and edits live, and a persistent cross-session **knowledge graph** of what the learner knows — the graph is the app's home page.
+A standalone learning app (web + Electron desktop): a **teacher agent** (Next.js; the Vercel AI SDK's `UIMessage` protocol end-to-end, LLM engine [pi-ai](docs/pi-engine-swap.md) via OpenRouter), probe→teach lessons with graded quiz/ask interactions, a formal **session plan tree** the teacher authors once (`plan_init`) and whose progress is derived from tagged quiz calls, and a persistent cross-session **knowledge graph** of what the learner knows — the graph is the app's home page.
 
-Not a chat app with a graph bolted on: sessions are probe→teach lessons, the plan tree is a structured, agent-editable object, quiz outcomes reach the graph through the extraction pipeline as ledger events, and the graph feeds back as the teacher's context so probing compounds across sessions.
+Not a chat app with a graph bolted on: sessions are probe→teach lessons, the plan tree is a structured, schema-validated object, quiz outcomes reach the graph through the extraction pipeline as ledger events, and the graph feeds back as the teacher's session context (semantic top-K under a token budget) so probing compounds across sessions.
 
+- [`docs/architecture.md`](docs/architecture.md) is the **canonical architecture spec** — layers, the import law, the five systems, the invariants, the seam directory. (The pre-audit spec is archived under `docs/archive/` — history only.)
 - Living design doc (all decisions): [`docs/vision.md`](docs/vision.md)
 - Build plan + wave/gate results: [`docs/plan.md`](docs/plan.md)
-- [`docs/architecture.md`](docs/architecture.md) is the **canonical architecture spec** — layers, ports, the import law, the single-writer rule, the two graph channels.
 
 ## Commands
 
@@ -14,172 +14,163 @@ Not a chat app with a graph bolted on: sessions are probe→teach lessons, the p
 npm install          # once
 
 npm run dev          # http://localhost:3000
-npm run build        # production build
+npm run build        # production build (standalone output)
 npm start            # serve the production build
 
-npm test             # all tests (node:test via tsx; deterministic, no LLM)
-npm run lint         # eslint — includes the import law (architecture §1)
+npm test             # all 44 suites (node:test via tsx; deterministic, no LLM)
+npm run lint         # eslint — includes the import law (architecture §2)
 npm run typecheck    # tsc --noEmit
 
-npx tsx scripts/bench-graph.ts   # force-layout benchmark (synthetic graphs)
+npm run desktop:dev    # next dev + Electron shell pointed at it
+npm run desktop:dist   # build + package the desktop app (electron-builder)
+
+# one-shot data scripts (run from the master tree only — data never crosses trees)
+npx tsx --env-file=.env.local scripts/import-notes.ts <dir>   # bulk-import notes → graph
+npx tsx --env-file=.env.local scripts/backfill-graph.ts       # wipe + re-extract every chat
+npx tsx --env-file=.env.local scripts/embed-graph.ts          # embed/backfill the whole graph
+npx tsx --env-file=.env.local scripts/replay-layout.ts        # re-derive layout from the ledgers
+npx tsx scripts/sync-pricing.ts                               # regenerate core/prices.ts tables
 ```
 
 ## Environment (`.env.local`)
 
-Secrets and machine-specific paths only. Model choice and thinking budgets are product tuning, not environment — they live in **`config.ts` → `MODELS`** (teacher, researcher, demoBuilder, visualMaker, extractor, auditor; each with an OpenRouter model id + reasoning `effort`). The extraction trigger threshold is there too (`EXTRACTION.everyNQuizAnswers`).
+Secrets and machine-specific paths only. Model choice and thinking budgets are product tuning, not environment — they live in **`config.ts` → `MODELS`** (prober, teacher, researcher, demoBuilder, visualMaker, extractor, auditor, labeler; each an OpenRouter model id + reasoning `effort`). The extraction batch threshold is there too (`EXTRACTION.chunkTokens`).
 
 | Variable | Purpose |
 |---|---|
 | `OPENROUTER_API_KEY` | required — all LLM calls go through OpenRouter |
 | `GOOGLE_SEARCH_API_KEY` + `GOOGLE_CSE_ID` | researcher's `web_search` (Google Custom Search) |
+| `DEEPGRAM_API_KEY` | optional — dictation (STT token minting; audio streams browser→Deepgram, never through the server) |
 | `CHROME_PATH` | optional explicit Chrome path for headless verification (puppeteer-core uses system Chrome; nothing is downloaded) |
+
+The packaged desktop app takes keys from `userData/auth.json` (BYOK, mode 0600, injected into the server child as env only).
 
 ## Architecture
 
-Five layers, dependency arrows pointing down only, the import law machine-enforced as four ESLint zones (shell → barrels only; core and agent never import below themselves). The full spec: [`docs/architecture.md`](docs/architecture.md).
+Five layers, dependency arrows pointing inward only, machine-enforced as four ESLint zones (shell → barrels only; core and agent never import below themselves). Two composition roots, one writer per store. The full spec — layers, systems, runtime flows, invariants, seams: [`docs/architecture.md`](docs/architecture.md).
 
 ```mermaid
-graph TB
-    subgraph SESSION_UI["Browser · session page (app/chat/[id])"]
-        TR["Transcript — streamdown markdown,<br/>KaTeX \\(..\\)/\\[..\\], mermaid,<br/>probe→teach phase divider"]
-        DOCK["QuestionDock / AnsweredCard<br/>quiz graded client-side<br/>(question-core)"]
-        TREE["TreePanel — plan tree,<br/>topo order, done/current/upcoming"]
-        ART["Artifact cards — research brief,<br/>demo in sandboxed iframe, SVG"]
-        COMP["Composer — gated by question<br/>or turn; jobs run in parallel"]
+flowchart TB
+    LEARNER["the learner"]
+
+    subgraph STAGE["STAGE — presentation shell (browser)"]
+        UI["session UI · question dock · plan panel · graph canvas · activity dock · sidebar"]
     end
 
-    subgraph HOME_UI["Browser · home page (app/)"]
-        GV["GraphView — sigma.js + forceAtlas2,<br/>run-then-freeze, node state colors"]
+    subgraph CLASSROOM["CLASSROOM — session engine (owns data/chats)"]
+        TURN["turn pipeline — handleChatRequest:<br/>liveness · steer claiming · write-ahead persist · stream"]
+        AGENTS["prober → teacher agents<br/>(stateless per-turn, built from the record)"]
+        CHATDATA[("chat records<br/>data/chats/*.json")]
     end
 
-    subgraph ROUTES["Next.js route handlers (app/api)"]
-        RCHAT["POST /api/chat"]
-        RCHATS["/api/chats · /api/chats/[id]"]
-        RGRAPH["GET /api/graph"]
-        RJOBS["GET /api/jobs?chatId"]
+    subgraph WORKBENCH["WORKBENCH — background labor (owns data/jobs)"]
+        SUBS["researcher · demo-builder · visual-maker<br/>(pi agents driven to completion)"]
+        WAKE["wake pipeline — per-chat serialized steer delivery,<br/>server-side wake turns, crash recovery"]
     end
 
-    subgraph TURN["Turn composition (src/server)"]
-        CH["chat-handler.ts — turn composition root<br/>(services: context · persist · spawn · extract)"]
+    subgraph LIBRARY["LIBRARY — world model (owns data/graph ledgers)"]
+        EXTRACT["extraction pipeline:<br/>extractor → auditor → merger<br/>(the SOLE graph writer)"]
+        DERIVE["derivation — graphSnapshot · embeddings · clusters<br/>(pure reads)"]
+        LEDG[("append-only ledgers<br/>data/graph/*.jsonl")]
     end
 
-    subgraph TEACHER["Teacher agent (src/agent)"]
-        TA["ToolLoopAgent<br/>system-prompt.md + prompts/*.md fragments<br/>+ graph-context block"]
-        QT["quiz · ask_user_question<br/>(client-side tools, no execute)"]
-        PT["plan_* tools (server-side,<br/>mutate the chat's tree)"]
-        JT["research · demo · visual<br/>(server-executed, ack mid-turn)"]
+    subgraph ROOM["MACHINE ROOM — host"]
+        HOST["Electron main → standalone Next server ·<br/>config.ts · LH_DATA_DIR · BYOK keys"]
     end
 
-    subgraph SUBS["Background sub-agents (src/agent/subagents) + wake pipeline (src/server/jobs.ts)"]
-        WAKE["wake queue — serialized per chat,<br/>turn-free + quiz-aware, server turn"]
-        RES["researcher<br/>web_search + web_fetch"]
-        DEMO["demo-builder<br/>write → headless-run → fix"]
-        VIS["visual-maker<br/>write → render → look"]
-        EXT["extraction pipeline<br/>extractor → auditor → merger<br/>(the sole graph writer)"]
-    end
-
-    subgraph STORE["File stores (src/store adapters → data/, never in git)"]
-        CHATS[("data/chats/*.json<br/>UIMessages + plan tree")]
-        JOBS[("data/jobs/*.json")]
-        LEDG[("data/graph/*.jsonl<br/>nodes/edges/events/mappings/sessions")]
-    end
-
-    subgraph PIPE["Graph core (src/core) — merger + derivation"]
-        MERGE["graph.ts mergeFindings<br/>deterministic apply: identity,<br/>event rebuild, dedupe, checkpoint"]
-        GCTX["graph-context.ts<br/>hotspots + 1-hop when large"]
-        SNAP["graphSnapshot (pure read)"]
-    end
-
-    TR & COMP & DOCK --> RCHAT
-    GV --> RGRAPH
-    ART --> RJOBS
-    RCHATS --> CHATS
-    TREE -.reads plan tool outputs.- TR
-
-    RCHAT --> CH
-    CH --> TA
-    TA --> QT & PT & JT
-    PT --> CHATS
-    CH -->|"onFinish: saveMessages"| CHATS
-    JT -->|"spawn(job, input) — fire-and-forget"| RES & DEMO & VIS
-    CH -->|"onFinish: every N quiz answers<br/>(turn-service seam)"| EXT
-
-    RES & DEMO & VIS --> JOBS
-    RES & DEMO & VIS -->|"steer message via `deliver`"| WAKE
-    WAKE -->|"server-side teacher turn<br/>(adopted client-side via turnInFlight)"| CH
-
-    EXT -->|"audit-passed findings"| MERGE
-    MERGE --> LEDG
-    LEDG --> GCTX -->|"appended to instructions"| TA
-    LEDG --> SNAP --> RGRAPH
+    LEARNER -->|"text · graded answers"| UI
+    UI -->|"POST /api/chat + addToolOutput"| TURN
+    TURN -->|"quiz / ask stream to browser<br/>(client tools, no server execute)"| UI
+    TURN --> CHATDATA
+    TURN -->|"spawn(job) — fire-and-forget ack"| SUBS
+    SUBS -->|"result → steer message"| WAKE
+    WAKE -->|"exactly-once wake turn"| TURN
+    TURN -->|"trigger when uncovered tokens ≥ chunkTokens"| EXTRACT
+    EXTRACT -->|"reads transcript as evidence"| CHATDATA
+    EXTRACT --> LEDG
+    EXTRACT -->|"semantic top-K context injection (one-shot steer)"| TURN
+    LEDG --> DERIVE
+    UI -->|"GET /api/graph · PUT positions · POST import"| DERIVE
+    HOST -.->|"hosts the server side"| TURN
 ```
 
-**Core invariant:** the extraction pipeline (extractor → auditor → merger) is the sole graph writer — tree-blind and post-hoc. The LLM stages propose, verify, and judge identity (link-or-create against the current graph; each finding carries verbatim evidence and message-granular provenance); the deterministic merger owns every ledger append and rebuilds anything the model could silently mis-copy (event kinds, timestamps, idempotency refs, provenance) from the transcript. Every node is an objective, world-facing fact; the learner's relationship to it lives entirely in the event ledger. The teacher stays a teacher; everything below the ledgers is derived.
+**Core invariant:** the extraction pipeline (extractor → auditor → merger) is the sole graph writer — tree-blind and post-hoc, triggered by token coverage, not quiz counts. The LLM stages propose, verify, and judge identity (link-or-create against the current graph; each finding carries verbatim evidence and message-granular provenance); the deterministic merger owns every ledger append and rebuilds anything the model could silently mis-copy (event kinds, timestamps, idempotency refs, provenance) from the transcript. Every node is an objective, world-facing fact; the learner's relationship to it lives entirely in the event ledger. The teacher stays a teacher; everything below the ledgers is derived.
 
 ## Layout
 
 ```
-app/                            Next.js App Router (UI + API route handlers)
-components/                     session + home UI, question dock, tree panel,
-                                graph view, artifact renderers (registry: artifacts/)
+app/                            Next.js App Router — pages + 16 thin API route handlers
+components/                     session + home UI, question dock, plan panel, graph
+                                canvas + view, artifact renderers (registry: artifacts/),
+                                dictation, activity dock, keyboard machine
 src/
   agent/
-    system-prompt.md            base teacher behavior (the teach methodology)
-    prompts/*.md                composed fragments (plan tree, jobs, phases,
-                                demos, graph context) — one per workstream
-    teacher-agent.ts            ToolLoopAgent bootstrap (model injectable for tests)
-    tools.ts                    per-request tool registry
-    tools/plan.ts               plan_init / add_node / … / set_current / mark_done
-    tools/web.ts                web_search (Google CSE) + web_fetch (Readability)
+    system-prompt.md            base teaching behavior (the methodology)
+    prompts/{prober,teacher}/   composed numbered fragments per role
+    teacher-agent.ts            prober/teacher factories (engine injectable for tests)
+    tools.ts                    tool composition; quiz / ask_user_question (client tools)
+    tools/plan.ts               plan_init (author-once mermaid plan, deterministic parser)
+    tools/probe.ts              probe_done (probe→teach handoff seam)
     tools/jobs.ts               research / demo / visual tool surfaces
+    tools/web.ts                web_search (Google CSE) + web_fetch (researcher only)
     subagents/                  researcher · demo-builder · visual-maker,
-                                extraction pipeline (extractor/auditor + prompts),
-                                runner (async protocol), headless Chrome helper
-  server/chat-handler.ts       one chat turn: compose agent + services, stream
-  server/turn-service.ts       turn services: teacher context · persist ·
-                                extraction trigger (the v1 quiz-answer
-                                threshold — one swappable seam)
-  server/jobs.ts               the sub-agent wake pipeline: serialized per-chat
-                                queue, steer delivery, server-side wake turns
-  server/stores.ts              THE composition root — the one place adapters wire in
-  server/{chats,graph,jobs}.ts  route entry points: chat list, pure-read
-                                graph snapshot, job polling
-  server/index.ts              the server barrel (the only server import app/ may use)
-  core/contracts.ts             THE contracts file — types + protocol docs
+                                extraction pipeline (extractor/auditor + merger handoff),
+                                runner (async protocol), cluster-namer, graph-context job,
+                                headless Chrome helper, abort registry
+  server/chat-handler.ts       THE turn composition root (liveness · steers · persist · stream)
+  server/turn-service.ts       turn seams: persist · graph-context · extraction trigger
+  server/jobs.ts               the wake pipeline: serialized per-chat steer delivery,
+                               server-side wake turns, crash recovery
+  server/stores.ts              THE storage composition root — the one place adapters wire in
+  server/turn-liveness.ts       per-chat turn registry (one turn per chat, ever)
+  server/embeddings.ts          local EmbeddingGemma-300M embedder (transformers.js)
+  server/observability.ts       the activity feed (running jobs + extraction, abort)
+  server/pi/                    the engine bridge: record-adapter (record → pi messages)
+                                · ui-stream (pi events → UIMessage SSE)
+  server/index.ts               the server barrel (the only server import app/ may use)
+  core/contracts/{plan,graph,chat,jobs,probe,models}.ts
+                                the contracts — one file per domain
   core/ports.ts                 storage ports — ChatStore · GraphStore · JobStore
                                 (core code depends on these types only)
-  core/                         question-core, plan-tree, phases, pending,
-                                graph (merger/derivation), graph-context, math delims
-                                — all pure: storage arrives as parameters
-  store/                        fs adapters implementing the ports: chats ·
-                                graph ledgers · jobs (plain fs, no framework)
-scripts/bench-graph.ts          sigma/forceAtlas2 layout benchmark
-data/                           chats/ · graph/ · jobs/ — runtime state, git-ignored
+  core/                         question-core, plan-tree, phases, pending, graph
+                                (merger/derivation), coverage, graph-context, layout,
+                                clusters, prices, tool-parts — all pure: storage
+                                arrives as parameters
+  store/                        fs adapters implementing the ports: chats · graph
+                                ledgers · jobs (+ render-settings, default-settings)
+electron/                       desktop launcher + security guard (spawns the standalone
+                                server; 1 IPC channel; LH_DATA_DIR + BYOK env)
+scripts/                        build-server.mjs (packaging guards), import-notes,
+                                backfill-graph, embed-graph, replay-layout, sync-pricing
+data/                           chats/ · graph/ (12 ledger + map files) · jobs/ ·
+                                default-settings.json — runtime state, git-ignored
 ```
 
 ## Key mechanisms
 
-**Client-side question tools.** `quiz` and `ask_user_question` have no server `execute`: the tool call streams to the browser in `input-available` state, the learner answers in the dock, the client grades via `question-core` and returns the verdict with `addToolOutput` — which fires the SDK continuation so the teacher resumes mid-turn. A pending quiz part persisted in the chat record is exactly what makes **resume mid-question free**.
+**Client-side question tools.** `quiz` and `ask_user_question` have no server `execute`: the tool call streams to the browser, the learner answers in the dock, the client grades via `question-core` and returns the verdict with `addToolOutput` — which fires the SDK continuation so the teacher resumes mid-turn. Options are shuffled deterministically (seeded by toolCallId) so server and client renders match. A pending quiz persisted in the chat record is exactly what makes **resume mid-question free**.
 
-**The formal plan tree.** The teacher authors the session's dependency tree with schema-validated tools (`plan_init`, `plan_add_node`, … `plan_set_current`, `plan_mark_done`). The tree persists in the chat record; the tree panel renders from the latest plan tool output in the transcript. Quiz calls can tag a `nodeId`, so outcomes feed the graph per-node.
+**The formal plan tree (author-once).** The teacher authors the session's dependency tree with one schema-validated tool — `plan_init`, whose mermaid-subset input is parsed deterministically (line-numbered errors) and validated as a DAG. The tree persists in the chat record; progress is never mutated — `current`/`visited`/upcoming are **derived** from tagged quiz calls in the transcript, and the panel renders that derivation.
 
-**The async sub-agent protocol (ack-and-steer).** `research` / `demo` / `visual` are server-executed tools: the call resolves immediately mid-turn with a fire-and-forget ack and the teacher keeps teaching; a background runner works in parallel (the job store tracks a live activity line; the client polls `/api/jobs`). On completion the runner builds a **steer message** — a user-role `UIMessage` whose text part is the model-facing result (data parts are dropped by provider conversion) and whose `data-subagent-artifact` part carries the full result for the client — and the **wake pipeline** (`server/jobs.ts`) delivers it: a per-chat serialized queue waits for the turn to end and no question to be pending, then fires a server-side teacher turn that weaves the result into the lesson. The client adopts the wake turn through the same `turnInFlight` machinery as returning mid-stream (busy shimmer, composer gate) and renders steers as artifacts — never a bubble. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable model — `MODELS.visualMaker` in config.ts).
+**The async sub-agent protocol (ack-and-steer).** `research` / `demo` / `visual` are server-executed tools: the call resolves immediately mid-turn with a fire-and-forget ack and the teacher keeps teaching; a background runner works in parallel (the client polls `/api/activity` and `/api/jobs`). On completion the runner builds a **steer message** — a user-role `UIMessage` whose text part is the model-facing result and whose `data-subagent-artifact` part carries the full result for the client — and the **wake pipeline** delivers it: a per-chat serialized queue waits for the turn to end and no question to be pending, then fires a server-side teacher turn that weaves the result into the lesson. Delivery is exactly-once (deterministic steer ids, delivered-flag checks at every claim point); stalled jobs are recovered on read; aborted jobs deliver an abort steer. The client adopts the wake turn through the same `turnInFlight` machinery as returning mid-stream (busy shimmer, composer gate) and renders steers as artifacts — never a bubble. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (vision-capable model — `MODELS.visualMaker` in config.ts).
 
-**The knowledge graph (the two channels).** The write channel: the extraction pipeline — extractor (LLM, tree-blind: propositions as true statements + descriptions, follows/supports edges, quiz attribution, understanding notes) → auditor (LLM: drops anything unbacked, stamps each survivor with an identity verdict — link to an existing node or create) → merger (`mergeFindings`, deterministic: applies the verdicts, link-appends phrasings/provenance, event rebuild from the transcript's tool parts, dedupe, checkpoint). Triggered once a chat accumulates `EXTRACTION.everyNQuizAnswers` (default 3, config.ts) new answered quizzes — a v1 placeholder trigger isolated in one seam (`turn-service.ts`), swappable without touching the pipeline. Failure checkpoints nothing; the next trigger re-runs. The read channel: the home view derives node states from the ledgers (`GET /api/graph` is a pure read — forceAtlas2 run-then-freeze, no idle simulation), and at session start the derived graph is rendered into a compact markdown block appended to the teacher's instructions (`buildGraphContext`) — whole graph while small, hotspots + 1-hop neighborhood past 150 nodes.
+**The knowledge graph (two channels, one writer).** The write channel: the extraction pipeline — extractor (LLM, tree-blind: sees only the transcript view — propositions as true statements, `follows`/`supports` edges, retroactive quiz attribution, one-word understanding observations) → auditor (LLM: sees findings + the current graph; drops anything without verbatim evidence, stamps each survivor with an identity verdict — link to an existing node or create) → merger (`mergeFindings`, deterministic: applies the verdicts, link-appends phrasings/provenance, rebuilds quiz events from the transcript's tool parts, dedupes, checkpoints coverage) → embeddings + layout settle + cluster naming. Triggered when a chat's **uncovered tokens** (message-view fingerprints, `coverage.jsonl`) cross `EXTRACTION.chunkTokens` — one swappable seam (`turn-service.ts`); failure checkpoints nothing, the next trigger re-runs. The same pipeline serves the **notes front door** (`POST /api/graph/import`: any `*.md`/`*.txt` becomes a source; re-imports are idempotent by path hash). The read channel: `GET /api/graph` derives the snapshot from the ledgers — a pure read; the home view is a hand-rolled Canvas 2D renderer (one rAF loop, dirty-flag idle, d3-zoom camera, zoom-gated labels, cluster hulls) over a d3-force layout, with server-persisted render settings and drag-committed positions. At session start the learner's topic is embedded and the top-K propositions under a token budget are delivered to the teacher as a one-shot context steer (marked in the UI) — same embeddings power search and the cluster partition.
+
+**Dictation.** Optional speech-to-text: the server mints short-lived Deepgram tokens; audio streams browser→Deepgram over WebSocket, never through the server.
 
 ## Testing
 
-All deterministic, no LLM (models are injected as `MockLanguageModelV4` where an agent loop is under test):
+All deterministic, no LLM, no network (engines are injected — pi-ai's faux provider scripted per test; `globalThis.fetch` stubbed where transport matters):
 
-1. **Pure core units** — plan-tree ops, question grading, phases, graph merger + trigger helper, graph-context selection, math delimiters.
-2. **Server flows** — `chat-handler` driven directly with a scripted mock model: persistence, job dispatch, steer delivery, the wake pipeline (409 retry, quiz deferral, idempotency).
-3. **Sub-agent loops** — researcher/demo-builder/visual-maker with mock models + fake headless API; the extraction pipeline end-to-end with mock models (extractor → auditor → in-memory ledgers).
-4. **Render tests** — transcript, cards, dock, composer, tree panel via React server-side rendering.
+1. **Pure core units** — merger (via the real fs adapters, backup-and-restored), derivation, coverage, question grading, plan tree, phases, clusters, layout, tool-parts, prices.
+2. **Server flows** — `handleChatRequest` driven end-to-end with scripted engines: persistence, liveness, steer claiming, the wake pipeline (409 retry, quiz deferral, idempotency), crash recovery, the data-dir seam (including a fresh child process).
+3. **Sub-agent loops** — researcher/demo-builder/visual-maker with fake headless APIs; the extraction pipeline end-to-end (audit drops, failure-checkpoints-nothing, single-flight, abort).
+4. **Render tests** — transcript, cards, docks, composer, sidebar, coverage via React server-side rendering.
 
 ## Lineage
 
-The teaching methodology comes from the Obsidian-based POC (`~/Desktop/Obsidian/vault/π/learn`; its `knowledge graph design.md` is still canonical for the epistemic model). The harness was originally built on the pi agent SDK, then pivoted to standalone Next.js + Vercel AI SDK (see the amendments table in `docs/vision.md`).
+The teaching methodology comes from the Obsidian-based POC (`~/Desktop/Obsidian/vault/π/learn`; its `knowledge graph design.md` was the original epistemic-model source, since amended — see the amendments table in `docs/vision.md`). The harness was originally built on the pi agent SDK, pivoted to standalone Next.js + the Vercel AI SDK, and later swapped its LLM engine back to pi-ai while keeping the AI SDK's `UIMessage` as the client protocol ([`docs/pi-engine-swap.md`](docs/pi-engine-swap.md)).
 
 ## Data
 
-Nothing under `data/` is ever tracked by git. Chats, graph ledgers, and jobs are plain files (JSON/JSONL) — inspect them freely; they are the canonical records.
+Nothing under `data/` is ever tracked by git. Chats, graph ledgers, jobs, embeddings, positions, and the settings records are plain files (JSON/JSONL) — inspect them freely; they are the canonical records. The desktop app relocates the whole directory via `LH_DATA_DIR`.
