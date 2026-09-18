@@ -132,3 +132,11 @@ export const EMBEDDINGS_FILE = path.join(PATHS.graph, "embeddings.json");
  * read-modify-write. Shared shape/sanitizer: src/core/render-settings.ts.
  */
 export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");
+
+/**
+ * DRAFT (pre-session) settings — the model + thinking + knowledge-context
+ * selections shared by the two new-session surfaces (the home graph view
+ * and /chat/new). One small JSON blob, read-modify-write, written only
+ * through the validated app/api/settings/draft route.
+ */
+export const DRAFT_SETTINGS_FILE = path.join(DATA_ROOT, "draft-settings.json");

@@ -6,6 +6,7 @@ import { Conversation, ConversationContent, ConversationEmptyState } from "@/com
 import { Composer } from "@/components/composer";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
+import { useDraftSettings } from "@/components/draft-settings";
 import { PhaseChip } from "@/components/phase-divider";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
@@ -150,9 +151,13 @@ export function NewSession() {
 	const router = useRouter();
 	const [text, setText] = useState("");
 	const [busy, setBusy] = useState(false);
-	// The pre-chat model+thinking selection, lifted from the StatsBar's
-	// ModelControl (empty chatId → it never PUTs; it hands the choice up).
-	const [settings, setSettings] = useState<ChatSettings | undefined>(undefined);
+	// The pre-chat model+thinking+context selection — the SHARED draft
+	// record (draft-settings wave, 2026-09-18): /chat/new and the home
+	// topic dock read and write ONE persisted choice, so what the learner
+	// last left the controls on is what shows on return. ModelControl with
+	// an empty chatId never PUTs — it hands the choice up; it still rides
+	// the session POST then PUT-on-create.
+	const { settings, save: saveDraft } = useDraftSettings();
 
 	const send = useCallback(() => {
 		if (!text.trim() || busy) return;
@@ -172,7 +177,7 @@ export function NewSession() {
 			onChange={setText}
 			onSend={send}
 			settings={settings}
-			onSettingsSaved={setSettings}
+			onSettingsSaved={saveDraft}
 		/>
 	);
 }

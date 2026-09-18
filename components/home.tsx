@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
+import { useDraftSettings } from "@/components/draft-settings";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
@@ -25,10 +26,13 @@ export function Home() {
 		append: (t) => setTopic((v) => (v ? v.replace(/\s+$/, "") + " " + t : t)),
 	});
 	const [busy, setBusy] = useState(false);
-	// The model+thinking selection made pre-chat — lifted from the StatsBar's
-	// ModelControl, carried to the chat POST then PUT-on-create (the model
-	// picker defers its save when chatId is empty; see components/model-picker).
-	const [settings, setSettings] = useState<ChatSettings | undefined>(undefined);
+	// The model+thinking+context selection made pre-chat — the SHARED draft
+	// record (draft-settings wave, 2026-09-18): both new-session surfaces
+	// (this topic dock and /chat/new) read and write ONE persisted choice,
+	// so what the learner last left the controls on is what shows on return.
+	// Still carried to the chat POST then PUT-on-create (the model picker
+	// defers its save when chatId is empty; see components/model-picker).
+	const { settings, save: saveDraft } = useDraftSettings();
 
 	const start = async () => {
 		const t = topic.trim();
@@ -140,13 +144,11 @@ export function Home() {
 						turns={[] as TurnUsage[]}
 						chatId=""
 						settings={settings}
-						onSettingsSaved={setSettings}
+						onSettingsSaved={saveDraft}
 						leftSlot={
 							<GraphContextControl
 								value={effectiveContextTokens(settings)}
-								onChange={(tokens) =>
-									setSettings((s) => ({ ...s, graphContextTokens: tokens }))
-								}
+								onChange={(tokens) => saveDraft({ ...settings, graphContextTokens: tokens })}
 							/>
 						}
 					/>
