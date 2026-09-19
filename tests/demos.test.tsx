@@ -422,13 +422,14 @@ describe("steer card rendering (the delivered artifact)", () => {
 				path: "/Users/x/course/chapter-3.pdf",
 				question: "What is the integral of x dx?",
 				brief: "The power rule appears on **page 1**: the integral of x dx is x^2/2 + C.",
+				pagesRead: [1],
 				pagesConsulted: [1, 2],
 			},
 		);
 		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
 		assert.match(html, /PDF/);
 		assert.match(html, /reading complete/);
-		assert.match(html, /2 pages consulted/);
+		assert.match(html, /read 1 page/, "the badge counts READ pages, not search hits");
 		assert.match(html, /<details[^>]*data-testid="pdf-complete-badge"/, "a real disclosure like the research badge");
 		assert.ok(!/<details[^>]*open/.test(html), "collapsed by default");
 		assert.ok(html.includes("power rule"), "the brief rides inside the details");
@@ -439,7 +440,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 	it("renders the PDF failure brief with the failed badge when the reader FAILED", () => {
 		const steer = buildSubagentSteer(
 			{ id: "jpf2", kind: "pdf", toolCallId: "cpf2" },
-			{ path: "/tmp/doc.pdf", question: "q", brief: "PDF failed: the file could not be opened", pagesConsulted: [] },
+			{ path: "/tmp/doc.pdf", question: "q", brief: "PDF failed: the file could not be opened", pagesRead: [], pagesConsulted: [] },
 		);
 		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
 		assert.match(html, /pdf-brief-card/);

@@ -172,7 +172,7 @@ export async function runPdfReaderAgent(
 	// for renders — the brief never starts on a broken source.
 	const openError = await probeReadable(pdfPath);
 	if (openError) {
-		return { path: pdfPath, question: input.question, brief: `PDF failed: ${openError}`, pagesConsulted: [] };
+		return { path: pdfPath, question: input.question, brief: `PDF failed: ${openError}`, pagesRead: [], pagesConsulted: [] };
 	}
 	const chromeReason = headless.unavailableReason();
 	// Chrome missing does NOT fail the run: text-side tools still work; the
@@ -192,6 +192,10 @@ export async function runPdfReaderAgent(
 	let messages: Message[] = [{ role: "user", content: prompt, timestamp: Date.now() }];
 	/** Every page the reader extracted or rendered (the citation set). */
 	const consulted = new Set<number>();
+	/** Pages genuinely READ — extract or render output entered the loop.
+	 *  Search-hit context lines consult but don't read (the "78 pages
+	 *  consulted" overstatement split, sources v1 2026-09-19). */
+	const read = new Set<number>();
 	let finalText = "";
 	let nudged = false;
 
@@ -211,6 +215,10 @@ export async function runPdfReaderAgent(
 					.map((c) => c.text)
 					.join("")
 					.trim();
+				// The gate stays on CONSULTED, not read: search-hit context
+				// lines are genuine consultation (anti-fabrication duty) — a
+				// search-only brief is honest. pagesRead is the UI's honest
+				// count, not a delivery gate.
 				if (consulted.size === 0 && !nudged) {
 					nudged = true;
 					messages = [
@@ -219,7 +227,7 @@ export async function runPdfReaderAgent(
 					];
 					continue;
 				}
-				return { path: pdfPath, question: input.question, brief: finalText || "(no brief text)", pagesConsulted: [...consulted].sort((a, b) => a - b) };
+				return { path: pdfPath, question: input.question, brief: finalText || "(no brief text)", pagesRead: [...read].sort((a, b) => a - b), pagesConsulted: [...consulted].sort((a, b) => a - b) };
 			}
 
 			const toolResults: ToolResultMessage[] = [];
@@ -239,7 +247,10 @@ export async function runPdfReaderAgent(
 						opts.onActivity?.(`pdf_extract: ${spec}`);
 						const r = await tools.pdf_extract.execute!({ pages: spec }, { toolCallId: call.id });
 						toolResults.push(toolText(call.id, call.name, String(r)));
-						for (const p of specNumbers(spec, Infinity)) consulted.add(p);
+						for (const p of specNumbers(spec, Infinity)) {
+							consulted.add(p);
+							read.add(p);
+						}
 					} else if (call.name === "pdf_search") {
 						const query = String(args.query ?? "");
 						const contextLines = numOr(args.context_lines, 3);
@@ -268,7 +279,10 @@ export async function runPdfReaderAgent(
 							const wanted = specNumbers(spec, RENDER_BATCH_CAP);
 							opts.onActivity?.(`pdf_render: ${spec} @${dpi}dpi`);
 							const pages = await headless.renderPdfPages(pdfPath, wanted, { dpi });
-							for (const p of pages) consulted.add(p.page);
+							for (const p of pages) {
+								consulted.add(p.page);
+								read.add(p.page);
+							}
 							if (pages.length === 0) {
 								toolResults.push(toolText(call.id, call.name, "ERROR: no pages rendered (spec matched nothing?)"));
 							} else {
@@ -315,7 +329,7 @@ export async function runPdfReaderAgent(
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		return { path: pdfPath, question: input.question, brief: `PDF failed: the reader crashed — ${msg}`, pagesConsulted: [...consulted].sort((a, b) => a - b) };
+		return { path: pdfPath, question: input.question, brief: `PDF failed: the reader crashed — ${msg}`, pagesRead: [...read].sort((a, b) => a - b), pagesConsulted: [...consulted].sort((a, b) => a - b) };
 	}
 
 	// Iteration limit: deliver whatever was honestly consulted (never invention).
@@ -323,6 +337,7 @@ export async function runPdfReaderAgent(
 		path: pdfPath,
 		question: input.question,
 		brief: finalText || `PDF failed: iteration limit (${maxIterations}) reached without a brief.`,
+		pagesRead: [...read].sort((a, b) => a - b),
 		pagesConsulted: [...consulted].sort((a, b) => a - b),
 	};
 }

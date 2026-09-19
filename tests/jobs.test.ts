@@ -292,7 +292,7 @@ describe("steer helpers (contracts.ts)", () => {
 	});
 
 	it("pdf steers (sources v0): brief + page citations on success, PDF failed: shape on failure, abort wording per kind", () => {
-		const pdf: PdfResult = { path: "/tmp/doc.pdf", question: "q?", brief: "The formula is on p. 2.", pagesConsulted: [1, 2] };
+		const pdf: PdfResult = { path: "/tmp/doc.pdf", question: "q?", brief: "The formula is on p. 2.", pagesRead: [2], pagesConsulted: [1, 2] };
 		const ok = buildSubagentSteer({ id: "jp", kind: "pdf", toolCallId: "cp" }, pdf);
 		assert.ok(ok.parts[0].type === "text" && ok.parts[0].text.includes("page citations"), "the teacher is told to cite pages");
 		assert.ok(ok.parts[0].type === "text" && ok.parts[0].text.includes("The formula is on p. 2."));
@@ -622,6 +622,7 @@ describe("pdf runner (sources v0)", () => {
 		const result = done.result as PdfResult;
 		assert.equal(result.path, PDF_FIXTURE);
 		assert.match(result.brief, /integral rule/);
+		assert.deepEqual(result.pagesRead, [1, 2], "extracted pages are READ pages");
 		assert.deepEqual(result.pagesConsulted, [1, 2]);
 
 		assert.equal(delivery.steers.length, 1, "one job, one steer");
@@ -651,6 +652,7 @@ describe("pdf runner (sources v0)", () => {
 		assert.equal(done.status, "error", "the failure brief is a subagent failure");
 		const result = done.result as PdfResult;
 		assert.match(result.brief, /^PDF failed:/);
+		assert.deepEqual(result.pagesRead, []);
 		assert.deepEqual(result.pagesConsulted, []);
 
 		const steer = delivery.steers[0]!;

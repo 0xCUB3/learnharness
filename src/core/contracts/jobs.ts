@@ -231,7 +231,13 @@ export interface PdfResult {
 	/** The distilled brief. Page citations inside the text point at
 	 *  pagesConsulted. Failure shape: /^PDF failed:/i (mirrors research). */
 	brief: string;
-	/** Pages the reader actually consulted. */
+	/** Pages the reader actually READ — extract or render output entered the
+	 *  loop (the honest count for the UI badge; search-hit snippets don't
+	 *  count — sources v1 split, 2026-09-19, after the "78 pages consulted"
+	 *  overstatement on a long-book search-first read). */
+	pagesRead: number[];
+	/** Every page whose content entered the loop, search-hit context lines
+	 *  included — the full audit set (the brief's citations may point here). */
 	pagesConsulted: number[];
 }
 

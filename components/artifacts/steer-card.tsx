@@ -79,15 +79,18 @@ function AbortedBadge({ kind }: { kind: string }) {
  * the badge marks delivery, the collapsed details carries the full text
  * + consulted pages. */
 function PdfCompleteBadge({ result }: { result: PdfResult }) {
+	// The honest count is READ pages (extract/render — sources v1 split);
+	// the ?? is runtime tolerance for pre-split persisted steers.
+	const readPages = result.pagesRead ?? result.pagesConsulted;
 	return (
 		<details data-testid="pdf-complete-badge" className="group w-full text-xs text-muted-foreground">
 			<summary className="flex cursor-pointer select-none list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
 				<CheckIcon className="size-3.5" />
 				<span className="font-medium uppercase tracking-wide">PDF</span>
 				<span>reading complete</span>
-				{result.pagesConsulted.length > 0 && (
+				{readPages.length > 0 && (
 					<span>
-						· {result.pagesConsulted.length} page{result.pagesConsulted.length === 1 ? "" : "s"} consulted
+						· read {readPages.length} page{readPages.length === 1 ? "" : "s"}
 					</span>
 				)}
 				<span className="ml-1 text-xs text-muted-foreground/70 group-open:hidden">view brief</span>

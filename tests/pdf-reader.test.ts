@@ -64,6 +64,7 @@ describe("pdf-reader loop (faux engine)", () => {
 		);
 		assert.equal(result.path, FIXTURE);
 		assert.match(result.brief, /integral rule/);
+		assert.deepEqual(result.pagesRead, [1, 2], "extracted pages are read pages");
 		assert.deepEqual(result.pagesConsulted, [1, 2]);
 	});
 
@@ -85,7 +86,9 @@ describe("pdf-reader loop (faux engine)", () => {
 			{ engine, onActivity: (line) => void (line && (nudged ||= line.startsWith("pdf_search"))) },
 		);
 		assert.match(result.brief, /Found it on page 1/);
+		assert.deepEqual(result.pagesRead, [], "search hits consult but do not read (the split)");
 		assert.deepEqual(result.pagesConsulted, [1]);
+		// and the gate lets it through: search hits ARE genuine consultation
 		// the first (invention) answer must NOT be the delivered brief
 		assert.notEqual(result.brief, "The answer is 42, trust me.");
 	});
@@ -102,6 +105,7 @@ describe("pdf-reader loop (faux engine)", () => {
 			{ path: FIXTURE, question: "what is the force formula?" },
 			{ engine, headless },
 		);
+		assert.deepEqual(result.pagesRead, [2, 3], "rendered pages are read pages");
 		assert.deepEqual(result.pagesConsulted, [2, 3]);
 		assert.deepEqual(headless.calls, ["render:2,3"]);
 	});
@@ -137,6 +141,7 @@ describe("pdf-reader loop (faux engine)", () => {
 			},
 		);
 		assert.match(result.brief, /Extracted instead/);
+		assert.deepEqual(result.pagesRead, [1]);
 		assert.deepEqual(result.pagesConsulted, [1]);
 	});
 
@@ -149,6 +154,7 @@ describe("pdf-reader loop (faux engine)", () => {
 		// had the model been consulted, the brief would be its text instead
 		assert.match(result.brief, /^PDF failed:/);
 		assert.ok(!result.brief.includes("never reached"));
+		assert.deepEqual(result.pagesRead, []);
 		assert.deepEqual(result.pagesConsulted, []);
 	});
 });
