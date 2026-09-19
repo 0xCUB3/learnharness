@@ -13,8 +13,10 @@
  * /auth/grant (their docs, token-based auth FAQ) — plain read/transcribe
  * keys return FORBIDDEN here.
  */
+import { keyValue } from "@/src/server";
+
 export async function GET() {
-	const key = process.env.DEEPGRAM_API_KEY;
+	const key = keyValue("DEEPGRAM_API_KEY");
 	if (!key) {
 		return Response.json(
 			{ message: "No DEEPGRAM_API_KEY — add it to auth.json (desktop) or .env.local (dev)." },
