@@ -36,7 +36,8 @@ export const findTool = lhTool({
 	name: "find",
 	description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Ignores node_modules, .git, and Library directories. Output is truncated to ${DEFAULT_LIMIT} results or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first).`,
 	schema: findInputSchema,
-	async execute(input) {
+	async execute(input, ctx) {
+		if (ctx?.signal?.aborted) return "Operation aborted";
 		const searchPath = resolveSourcePath(input.path);
 		let stat;
 		try {
@@ -49,7 +50,7 @@ export const findTool = lhTool({
 		const effectiveLimit = input.limit ?? DEFAULT_LIMIT;
 		const matches: string[] = [];
 		let limitReached = false;
-		const { timedOut } = await walkFiles(
+		const { timedOut, aborted } = await walkFiles(
 			searchPath,
 			(filePath) => {
 				const rel = path.relative(searchPath, filePath).split(path.sep).join("/");
@@ -61,8 +62,14 @@ export const findTool = lhTool({
 				matches.push(rel);
 				return false;
 			},
+			ctx?.signal,
 		);
 
+		if (aborted) {
+			return matches.length > 0
+				? `${matches.join("\n")}\n\n[search aborted — partial results]`
+				: "Search aborted before any results.";
+		}
 		if (matches.length === 0 && !limitReached) {
 			return timedOut
 				? `Search timed out after 10s with no matches yet. Narrow the search to a subdirectory.`

@@ -2,7 +2,7 @@
 
 import { createContext, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
-import { isToolUIPart, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
+import { lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { createChatTransport } from "@/components/chat-transport";
 import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
@@ -34,7 +34,7 @@ import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TeacherUIMessage, TurnUsage } from "@/src/core";
 import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
-import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
+import { findPendingToolCall, phaseAt3, phaseTimeline, streamingToolActivity } from "@/src/core";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 /**
@@ -262,12 +262,12 @@ export function Chat({
 	// session's current phase.
 	const phases = useMemo(() => phaseTimeline(messages), [messages]);
 
-	// A tool call still streaming its input: the teacher is writing a question.
-	// Shown as a transcript shimmer, exactly like the thinking indicator.
-	const questionStreaming =
-		!pending &&
-		messages.at(-1)?.role === "assistant" &&
-		(messages.at(-1)?.parts.some((p) => isToolUIPart(p) && p.state === "input-streaming") ?? false);
+	// A tool call still streaming its input: the teacher is mid-activity. The
+	// label names the ACTUAL tool (a long grep used to shimmer as “Writing a
+	// question…” for minutes — a part stays input-streaming through its whole
+	// execution, see streamingToolActivity); shown as the transcript shimmer,
+	// exactly like the thinking indicator.
+	const streamingActivity = !pending ? streamingToolActivity(messages) : null;
 
 	const [text, setText] = useState("");
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of
@@ -941,7 +941,7 @@ export function Chat({
 							))}
 
 							{(status === "submitted" || turnInFlight) && <Shimmer className="text-sm">Thinking…</Shimmer>}
-							{questionStreaming && <Shimmer className="text-sm">Writing a question…</Shimmer>}
+							{streamingActivity && <Shimmer className="text-sm">{streamingActivity}</Shimmer>}
 							{error && (
 								<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
 									Something went wrong: {error.message}

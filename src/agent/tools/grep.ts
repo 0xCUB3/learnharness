@@ -12,6 +12,7 @@ import {
 	resolveSourcePath,
 	truncateGrepLine,
 	walkFiles,
+	WALK_TIMEOUT_MS,
 } from "./fs-shared.ts";
 
 /**
@@ -45,7 +46,8 @@ export const grepTool = lhTool({
 	name: "grep",
 	description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Ignores node_modules, .git, and Library directories. Output is truncated to ${DEFAULT_LIMIT} matches or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
 	schema: grepInputSchema,
-	async execute(input) {
+	async execute(input, ctx) {
+		if (ctx?.signal?.aborted) return "Operation aborted";
 		const searchPath = resolveSourcePath(input.path);
 
 		let stat;
@@ -66,6 +68,7 @@ export const grepTool = lhTool({
 		// Files to scan: one explicit file, or the walked tree (glob-filtered).
 		const files: string[] = [];
 		let timedOut = false;
+		let aborted = false;
 		if (!isDirectory) {
 			files.push(searchPath);
 		} else {
@@ -79,16 +82,32 @@ export const grepTool = lhTool({
 					files.push(filePath);
 					return false;
 				},
+				ctx?.signal,
 			);
 			timedOut = result.timedOut;
+			aborted = result.aborted;
 		}
 
 		const outLines: string[] = [];
 		let matchCount = 0;
 		let limitReached = false;
 		let linesTruncated = false;
+		// The scan phase is bounded too (2026-09-19): the walk's 10s deadline
+		// bounds COLLECTION, but reading every collected file was unbounded —
+		// the grep that outlived its turn by minutes. Same budget, checked per
+		// file; abort lands mid-scan with partial results.
+		const scanDeadline = Date.now() + WALK_TIMEOUT_MS;
+		let scanTimedOut = false;
 
 		for (const filePath of files) {
+			if (ctx?.signal?.aborted) {
+				aborted = true;
+				break;
+			}
+			if (Date.now() > scanDeadline) {
+				scanTimedOut = true;
+				break;
+			}
 			if (matchCount >= effectiveLimit) {
 				limitReached = true;
 				break;
@@ -133,8 +152,13 @@ export const grepTool = lhTool({
 			if (limitReached) break;
 		}
 
+		if (aborted) {
+			return outLines.length > 0
+				? `${capOutput(outLines).content}\n\n[search aborted — partial results]`
+				: "Search aborted before any results.";
+		}
 		if (outLines.length === 0) {
-			return timedOut
+			return timedOut || scanTimedOut
 				? `Search timed out after 10s with no matches yet. Narrow the search to a subdirectory.`
 				: "No matches found";
 		}
@@ -143,7 +167,7 @@ export const grepTool = lhTool({
 		if (limitReached || matchCount >= effectiveLimit) notices.push(`${effectiveLimit} matches limit reached`);
 		if (linesTruncated) notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`);
 		if (truncated) notices.push(`${formatSize(MAX_OUTPUT_BYTES)} limit reached`);
-		if (timedOut) notices.push("search timed out after 10s — partial results, narrow the directory");
+		if (timedOut || scanTimedOut) notices.push("search timed out after 10s — partial results, narrow the directory");
 		return notices.length > 0 ? `${content}\n\n[${notices.join(". ")}]` : content;
 	},
 });

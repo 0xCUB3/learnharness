@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 
-import { expandBraces, globToRegex, matchGlob } from "../src/agent/tools/fs-shared.ts";
+import { expandBraces, globToRegex, matchGlob, walkFiles } from "../src/agent/tools/fs-shared.ts";
 import { findTool } from "../src/agent/tools/find.ts";
 import { grepTool } from "../src/agent/tools/grep.ts";
 import { lsTool } from "../src/agent/tools/ls.ts";
@@ -184,5 +184,62 @@ describe("read (home-anchored re-port)", () => {
 	it("reads a fixture file verbatim through the shared slice machinery", async () => {
 		const out = (await readTool.execute!({ path: path.join(FIXTURE, "notes", "linear.txt") }, { toolCallId: "c" })) as string;
 		assert.match(out, /Eigenvectors keep their direction/);
+	});
+});
+
+describe("abort plumbing (the 2026-09-19 cascade fix)", () => {
+	it("walkFiles stops promptly when the signal aborts mid-walk", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "lh-fs-abort-"));
+		for (let i = 0; i < 20; i++) await fs.writeFile(path.join(root, `f${i}.txt`), "needle\n");
+		const ac = new AbortController();
+		let visited = 0;
+		const result = await walkFiles(
+			root,
+			() => {
+				visited++;
+				if (visited === 3) ac.abort(); // deterministic: abort from inside the walk
+				return false;
+			},
+			ac.signal,
+		);
+		assert.equal(result.aborted, true);
+		assert.equal(result.timedOut, false);
+		assert.ok(visited < 20, "the walk stopped early");
+	});
+
+	it("find honors a pre-aborted signal without walking", async () => {
+		FIXTURE = await setup();
+		const ac = new AbortController();
+		ac.abort();
+		const out = (await findTool.execute!({ pattern: "*.md" }, { toolCallId: "c", signal: ac.signal })) as string;
+		assert.equal(out, "Operation aborted");
+	});
+
+	it("grep honors a pre-aborted signal without scanning", async () => {
+		const ac = new AbortController();
+		ac.abort();
+		const out = (await grepTool.execute!({ pattern: "eigenvector" }, { toolCallId: "c", signal: ac.signal })) as string;
+		assert.equal(out, "Operation aborted");
+	});
+
+	it("grep aborts mid-run with partial results, not a hang", async () => {
+		// The exact shape of the 2.7-minute lesson: a tree big enough that
+		// the walk+scan outlast an abort mid-flight. Whichever phase the
+		// abort lands in, the tool returns promptly with an abort notice —
+		// never "No matches found", never a hang.
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "lh-fs-midabort-"));
+		await fs.mkdir(path.join(root, "deep"), { recursive: true });
+		for (let i = 0; i < 200; i++) {
+			await fs.writeFile(path.join(root, i % 2 ? `f${i}.txt` : `deep/f${i}.txt`), "needle line\n");
+		}
+		const ac = new AbortController();
+		setTimeout(() => ac.abort(), 1);
+		const started = Date.now();
+		const out = (await grepTool.execute!(
+			{ pattern: "needle", path: root },
+			{ toolCallId: "c", signal: ac.signal },
+		)) as string;
+		assert.match(out, /aborted/);
+		assert.ok(Date.now() - started < 5_000, "returned promptly");
 	});
 });

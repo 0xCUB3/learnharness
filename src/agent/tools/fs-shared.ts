@@ -136,16 +136,21 @@ export async function walkFiles(
 	root: string,
 	visit: (filePath: string) => boolean | Promise<boolean>,
 	signal?: AbortSignal,
-): Promise<{ timedOut: boolean }> {
+): Promise<{ timedOut: boolean; aborted: boolean }> {
 	const deadline = Date.now() + WALK_TIMEOUT_MS;
 	let timedOut = false;
+	let aborted = false;
+	if (signal?.aborted) return { timedOut: false, aborted: true };
 
 	const walkDir = async (dir: string): Promise<boolean> => {
 		if (Date.now() > deadline) {
 			timedOut = true;
 			return true; // stop
 		}
-		if (signal?.aborted) throw new Error("Operation aborted");
+		if (signal?.aborted) {
+			aborted = true;
+			return true; // stop — abort yields partial results, not a throw
+		}
 		let entries: import("node:fs").Dirent[];
 		try {
 			entries = await fs.readdir(dir, { withFileTypes: true });
@@ -155,6 +160,10 @@ export async function walkFiles(
 		for (const entry of entries) {
 			if (Date.now() > deadline) {
 				timedOut = true;
+				return true;
+			}
+			if (signal?.aborted) {
+				aborted = true;
 				return true;
 			}
 			const full = path.join(dir, entry.name);
@@ -170,7 +179,7 @@ export async function walkFiles(
 	};
 
 	await walkDir(root);
-	return { timedOut };
+	return { timedOut, aborted };
 }
 
 /** True if the first 8KB chunk contains a NUL byte — pi/rg's binary skip. */
