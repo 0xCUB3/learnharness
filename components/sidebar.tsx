@@ -8,6 +8,7 @@ import { ActivitySection } from "@/components/activity-dock";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
+import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -265,6 +266,7 @@ function SessionsSidebar() {
 	const [query, setQuery] = useState("");
 	const pathname = usePathname();
 	const router = useRouter();
+	const { open: openSettings } = useSettingsDialog();
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
 	   sessionless draft view; the session is created only when the first
@@ -483,18 +485,19 @@ function SessionsSidebar() {
 					    learner opted out (no ambient signal, user decision). */}
 					<ActivitySection />
 
-					{/* Settings entry (thin settings wave): the same row language
-					    as New session — quiet, bottom-pinned, one chord away is
-					    mod+, (the keyboard registry's open-settings action). */}
+					{/* Settings entry (settings-app wave): same row language as
+					    New session — quiet, bottom-pinned, opens the centered
+					    dialog (also mod+, in the keyboard registry). */}
 					<div className="px-3 pb-3 pt-1">
-						<Link
-							href="/settings"
+						<button
+							type="button"
+							onClick={openSettings}
 							data-testid="settings-entry"
 							className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 						>
 							<SettingsIcon className="size-3" />
 							Settings
-						</Link>
+						</button>
 					</div>
 				</div>
 			</aside>
@@ -504,13 +507,13 @@ function SessionsSidebar() {
 /** The app frame: sidebar inline + content. Rendered once in the root layout. */
 export function AppShell({ children }: { children: React.ReactNode }) {
 	return (
-		<>
+		<SettingsDialogProvider>
 			<SessionsSidebar />
 			<main className="min-w-0 flex-1">{children}</main>
 			{/* The single document-level keydown listener (keyboard wave A) —
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}
 			<KeyboardShortcuts />
-		</>
+		</SettingsDialogProvider>
 	);
 }

@@ -34,18 +34,21 @@ import {
 	KEYBOARD_ACTIONS,
 } from "@/src/core";
 import { isDictationActive } from "@/components/dictation";
+import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 
 export function KeyboardShortcuts() {
 	const router = useRouter();
 	const [cheatOpen, setCheatOpen] = useState(false);
+	const { open: openSettings } = useSettingsDialog();
 
-	// Router + cheat state inside a ref so the keydown listener (attached
-	// once) never goes stale.
+	// Router + cheat + settings state inside a ref so the keydown listener
+	// (attached once) never goes stale.
 	const handlersRef = useRef<{
 		router: ReturnType<typeof useRouter>;
 		setCheatOpen: (v: boolean) => void;
-	}>({ router, setCheatOpen });
-	handlersRef.current = { router, setCheatOpen };
+		openSettings: () => void;
+	}>({ router, setCheatOpen, openSettings });
+	handlersRef.current = { router, setCheatOpen, openSettings };
 
 	useEffect(() => {
 		const onKeyDown = (e: KeyboardEvent) => {
@@ -95,7 +98,9 @@ export function KeyboardShortcuts() {
 					handlersRef.current.router.push("/chat/new");
 					break;
 				case "open-settings":
-					handlersRef.current.router.push("/settings");
+					// Settings-app wave: the dialog is the surface, the URL is
+					// gone — /settings redirects to the draft shell.
+					handlersRef.current.openSettings();
 					break;
 				case "jump-graph":
 					handlersRef.current.router.push("/");

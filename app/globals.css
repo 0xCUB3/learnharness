@@ -389,6 +389,30 @@ body {
 	}
 }
 
+/* Settings dialog pop (settings-app wave, 2026-09-20): a short fade +
+   2% settle-scale — understated by design, the app's motion taste
+   (200ms sidebar, 150ms here); honors reduced-motion by appearing. */
+@keyframes settings-pop {
+	from {
+		opacity: 0;
+		scale: 0.98;
+	}
+	to {
+		opacity: 1;
+		scale: 1;
+	}
+}
+
+.settings-dialog-pop {
+	animation: settings-pop 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog-pop {
+		animation: none;
+	}
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Electron merged chrome (owner, 2026-09-17). The system title bar is
    hidden (titleBarStyle: "hiddenInset" in electron/main.cjs); the app's

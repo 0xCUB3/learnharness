@@ -155,7 +155,7 @@ export function KeyboardSection() {
 				);
 			})}
 			<div className="mt-1 flex items-center justify-between">
-				<span className="text-xs text-muted-foreground/70">Stored in this browser (lh:keymap) — overrides only.</span>
+				<span className="text-xs text-muted-foreground/70">Stored on this device (lh:keymap) — overrides only.</span>
 				<button
 					type="button"
 					onClick={resetAll}
