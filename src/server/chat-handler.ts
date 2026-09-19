@@ -1,6 +1,6 @@
 import type { UIMessage } from "ai";
 import type { Usage } from "@earendil-works/pi-ai";
-import { createProberAgent, createTeacherAgent, type TeachingAgent } from "../agent/teacher-agent.ts";
+import { createProberAgent, createTeacherAgent, type AgentBuildOptions, type TeachingAgent } from "../agent/teacher-agent.ts";
 import { piEngineFor } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
@@ -10,7 +10,8 @@ import type { ModelRole } from "../../config.ts";
 import { claimSteers, deliverJobResult, setContextRespawn, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { createPiTurnResponse } from "./pi/ui-stream.ts";
-import { stores } from "./stores.ts";
+import { effectiveSettings, stores } from "./stores.ts";
+import { extractionEnabled, graphContextEnabled } from "../core/settings-resolution.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { persistTurn, triggerExtraction, triggerGraphContext, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
@@ -137,6 +138,12 @@ export async function handleChatRequest(
 		steers.length > 0 ? [...(body.messages as UIMessage[]), ...steers] : body.messages
 	) as UIMessage[];
 
+	// THE SETTINGS VIEW (settings-storage wave, 2026-09-19): resolved fresh
+	// per turn — graph gates, tool toggles, and (via the store) the record's
+	// chat defaults all read from ONE small file. No caching: a stale toggle
+	// after a settings PUT would be worse than the read.
+	const effective = effectiveSettings();
+
 	// Write-ahead persistence: the request body IS the client's canonical
 	// state, so it goes on disk BEFORE the stream starts. The learner's answer
 	// is durable the instant the request arrives — any remount, second tab, or
@@ -161,7 +168,12 @@ export async function handleChatRequest(
 	// runner module; for every session past its start this is a no-op.
 	// Extraction stays in onFinish by contrast: it depends on quiz
 	// answers accumulated DURING the turn.
-	triggerGraphContext(graphContext, chatId);
+	// GRAPH GATES (settings-storage wave, 2026-09-19): the read channel
+	// needs BOTH the master switch and the embedding rung (injection is a
+	// vector query); with graph off there is no context job at all.
+	if (graphContextEnabled(effective.graph)) {
+		triggerGraphContext(graphContext, chatId);
+	}
 
 	// MONEY CHANNEL (wave 4): one collector per request, fed by the agent's
 	// message_end events. Every model call's usage lands in the chat record's
@@ -198,6 +210,18 @@ export async function handleChatRequest(
 	// Tests inject a factory: the agent is stateless per turn (docs/
 	// pi-engine-swap.md §2), so each request builds a fresh one off the
 	// transcript — the factory mirrors that seam exactly.
+	// CROSS-STREAM SEAM (agreed 2026-09-19, settings wave): `toolToggles`
+	// rides the build opts as the user-level DELTA map (absent key =
+	// enabled — quiz, ask_user_question, research, demo, visual). The
+	// Teacher stream adds the field to AgentBuildOptions + the filtering in
+	// createTeacherTools / the prober's registry this same wave; until that
+	// merge, the extra property is structurally ignored (a harmless no-op).
+	const agentOpts: AgentBuildOptions & { toolToggles?: Record<string, boolean> } = {
+		engine,
+		messages: recordToPiMessages(outgoing),
+		onUsage: collectUsage,
+		toolToggles: effective.agent.tools,
+	};
 	const constructed: TeachingAgent = buildAgent
 		? buildAgent(outgoing)
 		: teaching
@@ -208,7 +232,7 @@ export async function handleChatRequest(
 						jobStore: stores.jobStore,
 						spawn: (job, input) => void jobRunner.runJob(job.id, input),
 					},
-					{ engine, messages: recordToPiMessages(outgoing), onUsage: collectUsage },
+					agentOpts,
 				)
 			: createProberAgent(
 					{
@@ -216,7 +240,7 @@ export async function handleChatRequest(
 						chatStore: stores.chatStore,
 						deliver: (steer) => void deliverJobResult(steer),
 					},
-					{ engine, messages: recordToPiMessages(outgoing), onUsage: collectUsage },
+					agentOpts,
 				);
 
 	// A test-injected agent gets no usage collector (tests assert the
@@ -253,7 +277,13 @@ export async function handleChatRequest(
 						steps,
 					});
 				}
-				triggerExtraction(stores, extraction, chatId);
+				// GRAPH GATE (settings-storage wave, 2026-09-19): the write channel —
+				// extraction, its auditor — dies with the master switch. (The deeper
+				// pipeline knobs — embedding/clustering/labeling — gate inside the
+				// pipeline and its consumers, later waves, via the same resolved view.)
+				if (extractionEnabled(effective.graph)) {
+					triggerExtraction(stores, extraction, chatId);
+				}
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.
 				endTurn(chatId);

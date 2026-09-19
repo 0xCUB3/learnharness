@@ -149,3 +149,36 @@ export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json
  * read-modify-write, written only through app/api/settings/defaults.
  */
 export const DEFAULT_SETTINGS_FILE = path.join(DATA_ROOT, "default-settings.json");
+
+/**
+ * THE USER SETTINGS RECORD (settings-storage wave, 2026-09-19): one
+ * versioned, DELTA-shaped JSON blob at the data-dir seam holding every
+ * non-secret product preference — general, chat defaults, agent (background
+ * model/thinking overrides + tool toggles + prompt-override switches),
+ * appearance, graph. Explicit user choices only: ABSENT keys resolve to the
+ * factory defaults compiled into src/core/settings.ts (FACTORY_SETTINGS), so
+ * a software update that adds a knob (new tool, new role, new appearance
+ * field) needs no migration — old records simply lack the new keys. The
+ * version field is a PRIVATE schema counter for breaking shape changes
+ * only (field renamed/meaning changed), unrelated to the app release
+ * version. Secrets (API keys, login tokens) NEVER live here — auth.json /
+ * .env.local keep that role. Migrated FROM: default-settings.json folds
+ * into the record's `chat` section on first read (the old file is left in
+ * place, inert).
+ */
+export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
+
+/**
+ * User prompt-override files (settings-storage wave, 2026-09-19): the
+ * per-segment system-prompt overrides mirroring the SOURCE layout
+ * (src/agent/prompts/) — the shared base as prompts/system-prompt.md,
+ * fragments as prompts/teacher/<file> / prompts/prober/<file>. File
+ * PRESENCE alone is not the override: settings.json's agent.prompts map
+ * (segmentPath → boolean) is the explicit switch, so a user can keep a
+ * customized file on disk but run the source default to compare. The
+ * segment list itself is ALWAYS derived from source at runtime (the
+ * loader in src/store/prompt-overrides.ts) — code updates that add,
+ * remove, or reorder fragments adapt automatically; an override keyed to
+ * a vanished segment stops composing but stays on disk.
+ */
+export const PROMPTS_OVERRIDE_DIR = path.join(DATA_ROOT, "prompts");

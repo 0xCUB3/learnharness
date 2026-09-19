@@ -1,20 +1,17 @@
 /**
- * Tests for the default-settings wave (2026-09-18): the shared settings-body
- * parser (the one seam behind BOTH settings routes — per-chat and defaults —
- * so their parse behavior is identical) and the default-settings store
- * (data/default-settings.json read/write, first-boot null semantics).
+ * Tests for the shared settings-body parser, chat-section flavor
+ * (default-settings wave, 2026-09-18; record-backed 2026-09-19): the seam
+ * behind BOTH chat-settings routes — per-chat and the defaults alias.
  *
- * The store tests write the real repo data file (npm test's shared data/,
- * disposable scratch by doctrine) and clean up after themselves.
+ * The record store, the legacy-file migration, and the record-backed
+ * default-settings facade are covered in tests/settings-store.test.ts
+ * (one fs owner per file — the test runner executes files in parallel).
  */
 
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import { afterEach, describe, it } from "node:test";
-import { GRAPH_CONTEXT_TOKENS_MAX, type ChatSettings } from "../src/core";
+import { describe, it } from "node:test";
+import { GRAPH_CONTEXT_TOKENS_MAX } from "../src/core";
 import { parseSettingsBody } from "../src/server/settings-body.ts";
-import { DEFAULT_SETTINGS_FILE } from "../config.ts";
-import { readDefaultSettings, writeDefaultSettings } from "../src/store/default-settings.ts";
 
 describe("parseSettingsBody (shared by both settings routes)", () => {
 	it("an empty object parses to {} — the clear-overrides write", () => {
@@ -64,45 +61,5 @@ describe("parseSettingsBody (shared by both settings routes)", () => {
 		}
 		const ok = parseSettingsBody({ graphContextTokens: GRAPH_CONTEXT_TOKENS_MAX });
 		assert.equal(ok.ok, true);
-	});
-});
-
-describe("the default-settings store", () => {
-	afterEach(() => {
-		try {
-			fs.rmSync(DEFAULT_SETTINGS_FILE);
-		} catch {
-			/* nothing to clean */
-		}
-	});
-
-	it("reads null on first boot (no file) — the surfaces use config defaults", () => {
-		try {
-			fs.rmSync(DEFAULT_SETTINGS_FILE);
-		} catch {
-			/* absent already */
-		}
-		assert.equal(readDefaultSettings(), null);
-	});
-
-	it("write then read roundtrips verbatim — validated shape, no sanitizer games", () => {
-		const settings: ChatSettings = {
-			model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
-			thinkingLevel: "high",
-			graphContextTokens: 1024,
-		};
-		writeDefaultSettings(settings);
-		assert.deepEqual(readDefaultSettings(), settings);
-	});
-
-	it("an empty {} record roundtrips (all overrides cleared)", () => {
-		writeDefaultSettings({});
-		assert.deepEqual(readDefaultSettings(), {});
-	});
-
-	it("a corrupt file reads as null — defaults, never a crash", () => {
-		fs.rmSync(DEFAULT_SETTINGS_FILE, { force: true }); // a directory from a broken earlier run also blocks
-		fs.writeFileSync(DEFAULT_SETTINGS_FILE, "{ not json", "utf-8");
-		assert.equal(readDefaultSettings(), null);
 	});
 });

@@ -18,6 +18,7 @@ import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-work
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { MODELS } from "../../config.ts";
 import { piModels } from "../agent/models.ts";
+import { settingsStore } from "../store/settings.ts";
 import type { ChatSettings } from "../core/contracts/chat.ts";
 import type {
 	CatalogDefaults,
@@ -28,12 +29,23 @@ import type {
 /** The picker's client-safe model entry (contract: core/contracts/models.ts). */
 export type ModelDto = ModelCatalogEntry;
 
-/** The conversation agents' config pin — what a settings-less chat runs. */
-export function catalogDefaults(): CatalogDefaults {
+/** The conversation agents' resolved default pin (pure form — the record's
+ *  chat section in, CatalogDefaults out; `catalogDefaults()` below is the
+ *  fs wrapper). Absent fields (or no record — BYOK first boot) fall back
+ *  to the config pin, exactly as before. */
+export function catalogDefaultsFor(chat?: ChatSettings): CatalogDefaults {
 	return {
-		model: { provider: "openrouter", id: MODELS.prober.model },
-		thinkingLevel: MODELS.prober.effort as ThinkingLevel,
+		model: chat?.model ?? { provider: "openrouter", id: MODELS.prober.model },
+		thinkingLevel: (chat?.thinkingLevel ?? MODELS.prober.effort) as ThinkingLevel,
 	};
+}
+
+/** The conversation agents' config pin — what a settings-less chat runs.
+ *  (settings-storage wave, 2026-09-19): the user's picked default rides in
+ *  the settings record's `chat` section; the picker's defaults row shows
+ *  it once chosen. */
+export function catalogDefaults(): CatalogDefaults {
+	return catalogDefaultsFor(settingsStore.readSettings()?.chat);
 }
 
 /** Project one catalog model to the client DTO. */

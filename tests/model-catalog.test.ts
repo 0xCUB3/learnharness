@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { modelCatalog, validateChatSettings, catalogDefaults, toModelDto } from "../src/server/model-catalog.ts";
+import { modelCatalog, validateChatSettings, catalogDefaultsFor, toModelDto } from "../src/server/model-catalog.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { MODELS } from "../config.ts";
 import { piEngineFor } from "../src/agent/models.ts";
@@ -32,9 +32,23 @@ describe("the model catalog projection", () => {
 	});
 
 	it("defaults mirror the conversation agents' config pin", () => {
-		const d = catalogDefaults();
+		const d = catalogDefaultsFor();
 		assert.deepEqual(d, { model: { provider: "openrouter", id: MODELS.prober.model }, thinkingLevel: MODELS.prober.effort });
 		assert.equal(d.model.id, MODELS.teacher.model, "one controller: prober and teacher share the pin");
+	});
+
+	it("a picked default in the record's chat section overrides the pin (catalogDefaultsFor, settings wave)", () => {
+		const d = catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" });
+		assert.deepEqual(d, { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" });
+		// partial: only the model chosen → thinking falls back to the pin
+		const partial = catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } });
+		assert.equal(partial.thinkingLevel, MODELS.prober.effort);
+		assert.equal(partial.model.id, "qwen/qwen3.8-flash");
+		// graphContextTokens-only record: model untouched
+		assert.deepEqual(catalogDefaultsFor({ graphContextTokens: 512 }), {
+			model: { provider: "openrouter", id: MODELS.prober.model },
+			thinkingLevel: MODELS.prober.effort,
+		});
 	});
 
 	it("toModelDto projects the raw catalog model verbatim", () => {
