@@ -193,7 +193,7 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 				<nav
 					aria-label="Settings sections"
 					data-testid="settings-nav"
-					className="flex w-44 shrink-0 flex-col border-r border-border p-2"
+					className="flex w-44 shrink-0 flex-col gap-1 border-r border-border p-2"
 				>
 					{SECTIONS.map((s) => (
 						<button

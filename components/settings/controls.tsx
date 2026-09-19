@@ -104,14 +104,18 @@ export function Toggle({
 			onClick={() => onChange(!checked)}
 			className={cn(
 				"relative h-4.5 w-8 shrink-0 rounded-full border border-border transition-colors",
-				checked ? "bg-foreground" : "bg-muted",
+				// Owner (2026-09-20): on is a gray track with a WHITE disc (a full-white
+				// track was too loud); off stays the muted track.
+				checked ? "bg-muted-foreground" : "bg-muted",
 				disabled && "cursor-not-allowed",
 			)}
 		>
 			<span
 				className={cn(
 					"absolute left-0 top-0.5 size-3 rounded-full transition-transform",
-					checked ? "translate-x-4.5 bg-background" : "translate-x-0.5 bg-muted-foreground",
+					// 2px inset from each inner edge, both states (owner round: the on
+					// disc used to touch the pill's right edge).
+					checked ? "translate-x-4 bg-foreground" : "translate-x-0.5 bg-muted-foreground",
 				)}
 			/>
 		</button>

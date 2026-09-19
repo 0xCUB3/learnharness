@@ -30,6 +30,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type React from "react";
 import { BACKGROUND_MODEL_ROLES, type AgentSettings, type BackgroundModelRole, type ModelCatalogEntry } from "@/src/core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
@@ -106,6 +108,7 @@ function MenuTrigger({
 	testid,
 	open,
 	onClick,
+	widthClass,
 }: {
 	value: string;
 	/** What the trigger shows when there is no override ("Default"). */
@@ -114,6 +117,11 @@ function MenuTrigger({
 	testid: string;
 	open: boolean;
 	onClick: () => void;
+	/** Owner (2026-09-20): the thinking trigger is FIXED at the width the
+	 *  Default state needs (values shifting it mid-edit shifted the row);
+	 *  the model trigger takes the same width as a MINIMUM — its values
+	 *  genuinely vary in length. */
+	widthClass: string;
 }) {
 	return (
 		<button
@@ -122,13 +130,62 @@ function MenuTrigger({
 			aria-expanded={open}
 			data-testid={testid}
 			onClick={onClick}
-			className="flex h-7 items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+			className={`flex h-7 items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 ${widthClass}`}
 		>
-			<span className="max-w-52 truncate">{value || emptyLabel}</span>
+			<span className="min-w-0 flex-1 truncate">{value || emptyLabel}</span>
 			<span aria-hidden className="text-muted-foreground">
 				▾
 			</span>
 		</button>
+	);
+}
+
+/** The opened dropdown, PORTALED to document.body with fixed positioning:
+ *  the dialog's overflow frame must not clip it — the owner wants the
+ *  menus flowing over the whole screen, outside the settings surface
+ *  (2026-09-20). Right-aligned to its trigger, repositioned while the
+ *  dialog content scrolls under it. */
+function AnchoredMenu({
+	anchorTestid,
+	menuClass,
+	testid,
+	children,
+}: {
+	/** The trigger to hang from — its data-testid. */
+	anchorTestid: string;
+	/** The positioned menu's classes (width, padding, frame). */
+	menuClass: string;
+	testid: string;
+	children: React.ReactNode;
+}) {
+	const [style, setStyle] = useState<{ right: number; top: number } | null>(null);
+	useEffect(() => {
+		const place = () => {
+			const anchor = document.querySelector(`[data-testid="${anchorTestid}"]`);
+			if (!anchor) return;
+			const r = anchor.getBoundingClientRect();
+			setStyle({ right: window.innerWidth - r.right, top: r.bottom + 4 });
+		};
+		place();
+		// Capture-phase: catches the dialog's inner content scroll.
+		window.addEventListener("scroll", place, true);
+		window.addEventListener("resize", place);
+		return () => {
+			window.removeEventListener("scroll", place, true);
+			window.removeEventListener("resize", place);
+		};
+	}, [anchorTestid]);
+	if (style === null) return null;
+	return createPortal(
+		<div
+			data-testid={testid}
+			data-lh-menu=""
+			style={{ position: "fixed", right: style.right, top: style.top, zIndex: 60 }}
+			className={menuClass}
+		>
+			{children}
+		</div>,
+		document.body,
 	);
 }
 
@@ -141,6 +198,11 @@ export function AgentSection({
 	onSectionChange: (next: AgentSettings) => void;
 }) {
 	const [catalog, setCatalog] = useState<ModelCatalogEntry[] | null>(null);
+	/** The config-pinned model per background role — GET /api/models'
+	 *  rolePins (Platform stream, landing as a standalone commit; master
+	 *  routing 2026-09-20). Optional here: until the rebase the rows read
+	 *  "Default: config pin" and light up the moment the field arrives. */
+	const [rolePins, setRolePins] = useState<Record<string, { model: { provider: string; id: string }; thinkingLevel?: string }> | null>(null);
 	const [prompts, setPrompts] = useState<{ prober: SegmentInfo[]; teacher: SegmentInfo[] } | null>(null);
 	const [openSegment, setOpenSegment] = useState<string | null>(null);
 	const [segmentDraft, setSegmentDraft] = useState<Record<string, string>>({});
@@ -153,7 +215,10 @@ export function AgentSection({
 	useEffect(() => {
 		fetch("/api/models")
 			.then((r) => r.json())
-			.then((body: { models: ModelCatalogEntry[] }) => setCatalog(body.models))
+			.then((body: { models: ModelCatalogEntry[]; rolePins?: Record<string, { model: { provider: string; id: string }; thinkingLevel?: string }> }) => {
+				setCatalog(body.models);
+				if (body.rolePins) setRolePins(body.rolePins);
+			})
 			.catch(() => setCatalog(null));
 		fetch("/api/settings/prompts")
 			.then((r) => r.json())
@@ -171,6 +236,7 @@ export function AgentSection({
 		const onPointerDown = (e: PointerEvent) => {
 			const target = e.target as Node;
 			if (menuAnchorRef.current?.contains(target)) return;
+			if (target instanceof Element && target.closest("[data-lh-menu]")) return;
 			if (target instanceof Element && target.closest('[role="dialog"]')) {
 				setOpenMenu(null);
 			}
@@ -319,25 +385,34 @@ export function AgentSection({
 					const override = agent?.models?.[role];
 					const modelId = override?.model?.id ?? "";
 					const thinking = override?.thinkingLevel ?? "";
-					const chosen = catalog?.find((m) => m.id === modelId);
-					// The thinking levels this role can pick: the chosen
-					// model's when one is pinned; the standard list when the
-					// config pin applies (the pin's model is unknown client-side).
+					// The model whose levels govern the thinking list: the
+					// override, else the config pin (rolePins makes the
+					// default's levels resolvable when it's in the catalog);
+					// the standard ladder as the last fallback.
+					const effectiveId = modelId || rolePins?.[role]?.model.id || "";
+					const chosen = catalog?.find((m) => m.id === effectiveId);
 					const levels = chosen ? chosen.supportedLevels : THINKING_LEVELS;
+					// The row ALWAYS names the default (owner, 2026-09-20: the
+					// old "config pin applies" hint said nothing). rolePins
+					// carries the resolved default; the fallback reads until
+					// Platform's rolePins lands on main.
+					const defaultName = rolePins?.[role]?.model.id
+						? prettyModel(rolePins[role].model.id)
+						: "config pin";
 					const thisMenuOpen =
 						openMenu?.role === role ? openMenu.kind : null;
 					return (
 						<SettingsRow
 							key={role}
 							label={ROLE_LABEL[role]}
-							hint={modelId ? undefined : "Default — the config pin applies"}
+							hint={`Default: ${defaultName}`}
 							testid={`role-row-${role}`}
 						>
 							{/* The anchor for the outside-click contract is the
 							    span holding BOTH triggers of the open menu. */}
 							<span
 								ref={thisMenuOpen ? menuAnchorRef : undefined}
-								className={`relative flex items-center gap-2 ${thisMenuOpen ? "z-10" : ""}`}
+								className="relative flex items-center gap-2"
 							>
 								<MenuTrigger
 									value={modelId ? prettyModel(modelId) : ""}
@@ -346,6 +421,7 @@ export function AgentSection({
 									testid={`role-model-${role}`}
 									open={thisMenuOpen === "model"}
 									onClick={() => setOpenMenu(thisMenuOpen === "model" ? null : { role, kind: "model" })}
+									widthClass="min-w-20"
 								/>
 								<MenuTrigger
 									value={thinking}
@@ -354,11 +430,13 @@ export function AgentSection({
 									testid={`role-thinking-${role}`}
 									open={thisMenuOpen === "thinking"}
 									onClick={() => setOpenMenu(thisMenuOpen === "thinking" ? null : { role, kind: "thinking" })}
+									widthClass="w-20"
 								/>
 								{thisMenuOpen === "model" && (
-									<div
-										data-testid={`role-model-menu-${role}`}
-										className="absolute top-full right-0 z-40 mt-1 flex w-[22rem] flex-col rounded-xl border bg-card p-2 text-xs shadow-xl"
+									<AnchoredMenu
+										anchorTestid={`role-model-${role}`}
+										testid={`role-model-menu-${role}`}
+										menuClass="flex w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 									>
 										{defaultRow(
 											modelId === "",
@@ -376,12 +454,13 @@ export function AgentSection({
 											}}
 											footer="Applied to every run of this role"
 										/>
-									</div>
+									</AnchoredMenu>
 								)}
 								{thisMenuOpen === "thinking" && (
-									<div
-										data-testid={`role-thinking-menu-${role}`}
-										className="absolute top-full right-0 z-40 mt-1 flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+									<AnchoredMenu
+										anchorTestid={`role-thinking-${role}`}
+										testid={`role-thinking-menu-${role}`}
+										menuClass="flex w-44 flex-col gap-0.5 rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 									>
 										{defaultRow(
 											thinking === "",
@@ -398,7 +477,7 @@ export function AgentSection({
 												setOpenMenu(null);
 											}}
 										/>
-									</div>
+									</AnchoredMenu>
 								)}
 							</span>
 						</SettingsRow>
