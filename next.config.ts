@@ -19,8 +19,16 @@ const nextConfig: NextConfig = {
 	// pi-ai's provider catalog (39 JSON files) vanished from the trace and
 	// the server 500s on module load. Include the whole data dirs of the
 	// runtime-loaded engine packages.
+	// pdfjs-dist (sources v0 live smoke, 2026-09-19): its legacy build loads
+	// the node fake worker (pdf.worker.mjs) and our standard_fonts dir via
+	// runtime-resolved paths — invisible to the tracer. Bundling (without
+	// serverExternalPackages below) additionally breaks the worker's
+	// import.meta.url resolution inside .next/dev chunks — the live smoke
+	// caught it; unit tests run unbundled and never see it.
 	outputFileTracingIncludes: {
 		"*": [
+			"node_modules/pdfjs-dist/legacy/**/*",
+			"node_modules/pdfjs-dist/standard_fonts/**/*",
 			"node_modules/@earendil-works/pi-ai/dist/providers/data/**/*",
 			"node_modules/@earendil-works/pi-agent-core/dist/**/*.json",
 			// onnxruntime-node: the .node binding was traced, but its
@@ -38,6 +46,7 @@ const nextConfig: NextConfig = {
 		"@earendil-works/pi-ai",
 		"@earendil-works/pi-agent-core",
 		"@huggingface/transformers",
+		"pdfjs-dist", // sources v0: bundling breaks its node fake-worker path
 	],
 };
 

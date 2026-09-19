@@ -326,8 +326,12 @@ async function renderPdfPages(
 		const page = await browser.newPage();
 		await page.setViewport({ width: 1200, height: 1600, deviceScaleFactor: 1 });
 		await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
+		// Standard-font data as a file URL (live-smoke finding 2026-09-19:
+		// without it pdfjs renders non-embedded standard fonts via fallback);
+		// verbosity 0 = errors only (JBIG2 noise on scanned PDFs).
+		const fontsUrl = pathToFileURL(path.join(PATHS_nodeModules(), "pdfjs-dist", "standard_fonts") + path.sep).href;
 		const results = await page.evaluate(
-			async (b64pdf, workerUrl, pageNos, dpi) => {
+			async (b64pdf, workerUrl, pageNos, dpi, fontsUrl) => {
 				// window-scope dynamic import (Chrome evaluates this string in the
 				// shim page, not under Node)
 				const pdfjs = (await import(workerUrl)) as typeof import("pdfjs-dist");
@@ -335,7 +339,7 @@ async function renderPdfPages(
 				const bin = atob(b64pdf);
 				const bytes = new Uint8Array(bin.length);
 				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-				const doc = await pdfjs.getDocument({ data: bytes }).promise;
+				const doc = await pdfjs.getDocument({ data: bytes, standardFontDataUrl: fontsUrl, verbosity: 0 }).promise;
 				const out: Array<{ page: number; dataUrl: string; w: number; h: number }> = [];
 				for (const pageNo of pageNos) {
 					if (pageNo < 1 || pageNo > doc.numPages) continue;
@@ -355,6 +359,7 @@ async function renderPdfPages(
 			pdfjsUrl,
 			pages,
 			dpi,
+			fontsUrl,
 		);
 		return results.map((r) => ({
 			page: r.page,
