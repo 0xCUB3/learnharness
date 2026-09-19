@@ -63,7 +63,7 @@
 
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CoinsIcon, FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
+import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
 import { incrementalLayout, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { GraphCoverageControl } from "./graph-coverage.tsx";
@@ -234,11 +234,45 @@ function fmtRunCost(dollars: number | null): string {
 }
 
 /**
- * The graph-pipeline cost pill's expanded panel (2026-09 graph cost
- * metrics wave): stage totals (extraction / audit / cluster-naming —
- * dollars headline, tokens secondary) + the recent-runs list. Presenta-
- * tional: the fold happens server-side (core/cost-summary.ts); dollars
- * are inferred read-time, never stored.
+ * The graph-pipeline cost control (2026-09-20 placement wave): a bare
+ * cumulative-dollars number — no pill chrome (owner: "just a number"),
+ * hover-highlighted, click toggles the breakdown panel. Same dismiss
+ * pattern as the settings gear: outside click or Escape closes. The
+ * panel is viewport-capped + scrollable like the coverage dropdown.
+ */
+function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
+	const [open, setOpen] = useState(false);
+	// Click anywhere outside (or Escape) closes the panel — the root
+	// wraps button + panel, so the toggle itself keeps working.
+	const rootRef = useRef<HTMLDivElement>(null);
+	usePopoverDismiss(rootRef, open, () => setOpen(false));
+	return (
+		<div ref={rootRef} className="relative">
+			<button
+				type="button"
+				title="Graph pipeline costs — click for the breakdown"
+				aria-expanded={open}
+				onClick={() => setOpen((o) => !o)}
+				className={`rounded-lg px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent ${
+					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+				}`}
+			>
+				${costs.totalDollars.toFixed(2)}
+			</button>
+			{open && (
+				<div className="absolute right-0 top-full mt-2 max-h-[60vh] overflow-y-auto">
+					<GraphCostPanel costs={costs} />
+				</div>
+			)}
+		</div>
+	);
+}
+
+/**
+ * The cost control's expanded panel: stage totals (extraction / audit /
+ * cluster-naming — dollars headline, tokens secondary) + the recent-runs
+ * list. Presentational: the fold happens server-side
+ * (core/cost-summary.ts); dollars are inferred read-time, never stored.
  */
 function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 	const stageRows: [string, GraphCostSummary["stages"]["extraction"]][] = [
@@ -849,7 +883,6 @@ export function GraphView() {
 	// without a manual reload. Best-effort: a fetch failure never blocks
 	// the view — the pill just stays on its last numbers.
 	const [costs, setCosts] = useState<GraphCostSummary | null>(null);
-	const [costsOpen, setCostsOpen] = useState(false);
 	const refreshCosts = useCallback(() => {
 		fetch("/api/graph/costs")
 			.then((res) => res.json() as Promise<GraphCostSummary>)
@@ -1113,7 +1146,8 @@ export function GraphView() {
 			    threshold the row wraps to a second line instead of overflowing
 			    left over the header toggle cluster (92px gutter + 36px button);
 			    9rem keeps one clear column of air alongside it. */}
-			<div className="lh-no-drag absolute right-3 top-3 z-10 flex max-w-[calc(100%-9rem)] flex-wrap items-start gap-2">
+			<div className="lh-no-drag absolute right-3 top-3 z-10 flex flex-col items-end gap-2">
+			<div className="flex max-w-[calc(100%-9rem)] flex-wrap items-start gap-2">
 				{!isEmpty && (
 					<>
 					{/* Search — its own container (icon + input + no-match note). */}
@@ -1176,38 +1210,25 @@ export function GraphView() {
 				)}
 			</div>
 
-			{/* Bottom-left stack (2026-09-17 merge): the graph-pipeline cost
-			    pill + its expandable panel, and the running-pipeline pills —
-			    one container so they stack instead of overlapping. The pill
-			    shows cumulative pipeline spend (dollars headline, inferred
-			    read-time — never stored); click toggles the breakdown. */}
-			{(costs?.runs.length ?? 0) > 0 || pipelineRuns.length > 0 ? (
-				<div className="absolute bottom-3 left-3 z-10 flex flex-col items-start gap-1.5">
-					{costsOpen && costs && <GraphCostPanel costs={costs} />}
-					{costs && costs.runs.length > 0 && (
-						<button
-							type="button"
-							onClick={() => setCostsOpen((open) => !open)}
-							className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:bg-accent"
-							aria-expanded={costsOpen}
-						>
-							<CoinsIcon className="size-3.5 shrink-0" />
-							<span className="text-foreground tabular-nums">${costs.totalDollars.toFixed(2)}</span>
-						</button>
-					)}
-					{pipelineRuns.map((run) => (
-						<div
-							key={run.chatId}
-							className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
-						>
-							<Loader2Icon className="size-3.5 shrink-0 animate-spin" />
-							<span className="capitalize">{run.phase}</span>
-							<span className="max-w-48 truncate text-foreground">{run.title}</span>
-							<span className="tabular-nums">{Math.max(0, Math.round((Date.now() - run.startedAt) / 1000))}s</span>
-						</div>
-					))}
+			{/* Top-right tail (owner, 2026-09-20): the pipeline cost number —
+			    just a number, hover-highlighted, dropdown breakdown — then
+			    the running-pipeline pills under it. Lives BELOW the actions
+			    row so narrow windows can never push it over the composer
+			    the way the old bottom-left stack did; the whole top-right
+			    cluster is one column, right-aligned. */}
+			{costs && costs.runs.length > 0 && <GraphCostControl costs={costs} />}
+			{pipelineRuns.map((run) => (
+				<div
+					key={run.chatId}
+					className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
+				>
+					<Loader2Icon className="size-3.5 shrink-0 animate-spin" />
+					<span className="capitalize">{run.phase}</span>
+					<span className="max-w-48 truncate text-foreground">{run.title}</span>
+					<span className="tabular-nums">{Math.max(0, Math.round((Date.now() - run.startedAt) / 1000))}s</span>
 				</div>
-			) : null}
+			))}
+			</div>
 
 			{selected && !isEmpty && (
 				<div
