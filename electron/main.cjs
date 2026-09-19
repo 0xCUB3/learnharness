@@ -4,7 +4,7 @@
  * What this process is and is not:
  *   IS:  a thin launcher + security guard around the app's real server —
  *        `next build`'s standalone server.js (Next 16), spawned as a child
- *        on 127.0.0.1 with the BYOK keys and the LH_DATA_DIR seam.
+ *        on 127.0.0.1 with the BYOK auth file and the LH_DATA_DIR seam.
  *   NOT: a host for any app logic. Everything — teacher turns, extraction,
  *        the graph — runs in the Next server, unchanged.
  *
@@ -17,8 +17,11 @@
  *   - all mutable state under userData (never inside the .app bundle —
  *     translocated apps are read-only);
  *   - keys ride the child's ENV, never argv; auth.json (BYOK) is a flat
- *     {VAR: value} JSON map, plaintext, mode 0600, hand-edited until the
- *     settings milestone builds the UI.
+ *     {VAR: value} JSON map, plaintext, mode 0600 — server-managed since
+ *     the auth-keys wave (2026-09-19): the child reads/writes it DIRECTLY
+ *     (LH_AUTH_FILE below) and reflects values into its own env. The old
+ *     spawn-time env injection retired with that wave — a copy made here
+ *     would shadow every settings-page key change until restart.
  */
 
 const { app, BrowserWindow, Menu, ipcMain, session, shell } = require("electron");
@@ -83,22 +86,12 @@ function freePort() {
 	});
 }
 
-/** BYOK keys: auth.json in userData, flat {VAR: value} map, 0600.
- *  Absent file = no keys injected — the app runs, model calls fail with the
- *  engine's own clear error until the settings milestone adds the UI.
- *  Real environment variables win over the file (process.env precedence is
- *  also Next's own env loading order, so this stays consistent). */
-function authEnv() {
-	try {
-		const raw = JSON.parse(fs.readFileSync(AUTH_FILE(), "utf-8"));
-		if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-		return Object.fromEntries(
-			Object.entries(raw).filter(([, v]) => typeof v === "string").map(([k, v]) => [k, v]),
-		);
-	} catch {
-		return {}; // absent or corrupt — the documented state is "no keys yet"
-	}
-}
+/** BYOK keys: auth.json in userData, flat {VAR: value} map, 0600 —
+ *  SERVER-MANAGED since the auth-keys wave (2026-09-19). This shell no
+ *  longer reads or injects it: the child gets LH_AUTH_FILE below and does
+ *  its own read/reflect/write, so a key saved in the settings page takes
+ *  effect on the next model call — no restart. Real environment variables
+ *  still win over the file inside the child (its documented rule). */
 
 function log(line) {
 	const stamp = new Date().toISOString();
@@ -123,12 +116,15 @@ function startServer(port) {
 				cwd: path.dirname(serverEntry()),
 				env: {
 					...process.env,
-					...authEnv(),
 					ELECTRON_RUN_AS_NODE: "1",
 					NODE_ENV: "production",
 					PORT: String(port),
 					HOSTNAME: "127.0.0.1", // the server defaults to 0.0.0.0 — never
 					LH_DATA_DIR: DATA_DIR(),
+					// The auth/keys store — the child reads AND writes this file itself
+					// (no env injection anymore: a spawn-time copy would shadow every
+					// settings-page key change until restart; env wins over file).
+					LH_AUTH_FILE: AUTH_FILE(),
 				},
 				stdio: ["ignore", "pipe", "pipe"],
 			},
