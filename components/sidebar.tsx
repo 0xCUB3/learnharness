@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
@@ -482,6 +482,20 @@ function SessionsSidebar() {
 					    flex-1, so this pins to the bottom. Sidebar closed = the
 					    learner opted out (no ambient signal, user decision). */}
 					<ActivitySection />
+
+					{/* Settings entry (thin settings wave): the same row language
+					    as New session — quiet, bottom-pinned, one chord away is
+					    mod+, (the keyboard registry's open-settings action). */}
+					<div className="px-3 pb-3 pt-1">
+						<Link
+							href="/settings"
+							data-testid="settings-entry"
+							className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						>
+							<SettingsIcon className="size-3" />
+							Settings
+						</Link>
+					</div>
 				</div>
 			</aside>
 	);

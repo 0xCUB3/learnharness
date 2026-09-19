@@ -48,6 +48,8 @@
 	   the reskin's hand-tuned 16.5 to the ladder's 16.) */
 	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
+	/* Markdown heading weight (appearance settings; 900 = the Black cut). */
+	--lh-heading-weight: 900;
 }
 
 /* The app is always dark (<html class="dark">); mirror the same values so
@@ -80,6 +82,8 @@
 	   the reskin's hand-tuned 16.5 to the ladder's 16.) */
 	--lh-prose-size: 16px;
 	--lh-prose-leading: 1.5;
+	/* Markdown heading weight (appearance settings; 900 = the Black cut). */
+	--lh-heading-weight: 900;
 }
 
 /* CMU Serif bold (titles) — bundled local file, no CDN dependency. */
@@ -185,7 +189,7 @@ body {
    :where keeps specificity zero. Chrome titles (CMU Serif) don't live
    under .lh-prose and stay untouched. */
 .lh-prose :where(h1, h2, h3, h4, h5, h6) {
-	font-weight: 900;
+	font-weight: var(--lh-heading-weight, 900);
 }
 
 /* lh-input (owner, typography round 2): lh-prose's 1.5 READING leading

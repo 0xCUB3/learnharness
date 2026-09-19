@@ -39,7 +39,8 @@ export type KeyAction =
 	| "question-next-row"
 	| "question-prev-row"
 	| "question-pick-row"
-	| "question-submit";
+	| "question-submit"
+	| "open-settings";
 
 /** Where the cheat sheet groups an action (display only — dispatch is
  *  global; a seam that isn't mounted simply no-ops). */
@@ -59,6 +60,7 @@ export interface KeyActionDef {
 
 export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "toggle-dictation", label: "Toggle dictation", scope: "global", binding: "mod+d" },
+	{ id: "open-settings", label: "Open settings", scope: "global", binding: "mod+," },
 	{ id: "open-model-picker", label: "Model selector", scope: "global", binding: "mod+k" },
 	{ id: "cycle-thinking", label: "Cycle thinking level", scope: "global", binding: "shift+tab" },
 	{ id: "toggle-sidebar", label: "Toggle sessions sidebar", scope: "global", binding: "mod+b" },
@@ -91,7 +93,7 @@ const STORAGE_KEY = "lh:keymap";
 /** localStorage overrides ({actionId: binding}) — read once per module
  *  instance; the settings editor will write this key. Guarded: SSR and a
  *  corrupt/absent store both fall back to defaults. */
-function loadOverrides(): Partial<Record<KeyAction, string>> {
+export function loadOverrides(): Partial<Record<KeyAction, string>> {
 	if (typeof window === "undefined") return {};
 	try {
 		const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -102,6 +104,19 @@ function loadOverrides(): Partial<Record<KeyAction, string>> {
 		/* corrupt store = defaults */
 	}
 	return {};
+}
+
+/** Write the full overrides map ({actionId: binding}) — the settings
+ *  editor's rebind/reset persistence. Guarded: SSR no-ops. An empty
+ *  map clears the store entirely (all-defaults). */
+export function saveOverrides(overrides: Partial<Record<KeyAction, string>>): void {
+	if (typeof window === "undefined") return;
+	try {
+		if (Object.keys(overrides).length) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
+		else window.localStorage.removeItem(STORAGE_KEY);
+	} catch {
+		/* storage unavailable = overrides don't persist, defaults keep working */
+	}
 }
 
 /** The live key map: defaults with user overrides applied. */

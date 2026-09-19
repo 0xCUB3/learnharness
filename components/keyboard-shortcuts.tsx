@@ -94,6 +94,9 @@ export function KeyboardShortcuts() {
 				case "new-session":
 					handlersRef.current.router.push("/chat/new");
 					break;
+				case "open-settings":
+					handlersRef.current.router.push("/settings");
+					break;
 				case "jump-graph":
 					handlersRef.current.router.push("/");
 					break;

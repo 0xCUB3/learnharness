@@ -4,6 +4,7 @@ import "katex/dist/katex.min.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
 import { ActivityProvider } from "@/components/activity-dock";
+import { AppearanceProvider } from "@/components/settings/appearance";
 
 // Chrome = JetBrains Mono, teaching prose = Source Sans 3, titles = CMU
 // Serif (the bundled lh-cmu @font-face in globals.css — no CDN).
@@ -19,11 +20,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 	return (
 		<html lang="en" className={`dark ${ui.variable} ${prose.variable}`}>
 			<body className="min-h-dvh antialiased">
-			<SidebarProvider>
-				<ActivityProvider>
-					<AppShell>{children}</AppShell>
-				</ActivityProvider>
-			</SidebarProvider>
+			<AppearanceProvider>
+				<SidebarProvider>
+					<ActivityProvider>
+						<AppShell>{children}</AppShell>
+					</ActivityProvider>
+				</SidebarProvider>
+			</AppearanceProvider>
 		</body>
 		</html>
 	);
