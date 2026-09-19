@@ -10,6 +10,8 @@ import { describe, it } from "node:test";
 import { appearanceVars, derivedPalette, resolveAppearance } from "../components/settings/appearance.tsx";
 import { composePromptSwitch, composeRoleModel, composeTool } from "../components/settings/agent-section.tsx";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
+import { classifyKeys, keyStatusLine, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
+import type { AuthKeyStatus } from "../src/core";
 
 describe("resolveAppearance — delta over factory", () => {
 	it("absent everything = the factory view", () => {
@@ -135,5 +137,77 @@ describe("nextOverrides — the rebind persistence map", () => {
 	it("null = reset that action to its default (key removed)", () => {
 		const next = nextOverrides({ "toggle-sidebar": "mod+b", find: "mod+f" }, "toggle-sidebar", null);
 		assert.deepEqual(next, { find: "mod+f" });
+	});
+});
+
+describe("classifyKeys — the Keys section's two-group projection", () => {
+	const synth = (id: string, present = false): AuthKeyStatus => ({
+		id,
+		info: null,
+		present,
+		masked: present ? `…${id.slice(-4)} (32 chars)` : null,
+		source: present ? "file" : "none",
+		shadowedByEnv: false,
+	});
+	const providers: ProviderKeyInfo[] = [
+		{ id: "groq", envVar: "GROQ_API_KEY", label: "Groq" },
+		{ id: "deepseek", envVar: "DEEPSEEK_API_KEY", label: "DeepSeek" },
+		{ id: "openrouter", envVar: "OPENROUTER_API_KEY", label: "OpenRouter" },
+	];
+
+	it("OpenRouter is pinned: synthesized when absent (first boot), found when present", () => {
+		const none = classifyKeys([], providers);
+		assert.equal(none.openrouter.id, "OPENROUTER_API_KEY");
+		assert.ok(!none.openrouter.present);
+		const stored = classifyKeys([synth("OPENROUTER_API_KEY", true)], providers);
+		assert.ok(stored.openrouter.present);
+	});
+
+	it("stored provider keys land in providerRows with their provider entry", () => {
+		const out = classifyKeys([synth("GROQ_API_KEY", true)], providers);
+		assert.equal(out.providerRows.length, 1);
+		assert.equal(out.providerRows[0]!.provider?.id, "groq");
+		// the Add dropdown no longer offers groq
+		assert.ok(!out.addable.some((p) => p.id === "groq"));
+		assert.ok(out.addable.some((p) => p.id === "deepseek"));
+	});
+
+	it("curated tool ids always render (synthesized when absent)", () => {
+		const out = classifyKeys([synth("DEEPGRAM_API_KEY", true)], undefined);
+		assert.deepEqual(out.toolRows.map((r) => r.id), [
+			"DEEPGRAM_API_KEY",
+			"GOOGLE_SEARCH_API_KEY",
+			"GOOGLE_CSE_ID",
+		]);
+		assert.ok(out.toolRows[0]!.present);
+		assert.ok(!out.toolRows[1]!.present);
+	});
+
+	it("unknown file vars surface read-only, out of the provider rows", () => {
+		const out = classifyKeys([synth("PLANS_LOGIN_TOKEN", true)], providers);
+		assert.equal(out.unknownRows.length, 1);
+		assert.equal(out.providerRows.length, 0);
+	});
+
+	it("providers seam absent = addable empty, nothing crashes", () => {
+		const out = classifyKeys([], undefined);
+		assert.deepEqual(out.addable, []);
+	});
+});
+
+describe("keyStatusLine — the masked at-a-glance state", () => {
+	it("present file key: tail, chars, source", () => {
+		assert.equal(
+			keyStatusLine({ id: "X", info: null, present: true, masked: "…ab12 (64 chars)", source: "file", shadowedByEnv: false }),
+			"…ab12 · 64 chars · saved",
+		);
+	});
+
+	it("env-sourced key reads 'environment'", () => {
+		assert.ok(keyStatusLine({ id: "X", info: null, present: true, masked: "…ab12 (64 chars)", source: "env", shadowedByEnv: false })?.endsWith("environment"));
+	});
+
+	it("absent key has no line", () => {
+		assert.equal(keyStatusLine({ id: "X", info: null, present: false, masked: null, source: "none", shadowedByEnv: false }), null);
 	});
 });

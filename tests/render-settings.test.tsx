@@ -14,6 +14,7 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TOGGLE_TOOLS, AgentSection } from "../components/settings/agent-section.tsx";
 import { AppearanceSection, GraphSection } from "../components/settings/appearance-section.tsx";
+import { KeysSection } from "../components/settings/keys-section.tsx";
 import { KeyboardSection } from "../components/settings/keyboard-section.tsx";
 import { SettingsDialogBody, SettingsDialogProvider } from "../components/settings/settings-dialog.tsx";
 import { KEYBOARD_ACTIONS } from "../src/core/index.ts";
@@ -39,12 +40,12 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 		assert.ok(!html.includes("settings-dialog"));
 	});
 
-	it("the dialog frame: role=dialog + the ✕ + the five-section nav, General active", () => {
+	it("the dialog frame: role=dialog + the ✕ + the six-section nav, General active", () => {
 		const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} />);
 		assert.ok(html.includes('role="dialog"'));
 		assert.ok(html.includes('aria-modal="true"'));
 		assert.ok(html.includes('aria-label="Close settings"'));
-		for (const id of ["general", "agent", "appearance", "graph", "keyboard"]) {
+		for (const id of ["general", "keys", "agent", "appearance", "graph", "keyboard"]) {
 			assert.ok(html.includes(`data-testid="settings-nav-${id}"`), id);
 		}
 		// General is the landing section; the others are not current.
@@ -135,6 +136,13 @@ describe("GraphSection — the dependency ladder", () => {
 		assert.ok(!tagOf(html, "toggle-graph-embedding").includes("disabled"), "embedding touchable");
 		assert.ok(!tagOf(html, "toggle-graph-clustering").includes("disabled"), "clustering touchable");
 		assert.ok(tagOf(html, "toggle-graph-labeling").includes("disabled"), "labeling grayed");
+	});
+});
+
+describe("KeysSection (thin SSR)", () => {
+	it("SSR = the loading state (effects never fire)", () => {
+		const html = renderToStaticMarkup(<KeysSection />);
+		assert.ok(html.includes("Loading keys…"));
 	});
 });
 

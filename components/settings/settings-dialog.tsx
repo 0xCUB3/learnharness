@@ -39,6 +39,7 @@ import {
 import { useAppearance } from "./appearance.tsx";
 import { SettingsSection, SettingsRow, Toggle } from "./controls.tsx";
 import { AgentSection } from "./agent-section.tsx";
+import { KeysSection } from "./keys-section.tsx";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 
@@ -47,6 +48,7 @@ import { KeyboardSection } from "./keyboard-section.tsx";
  *  real question users ask). */
 const SECTIONS = [
 	{ id: "general", label: "General" },
+	{ id: "keys", label: "Keys" },
 	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance" },
 	{ id: "graph", label: "Graph" },
@@ -255,6 +257,11 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 											}
 										/>
 									</SettingsRow>
+								</SettingsSection>
+							)}
+							{active === "keys" && (
+								<SettingsSection title="Keys" testid="section-keys">
+									<KeysSection />
 								</SettingsSection>
 							)}
 							{active === "agent" && (
