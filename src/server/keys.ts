@@ -28,9 +28,13 @@
 
 import {
 	AUTH_KEYS,
+	AUTH_PROVIDER_KEYS,
+	AUTH_PROVIDER_ENV_VARS,
 	type AuthKeyInfo,
 	type AuthKeyStatus,
+	genericProviderKeyGuard,
 	isKnownAuthKey,
+	isProviderEnvVar,
 	maskKey,
 	validateKeyShape,
 } from "../core/auth-keys.ts";
@@ -54,6 +58,20 @@ function boot(): AuthBoot {
 	return g[BOOT_KEY];
 }
 
+/** Is `id` a WRITABLE key name — curated catalog or model-provider env
+ *  var (provider-keys interlude: PUT/DELETE accept both). */
+export function isWritableAuthKey(id: string): boolean {
+	return isKnownAuthKey(id) || isProviderEnvVar(id);
+}
+
+/** The settings page's provider dropdown: every pi-ai provider that takes
+ *  a plain key ({id, envVar, label} — no-drift-pinned, see the table's doc
+ *  in core/auth-keys.ts and tests/auth-provider-keys.test.ts). Sorted by
+ *  id for a stable payload. */
+export function providerKeyList() {
+	return [...AUTH_PROVIDER_KEYS].sort((a, b) => a.id.localeCompare(b.id));
+}
+
 /**
  * The boot fill-gap — idempotent. First call snapshots which managed names
  * are real env; later calls (HMR re-import, or after a hand-edit) only fill
@@ -63,7 +81,14 @@ function boot(): AuthBoot {
 export function initAuthEnv(): void {
 	const record = boot();
 	const fileVars = authStore.authVars();
-	const managed = new Set<string>([...Object.keys(fileVars), ...AUTH_KEYS.map((k) => k.id)]);
+	const managed = new Set<string>([
+		...Object.keys(fileVars),
+		...AUTH_KEYS.map((k) => k.id),
+		// Provider env vars are managed names too (provider-keys interlude):
+		// an env-exported OPENAI_API_KEY with a file copy gets honest shadow
+		// semantics, exactly like the curated vars.
+		...AUTH_PROVIDER_KEYS.map((p) => p.envVar),
+	]);
 	if (record.realEnv.size === 0 && record.fillGap.size === 0) {
 		// First init in this process: what's already in the env is REAL env.
 		for (const name of managed) {
@@ -79,11 +104,10 @@ export function initAuthEnv(): void {
 	}
 }
 
-/** The managed name-space: catalog keys + whatever the file holds (unknown
- *  vars are managed too — preserved, surfaced, env-reflected — just not
- *  editable through the curated API). */
+/** Is this env-var name one the keys system manages (curated, provider,
+ *  or held in the file)? */
 function isManagedName(name: string): boolean {
-	return isKnownAuthKey(name) || name in authStore.authVars();
+	return isWritableAuthKey(name) || name in authStore.authVars();
 }
 
 /**
@@ -94,8 +118,15 @@ export function resolveKeyStatuses(
 	fileVars: Record<string, string>,
 	env: Record<string, string | undefined>,
 	realEnv: ReadonlySet<string>,
+	/** The model-provider env vars (provider-keys interlude): PRESENT ones
+	 *  join the status rows — absent ones never spam (the dropdown is the
+	 *  discovery surface). Curated keys always get rows, present or not. */
+	providerEnvVars: ReadonlySet<string> = new Set(),
 ): AuthKeyStatus[] {
 	const ids = new Set<string>([...AUTH_KEYS.map((k) => k.id), ...Object.keys(fileVars)]);
+	for (const envVar of providerEnvVars) {
+		if (env[envVar] !== undefined || fileVars[envVar] !== undefined) ids.add(envVar);
+	}
 	const rows: AuthKeyStatus[] = [];
 	for (const id of ids) {
 		const envValue = env[id];
@@ -119,7 +150,7 @@ export function resolveKeyStatuses(
 
 /** The GET view: every curated key (present or not) + unknown file vars. */
 export function keyStatuses(): AuthKeyStatus[] {
-	return resolveKeyStatuses(authStore.authVars(), process.env, boot().realEnv);
+	return resolveKeyStatuses(authStore.authVars(), process.env, boot().realEnv, AUTH_PROVIDER_ENV_VARS);
 }
 
 /** The live value for one var, env-first (the env-wins rule) — the canonical
@@ -137,7 +168,7 @@ export function keyValue(id: string): string | undefined {
  * reports shadowedByEnv so the page can explain it).
  */
 export function saveKey(id: string, value: string): { ok: true; status: AuthKeyStatus } | { ok: false; error: string } {
-	const shape = validateKeyShape(id, value);
+	const shape = isProviderEnvVar(id) ? genericProviderKeyGuard(id, value) : validateKeyShape(id, value);
 	if (!shape.ok) return { ok: false, error: shape.error };
 	const trimmed = value.trim();
 	authStore.setAuthVar(id, trimmed);

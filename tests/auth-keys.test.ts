@@ -8,38 +8,35 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { AUTH_KEYS, isKnownAuthKey, maskKey, validateKeyShape } from "../src/core/auth-keys.ts";
+import { AUTH_KEYS, genericProviderKeyGuard, isKnownAuthKey, maskKey, validateKeyShape } from "../src/core/auth-keys.ts";
 
 describe("the catalog", () => {
-	it("is exactly the four curated keys, ids = env-var names", () => {
+	it("is exactly the three CURATED app-service keys (provider keys live in the provider table)", () => {
 		assert.deepEqual(
 			AUTH_KEYS.map((k) => k.id),
-			["OPENROUTER_API_KEY", "DEEPGRAM_API_KEY", "GOOGLE_SEARCH_API_KEY", "GOOGLE_CSE_ID"],
+			["DEEPGRAM_API_KEY", "GOOGLE_SEARCH_API_KEY", "GOOGLE_CSE_ID"],
 		);
 		for (const k of AUTH_KEYS) {
 			assert.ok(k.label.length > 0, `${k.id} has a label`);
 			assert.ok(k.description.length > 0, `${k.id} has a description`);
 			assert.ok(k.docsUrl.startsWith("https://"), `${k.id} has a docs link`);
 		}
+		// OPENROUTER_API_KEY graduated to the provider table (owner decision,
+		// provider-keys interlude) — not curated anymore.
+		assert.ok(!isKnownAuthKey("OPENROUTER_API_KEY"));
 	});
 
 	it("isKnownAuthKey: catalog yes, everything else no", () => {
-		assert.ok(isKnownAuthKey("OPENROUTER_API_KEY"));
+		assert.ok(isKnownAuthKey("DEEPGRAM_API_KEY"));
 		assert.ok(isKnownAuthKey("GOOGLE_CSE_ID"));
-		assert.ok(!isKnownAuthKey("OPENROUTER"));
+		assert.ok(!isKnownAuthKey("OPENROUTER_API_KEY"));
+		assert.ok(!isKnownAuthKey("OPENAI_API_KEY"), "provider vars are a separate surface");
 		assert.ok(!isKnownAuthKey("FUTURE_PLANS_TOKEN"));
 		assert.ok(!isKnownAuthKey(""));
 	});
 });
 
-describe("validateKeyShape (the 400 gate)", () => {
-	it("OpenRouter: sk-or- prefix required, length floor past it", () => {
-		assert.deepEqual(validateKeyShape("OPENROUTER_API_KEY", "sk-or-v1-abc123def456ghi789jkl012"), { ok: true });
-		assert.ok(!validateKeyShape("OPENROUTER_API_KEY", "sk-proj-abcdefghij").ok, "wrong family (OpenAI paste)");
-		assert.ok(!validateKeyShape("OPENROUTER_API_KEY", "sk-or-").ok, "prefix alone is a truncation");
-		assert.ok(!validateKeyShape("OPENROUTER_API_KEY", "  ").ok, "empty fails");
-	});
-
+describe("validateKeyShape (the 400 gate — curated keys)", () => {
 	it("Google API key: AIza prefix required", () => {
 		assert.ok(validateKeyShape("GOOGLE_SEARCH_API_KEY", "AIzaSyD-abcdef1234").ok);
 		assert.ok(!validateKeyShape("GOOGLE_SEARCH_API_KEY", "sk-or-v1-abcdefghij").ok, "wrong family");
@@ -61,13 +58,33 @@ describe("validateKeyShape (the 400 gate)", () => {
 	});
 
 	it("trims surrounding paste whitespace before checking", () => {
-		assert.ok(validateKeyShape("OPENROUTER_API_KEY", "  sk-or-v1-abc123def456  \n").ok);
+		assert.ok(validateKeyShape("DEEPGRAM_API_KEY", `  ${"d".repeat(40)}  `).ok);
 	});
 
 	it("unknown ids are rejected with the supported list", () => {
 		const r = validateKeyShape("SOMETHING_ELSE", "whatever");
 		assert.ok(!r.ok);
-		if (!r.ok) assert.match(r.error, /SOMETHING_ELSE.*OPENROUTER_API_KEY/);
+		if (!r.ok) assert.match(r.error, /SOMETHING_ELSE.*DEEPGRAM_API_KEY/);
+	});
+});
+
+describe("genericProviderKeyGuard (model-provider keys — paste hygiene only)", () => {
+	it("accepts any ≥12-char whitespace-free value (families vary)", () => {
+		assert.deepEqual(genericProviderKeyGuard("OPENROUTER_API_KEY", "sk-or-v1-abc123"), { ok: true });
+		assert.deepEqual(genericProviderKeyGuard("OPENAI_API_KEY", "whaterver-value-here"), { ok: true });
+		assert.deepEqual(genericProviderKeyGuard("HF_TOKEN", "hf_xxxxxxxx9999"), { ok: true });
+	});
+
+	it("rejects truncations and whitespace — the only guards", () => {
+		const short = genericProviderKeyGuard("ZAI_API_KEY", "short");
+		assert.ok(!short.ok);
+		if (!short.ok) assert.match(short.error, /at least 12/);
+		assert.ok(!genericProviderKeyGuard("OPENAI_API_KEY", "has whitespace now").ok);
+		assert.ok(!genericProviderKeyGuard("OPENAI_API_KEY", "   ").ok);
+	});
+
+	it("trims before checking", () => {
+		assert.ok(genericProviderKeyGuard("OPENROUTER_API_KEY", "  sk-or-v1-xyz999  ").ok);
 	});
 });
 

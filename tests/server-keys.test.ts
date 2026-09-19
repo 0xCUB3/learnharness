@@ -26,6 +26,7 @@ for (const varName of [
 	"DEEPGRAM_API_KEY",
 	"GOOGLE_SEARCH_API_KEY",
 	"GOOGLE_CSE_ID",
+	"OPENAI_API_KEY",
 	"FUTURE_PLANS_TOKEN",
 ]) {
 	delete process.env[varName];
@@ -48,7 +49,7 @@ fs.writeFileSync(
 process.env.OPENROUTER_API_KEY = "sk-or-v1-envvalue99";
 
 // Import AFTER env setup — module init runs the boot fill-gap + snapshot.
-const { deleteKey, initAuthEnv, keyStatuses, keyValue, resolveKeyStatuses, saveKey } = await import(
+const { deleteKey, initAuthEnv, keyStatuses, keyValue, resolveKeyStatuses, saveKey, isWritableAuthKey } = await import(
 	"../src/server/keys.ts"
 );
 const { authStore } = await import("../src/store/auth.ts");
@@ -58,6 +59,7 @@ const ENV_OWNED = "sk-or-v1-envvalue99";
 after(() => {
 	delete process.env.OPENROUTER_API_KEY;
 	delete process.env.DEEPGRAM_API_KEY;
+	delete process.env.OPENAI_API_KEY;
 	fs.rmSync(TMP, { recursive: true, force: true });
 });
 
@@ -145,6 +147,49 @@ describe("saveKey / deleteKey (immediate effect, no restart)", () => {
 	it("re-running initAuthEnv is idempotent — deleted vars never resurrect", () => {
 		initAuthEnv();
 		assert.equal(process.env.DEEPGRAM_API_KEY, undefined, "file entry gone → no re-fill");
+	});
+
+	describe("model-provider keys (provider-keys interlude)", () => {
+		it("absent provider keys do NOT spam status rows — the dropdown is discovery", () => {
+			const rows = keyStatuses().map((s) => s.id);
+			assert.ok(!rows.includes("OPENAI_API_KEY"), "never saved → no row");
+			assert.ok(!rows.includes("ZAI_API_KEY"));
+		});
+
+		it("save via provider env var: generic guard, reflected immediately", () => {
+			const value = "sk-throwaway-openai-0123456789"; // never a real secret
+			const r = saveKey("OPENAI_API_KEY", value);
+			assert.ok(r.ok);
+			assert.equal(process.env.OPENAI_API_KEY, value, "env updated immediately");
+			assert.equal(authStore.authVars().OPENAI_API_KEY, value, "file updated");
+			const row = keyStatuses().find((s) => s.id === "OPENAI_API_KEY")!;
+			assert.ok(row.present);
+			assert.equal(row.source, "file", "fill-gap reflection — origin is the store");
+		});
+
+		it("provider truncations/whitespace are 400s (paste hygiene only)", () => {
+			assert.ok(!saveKey("OPENAI_API_KEY", "short").ok);
+			assert.ok(!saveKey("OPENAI_API_KEY", "has whitespace now").ok);
+			// no family check anymore — any ≥12-char token passes
+			assert.ok(saveKey("OPENROUTER_API_KEY", "not-sk-or-but-12chars").ok);
+		});
+
+		it("isWritableAuthKey: curated ∪ provider env vars; unknown stays unwritable", () => {
+			assert.ok(isWritableAuthKey("DEEPGRAM_API_KEY"));
+			assert.ok(isWritableAuthKey("OPENROUTER_API_KEY"));
+			assert.ok(isWritableAuthKey("OPENAI_API_KEY"));
+			assert.ok(!isWritableAuthKey("FUTURE_PLANS_TOKEN"));
+			assert.ok(!isWritableAuthKey("ANTHROPIC_AUTH_TOKEN"), "anthropic alternates stay env-only");
+		});
+
+		it("delete of a provider key: env + file both cleared", () => {
+			deleteKey("OPENAI_API_KEY");
+			assert.equal(process.env.OPENAI_API_KEY, undefined);
+			assert.ok(!("OPENAI_API_KEY" in authStore.authVars()));
+			// cleanup the openrouter save from the guard test too
+			deleteKey("OPENROUTER_API_KEY");
+			assert.ok(!("OPENROUTER_API_KEY" in authStore.authVars()));
+		});
 	});
 });
 
