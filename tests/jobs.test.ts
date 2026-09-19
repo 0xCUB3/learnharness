@@ -37,7 +37,9 @@ import {
 	steerDelivered,
 	type DemoResult,
 	type JobUsage,
+	type PdfResult,
 	type ResearchResult,
+	type SubagentArtifactData,
 	type SteerMessage,
 	type SubagentSteerMessage,
 	type VisualResult,
@@ -55,7 +57,7 @@ import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { persistTurn, withMessageIds } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
-import { createJobRunner, researchModelOverride } from "../src/agent/subagents/runner.ts";
+import { createJobRunner, pdfModelOverride, researchModelOverride } from "../src/agent/subagents/runner.ts";
 import type { PiEngine } from "../src/agent/models.ts";
 import { PATHS } from "../config.ts";
 
@@ -287,6 +289,24 @@ describe("steer helpers (contracts.ts)", () => {
 			assert.ok(text.type === "text" && !text.text.includes("rendered in the lesson"), "failure text never claims the artifact landed");
 		}
 		assert.ok(failResearch.parts[0].type === "text" && failResearch.parts[0].text.includes("flag the uncertainty"));
+	});
+
+	it("pdf steers (sources v0): brief + page citations on success, PDF failed: shape on failure, abort wording per kind", () => {
+		const pdf: PdfResult = { path: "/tmp/doc.pdf", question: "q?", brief: "The formula is on p. 2.", pagesConsulted: [1, 2] };
+		const ok = buildSubagentSteer({ id: "jp", kind: "pdf", toolCallId: "cp" }, pdf);
+		assert.ok(ok.parts[0].type === "text" && ok.parts[0].text.includes("page citations"), "the teacher is told to cite pages");
+		assert.ok(ok.parts[0].type === "text" && ok.parts[0].text.includes("The formula is on p. 2."));
+		assert.equal(ok.parts[1].type, "data-subagent-artifact");
+		assert.equal((ok.parts[1] as { data: SubagentArtifactData }).data.kind, "pdf");
+		assert.deepEqual((ok.parts[1] as { data: SubagentArtifactData }).data.result, pdf);
+		// failure shape mirrors research
+		assert.equal(isSubagentFailure("pdf", pdf), false);
+		assert.equal(isSubagentFailure("pdf", { ...pdf, brief: "PDF failed: unreadable" }), true);
+		const fail = buildSubagentSteer({ id: "jf", kind: "pdf", toolCallId: "cf" }, { ...pdf, brief: "PDF failed: unreadable" });
+		assert.ok(fail.parts[0].type === "text" && fail.parts[0].text.includes("flag the gap"));
+		// abort wording names the PDF job
+		const aborted = buildAbortSteer({ id: "ja", kind: "pdf", toolCallId: "ca" });
+		assert.ok(aborted.parts[0].type === "text" && aborted.parts[0].text.includes("PDF reading job"));
 	});
 });
 
@@ -558,6 +578,87 @@ describe("research runner (async protocol §3)", () => {
 
 // ─── the researcher agent construction (model resolution seam) ──────────────
 
+
+describe("pdf runner (sources v0)", () => {
+	const PDF_FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-3page.pdf");
+	const PDF_INPUT = { path: PDF_FIXTURE, question: "What is the integral of x dx?" };
+
+	/** A pdf-reader that triages, extracts pages 1-2, then briefs. */
+	function pdfReaderModel(): PiEngine {
+		return fauxEngine([
+			fauxAssistantMessage([fauxToolCall("pdf_info", {}, { id: "i1" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([fauxToolCall("pdf_extract", { pages: "1-2" }, { id: "e1" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([fauxText("The integral rule appears on page 1 (p. 1): x dx integrates to x^2/2.")]),
+		]);
+	}
+
+	it("runJob completes a pdf job: brief + pagesConsulted land on the record, citation steer delivered", async () => {
+		const chat = chatStore.createChat("Test: pdf runner");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "read this pdf" }] },
+			{
+				id: "a1",
+				role: "assistant",
+				parts: [{ type: "tool-pdf", toolCallId: "call-pdf1", state: "output-available", input: PDF_INPUT, output: "Dispatched." }],
+			},
+		] as never);
+
+		const job = jobStore.createJob({ kind: "pdf", chatId: chat.id, toolCallId: "call-pdf1" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
+		pdfModelOverride.current = pdfReaderModel();
+		try {
+			await runner.runJob(job.id);
+		} finally {
+			pdfModelOverride.current = undefined;
+		}
+
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "done");
+		assert.equal(done.activity, "delivered");
+		const result = done.result as PdfResult;
+		assert.equal(result.path, PDF_FIXTURE);
+		assert.match(result.brief, /integral rule/);
+		assert.deepEqual(result.pagesConsulted, [1, 2]);
+
+		assert.equal(delivery.steers.length, 1, "one job, one steer");
+		const steer = delivery.steers[0]!;
+		assert.equal(steer.metadata.subagentResult.kind, "pdf");
+		const text = steer.parts[0];
+		assert.ok(text.type === "text" && text.text.includes("integral rule"), "steer text carries the brief");
+	});
+
+	it("an unreadable source: the job lands error with the PDF failed: brief and the steer flags the gap", async () => {
+		const chat = chatStore.createChat("Test: pdf runner failure");
+		trackChat(chat.id);
+		const badPath = path.join(import.meta.dirname, "fixtures", "not-a-pdf.txt");
+		const job = jobStore.createJob({ kind: "pdf", chatId: chat.id, toolCallId: "call-pdf2" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
+		pdfModelOverride.current = pdfReaderModel();
+		try {
+			await runner.runJob(job.id, { path: badPath, question: "anything" });
+		} finally {
+			pdfModelOverride.current = undefined;
+		}
+
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "error", "the failure brief is a subagent failure");
+		const result = done.result as PdfResult;
+		assert.match(result.brief, /^PDF failed:/);
+		assert.deepEqual(result.pagesConsulted, []);
+
+		const steer = delivery.steers[0]!;
+		const text = steer.parts[0];
+		assert.ok(text.type === "text" && text.text.includes("flag the gap"), "the teacher learns to flag the gap");
+	});
+});
+
 describe("researcher agent", () => {
 	it("runs with the web tool set (no network touched)", () => {
 		// The researcher is a runSubagent call over the webTools registry —
@@ -567,6 +668,14 @@ describe("researcher agent", () => {
 		assert.equal(Object.keys(webTools).length, 2, "ONLY the web tools — no question/plan tools");
 		// reset any accidental global override
 		researchModelOverride.current = undefined;
+	});
+
+	it("the pdf-reader declares exactly the four skill tools (sources v0)", async () => {
+		const { createPdfTools } = await import("../src/agent/subagents/pdf-reader.ts");
+		const tools = createPdfTools(path.join(import.meta.dirname, "fixtures", "sample-3page.pdf"));
+		assert.deepEqual(Object.keys(tools).sort(), ["pdf_extract", "pdf_info", "pdf_render", "pdf_search"]);
+		// reset any accidental global override
+		pdfModelOverride.current = undefined;
 	});
 });
 
@@ -947,6 +1056,37 @@ describe("prompt composition", () => {
 			const body = fs.readFileSync(`src/agent/prompts/${f}`, "utf-8").trim();
 			assert.ok(instructions.includes(body), `fragment ${f} must compose verbatim`);
 		}
+	});
+
+	it("the question principles compose into the teacher prompt; the probe's quick-measurement revision landed", () => {
+		const teacher = composeInstructions("teacher");
+		// the T2a doctrine fragment (user-locked wording 2026-09-15): verbatim presence
+		for (const pin of [
+			"Answerable by reasoning from the session",
+			"Never just reciting your words back",
+			"Prefer problems that apply the knowledge",
+			"Catch confusion early, and make it nameable",
+		]) {
+			assert.ok(teacher.includes(pin), `teacher prompt lost the principle: ${pin}`);
+		}
+		// it loads in sorted fragment order: right after 20-teaching, before 30-jobs
+		assert.ok(
+			teacher.indexOf("Question principles") > teacher.indexOf("# Teach — the loop"),
+			"principles sit after the teaching loop",
+		);
+		// the prober's doctrine: the "no rush" framing is gone, quick measurement in
+		const prober = composeInstructions("prober");
+		assert.ok(!prober.includes("There is no rush"), "the old no-rush framing is retired");
+		assert.ok(prober.includes("measurement should be efficient"), "the quick-measurement directive is in");
+		assert.ok(!prober.includes("Question principles"), "the teach-phase fragment never composes into the prober");
+	});
+
+	it("the sources-v0 prompt lines compose: read/pdf doctrine in the teacher, the read line in the prober", () => {
+		const teacher = composeInstructions("teacher");
+		assert.ok(teacher.includes("Learner source files"), "the teacher carries the source-files section");
+		assert.ok(teacher.includes("brief with page citations"), "the pdf brief's citation duty is stated");
+		const prober = composeInstructions("prober");
+		assert.ok(prober.includes("the `read` tool can inspect it directly"), "the prober knows it can read learner files");
 	});
 
 	it("guards prompt size — no fragment can silently balloon (the README-leak class)", () => {

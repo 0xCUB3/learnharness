@@ -9,6 +9,8 @@ import {
 	type JobKind,
 	type JobRecord,
 	type JobUsage,
+	type PdfResult,
+	type PdfToolInput,
 	type ResearchResult,
 	type ResearchToolInput,
 	type SubagentSteerMessage,
@@ -20,6 +22,7 @@ import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import { MODELS } from "../../../config.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
+import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
 import { runVisualMaker } from "./visual-maker.ts";
 
@@ -51,9 +54,10 @@ import { runVisualMaker } from "./visual-maker.ts";
 export const researchModelOverride: { current?: PiEngine } = {};
 export const demoModelOverride: { current?: PiEngine } = {};
 export const visualModelOverride: { current?: PiEngine } = {};
+export const pdfModelOverride: { current?: PiEngine } = {};
 
 /** The dispatch-time tool input (from src/agent/tools/jobs.ts schemas). */
-type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput;
+type JobToolInput = ResearchToolInput | DemoToolInput | VisualToolInput | PdfToolInput;
 
 export interface JobRunnerDeps {
 	chatStore: ChatStore;
@@ -71,7 +75,7 @@ export interface JobRunner {
 	 *  The tool input rides along from dispatch (the spawn fires mid-stream,
 	 *  before the tool part is persisted — only crash-recovery re-spawns
 	 *  resolve the input from the transcript). */
-	runJob(jobId: string, input?: ResearchToolInput | DemoToolInput | VisualToolInput): Promise<void>;
+	runJob(jobId: string, input?: JobToolInput): Promise<void>;
 }
 
 /** One job loop's injected machinery: the kill switch (real abort, 2026-09
@@ -96,6 +100,7 @@ const KIND_MODEL: Record<JobKind, string> = {
 	research: MODELS.researcher.model,
 	demo: MODELS.demoBuilder.model,
 	visual: MODELS.visualMaker.model,
+	pdf: MODELS.pdfReader.model,
 	"graph-context": "",
 };
 
@@ -145,6 +150,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		research: (jobId, input, loop) => runResearchJob(jobId, researchModelOverride.current, input, loop),
 		demo: (jobId, input, loop) => runDemoJob(jobId, demoModelOverride.current, input, loop),
 		visual: (jobId, input, loop) => runVisualJob(jobId, visualModelOverride.current, input, loop),
+		pdf: (jobId, input, loop) => runPdfJob(jobId, pdfModelOverride.current, input, loop),
 	};
 
 	async function runJob(jobId: string, input?: JobToolInput): Promise<void> {
@@ -185,15 +191,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	function resolveInput(
 		job: JobRecord,
 		input: JobToolInput | undefined,
-	): ResearchToolInput | DemoToolInput | VisualToolInput | undefined {
+	): JobToolInput | undefined {
 		if (input) return input;
 		const chat = chatStore.getChat(job.chatId);
 		if (!chat) return undefined;
-		return (findToolPart(chat.messages, job.toolCallId)?.input ?? undefined) as
-			| ResearchToolInput
-			| DemoToolInput
-			| VisualToolInput
-			| undefined;
+		return (findToolPart(chat.messages, job.toolCallId)?.input ?? undefined) as JobToolInput | undefined;
 	}
 
 	// ─── shared plumbing ────────────────────────────────────────────────────
@@ -213,7 +215,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	 * actually resumed — until then the job reads "running" so the client's
 	 * activity card keeps polling and re-syncs once, at the end.
 	 */
-	async function finishJob(jobId: string, result: ResearchResult | DemoResult | VisualResult): Promise<void> {
+	async function finishJob(jobId: string, result: ResearchResult | DemoResult | VisualResult | PdfResult): Promise<void> {
 		const job = jobStore.getJob(jobId);
 		if (!job) return;
 		// Aborted mid-run or mid-delivery (abortJob flips the record before
@@ -372,6 +374,44 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		}
 	}
 
+	// ─── pdf reading (sources v0) ────────────────────────────────────────────
+
+	async function runPdfJob(
+		jobId: string,
+		model: PiEngine | undefined,
+		passedInput: JobToolInput | undefined,
+		loop: LoopContext,
+	): Promise<void> {
+		const ctx = jobContext(jobId);
+		if (!ctx) return;
+		const { job } = ctx;
+
+		const input = (passedInput ?? resolveInput(job, passedInput)) as PdfToolInput | undefined;
+		const path = typeof input?.path === "string" && input.path.trim() ? input.path.trim() : "";
+		const question = typeof input?.question === "string" ? input.question : "";
+
+		try {
+			jobStore.updateJob(jobId, { activity: "reading pdf" });
+			const result = await runPdfReaderAgent(
+				{ path, question },
+			{
+				engine: model,
+				abortSignal: loop.abortSignal,
+				onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
+				onActivity: (line) => jobStore.updateJob(jobId, { activity: line }),
+			},
+			);
+			if (isPdfFailure(result) && stillRunning(jobId))
+				jobStore.updateJob(jobId, { error: result.brief.replace(/^PDF failed:\s*/i, "") });
+			await finishJob(jobId, result);
+		} catch (err) {
+			if (loop.abortSignal.aborted) return;
+			const reason = err instanceof Error ? err.message : String(err);
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
+			await finishJob(jobId, { path, question, brief: `PDF failed: ${reason}`, pagesConsulted: [] });
+		}
+	}
+
 	return { runJob };
 }
 
@@ -384,6 +424,11 @@ function isDemoFailure(result: DemoResult): boolean {
 
 function isVisualFailure(result: VisualResult): boolean {
 	return typeof result.svg !== "string" || result.svg.length === 0;
+}
+
+/** The pdf-reader's failure brief (mirrors the research failure shape). */
+function isPdfFailure(result: PdfResult): boolean {
+	return /^PDF failed:/i.test(result.brief);
 }
 
 /** The activity line shown in the UI: `web_search: "query"` / `web_fetch: host`. */

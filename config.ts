@@ -62,6 +62,13 @@ export const MODELS = {
 	demoBuilder: { model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** Must be vision-capable: it looks at rendered SVGs. */
 	visualMaker: { model: "qwen/qwen3.8-flash", effort: "low" },
+	/** SEAM (master-approved 2026-09, revised by the user 2026-09-19): the
+	 *  pdf-reader sub-agent. Must be vision-capable — it looks at rendered
+	 *  PDF pages; its briefs are text. The user overrode the initial
+	 *  glm-5.3-flash pick (catalog says it accepts images, but qwen is
+	 *  proven for exactly this look-at-renders job — visualMaker's daily
+	 *  workload). */
+	pdfReader: { model: "qwen/qwen3.8-flash", effort: "low" },
 	/** Extraction is judgment over given evidence — light thinking suffices. */
 	extractor: { model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** The auditor verifies evidence exists; keep it cheap. */

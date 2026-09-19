@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIcon, BookOpenIcon, BotIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
+import { ActivityIcon, BookOpenIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
 import { CONTEXT_LIMITS, jobCost } from "@/src/core";
@@ -232,6 +232,7 @@ const KIND_ICON: Record<JobKind, typeof SearchIcon> = {
 	research: SearchIcon,
 	demo: PlayIcon,
 	visual: PenToolIcon,
+	pdf: FileTextIcon, // sources v0 — type-forced entry (JobKind grew "pdf")
 	"graph-context": BookOpenIcon,
 };
 
@@ -347,9 +348,11 @@ function ActivityBlobRow({
 					? "Demo builder"
 					: blob.jobKind === "visual"
 						? "Figure maker"
-						: blob.jobKind === "graph-context"
-							? "Graph context"
-							: "Sub-agent";
+						: blob.jobKind === "pdf"
+							? "PDF reader"
+							: blob.jobKind === "graph-context"
+								? "Graph context"
+								: "Sub-agent";
 	return (
 		<div
 			data-testid={`activity-blob-${blob.process}`}

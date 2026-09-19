@@ -1,0 +1,401 @@
+import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
+import { z } from "zod";
+import { lhTool, piToolDeclarations, type LhTool } from "../lh-tool.ts";
+import { piEngineFor, thinkingLevelFor, type PiEngine } from "../models.ts";
+import type { PdfResult, PdfToolInput } from "../../core/contracts.ts";
+import { getHeadless, type HeadlessApi } from "./headless.ts";
+import { pdfExtract, pdfInfo, pdfProbe, pdfSearch, type PdfSearchHit } from "./pdf-ops.ts";
+
+/**
+ * The pdf-reader sub-agent (sources v0, 2026-09): reads a learner-provided
+ * PDF on the teacher's behalf — a hand-rolled loop like the visual-maker's
+ * (image-in-the-loop can't ride the execute-tool plumbing: rendered pages
+ * are shown to THIS agent's eyes, never delivered onward — user-decided).
+ *
+ * System prompt = the pdf-reader skill's reading doctrine, verbatim in
+ * strategy: triage with pdf_info FIRST, then size-based strategy — short
+ * PDFs render all pages, medium render flagged (math/image-heavy) pages,
+ * long ones search for targeted lookups before reading anything at length.
+ *
+ * Its final text IS the brief (researcher idiom), with (p. N) citations;
+ * runPdfJob wraps it into PdfResult with pagesConsulted tracked by the loop.
+ */
+
+const INSTRUCTIONS = `You are a PDF reading specialist. You work for a teacher agent inside a learning
+application: given a PDF path and a question, read the document on the teacher's behalf and
+produce a focused brief that the teacher can teach from, with page citations.
+
+You operate in an isolated context. The task gives you the PDF path and the question — that is
+everything you know.
+
+Reading doctrine — always in this order:
+1. TRIAGE FIRST: call pdf_info. It returns page count plus per-page signals (text_length,
+   image_count, math_density). Never read or render anything before this.
+2. Pick a strategy by document size:
+   - SHORT (≤ 10 pages): extract the full text; render every page that has meaningful
+     math_density or images (you read equations and diagrams visually, not as extracted text).
+   - MEDIUM (11-40 pages): extract promising pages; render only flagged pages (math- or
+     image-heavy, or where extraction looks thin).
+   - LONG (> 40 pages): pdf_search for the question's key terms first; extract and render only
+     the pages that hit. Never read a long document front-to-back.
+3. When the extracted text of a page looks math- or diagram-heavy, or garbled, RENDER that
+   page and read it visually before drawing conclusions from it.
+4. Render DPI guidance: 100 for text-dominant pages, 150 the default, 200 for dense small
+   print (math details, fine diagrams).
+
+Tool outputs may be error strings (file unreadable, invalid regex, no hits). Adapt: narrow the
+page spec, change the query, lower DPI. If the document genuinely cannot answer the question,
+say so in the brief instead of inventing content.
+
+Your FINAL assistant message is your entire deliverable — it must stand alone, in this format:
+2-6 sentences (or short sections) answering the teacher's question from the document, each
+claim cited as (p. N). End with a line "Pages consulted: N, N, …" listing every page you
+extracted or rendered.`;
+
+const MAX_ITERATIONS = 14;
+/** Rendered pages per pdf_render call — the skill renders selectively; a
+ *  batch cap keeps one over-eager call from flooding the vision context. */
+const RENDER_BATCH_CAP = 6;
+/** Extract output ceiling — narrow the spec instead of dumping a book. */
+const EXTRACT_CAP = 24_000;
+
+export interface PdfReaderOptions {
+	engine?: PiEngine;
+	abortSignal?: AbortSignal;
+	onUsage?: (usage: Usage) => void;
+	onActivity?: (line: string) => void;
+	headless?: HeadlessApi;
+	maxIterations?: number;
+}
+
+export interface PdfReaderInput extends PdfToolInput {}
+
+export function createPdfTools(
+	pdfPath: string,
+): {
+	pdf_info: LhTool<any, any>;
+	pdf_extract: LhTool<any, any>;
+	pdf_render: LhTool<any, any>;
+	pdf_search: LhTool<any, any>;
+} {
+	return {
+		pdf_info: lhTool({
+			name: "pdf_info",
+			description: "Metadata + per-page triage signals for the PDF (page count, text length, image count, math density). ALWAYS call this first.",
+			schema: z.object({}),
+			execute: async () => {
+				const info = await pdfInfo(pdfPath);
+				const lines = [
+					`File: ${info.path}`,
+					`Pages: ${info.page_count} (mean text length/page: ${info.mean_text_length})`,
+					...info.pages.map(
+						(p) =>
+							`p${p.page}: len=${p.text_length} img=${p.image_count} math=${p.math_density.toFixed(2)}`,
+					),
+				];
+				return lines.join("\n");
+			},
+		}),
+		pdf_extract: lhTool({
+			name: "pdf_extract",
+			description: "Extract text from pages (spec: 'all', '1-5', '1,3,7', '3'). Use pdf_info first; narrow the spec for big documents.",
+			schema: z.object({ pages: z.string().describe("Page spec, e.g. 'all', '1-5', '1,3,7'") }),
+			execute: async ({ pages }) => {
+				const text = await pdfExtract(pdfPath, pages);
+				if (text.length > EXTRACT_CAP) {
+					return `${text.slice(0, EXTRACT_CAP)}\n\n[Output truncated at ${EXTRACT_CAP} chars — narrow the page spec and extract in smaller batches.]`;
+				}
+				return text;
+			},
+		}),
+		pdf_render: lhTool({
+			name: "pdf_render",
+			description:
+				"Render pages to images and show them to you for visual reading (equations, diagrams, layout). DPI: 100 text, 150 default, 200 dense small print. Max 6 pages per call.",
+			schema: z.object({
+				pages: z.string().describe("Page spec, e.g. '1-3' or '2,5,8'"),
+				dpi: z.number().int().min(72).max(300).default(150).describe("Render DPI (100 text / 150 default / 200 dense)"),
+			}),
+			execute: async () => {
+				// Actual rendering happens OUTSIDE execute — the loop appends the
+				// images as a user message after the tool results (the
+				// image-in-the-loop idiom). execute returns the plan the loop uses.
+				return "render requested";
+			},
+		}),
+		pdf_search: lhTool({
+			name: "pdf_search",
+			description: "Search the PDF's text by keyword or regex (case-insensitive); returns hits with context lines. Use for long documents before reading anything at length.",
+			schema: z.object({
+				query: z.string().describe("Keyword or regex"),
+				context_lines: z.number().int().min(0).max(8).default(3).describe("Context lines around each hit"),
+				literal: z.boolean().default(false).describe("true = treat the query literally (no regex)"),
+			}),
+			execute: async ({ query, context_lines, literal }) => {
+				const { hits } = await pdfSearch(pdfPath, query, { contextLines: context_lines, literal });
+				if (hits.length === 0) return "No hits.";
+				const cap = hits.slice(0, 40);
+				const body = cap.map((h: PdfSearchHit) => `=== Page ${h.page}, line ${h.line} ===\n${h.context}`).join("\n");
+				const more = hits.length > cap.length ? `\n\n[${hits.length - cap.length} more hits — narrow the query.]` : "";
+				return body + more;
+			},
+		}),
+	};
+}
+
+function toolText(toolCallId: string, toolName: string, value: string): ToolResultMessage {
+	return {
+		role: "toolResult",
+		toolCallId,
+		toolName,
+		content: [{ type: "text", text: value }],
+		isError: value.startsWith("ERROR:"),
+		timestamp: Date.now(),
+	};
+}
+
+/** Doctrine gate (the visual-maker's unlooked-finish rule, ported): never
+ *  deliver a brief that consulted nothing — an unread PDF brief is made-up
+ *  content, exactly the class of failure the gate exists for. */
+const UNREAD_FINISH_MESSAGE =
+	"You finished without consulting any page of the PDF — your brief would be invention, not reading. Extract or render the relevant pages first, then write the brief from what you actually saw.";
+
+export async function runPdfReaderAgent(
+	input: PdfReaderInput,
+	opts: PdfReaderOptions = {},
+): Promise<PdfResult> {
+	const headless = opts.headless ?? getHeadless();
+	const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
+	const pdfPath = input.path;
+
+	// Deterministic upfront failure: unreadable / unparseable / no Chrome
+	// for renders — the brief never starts on a broken source.
+	const openError = await probeReadable(pdfPath);
+	if (openError) {
+		return { path: pdfPath, question: input.question, brief: `PDF failed: ${openError}`, pagesConsulted: [] };
+	}
+	const chromeReason = headless.unavailableReason();
+	// Chrome missing does NOT fail the run: text-side tools still work; the
+	// doctrine degrades to extract+search (render calls return an error note).
+
+	const tools = createPdfTools(pdfPath);
+	const toolDeclarations = piToolDeclarations(tools);
+	const engine = opts.engine ?? piEngineFor("pdfReader");
+	const reasoning = thinkingLevelFor("pdfReader");
+	const prompt = [
+		`PDF path: ${pdfPath}`,
+		`Question (what the teacher needs from this document): ${input.question || "(no question — give a structural overview)"}`,
+		"",
+		"Read the document per your doctrine, then produce your final brief in the required format.",
+	].join("\n");
+
+	let messages: Message[] = [{ role: "user", content: prompt, timestamp: Date.now() }];
+	/** Every page the reader extracted or rendered (the citation set). */
+	const consulted = new Set<number>();
+	let finalText = "";
+	let nudged = false;
+
+	try {
+		for (let iteration = 0; iteration < maxIterations; iteration++) {
+			const result = await streamOnce(engine, INSTRUCTIONS, messages, toolDeclarations, reasoning, opts.abortSignal);
+			// Money channel: each iteration is one model call.
+			opts.onUsage?.(result.usage);
+			messages = [...messages, result];
+
+			const toolCalls = result.content.filter(
+				(c): c is Extract<typeof c, { type: "toolCall" }> => c.type === "toolCall",
+			);
+			if (toolCalls.length === 0) {
+				finalText = result.content
+					.filter((c): c is { type: "text"; text: string } => c.type === "text")
+					.map((c) => c.text)
+					.join("")
+					.trim();
+				if (consulted.size === 0 && !nudged) {
+					nudged = true;
+					messages = [
+						...messages,
+						{ role: "user", content: UNREAD_FINISH_MESSAGE, timestamp: Date.now() },
+					];
+					continue;
+				}
+				return { path: pdfPath, question: input.question, brief: finalText || "(no brief text)", pagesConsulted: [...consulted].sort((a, b) => a - b) };
+			}
+
+			const toolResults: ToolResultMessage[] = [];
+			/** Rendered pages this batch, appended as images AFTER the tool
+			 *  results — the visual-maker's image-in-the-loop idiom. */
+			let renderedImages: { page: number; png: Buffer }[] | null = null;
+
+			for (const call of toolCalls) {
+				const args = (call.arguments ?? {}) as Record<string, unknown>;
+				try {
+					if (call.name === "pdf_info") {
+						opts.onActivity?.("pdf_info: triaging");
+						const r = await tools.pdf_info.execute!({}, { toolCallId: call.id });
+						toolResults.push(toolText(call.id, call.name, String(r)));
+					} else if (call.name === "pdf_extract") {
+						const spec = String(args.pages ?? "all");
+						opts.onActivity?.(`pdf_extract: ${spec}`);
+						const r = await tools.pdf_extract.execute!({ pages: spec }, { toolCallId: call.id });
+						toolResults.push(toolText(call.id, call.name, String(r)));
+						for (const p of specNumbers(spec, Infinity)) consulted.add(p);
+					} else if (call.name === "pdf_search") {
+						const query = String(args.query ?? "");
+						const contextLines = numOr(args.context_lines, 3);
+						const literal = Boolean(args.literal);
+						opts.onActivity?.(`pdf_search: "${query}"`);
+						// Direct call (not the tool's execute): the loop needs the hits'
+						// pages — a hit's context lines ARE consultation, so they join
+						// the citation set (the unread-finish gate counts them).
+						const { hits } = await pdfSearch(pdfPath, query, { contextLines, literal });
+						for (const h of hits) consulted.add(h.page);
+						const cap = hits.slice(0, 40);
+						const body =
+							cap.length === 0
+								? "No hits."
+								: cap.map((h) => `=== Page ${h.page}, line ${h.line} ===\n${h.context}`).join("\n") +
+									(hits.length > cap.length ? `\n\n[${hits.length - cap.length} more hits — narrow the query.]` : "");
+						toolResults.push(toolText(call.id, call.name, body));
+					} else if (call.name === "pdf_render") {
+						const spec = String(args.pages ?? "1");
+						const dpi = numOr(args.dpi, 150);
+						if (chromeReason) {
+							toolResults.push(
+								toolText(call.id, call.name, `ERROR: rendering unavailable — ${chromeReason} Read via pdf_extract instead.`),
+							);
+						} else {
+							const wanted = specNumbers(spec, RENDER_BATCH_CAP);
+							opts.onActivity?.(`pdf_render: ${spec} @${dpi}dpi`);
+							const pages = await headless.renderPdfPages(pdfPath, wanted, { dpi });
+							for (const p of pages) consulted.add(p.page);
+							if (pages.length === 0) {
+								toolResults.push(toolText(call.id, call.name, "ERROR: no pages rendered (spec matched nothing?)"));
+							} else {
+								renderedImages = pages;
+								toolResults.push(
+									toolText(
+										call.id,
+										call.name,
+										`Rendered ${pages.length} page(s) at ${dpi} DPI — the images follow below. Read them carefully (equations, diagrams, layout).`,
+									),
+								);
+							}
+						}
+					} else {
+						toolResults.push(toolText(call.id, call.name, `ERROR: unknown tool "${call.name}"`));
+					}
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					toolResults.push(toolText(call.id, call.name, `ERROR: ${msg}`));
+				}
+			}
+
+			messages = [...messages, ...toolResults];
+			if (renderedImages) {
+				messages = [
+					...messages,
+					{
+						role: "user",
+						content: [
+							{
+								type: "text",
+								text: `The rendered page(s), in order (${renderedImages.map((p) => `p${p.page}`).join(", ")}):`,
+							},
+							...renderedImages.map((p) => ({
+								type: "image" as const,
+								data: p.png.toString("base64"),
+								mimeType: "image/png",
+							})),
+						],
+						timestamp: Date.now(),
+					},
+				];
+			}
+		}
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { path: pdfPath, question: input.question, brief: `PDF failed: the reader crashed — ${msg}`, pagesConsulted: [...consulted].sort((a, b) => a - b) };
+	}
+
+	// Iteration limit: deliver whatever was honestly consulted (never invention).
+	return {
+		path: pdfPath,
+		question: input.question,
+		brief: finalText || `PDF failed: iteration limit (${maxIterations}) reached without a brief.`,
+		pagesConsulted: [...consulted].sort((a, b) => a - b),
+	};
+}
+
+// ─── small helpers ───────────────────────────────────────────────────────────
+
+/** Parse a page spec into concrete page numbers, capped. */
+function specNumbers(spec: string, cap: number): number[] {
+	// total = Infinity: bounds come from the document at execution time; the
+	// cap alone protects the batch.
+	const parts = spec.trim().toLowerCase() === "all" ? [`${cap}`] : spec.split(",");
+	const out = new Set<number>();
+	for (const part of parts) {
+		const p = part.trim();
+		if (!p) continue;
+		if (p.includes("-")) {
+			const [s, e] = p.split("-", 2) as [string, string];
+			const start = Math.max(1, parseInt(s, 10) || 1);
+			const end = Math.min(parseInt(e, 10) || start, start + cap - 1);
+			for (let pg = start; pg <= end && out.size < cap; pg++) out.add(pg);
+		} else {
+			const pg = parseInt(p, 10);
+			if (Number.isFinite(pg) && pg >= 1 && out.size < cap) out.add(pg);
+		}
+	}
+	return [...out].sort((a, b) => a - b);
+}
+
+function numOr(v: unknown, dflt: number): number {
+	return typeof v === "number" && Number.isFinite(v) ? v : dflt;
+}
+
+/** Cheap upfront readability probe — real parsing happens inside the tools. */
+async function probeReadable(pdfPath: string): Promise<string | null> {
+	try {
+		const fs = await import("node:fs/promises");
+		const stat = await fs.stat(pdfPath);
+		if (!stat.isFile()) return "not a regular file";
+		if (stat.size === 0) return "file is empty";
+		// parse probe: pdfProbe throws pdfjs's precise error for garbage files
+		await pdfProbe(pdfPath);
+		return null;
+	} catch (err) {
+		return err instanceof Error ? err.message : String(err);
+	}
+}
+
+/** One raw model call (no agent loop): the visual-maker's streamOnce,
+ *  duplicated here because its module keeps it private. */
+async function streamOnce(
+	engine: PiEngine,
+	systemPrompt: string,
+	messages: Message[],
+	tools: ReturnType<typeof piToolDeclarations>,
+	reasoning: ReturnType<typeof thinkingLevelFor>,
+	abortSignal?: AbortSignal,
+): Promise<AssistantMessage> {
+	const stream = engine.streamFn(engine.model, { systemPrompt, messages, tools }, {
+		reasoning: reasoning === "off" ? undefined : reasoning,
+		apiKey: process.env.OPENROUTER_API_KEY || undefined,
+		signal: abortSignal,
+	} as never);
+	for await (const event of stream) {
+		if (event.type === "done") return event.message;
+		if (event.type === "error") {
+			if (event.reason === "aborted") {
+				const err = new Error("aborted");
+				const abortedErr = err as Error & { name: string };
+				abortedErr.name = "AbortError";
+				throw abortedErr;
+			}
+			throw new Error(event.error.errorMessage ?? "the model call failed");
+		}
+	}
+	throw new Error("the model stream ended without a result");
+}

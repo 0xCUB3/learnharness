@@ -14,7 +14,9 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import { createProberTools, teachQuizToolFor } from "../src/agent/tools.ts";
+import { createProberTools, createTeacherTools, teachQuizToolFor, type TeacherToolContext } from "../src/agent/tools.ts";
+import { TOGGLEABLE_TOOLS } from "../src/core/pending.ts";
+import { jobStore } from "../src/store/jobs.ts";
 import { probeQuizInputSchema } from "../src/core/question-core.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
@@ -141,11 +143,59 @@ describe("the prober's quiz: no nodeId field at all", () => {
 		assert.equal("nodeId" in smuggled.data, false, "stripped, not tolerated");
 	});
 
-	it("the prober's tool registry carries the nodeId-less quiz and probe_done only", () => {
+	it("the prober's tool registry carries the nodeId-less quiz, probe_done, and the shared read tool", () => {
 		const chatId = newChat("Prober: registry");
 		const tools = createProberTools({ chatId, chatStore, deliver: () => {} });
-		assert.deepEqual(Object.keys(tools).sort(), ["ask_user_question", "probe_done", "quiz"]);
+		assert.deepEqual(Object.keys(tools).sort(), ["ask_user_question", "probe_done", "quiz", "read"]);
 		const schema = quizSchemaOf(tools);
 		assert.equal(schema.safeParse({ ...validQuiz, nodeId: "anything" }).success, true, "no session check to fail");
+	});
+});
+// ─── tool availability (2026-09 settings seam) ───────────────────────────────
+
+describe("tool toggles (core/pending.ts + factories)", () => {
+	it("TOGGLEABLE_TOOLS: the sub-agent dispatch tools; quiz/ask/read stay off the list", () => {
+		// The user-toggleable vocabulary Platform's settings validates against.
+		// quiz/ask_user_question/read are always-on FOR NOW (user-decided
+		// 2026-09-15, sources v0); they join when settings exposes them — the
+		// factory seam is generic.
+		assert.deepEqual(TOGGLEABLE_TOOLS, ["research", "demo", "visual", "pdf"]);
+	});
+
+	it("createProberTools: absent record = full set; explicit false drops exactly that tool; probe_done survives everything", () => {
+		const chatId = newChat("Prober: toggles");
+		const ctx = { chatId, chatStore, deliver: () => {} };
+		assert.deepEqual(Object.keys(createProberTools(ctx)).sort(), ["ask_user_question", "probe_done", "quiz", "read"]);
+
+		const noAsk = createProberTools(ctx, { ask_user_question: false });
+		assert.deepEqual(Object.keys(noAsk).sort(), ["probe_done", "quiz", "read"]);
+
+		// quiz off is honored by the generic machinery too (future toggleable),
+		// but probe_done is never droppable — it is how the phase ends.
+		const noQuiz = createProberTools(ctx, { quiz: false });
+		assert.deepEqual(Object.keys(noQuiz).sort(), ["ask_user_question", "probe_done", "read"]);
+		assert.ok(createProberTools(ctx, { probe_done: false }).probe_done, "probe_done always-on");
+	});
+
+	it("createTeacherTools: {research: false} removes exactly research; unknown keys are no-ops", () => {
+		const chatId = newChat("Teacher: toggles");
+		const ctx: TeacherToolContext = {
+			chatId,
+			chatStore,
+			jobStore,
+			spawn: () => {},
+		};
+		const full = Object.keys(createTeacherTools(ctx)).sort();
+		assert.deepEqual(full, ["ask_user_question", "demo", "pdf", "plan_init", "quiz", "read", "research", "visual"]);
+
+		const noResearch = Object.keys(createTeacherTools(ctx, { research: false })).sort();
+		assert.deepEqual(noResearch, ["ask_user_question", "demo", "pdf", "plan_init", "quiz", "read", "visual"]);
+
+		// absent = enabled: an empty record and undefined behave identically
+		assert.deepEqual(
+			Object.keys(createTeacherTools(ctx, {})).sort(),
+			full,
+			"absent keys mean enabled — old records behave exactly as today",
+		);
 	});
 });

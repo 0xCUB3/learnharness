@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
  * Shared headless-browser helper for the verifying sub-agents (W6):
@@ -46,6 +46,16 @@ export interface RenderSvgOptions {
 	height?: number;
 }
 
+export interface RenderPdfOptions {
+	/** Render DPI — 72 is 100% zoom; the skill's guidance is 100/150/200. */
+	dpi?: number;
+}
+
+export interface RenderedPdfPage {
+	page: number;
+	png: Buffer;
+}
+
 export interface HeadlessApi {
 	/** True when a Chrome executable is resolvable (cheap, no launch). */
 	available(): boolean;
@@ -55,6 +65,9 @@ export interface HeadlessApi {
 	runDemo(html: string, opts?: RunDemoOptions): Promise<DemoRunResult>;
 	/** Rasterize an SVG to a PNG buffer (for verify-by-looking). */
 	renderSvg(svg: string, opts?: RenderSvgOptions): Promise<Buffer>;
+	/** Render PDF pages to PNG buffers via Chrome's pdfium viewer (for the
+	 *  pdf-reader sub-agent's look-at-the-page loop). */
+	renderPdfPages(pdfPath: string, pages: number[], opts?: RenderPdfOptions): Promise<RenderedPdfPage[]>;
 }
 
 /** Test seam — undefined in production. */
@@ -94,7 +107,7 @@ const NO_CHROME_MESSAGE =
 	"No Chrome/Chromium found for headless testing. Install Google Chrome or set CHROME_PATH to a Chrome executable. " +
 	"(Verification is mandatory — demos and visuals are never delivered untested.)";
 
-async function launchBrowser(): Promise<import("puppeteer-core").Browser> {
+async function launchBrowser(extraArgs: string[] = []): Promise<import("puppeteer-core").Browser> {
 	const puppeteer = (await import("puppeteer-core")).default;
 	const executablePath = resolveChromeExecutablePath();
 	const browser = await puppeteer.launch({
@@ -102,7 +115,7 @@ async function launchBrowser(): Promise<import("puppeteer-core").Browser> {
 		// Explicit path when we found one; otherwise let puppeteer resolve the
 		// system Chrome install itself via the "chrome" channel.
 		...(executablePath ? { executablePath } : { channel: "chrome" as const }),
-		args: ["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
+		args: ["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", ...extraArgs],
 	});
 	return browser;
 }
@@ -275,6 +288,96 @@ async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buff
 	}
 }
 
+// ─── PDF page rasterization (pdfjs paints, Chrome hosts) ───────────────
+
+/** Render PDF pages to PNGs — the sources-v0 pdf-reader's eyes.
+ *
+ *  The engine (user-chosen hybrid, live-verified 2026-09-19): pdfjs paints
+ *  each page into a <canvas> (scale = dpi/72, the skill's zoom arithmetic)
+ *  inside a headless Chrome tab, and the canvas pixels come back via
+ *  toDataURL. Chrome's OWN PDF viewer plugin does not paint in headless
+ *  mode (verified: identical blank screenshots regardless of page), so the
+ *  canvas shim is the pixel path — Chrome still hosts and encodes, no
+ *  native node-canvas anywhere. PDF bytes pass in as base64 (fetch() is
+ *  blocked on file://); pdfjs runs via its real worker module under
+ *  --allow-file-access-from-files. */
+async function renderPdfPages(
+	pdfPath: string,
+	pages: number[],
+	opts: RenderPdfOptions = {},
+): Promise<RenderedPdfPage[]> {
+	const dpi = opts.dpi ?? 150;
+	const pdfAbs = path.resolve(pdfPath);
+	const pdfjsUrl = pathToFileURL(
+		path.join(PATHS_nodeModules(), "pdfjs-dist/legacy/build/pdf.mjs"),
+	).href;
+	const b64 = fs.readFileSync(pdfAbs).toString("base64");
+
+	const dir = tempDir("lh-pdf-");
+	const file = path.join(dir, "shim.html");
+	fs.writeFileSync(
+		file,
+		"<!doctype html><html><head><meta charset='utf-8'><style>html,body{margin:0;padding:0;background:#fff}canvas{display:block}</style></head><body></body></html>",
+		"utf-8",
+	);
+
+	const browser = await launchBrowser(["--allow-file-access-from-files"]);
+	try {
+		const page = await browser.newPage();
+		await page.setViewport({ width: 1200, height: 1600, deviceScaleFactor: 1 });
+		await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
+		const results = await page.evaluate(
+			async (b64pdf, workerUrl, pageNos, dpi) => {
+				// window-scope dynamic import (Chrome evaluates this string in the
+				// shim page, not under Node)
+				const pdfjs = (await import(workerUrl)) as typeof import("pdfjs-dist");
+				pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.replace("pdf.mjs", "pdf.worker.mjs");
+				const bin = atob(b64pdf);
+				const bytes = new Uint8Array(bin.length);
+				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+				const doc = await pdfjs.getDocument({ data: bytes }).promise;
+				const out: Array<{ page: number; dataUrl: string; w: number; h: number }> = [];
+				for (const pageNo of pageNos) {
+					if (pageNo < 1 || pageNo > doc.numPages) continue;
+					const pg = await doc.getPage(pageNo);
+					const vp = pg.getViewport({ scale: dpi / 72 });
+					const canvas = document.createElement("canvas");
+					canvas.width = Math.ceil(vp.width);
+					canvas.height = Math.ceil(vp.height);
+					const ctx = canvas.getContext("2d");
+					if (!ctx) throw new Error("canvas 2d context unavailable");
+					await pg.render({ canvasContext: ctx, canvas, viewport: vp }).promise;
+					out.push({ page: pageNo, dataUrl: canvas.toDataURL("image/png"), w: canvas.width, h: canvas.height });
+				}
+				return out;
+			},
+			b64,
+			pdfjsUrl,
+			pages,
+			dpi,
+		);
+		return results.map((r) => ({
+			page: r.page,
+			// canvas-encoded PNG → providerSafePng for the same single-IDAT
+			// canonical form every other vision-model image gets.
+			png: providerSafePng(Buffer.from(r.dataUrl.slice(r.dataUrl.indexOf(",") + 1), "base64")),
+		}));
+	} finally {
+		await browser.close().catch(() => {});
+		try {
+			fs.rmSync(dir, { recursive: true, force: true });
+		} catch {
+			/* best-effort cleanup */
+		}
+	}
+}
+
+/** node_modules — resolved from this module's location. */
+function PATHS_nodeModules(): string {
+	// import.meta.url = .../src/agent/subagents/headless.ts → three up + node_modules
+	return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "node_modules");
+}
+
 // ─── the real API ────────────────────────────────────────────────────────────
 
 export const realHeadless: HeadlessApi = {
@@ -286,4 +389,5 @@ export const realHeadless: HeadlessApi = {
 	},
 	runDemo,
 	renderSvg,
+	renderPdfPages,
 };

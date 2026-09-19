@@ -5,11 +5,13 @@ import {
 	quizInputObject,
 	quizInputProblems,
 } from "../core/question-core.ts";
+import { filterEnabledTools, type EnabledTools } from "../core/pending.ts";
 import type { JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
+import { readTool } from "./tools/read.ts";
 
 export { jobTools };
 export type { ProbeDoneContext } from "./tools/probe.ts";
@@ -62,12 +64,31 @@ export const probeQuizTool: LhTool<any, any> = {
 	schema: probeQuizInputSchema,
 };
 
-/** The prober's tool set: probe quiz (no nodeId) + ask + probe_done. */
-export function createProberTools(ctx: ProbeDoneContext): Record<string, LhTool<any, any>> {
+/** The prober's tool set: probe quiz (no nodeId) + ask + probe_done.
+ *  `enabled` is the resolved settings seam (core/pending.ts): any tool
+ *  explicitly false is dropped from the registry. probe_done stays
+ *  always-on regardless — it is how the phase ENDS; a prober that can
+ *  never conclude is a lockout. */
+export function createProberTools(
+	ctx: ProbeDoneContext,
+	enabled?: EnabledTools,
+): Record<string, LhTool<any, any>> {
+	// probe_done is re-added AFTER the filter, always-on by construction — it
+	// is how the phase ENDS; a prober that can never conclude is a lockout.
+	const done = probeDoneTool(ctx);
 	return {
-		quiz: probeQuizTool,
-		ask_user_question: askUserQuestionTool,
-		...probeDoneTool(ctx),
+		...filterEnabledTools(
+			{
+				quiz: probeQuizTool,
+				ask_user_question: askUserQuestionTool,
+				// read is always-on (user-decided 2026-09): the prober inspects
+				// learner-provided source files while assessing the edge.
+				read: readTool,
+				...done,
+			},
+			enabled,
+		),
+		...done,
 	};
 }
 
@@ -131,12 +152,28 @@ export interface TeacherToolContext extends PlanToolContext {
 /**
  * Per-request teacher tool registry: teach questions (validated nodeId) +
  * plan tools + job tools, all closing over the ctx.
+ *
+ * `enabled` is the resolved settings seam (core/pending.ts EnabledTools —
+ * Platform's chat-handler wiring passes it through from settings). Today
+ * only the sub-agent tools (research/demo/visual) are user-toggleable, but
+ * the filtering is GENERIC: any name explicitly false is dropped, so
+ * future toggleables (question-tool variants, …) need no change here.
+ * Absent/undefined = enabled — tests and old records see today's set.
  */
-export function createTeacherTools(ctx: TeacherToolContext): Record<string, LhTool<any, any>> {
-	return {
-		quiz: teachQuizToolFor(ctx),
-		ask_user_question: askUserQuestionTool,
-		...planTools(ctx),
-		...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn }),
-	};
+export function createTeacherTools(
+	ctx: TeacherToolContext,
+	enabled?: EnabledTools,
+): Record<string, LhTool<any, any>> {
+	return filterEnabledTools(
+		{
+			quiz: teachQuizToolFor(ctx),
+			ask_user_question: askUserQuestionTool,
+			// read is always-on (user-decided 2026-09): the teacher reads
+			// learner-provided sources on its own terms — nothing auto-injects.
+			read: readTool,
+			...planTools(ctx),
+			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn }),
+		},
+		enabled,
+	);
 }

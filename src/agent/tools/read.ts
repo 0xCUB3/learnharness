@@ -1,0 +1,117 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { z } from "zod";
+import { lhTool, type LhToolImageResult } from "../lh-tool.ts";
+
+/**
+ * The read tool — sources v0 (2026-09): a Node port of pi's read semantics
+ * for the learner's local files. The flow is learner-owned: he pastes file
+ * paths into the chat, the agent reads on its own terms (nothing is
+ * auto-injected). Unrestricted local reads are the user-decided v0 scope —
+ * this is a personal study harness, not a multi-tenant service.
+ *
+ * Ported behaviors (mirroring pi's dist/core/tools/read.js):
+ * - text files: utf-8, offset (1-indexed) / limit slicing, and the
+ *   2000-line / 50KB truncation ceiling with actionable "use offset=N"
+ *   continuation notices — a huge file never silently floods the context.
+ * - image files (jpg/png/gif/webp/bmp): returned as native image content
+ *   parts so the vision-capable model actually SEES them (teacher's
+ *   glm-5.3-flash accepts image input per pi's zai catalog; the converter
+ *   in lh-tool.ts maps LhToolImageResult to pi's ImageContent).
+ * - unreadable/missing files throw — pi turns that into an error tool
+ *   result the model sees and recovers from.
+ *
+ * Usage guidance ships in the description (the self-contained-tools
+ * principle, user-decided 2026-09: system prompts reference only
+ * always-on tools — read IS always-on, but its doctrine still lives here).
+ */
+
+const MAX_LINES = 2000;
+const MAX_BYTES = 50 * 1024;
+
+/** Extension map for v0 (pi sniffs magic bytes; extensions suffice here —
+ *  learner files are pasted paths, not adversarial uploads). */
+const IMAGE_MIME: Record<string, string> = {
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".png": "image/png",
+	".gif": "image/gif",
+	".webp": "image/webp",
+	".bmp": "image/bmp",
+};
+
+const readInputSchema = z.object({
+	path: z.string().min(1).describe("Path to the file to read (relative or absolute)"),
+	offset: z.number().int().positive().optional().describe("Line number to start reading from (1-indexed)"),
+	limit: z.number().int().positive().optional().describe("Maximum number of lines to read"),
+});
+
+function formatSize(bytes: number): string {
+	return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)}KB` : `${bytes}B`;
+}
+
+/** Slice + truncate the text body, pi's continuation-notice style. */
+function readTextSlice(text: string, offset: number | undefined, limit: number | undefined): string {
+	const allLines = text.split("\n");
+	const totalLines = allLines.length;
+	const startLine = offset ? Math.max(0, offset - 1) : 0;
+	if (startLine >= totalLines) {
+		throw new Error(`Offset ${offset} is beyond end of file (${totalLines} lines total)`);
+	}
+	// honor an explicit limit first (never beyond EOF)
+	let selected = allLines.slice(startLine, limit !== undefined ? startLine + limit : totalLines);
+	// then the 2000-line ceiling
+	let truncatedBy: "lines" | "bytes" | null = null;
+	if (selected.length > MAX_LINES) {
+		selected = selected.slice(0, MAX_LINES);
+		truncatedBy = "lines";
+	}
+	// then the 50KB ceiling
+	if (Buffer.byteLength(selected.join("\n"), "utf-8") > MAX_BYTES) {
+		while (selected.length > 0 && Buffer.byteLength(selected.join("\n"), "utf-8") > MAX_BYTES) {
+			selected.pop();
+		}
+		truncatedBy = "bytes";
+	}
+	if (truncatedBy === null) {
+		const remaining = totalLines - (startLine + selected.length);
+		if (remaining > 0) {
+			return `${selected.join("\n")}\n\n[${remaining} more lines in file. Use offset=${startLine + selected.length + 1} to continue.]`;
+		}
+		return selected.join("\n");
+	}
+	const endLineDisplay = startLine + selected.length;
+	const reason =
+		truncatedBy === "lines" ? `${MAX_LINES} line limit` : `${formatSize(MAX_BYTES)} limit`;
+	return `${selected.join("\n")}\n\n[Showing lines ${startLine + 1}-${endLineDisplay} of ${totalLines} (${reason}). Use offset=${endLineDisplay + 1} to continue.]`;
+}
+
+/** The read tool, shared verbatim by the prober and the teacher. */
+export const readTool = lhTool({
+	name: "read",
+	description:
+		"Read the contents of a local file — the learner's source material for this lesson " +
+		"(he pastes file paths into the chat; read them on your own terms, never ask him to " +
+		"paste file CONTENTS into the chat). Supports text files and images (jpg, png, gif, " +
+		"webp, bmp) — images are shown to you as attachments. Text output is truncated to " +
+		`2000 lines or 50KB (whichever is hit first); use offset/limit for large files, and ` +
+		"continue with offset until you have what you need.",
+	schema: readInputSchema,
+	execute: async ({ path: rawPath, offset, limit }): Promise<string | LhToolImageResult> => {
+		const absolute = path.resolve(process.cwd(), rawPath);
+		const ext = path.extname(absolute).toLowerCase();
+		const mime = IMAGE_MIME[ext];
+		const buffer = await fs.readFile(absolute); // ENOENT/EACCES → error result the model sees
+		if (mime) {
+			// NOTE v0: no resize — raw bytes as base64. Learner files are study
+			// material (screenshots, figures), not adversarial payloads; a resize
+			// step (sharp) can land later if large images prove wasteful.
+			return {
+				text: `Read image file [${mime}] — ${path.basename(absolute)} (${formatSize(buffer.byteLength)}), attached as an image.`,
+				images: [{ data: buffer.toString("base64"), mimeType: mime }],
+			};
+		}
+		const text = buffer.toString("utf-8");
+		return readTextSlice(text, offset, limit);
+	},
+});
