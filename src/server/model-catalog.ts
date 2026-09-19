@@ -19,12 +19,16 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { MODELS } from "../../config.ts";
 import { piModels } from "../agent/models.ts";
 import { settingsStore } from "../store/settings.ts";
+import { effectiveSettings } from "./stores.ts";
 import type { ChatSettings } from "../core/contracts/chat.ts";
 import type {
 	CatalogDefaults,
 	ModelCatalogEntry,
 	ModelCatalogResponse,
+	RolePins,
 } from "../core/contracts/models.ts";
+import type { EffectiveModelSpec } from "../core/settings-resolution.ts";
+import { BACKGROUND_MODEL_ROLES, type BackgroundModelRole } from "../core/settings.ts";
 
 /** The picker's client-safe model entry (contract: core/contracts/models.ts). */
 export type ModelDto = ModelCatalogEntry;
@@ -46,6 +50,31 @@ export function catalogDefaultsFor(chat?: ChatSettings): CatalogDefaults {
  *  it once chosen. */
 export function catalogDefaults(): CatalogDefaults {
 	return catalogDefaultsFor(settingsStore.readSettings()?.chat);
+}
+
+/** Project the resolved per-role specs to the client DTO (pure — the
+ *  settings UI's "Default: <actual pinned model>" caption reads this).
+ *  thinkingLevel is always concrete in the resolved view; the contract
+ *  keeps it optional so the UI tolerates a future role without one. */
+export function rolePinsFor(models: Record<BackgroundModelRole, EffectiveModelSpec>): RolePins {
+	const pins = {} as RolePins;
+	for (const role of BACKGROUND_MODEL_ROLES) {
+		const spec = models[role];
+		pins[role] = {
+			model: { provider: spec.provider, id: spec.id },
+			thinkingLevel: spec.thinkingLevel,
+		};
+	}
+	return pins;
+}
+
+/** The six background roles' RESOLVED pins (settings interlude,
+ *  2026-09-19): the user's agent-models override falling back to the
+ *  config.ts MODELS pin — the same resolution the agent factories use
+ *  (src/server/stores.ts effectiveSettings), so the caption can never
+ *  drift from what actually runs. */
+export function catalogRolePins(): RolePins {
+	return rolePinsFor(effectiveSettings().agent.models);
 }
 
 /** Project one catalog model to the client DTO. */
@@ -70,14 +99,15 @@ export function toModelDto(model: Model<Api>): ModelDto {
 
 /** The full picker payload: every model of every configured provider
  *  (sorted by provider then id — stable, diff-friendly) + the config
- *  defaults a settings-less chat runs. */
+ *  defaults a settings-less chat runs + the background roles' resolved
+ *  pins (the settings UI's per-role default captions). */
 export function modelCatalog(): ModelCatalogResponse {
 	const models = piModels()
 		.getProviders()
 		.flatMap((p) => piModels().getModels(p.id))
 		.map(toModelDto)
 		.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
-	return { models, defaults: catalogDefaults() };
+	return { models, defaults: catalogDefaults(), rolePins: catalogRolePins() };
 }
 
 /** One validated outcome for a settings write. */

@@ -35,6 +35,7 @@ const BACKGROUND_MODEL_PINS: ModelRoleSpecs = {
 	auditor: MODELS.auditor,
 	labeler: MODELS.labeler,
 };
+export { BACKGROUND_MODEL_PINS };
 
 /**
  * The resolved view of the settings record (core/settings-resolution.ts):
