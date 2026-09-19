@@ -17,13 +17,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-	fuzzyScore,
-	type ChatSettings,
-	type ModelCatalogEntry,
-	type ModelCatalogResponse,
-} from "@/src/core";
-import { formatTokens, prettyModel } from "@/components/usage-format";
+import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse } from "@/src/core";
+import { prettyModel } from "@/components/usage-format";
+import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
 
 /** GET /api/models is fetched once per page load and shared by every
  *  picker instance (the catalog is static within a pi-ai version). */
@@ -75,11 +71,6 @@ const LEVEL_LABEL: Record<string, string> = {
 	max: "Max",
 };
 
-/** USD per 1M tokens, compact: "$0.08 in · $0.25 out". */
-function priceLabel(cost: ModelCatalogEntry["cost"]): string {
-	const fmt = (n: number) => `$${n < 1 ? n.toFixed(2).replace(/0$/, "") : n.toFixed(2)}`;
-	return `${fmt(cost.input)}/${fmt(cost.output)}`;
-}
 
 export function ModelControl({
 	chatId,
@@ -104,15 +95,8 @@ export function ModelControl({
 }) {
 	const catalog = useModelCatalog();
 	const [open, setOpen] = useState<"model" | "thinking" | null>(null);
-	const [query, setQuery] = useState("");
 	const [error, setError] = useState<string | null>(null);
-	/** The arrow-walked result (owner polish, 2026-09-17): arrows move it
-	 *  through `results` while focus STAYS in the search field; Enter
-	 *  picks it (or the first result when nothing is walked). */
-	const [menuIdx, setMenuIdx] = useState<number | null>(null);
-	const searchRef = useRef<HTMLInputElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
-	const listRef = useRef<HTMLUListElement>(null);
 
 	const defaults = catalog?.defaults;
 	const effectiveId = noDefaultModel
@@ -124,15 +108,6 @@ export function ModelControl({
 	const entry = catalog?.models.find((m) => m.id === effectiveId);
 	const levels = entry?.supportedLevels ?? [];
 
-	// Focus the search box when the model menu opens (pi's /model feel).
-	useEffect(() => {
-		if (open === "model") searchRef.current?.focus();
-	}, [open]);
-	// Keep the arrow-walked result visible in the scrolling list.
-	useEffect(() => {
-		if (open !== "model" || menuIdx === null) return;
-		listRef.current?.querySelector(`[data-idx="${menuIdx}"]`)?.scrollIntoView({ block: "nearest" });
-	}, [menuIdx, open]);
 
 	// The intuitive dropdown contract (owner, stats-control round 1): any
 	// click outside the open menu — or an Esc keypress — closes it. Only the
@@ -199,9 +174,7 @@ export function ModelControl({
 	useEffect(() => {
 		const onOpenPicker = () => {
 			setOpen("model");
-			setQuery("");
 			setError(null);
-			setMenuIdx(null);
 		};
 		window.addEventListener("lh:kbd-open-model-picker", onOpenPicker);
 		return () => window.removeEventListener("lh:kbd-open-model-picker", onOpenPicker);
@@ -230,12 +203,6 @@ export function ModelControl({
 		void save({ ...(settings ?? {}), model: { provider: m.provider, id: m.id }, thinkingLevel: nextLevel });
 	};
 
-	// The filtered, ranked model list.
-	const results = (catalog?.models ?? [])
-		.map((m) => ({ m, s: fuzzyScore(query, m.provider, m.id, m.name) }))
-		.filter((r) => r.s !== null)
-		.sort((a, b) => (b.s! - a.s!) || a.m.id.localeCompare(b.m.id))
-		.map((r) => r.m);
 
 	return (
 		<div ref={containerRef} className="relative flex items-center gap-1.5" data-testid="model-control">
@@ -244,9 +211,7 @@ export function ModelControl({
 				data-testid="stats-model"
 				onClick={() => {
 					setOpen((o) => (o === "model" ? null : "model"));
-					setQuery("");
 					setError(null);
-					setMenuIdx(null);
 				}}
 				aria-expanded={open === "model"}
 				title="Conversation model — applies next turn"
@@ -277,82 +242,20 @@ export function ModelControl({
 				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>
 
+			{/* The shared dropdown body (extracted 2026-09-20): the agent
+			    settings' role selects use the exact same one. */}
 			{open === "model" && (
 				<div
 					data-testid="model-menu"
 					className="absolute bottom-full right-0 z-40 mb-1.5 flex w-[22rem] flex-col rounded-xl border bg-card p-2 text-xs shadow-xl"
 				>
-					<input
-						ref={searchRef}
-						data-testid="model-search"
-						value={query}
-						onChange={(e) => {
-							setQuery(e.target.value);
-							setMenuIdx(null); // new query → the walk restarts on Enter/↓
-						}}
-						// The menu keyboard machine (owner polish): focus STAYS in the
-						// search field — ↑/↓ walk the filtered results (clamped, no
-						// wrap), Enter picks the walked row (or the first result when
-						// nothing is walked). stopPropagation keeps these keys out of
-						// every other listener while the menu is open.
-						onKeyDown={(e) => {
-							if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-								e.preventDefault();
-								e.stopPropagation();
-								if (results.length === 0) return;
-								setMenuIdx((i) =>
-									e.key === "ArrowDown"
-										? Math.min((i ?? -1) + 1, results.length - 1)
-										: Math.max((i ?? results.length) - 1, 0),
-								);
-							} else if (e.key === "Enter") {
-								const chosen = results[menuIdx ?? 0];
-								if (chosen) {
-									e.preventDefault();
-									e.stopPropagation();
-									pickModel(chosen);
-								}
-							}
-						}}
-						placeholder="Search models…"
-						className="lh-input mb-1.5 w-full rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
-					/>
 					{error && <div className="mb-1.5 text-destructive">{error}</div>}
-					{!catalog && (
-						<div className="px-2 py-3 text-center text-muted-foreground">Loading models…</div>
-					)}
-					{catalog && results.length === 0 && (
-						<div className="px-2 py-3 text-center text-muted-foreground">No models match.</div>
-					)}
-					<ul ref={listRef} data-testid="model-list" className="flex max-h-72 flex-col overflow-y-auto px-1">
-						{results.map((m, i) => (
-							<li key={`${m.provider}/${m.id}`}>
-								<button
-									type="button"
-									data-testid={`model-option-${m.id.replace(/[^a-z0-9-]/gi, "_")}`}
-									data-idx={i}
-									onClick={() => pickModel(m)}
-									className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted ${
-										i === menuIdx ? "bg-accent/40 ring-1 ring-inset ring-border" : ""
-									}${m.id === effectiveId && i !== menuIdx ? " bg-muted/60" : ""}`}
-								>
-									<span className="flex items-center justify-between gap-2">
-										<span className="truncate text-card-foreground">{m.name}</span>
-										<span className="shrink-0 tabular-nums text-muted-foreground" title="USD per 1M tokens in/out">
-											{priceLabel(m.cost)}
-										</span>
-									</span>
-									<span className="flex items-center justify-between gap-2 text-muted-foreground">
-										<span className="truncate">{m.id}</span>
-										<span className="shrink-0 tabular-nums">{formatTokens(m.contextWindow)}</span>
-									</span>
-								</button>
-							</li>
-						))}
-					</ul>
-					<div className="mt-1 border-t px-2 pt-1.5 text-xs text-muted-foreground">
-						Applies to the next turn · background agents stay config-pinned
-					</div>
+					<ModelMenuList
+						models={catalog?.models}
+						effectiveId={effectiveId}
+						onPick={pickModel}
+						footer="Applies to the next turn · background agents stay config-pinned"
+					/>
 				</div>
 			)}
 
@@ -361,30 +264,14 @@ export function ModelControl({
 					data-testid="thinking-menu"
 					className="absolute bottom-full right-0 z-40 mb-1.5 flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
 				>
-					{!catalog && <div className="px-2 py-3 text-center text-muted-foreground">Loading…</div>}
-					{catalog && levels.length === 0 && (
-						<div className="px-2 py-3 text-center text-muted-foreground">
-							{effectiveId ? `${prettyModel(effectiveId)} has no thinking levels.` : "Pick a model first."}
-						</div>
-					)}
-					{levels.map((level) => (
-						<button
-							key={level}
-							type="button"
-							data-testid={`thinking-option-${level}`}
-							onClick={() => void save({ ...(settings ?? {}), thinkingLevel: level })}
-							className={`flex items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted ${
-								level === effectiveLevel ? "bg-muted/60 text-card-foreground" : "text-card-foreground"
-							}`}
-						>
-							<span>{LEVEL_LABEL[level] ?? level}</span>
-							{level === effectiveLevel && <span aria-hidden>✓</span>}
-						</button>
-					))}
+					<ThinkingMenuList
+						levels={catalog ? levels : []}
+						effectiveLevel={effectiveLevel}
+						onPick={(level) => void save({ ...(settings ?? {}), thinkingLevel: level as ChatSettings["thinkingLevel"] })}
+						empty={catalog ? (effectiveId ? `${prettyModel(effectiveId)} has no thinking levels.` : "Pick a model first.") : "Loading…"}
+						footer="Levels this model actually supports"
+					/>
 					{error && <div className="mt-1 text-destructive">{error}</div>}
-					<div className="mt-1 border-t px-2 pt-1.5 text-xs text-muted-foreground">
-						Levels this model actually supports
-					</div>
 				</div>
 			)}
 		</div>

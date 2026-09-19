@@ -1,34 +1,40 @@
 "use client";
 /**
- * The Agent section (thin settings wave): background-role model overrides,
- * the tool toggles, and the prompt override switches — three blocks, ONE
- * section (PUT /api/settings/agent replaces the whole agent object, so
- * every change composes models+tools+prompts together from the record).
+ * The Agent section (settings-app wave): background-role model overrides,
+ * the tool toggles, and the prompt override switches — three GROUPS
+ * (owner, 2026-09-20: clear separation — Models / Tools / System prompts),
+ * ONE section (PUT /api/settings/agent replaces the whole agent object,
+ * so every change composes models+tools+prompts together from the record).
+ *
+ * The role selects (owner, 2026-09-20) are the EXACT same dropdown as the
+ * chat model selector — the shared ModelMenuList/ThinkingMenuList from
+ * ./model-menu.tsx (fuzzy search, arrow-walk, Enter pick). The collapsed
+ * trigger keeps the thin select look; the opened menu is the model
+ * picker's. Menus open DOWNWARD here (the dialog sits mid-screen); the
+ * chat control opens upward — the shell belongs to each mount, the body
+ * is shared.
  *
  * Tools — the owner's final list (2026-09-19): research, demo, visual, pdf.
  * Absent key = enabled in the schema; the UI writes explicit booleans for
  * all four (simpler to reason about, sanitize-equivalent).
  *
- * Models: each of the six background roles gets a Default option (absent
- * override = config.ts's pin) plus the /api/models catalog. The thinking
- * select shows the CHOSEN model's supported levels when a model override
- * exists; without one the factory model is unknown client-side, so the
- * standard levels list (the server sanitizer accepts any valid level).
+ * Models: each of the six background roles defaults to config.ts's pin
+ * (no override). The Default row clears the model override; the stored id
+ * stays VISIBLE even when the catalog no longer contains it — a trigger
+ * showing "Default" over a live override would lie about the record.
  *
  * Prompts: GET /api/settings/prompts segments; the switch requires an
- * override FILE (route-enforced), the text writes through the segment
- * route. Switch state lives in this section's PUT; text does not.
+ * override FILE (route-enforced), so a file-less row dims whole-row
+ * (graph-view graying) until one is written. Switch state lives in this
+ * section's PUT; text writes through the segment route.
  */
 
-import { useEffect, useState } from "react";
-import {
-	BACKGROUND_MODEL_ROLES,
-	type AgentSettings,
-	type BackgroundModelRole,
-} from "@/src/core";
+import { useEffect, useRef, useState } from "react";
+import { BACKGROUND_MODEL_ROLES, type AgentSettings, type BackgroundModelRole, type ModelCatalogEntry } from "@/src/core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ModelCatalogEntry } from "@/src/core";
-import { SettingsRow, ThinSelect, Toggle } from "./controls.tsx";
+import { prettyModel } from "@/components/usage-format";
+import { SettingsGroup, SettingsRow, Toggle } from "./controls.tsx";
+import { ModelMenuList, ThinkingMenuList } from "./model-menu";
 
 /** The role's display label — schema ids are camelCase, the label is human. */
 const ROLE_LABEL: Record<BackgroundModelRole, string> = {
@@ -91,6 +97,41 @@ export function composePromptSwitch(agent: AgentSettings | undefined, path: stri
 	return { ...agent, prompts };
 }
 
+/** The collapsed select look (owner: "the look of the collapsed menu is
+ *  good") — now a button that opens the shared model-picker dropdown. */
+function MenuTrigger({
+	value,
+	emptyLabel,
+	ariaLabel,
+	testid,
+	open,
+	onClick,
+}: {
+	value: string;
+	/** What the trigger shows when there is no override ("Default"). */
+	emptyLabel: string;
+	ariaLabel: string;
+	testid: string;
+	open: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			aria-label={ariaLabel}
+			aria-expanded={open}
+			data-testid={testid}
+			onClick={onClick}
+			className="flex h-7 items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+		>
+			<span className="max-w-52 truncate">{value || emptyLabel}</span>
+			<span aria-hidden className="text-muted-foreground">
+				▾
+			</span>
+		</button>
+	);
+}
+
 export function AgentSection({
 	agent,
 	onSectionChange,
@@ -104,8 +145,11 @@ export function AgentSection({
 	const [openSegment, setOpenSegment] = useState<string | null>(null);
 	const [segmentDraft, setSegmentDraft] = useState<Record<string, string>>({});
 	const [segmentStatus, setSegmentStatus] = useState<string | null>(null);
+	/** One open dropdown for the whole section: which role, which kind. */
+	const [openMenu, setOpenMenu] = useState<{ role: BackgroundModelRole; kind: "model" | "thinking" } | null>(null);
+	const menuAnchorRef = useRef<HTMLSpanElement>(null);
 
-	// The catalog + the prompt segments — one fetch each per page load.
+	// The catalog + the prompt segments — one fetch each per section mount.
 	useEffect(() => {
 		fetch("/api/models")
 			.then((r) => r.json())
@@ -116,6 +160,35 @@ export function AgentSection({
 			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body))
 			.catch(() => setPrompts(null));
 	}, []);
+
+	// The dropdown contract (the chat model selector's, mirrored): any
+	// click outside the open menu — or an Esc — closes it. Esc is CLAIMED
+	// with stopPropagation so the settings dialog behind does NOT also
+	// close. A pointerdown on the backdrop is left for the dialog (its own
+	// click closes everything); a click inside the dialog just closes us.
+	useEffect(() => {
+		if (openMenu === null) return;
+		const onPointerDown = (e: PointerEvent) => {
+			const target = e.target as Node;
+			if (menuAnchorRef.current?.contains(target)) return;
+			if (target instanceof Element && target.closest('[role="dialog"]')) {
+				setOpenMenu(null);
+			}
+			// else: outside the dialog — the dialog's own close handles it.
+		};
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				e.stopPropagation();
+				setOpenMenu(null);
+			}
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", onPointerDown);
+			document.removeEventListener("keydown", onKeyDown);
+		};
+	}, [openMenu]);
 
 	async function saveSegment(path: string, text: string) {
 		setSegmentStatus(null);
@@ -147,6 +220,22 @@ export function AgentSection({
 			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body));
 	}
 
+	/** The pinned Default row — clears this control's override (absent key
+	 *  = config pin). Same row language as the shared menu's list rows. */
+	const defaultRow = (active: boolean, onPick: () => void) => (
+		<button
+			type="button"
+			data-testid="menu-default"
+			onClick={onPick}
+			className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted ${
+				active ? "bg-muted/60 text-card-foreground" : "text-card-foreground"
+			}`}
+		>
+			<span>Default</span>
+			{active && <span aria-hidden>✓</span>}
+		</button>
+	);
+
 	const segmentRow = (info: SegmentInfo) => {
 		const fileExists = info.overrideText !== null;
 		const open = openSegment === info.path;
@@ -154,8 +243,9 @@ export function AgentSection({
 			<div key={info.path} data-testid={`prompt-segment-${info.path}`}>
 				<SettingsRow
 					label={info.path}
-					hint={fileExists ? undefined : "no override file — write one below to enable the switch"}
+					hint={fileExists ? undefined : "no override file yet — write one below"}
 					testid={`prompt-row-${info.path}`}
+					dimmed={!fileExists}
 				>
 					<Toggle
 						checked={info.enabled && fileExists}
@@ -224,86 +314,127 @@ export function AgentSection({
 
 	return (
 		<>
-			{/* ── Models ── */}
-			{BACKGROUND_MODEL_ROLES.map((role) => {
-				const override = agent?.models?.[role];
-				const modelId = override?.model?.id ?? "";
-				const thinking = override?.thinkingLevel ?? "";
-				const chosen = catalog?.find((m) => m.id === modelId);
-				const levels = chosen ? chosen.supportedLevels : THINKING_LEVELS;
-				return (
-					<SettingsRow
-						key={role}
-						label={ROLE_LABEL[role]}
-						hint={modelId ? undefined : "Default — the config pin applies"}
-						testid={`role-row-${role}`}
-					>
-						<span className="flex items-center gap-2">
-							<ThinSelect
-								value={modelId}
-								ariaLabel={`${ROLE_LABEL[role]} model`}
-								testid={`role-model-${role}`}
-								onChange={(id) => onSectionChange(composeRoleModel(agent, role, id, thinking))}
+			<SettingsGroup label="Models" testid="group-models">
+				{BACKGROUND_MODEL_ROLES.map((role) => {
+					const override = agent?.models?.[role];
+					const modelId = override?.model?.id ?? "";
+					const thinking = override?.thinkingLevel ?? "";
+					const chosen = catalog?.find((m) => m.id === modelId);
+					// The thinking levels this role can pick: the chosen
+					// model's when one is pinned; the standard list when the
+					// config pin applies (the pin's model is unknown client-side).
+					const levels = chosen ? chosen.supportedLevels : THINKING_LEVELS;
+					const thisMenuOpen =
+						openMenu?.role === role ? openMenu.kind : null;
+					return (
+						<SettingsRow
+							key={role}
+							label={ROLE_LABEL[role]}
+							hint={modelId ? undefined : "Default — the config pin applies"}
+							testid={`role-row-${role}`}
+						>
+							{/* The anchor for the outside-click contract is the
+							    span holding BOTH triggers of the open menu. */}
+							<span
+								ref={thisMenuOpen ? menuAnchorRef : undefined}
+								className={`relative flex items-center gap-2 ${thisMenuOpen ? "z-10" : ""}`}
 							>
-								<option value="">Default</option>
-								{/* The stored id stays VISIBLE even when the catalog
-								    hasn't loaded (SSR) or no longer contains it —
-								    a select that silently shows "Default" over a
-								    live override would lie about the record. */}
-								{modelId && !catalog?.some((m) => m.id === modelId) && (
-									<option value={modelId}>{modelId}</option>
+								<MenuTrigger
+									value={modelId ? prettyModel(modelId) : ""}
+									emptyLabel="Default"
+									ariaLabel={`${ROLE_LABEL[role]} model`}
+									testid={`role-model-${role}`}
+									open={thisMenuOpen === "model"}
+									onClick={() => setOpenMenu(thisMenuOpen === "model" ? null : { role, kind: "model" })}
+								/>
+								<MenuTrigger
+									value={thinking}
+									emptyLabel="Default"
+									ariaLabel={`${ROLE_LABEL[role]} thinking`}
+									testid={`role-thinking-${role}`}
+									open={thisMenuOpen === "thinking"}
+									onClick={() => setOpenMenu(thisMenuOpen === "thinking" ? null : { role, kind: "thinking" })}
+								/>
+								{thisMenuOpen === "model" && (
+									<div
+										data-testid={`role-model-menu-${role}`}
+										className="absolute top-full right-0 z-40 mt-1 flex w-[22rem] flex-col rounded-xl border bg-card p-2 text-xs shadow-xl"
+									>
+										{defaultRow(
+											modelId === "",
+											() => {
+												onSectionChange(composeRoleModel(agent, role, "", thinking));
+												setOpenMenu(null);
+											},
+										)}
+										<ModelMenuList
+											models={catalog ?? undefined}
+											effectiveId={modelId || undefined}
+											onPick={(entry) => {
+												onSectionChange(composeRoleModel(agent, role, entry.id, thinking));
+												setOpenMenu(null);
+											}}
+											footer="Applied to every run of this role"
+										/>
+									</div>
 								)}
-								{catalog?.map((m) => (
-									<option key={m.id} value={m.id}>
-										{m.name}
-									</option>
-								))}
-							</ThinSelect>
-							<ThinSelect
-								value={thinking}
-								ariaLabel={`${ROLE_LABEL[role]} thinking`}
-								testid={`role-thinking-${role}`}
-								onChange={(level) => onSectionChange(composeRoleModel(agent, role, modelId, level))}
-							>
-								<option value="">Default</option>
-								{levels.map((l) => (
-									<option key={l} value={l}>
-										{l}
-									</option>
-								))}
-							</ThinSelect>
-						</span>
+								{thisMenuOpen === "thinking" && (
+									<div
+										data-testid={`role-thinking-menu-${role}`}
+										className="absolute top-full right-0 z-40 mt-1 flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+									>
+										{defaultRow(
+											thinking === "",
+											() => {
+												onSectionChange(composeRoleModel(agent, role, modelId, ""));
+												setOpenMenu(null);
+											},
+										)}
+										<ThinkingMenuList
+											levels={levels.map(String)}
+											effectiveLevel={thinking || undefined}
+											onPick={(level) => {
+												onSectionChange(composeRoleModel(agent, role, modelId, level));
+												setOpenMenu(null);
+											}}
+										/>
+									</div>
+								)}
+							</span>
+						</SettingsRow>
+					);
+				})}
+			</SettingsGroup>
+
+			<SettingsGroup label="Tools" testid="group-tools">
+				{TOGGLE_TOOLS.map((id) => (
+					<SettingsRow key={id} label={`Tool · ${id}`} testid={`tool-row-${id}`}>
+						<Toggle
+							checked={agent?.tools?.[id] ?? true}
+							label={`tool ${id}`}
+							onChange={(on) => onSectionChange(composeTool(agent, id, on))}
+						/>
 					</SettingsRow>
-				);
-			})}
+				))}
+			</SettingsGroup>
 
-			{/* ── Tools ── */}
-			{TOGGLE_TOOLS.map((id) => (
-				<SettingsRow key={id} label={`Tool · ${id}`} testid={`tool-row-${id}`}>
-					<Toggle
-						checked={agent?.tools?.[id] ?? true}
-						label={`tool ${id}`}
-						onChange={(on) => onSectionChange(composeTool(agent, id, on))}
-					/>
-				</SettingsRow>
-			))}
-
-			{/* ── Prompts ── */}
-			{prompts === null ? (
-				<p className="text-xs text-muted-foreground/70">Loading prompt segments…</p>
-			) : (
-				<div className="flex flex-col gap-4">
-					{(["prober", "teacher"] as const).map((who) => (
-						<div key={who}>
-							<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">{who}</p>
-							<div className="flex flex-col gap-2">
-								{prompts[who].map((info) => segmentRow(info))}
+			<SettingsGroup label="System prompts" testid="group-prompts">
+				{prompts === null ? (
+					<p className="text-xs text-muted-foreground/70">Loading prompt segments…</p>
+				) : (
+					<div className="flex flex-col gap-4">
+						{(["prober", "teacher"] as const).map((who) => (
+							<div key={who}>
+								<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">{who}</p>
+								<div className="flex flex-col gap-2">
+									{prompts[who].map((info) => segmentRow(info))}
+								</div>
 							</div>
-						</div>
-					))}
-					{segmentStatus && <p className="text-xs text-muted-foreground/70">{segmentStatus}</p>}
-				</div>
-			)}
+						))}
+						{segmentStatus && <p className="text-xs text-muted-foreground/70">{segmentStatus}</p>}
+					</div>
+				)}
+			</SettingsGroup>
 		</>
 	);
 }

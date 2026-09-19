@@ -15,6 +15,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { TOGGLE_TOOLS, AgentSection } from "../components/settings/agent-section.tsx";
 import { AppearanceSection, GraphSection } from "../components/settings/appearance-section.tsx";
 import { KeyboardSection } from "../components/settings/keyboard-section.tsx";
+import { SettingsDialogBody, SettingsDialogProvider } from "../components/settings/settings-dialog.tsx";
 import { KEYBOARD_ACTIONS } from "../src/core/index.ts";
 
 /** The full opening tag of the element carrying a testid — attribute
@@ -26,14 +27,50 @@ function tagOf(html: string, testid: string): string {
 	return html.slice(html.lastIndexOf("<", i), html.indexOf(">", i) + 1);
 }
 
+describe("SettingsDialog (the designed surface, SSR)", () => {
+	it("provider CLOSED: children only — no dialog, no portal content", () => {
+		const html = renderToStaticMarkup(
+			<SettingsDialogProvider>
+				<p>the app</p>
+			</SettingsDialogProvider>,
+		);
+		assert.ok(html.includes("the app"));
+		assert.ok(!html.includes("settings-backdrop"));
+		assert.ok(!html.includes("settings-dialog"));
+	});
+
+	it("the dialog frame: role=dialog + the ✕ + the five-section nav, General active", () => {
+		const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} />);
+		assert.ok(html.includes('role="dialog"'));
+		assert.ok(html.includes('aria-modal="true"'));
+		assert.ok(html.includes('aria-label="Close settings"'));
+		for (const id of ["general", "agent", "appearance", "graph", "keyboard"]) {
+			assert.ok(html.includes(`data-testid="settings-nav-${id}"`), id);
+		}
+		// General is the landing section; the others are not current.
+		assert.ok(tagOf(html, "settings-nav-general").includes('aria-current="true"'));
+		assert.ok(tagOf(html, "settings-nav-keyboard").includes('aria-current="false"'));
+		// Fetches don't run under SSR — the loading state IS the SSR state.
+		assert.ok(html.includes("Loading settings…"));
+		// Modal-only doctrine: no link back to /settings anywhere in it.
+		assert.ok(!html.includes('href="/settings"'));
+	});
+});
+
 describe("AgentSection (thin SSR)", () => {
-	it("renders all six background-role rows, Default-first selects", () => {
+	it("renders all six background-role rows, Default-triggered dropdowns", () => {
 		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
 		for (const role of ["researcher", "demoBuilder", "visualMaker", "extractor", "auditor", "labeler"]) {
 			assert.ok(html.includes(`data-testid="role-row-${role}"`), role);
-			assert.ok(html.includes(`data-testid="role-model-${role}"`), `${role} model select`);
+			// The shared model-picker dropdown as the opened menu (owner,
+			// 2026-09-20), the thin trigger as the collapsed look.
+			assert.ok(html.includes(`data-testid="role-model-${role}"`), `${role} model trigger`);
+			assert.ok(html.includes(`data-testid="role-thinking-${role}"`), `${role} thinking trigger`);
 		}
-		assert.equal((html.match(/>Default<\/option>/g) ?? []).length, 12, "six roles × two selects");
+		assert.equal((html.match(/>Default<\/span>/g) ?? []).length, 12, "six roles × two Default triggers");
+		assert.ok(html.includes('data-testid="group-models"'), "Models sub-group");
+		assert.ok(html.includes('data-testid="group-tools"'), "Tools sub-group");
+		assert.ok(html.includes('data-testid="group-prompts"'), "System prompts sub-group");
 	});
 
 	it("renders the owner's FINAL tool list — research, demo, visual, pdf", () => {
@@ -59,9 +96,9 @@ describe("AgentSection (thin SSR)", () => {
 				onSectionChange={() => {}}
 			/>,
 		);
-		// SSR has no catalog: the stored id renders as its own option (a select
-		// that showed "Default" over a live override would lie about the record).
-		assert.ok(html.includes(`value="z-ai/glm-4.7-flash" selected=""`), "the override id is selected, visible");
+		// The trigger shows the stored id even with no catalog loaded (a
+		// trigger reading "Default" over a live override would lie).
+		assert.ok(html.includes("Glm 4.7 Flash"), "the override id is visible (prettyModel form)");
 		assert.ok(tagOf(html, "toggle-tool-demo").includes('aria-checked="false"'), "demo off");
 		assert.ok(tagOf(html, "toggle-tool-visual").includes('aria-checked="true"'), "visual still on");
 	});
@@ -105,7 +142,9 @@ describe("AppearanceSection (thin SSR)", () => {
 	it("mode is rendered DISABLED — dark-only this wave, no lying control", () => {
 		const html = renderToStaticMarkup(<AppearanceSection appearance={undefined} onSectionChange={() => {}} />);
 		assert.ok(tagOf(html, "select-mode").includes("disabled"), "mode select disabled");
-		assert.ok(html.includes("Light mode ships with the design wave"));
+		assert.ok(html.includes("Light ships with the design wave"));
+		// The whole row dims, graph-view style (the control never adds its own).
+		assert.ok(tagOf(html, "row-mode").includes("opacity-40"), "mode row dims whole");
 	});
 
 	it("hex inputs carry the factory placeholders; prose size resolves against the factory", () => {
@@ -113,7 +152,7 @@ describe("AppearanceSection (thin SSR)", () => {
 		assert.ok(html.includes(`placeholder="#141414"`));
 		assert.ok(html.includes(`placeholder="Source Sans 3"`));
 		assert.ok(html.includes(`placeholder="#c96b4a"`));
-		assert.ok(html.includes("16px — prose, inputs, session titles scale together"));
+		assert.ok(html.includes("16px"));
 	});
 
 	it("a set background shows in the input, not the placeholder", () => {

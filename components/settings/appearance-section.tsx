@@ -11,8 +11,9 @@
  * light palette is the design wave's work, and a lying control is worse
  * than an honest disabled one.
  *
- * Graph is the dependency ladder (owner decision, 2026-09-19): a disabled
- * parent grays its dependents — stored values persist but resolve inert.
+ * Graph graying (owner, 2026-09-20) follows the graph viewer's render-panel
+ * convention: the whole row dims when a parent is off (stored values
+ * persist but resolve inert — the switch shows stored, the dim effective).
  */
 
 import type { AppearanceSettings, GraphSettings } from "@/src/core";
@@ -33,14 +34,14 @@ export function AppearanceSection({
 
 	return (
 		<>
-			<SettingsRow label="Mode" hint="Light mode ships with the design wave" testid="row-mode">
+			<SettingsRow label="Mode" hint="Light ships with the design wave" testid="row-mode" dimmed>
 				<ThinSelect value="dark" ariaLabel="mode" onChange={() => {}} testid="select-mode" disabled>
 					<option value="dark">Dark</option>
 				</ThinSelect>
 			</SettingsRow>
 			<SettingsRow
 				label="Background"
-				hint={`One color; raised/accent/edges derive from it. Empty = the dark default (${resolved.background ?? "#141414"})`}
+				hint={`Empty = ${resolved.background ?? "#141414"}`}
 				testid="row-background"
 			>
 				<CommitInput
@@ -53,7 +54,7 @@ export function AppearanceSection({
 			</SettingsRow>
 			<SettingsRow
 				label="Reading font"
-				hint="Font family name, by name — everything that reads today's Source Sans 3. Empty = Source Sans 3"
+				hint="Empty = Source Sans 3"
 				testid="row-font"
 			>
 				<CommitInput
@@ -64,7 +65,7 @@ export function AppearanceSection({
 					onCommit={(v) => onSectionChange({ ...appearance, fontFamily: v === "" ? null : v })}
 				/>
 			</SettingsRow>
-			<SettingsRow label="Reading font size" hint={`${resolved.proseFontSize}px — prose, inputs, session titles scale together`} testid="row-prose-size">
+			<SettingsRow label="Reading font size" hint={`${resolved.proseFontSize}px`} testid="row-prose-size">
 				<CommitInput
 					type="number"
 					value={String(appearance?.proseFontSize ?? "")}
@@ -78,14 +79,14 @@ export function AppearanceSection({
 					}}
 				/>
 			</SettingsRow>
-			<SettingsRow label="Session names in serif" hint="CMU Serif titles on/off" testid="row-session-serif">
+			<SettingsRow label="Session names in serif" testid="row-session-serif">
 				<Toggle
 					checked={appearance?.sessionNameSerif ?? true}
 					label="session names serif"
 					onChange={(on) => onSectionChange({ ...appearance, sessionNameSerif: on })}
 				/>
 			</SettingsRow>
-			<SettingsRow label="Heading weight" hint={`${resolved.mdRendering.headingWeight} — CSS resolves the nearest cut`} testid="row-heading-weight">
+			<SettingsRow label="Heading weight" hint={`${resolved.mdRendering.headingWeight}`} testid="row-heading-weight">
 				<CommitInput
 					type="number"
 					value={String(md?.headingWeight ?? "")}
@@ -102,7 +103,7 @@ export function AppearanceSection({
 					}}
 				/>
 			</SettingsRow>
-			<SettingsRow label="Bold color" hint="**Bold** spans in teaching prose. Empty = the default ink" testid="row-bold-color">
+			<SettingsRow label="Bold color" hint="Empty = #c96b4a" testid="row-bold-color">
 				<CommitInput
 					value={md?.boldColor ?? ""}
 					placeholder="#c96b4a"
@@ -111,7 +112,7 @@ export function AppearanceSection({
 					onCommit={(v) => onSectionChange({ ...appearance, mdRendering: { ...md, boldColor: v === "" ? null : v } })}
 				/>
 			</SettingsRow>
-			<SettingsRow label="Italic color" hint="*Italic* spans. Empty = the default ink" testid="row-italic-color">
+			<SettingsRow label="Italic color" hint="Empty = #6fa9d6" testid="row-italic-color">
 				<CommitInput
 					value={md?.italicColor ?? ""}
 					placeholder="#6fa9d6"
@@ -128,12 +129,11 @@ const LADDER: readonly {
 	key: keyof GraphSettings;
 	label: string;
 	needs: keyof GraphSettings | null;
-	hint: string;
 }[] = [
-	{ key: "enabled", label: "Graph", needs: null, hint: "Master: off = no extraction, embedding, or injection" },
-	{ key: "embedding", label: "Embedding", needs: "enabled", hint: "Vectors + graph-context injection" },
-	{ key: "clustering", label: "Clustering", needs: "embedding", hint: "Cluster computation + settle" },
-	{ key: "labeling", label: "Labeling", needs: "clustering", hint: "The LLM cluster-namer" },
+	{ key: "enabled", label: "Graph", needs: null },
+	{ key: "embedding", label: "Embedding", needs: "enabled" },
+	{ key: "clustering", label: "Clustering", needs: "embedding" },
+	{ key: "labeling", label: "Labeling", needs: "clustering" },
 ];
 
 export function GraphSection({
@@ -159,11 +159,11 @@ export function GraphSection({
 	};
 	return (
 		<>
-			{LADDER.map(({ key, label, needs, hint }) => {
+			{LADDER.map(({ key, label, needs }) => {
 				// Touchable only when every ancestor is EFFECTIVELY on.
 				const parentOn = needs === null ? true : effective[needs];
 				return (
-					<SettingsRow key={key} label={label} hint={!parentOn ? `${hint} — needs ${needs} on` : hint} testid={`graph-row-${key}`}>
+					<SettingsRow key={key} label={label} testid={`graph-row-${key}`} dimmed={!parentOn}>
 						<Toggle
 							checked={stored[key]}
 							disabled={!parentOn}

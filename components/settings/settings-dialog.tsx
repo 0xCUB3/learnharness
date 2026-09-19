@@ -42,28 +42,15 @@ import { AgentSection } from "./agent-section.tsx";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 
+/** Owner (2026-09-20): hints earn their place — mechanics-explaining
+ *  prose is out; only the keyboard note stays (storage location is a
+ *  real question users ask). */
 const SECTIONS = [
-	{ id: "general", label: "General", hint: "App-level behavior" },
-	{
-		id: "agent",
-		label: "Agent",
-		hint: "Background-role models, tools, and prompt overrides",
-	},
-	{
-		id: "appearance",
-		label: "Appearance",
-		hint: "Applied live as CSS variables",
-	},
-	{
-		id: "graph",
-		label: "Graph",
-		hint: "Dependency ladder — a disabled rung grays everything below it",
-	},
-	{
-		id: "keyboard",
-		label: "Keyboard",
-		hint: "Rebinds apply instantly — stored in this browser",
-	},
+	{ id: "general", label: "General" },
+	{ id: "agent", label: "Agent" },
+	{ id: "appearance", label: "Appearance" },
+	{ id: "graph", label: "Graph" },
+	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
 
@@ -253,7 +240,6 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 							{active === "general" && (
 								<SettingsSection
 									title="General"
-									hint="App-level behavior"
 									testid="section-general"
 								>
 									<SettingsRow
@@ -274,7 +260,6 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 							{active === "agent" && (
 								<SettingsSection
 									title="Agent"
-									hint="Background-role models, tools, and prompt overrides"
 									testid="section-agent"
 								>
 									<AgentSection
@@ -288,7 +273,6 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 							{active === "appearance" && (
 								<SettingsSection
 									title="Appearance"
-									hint="Applied live as CSS variables"
 									testid="section-appearance"
 								>
 									<AppearanceSection
@@ -302,7 +286,6 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 							{active === "graph" && (
 								<SettingsSection
 									title="Graph"
-									hint="Dependency ladder — a disabled rung grays everything below it"
 									testid="section-graph"
 								>
 									<GraphSection
@@ -316,7 +299,7 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 							{active === "keyboard" && (
 								<SettingsSection
 									title="Keyboard"
-									hint="Rebinds apply instantly — stored in this browser"
+									hint="Stored on this device"
 									testid="section-keyboard"
 								>
 									<KeyboardSection />
