@@ -6,6 +6,7 @@
  * components never import from the server band).
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { BackgroundModelRole } from "../settings.ts";
 
 /** One picker row: everything the UI shows about a model, projected from
  *  pi-ai's catalog. Costs are USD per 1M tokens (the same catalog, the same
@@ -32,8 +33,20 @@ export interface CatalogDefaults {
 	thinkingLevel: ThinkingLevel;
 }
 
+/** One background role's RESOLVED pin (settings interlude, 2026-09-19):
+ *  the user's agent-models override falling back to the config.ts MODELS
+ *  pin — what that role actually runs today. The settings UI shows each
+ *  agent-role row's "Default: <this>" caption from it. */
+export type RolePins = Record<
+	BackgroundModelRole,
+	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel }
+>;
+
 /** GET /api/models response. */
 export interface ModelCatalogResponse {
 	models: ModelCatalogEntry[];
 	defaults: CatalogDefaults;
+	/** The six background roles' resolved pins (same resolution the agent
+	 *  factories use — src/server/stores.ts effectiveSettings). */
+	rolePins: RolePins;
 }

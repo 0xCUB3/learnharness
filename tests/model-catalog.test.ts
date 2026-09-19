@@ -1,9 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { modelCatalog, validateChatSettings, catalogDefaultsFor, toModelDto } from "../src/server/model-catalog.ts";
+import { modelCatalog, validateChatSettings, catalogDefaultsFor, toModelDto, rolePinsFor, catalogRolePins } from "../src/server/model-catalog.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { MODELS } from "../config.ts";
 import { piEngineFor } from "../src/agent/models.ts";
+import { BACKGROUND_MODEL_ROLES, type BackgroundModelRole } from "../src/core/settings.ts";
+import { resolveSettings } from "../src/core/settings-resolution.ts";
+import { BACKGROUND_MODEL_PINS } from "../src/server/stores.ts";
 
 // The model-control wave (2026-09-12): pi-ai owns the registry — these pins
 // hold our projection + validation honest against the shipped catalog, and
@@ -59,6 +62,38 @@ describe("the model catalog projection", () => {
 		assert.deepEqual(dto.supportedLevels, getSupportedThinkingLevels(raw));
 		assert.equal(dto.cost.input, raw.cost.input);
 		assert.equal(dto.contextWindow, raw.contextWindow);
+	});
+});
+
+describe("the background roles' resolved pins (rolePins)", () => {
+	it("no overrides → every role pins its config MODELS spec, nested DTO shape, all six roles", () => {
+		const pins = rolePinsFor(resolveSettings(null, BACKGROUND_MODEL_PINS).agent.models);
+		assert.deepEqual(Object.keys(pins), [...BACKGROUND_MODEL_ROLES]);
+		for (const role of BACKGROUND_MODEL_ROLES) {
+			assert.deepEqual(pins[role].model, { provider: "openrouter", id: MODELS[role].model });
+			assert.equal(pins[role].thinkingLevel, MODELS[role].effort);
+		}
+		// the vision pin rides along like any other
+		assert.equal(pins.visualMaker.model.id, "qwen/qwen3.8-flash");
+	});
+
+	it("a model override wins for that role only; others stay pinned", () => {
+		const record = {
+			version: 1,
+			agent: { models: { researcher: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } } } },
+		};
+		const pins = rolePinsFor(resolveSettings(record, BACKGROUND_MODEL_PINS).agent.models);
+		assert.equal(pins.researcher.model.id, "qwen/qwen3.8-flash");
+		assert.equal(pins.researcher.thinkingLevel, MODELS.researcher.effort, "level stays the pin unless overridden too");
+		assert.equal(pins.visualMaker.model.id, MODELS.visualMaker.model);
+		assert.equal(pins.labeler.model.id, MODELS.labeler.model);
+	});
+
+	it("a thinkingLevel-only override keeps the model, changes the level", () => {
+		const record = { version: 1, agent: { models: { extractor: { thinkingLevel: "high" as const } } } };
+		const pins = rolePinsFor(resolveSettings(record, BACKGROUND_MODEL_PINS).agent.models);
+		assert.equal(pins.extractor.model.id, MODELS.extractor.model);
+		assert.equal(pins.extractor.thinkingLevel, "high");
 	});
 });
 
