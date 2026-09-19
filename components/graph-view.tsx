@@ -373,8 +373,14 @@ function GraphSettingsControl({
 				// floor of free space above the window bottom at any height,
 				// and the overflow-y-auto column (which also zeroes the flex
 				// item's min-height) scrolls instead of stretching the page.
-				<div className="absolute right-0 top-full mt-2 flex max-h-[60vh] w-64 flex-col rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
-					<div className="flex flex-col gap-2 overflow-y-auto">
+				// w-72 + inner pr (owner, 2026-09-20): the scrollbar used to
+				// press against the content — the panel widens so the scroll
+				// gutter gets real air. Spacing concentric: content -> 10px
+				// (pr-2.5) -> scrollbar -> 10px (p-2.5) -> panel edge. The
+				// scrollbar itself does NOT move: it stays pinned at the same
+				// distance from the panel's right border.
+				<div className="absolute right-0 top-full mt-2 flex max-h-[60vh] w-72 flex-col rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
+					<div className="flex flex-col gap-2 overflow-y-auto pr-2.5">
 							{/* Size/zoom/region sliders: LADDER-mapped 0-100, step 10 (11
 							    stops, every DEFAULT dead-center at 50, every value a nice
 							    number — src/core/render-settings.ts). Physics keeps the
