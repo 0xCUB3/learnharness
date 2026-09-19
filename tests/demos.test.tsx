@@ -42,7 +42,7 @@ import { SubagentSteerCard } from "../components/artifacts/steer-card.tsx";
 import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
 import { JobCard } from "../components/artifacts/job-card.tsx";
 import { JobsContext } from "../components/jobs-context.ts";
-import { demoInputSchema, jobTools, visualInputSchema } from "../src/agent/tools/jobs.ts";
+import { demoInputSchema, jobTools, pdfInputSchema, visualInputSchema } from "../src/agent/tools/jobs.ts";
 import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
 import { createJobRunner, demoModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
@@ -172,6 +172,9 @@ function noChromeHeadless(): HeadlessApi {
 			throw new Error("should not run");
 		},
 		renderSvg: async () => {
+			throw new Error("should not render");
+		},
+		renderPdfPages: async () => {
 			throw new Error("should not render");
 		},
 	};
@@ -367,6 +370,39 @@ describe("steer card rendering (the delivered artifact)", () => {
 		assert.ok(!/<details[^>]*open/.test(html), "collapsed by default — no `open` attribute");
 		assert.ok(html.includes("founded the Academy"), "the persisted brief rides inside the details");
 		assert.ok(html.includes("britannica.com/plato"), "source links ride inside the details");
+	});
+
+	it("renders a quiet PDF-reading-complete one-liner (sources v0) whose collapsed details carries the brief + pages", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jpf", kind: "pdf", toolCallId: "cpf" },
+			{
+				path: "/Users/x/course/chapter-3.pdf",
+				question: "What is the integral of x dx?",
+				brief: "The power rule appears on **page 1**: the integral of x dx is x^2/2 + C.",
+				pagesConsulted: [1, 2],
+			},
+		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		assert.match(html, /PDF/);
+		assert.match(html, /reading complete/);
+		assert.match(html, /2 pages consulted/);
+		assert.match(html, /<details[^>]*data-testid="pdf-complete-badge"/, "a real disclosure like the research badge");
+		assert.ok(!/<details[^>]*open/.test(html), "collapsed by default");
+		assert.ok(html.includes("power rule"), "the brief rides inside the details");
+		// the path/question are sub-agent context — never learner-facing chrome
+		assert.ok(!html.includes("/Users/x/course/chapter-3.pdf"), "the file path never renders");
+	});
+
+	it("renders the PDF failure brief with the failed badge when the reader FAILED", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jpf2", kind: "pdf", toolCallId: "cpf2" },
+			{ path: "/tmp/doc.pdf", question: "q", brief: "PDF failed: the file could not be opened", pagesConsulted: [] },
+		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		assert.match(html, /pdf-brief-card/);
+		assert.match(html, /failed/);
+		assert.match(html, /could not be opened/);
+		assert.ok(!html.includes("pdf-complete-badge"), "no complete badge for a failure");
 	});
 
 	it("renders the visual failure note with no svg when the build FAILED", () => {
@@ -750,14 +786,17 @@ describe("tool + renderer registry wiring", () => {
 	it("demo and visual are SERVER-EXECUTED dispatch tools with the contract schemas", () => {
 		const { runner } = testRunner();
 		const tools = jobTools({ chatId: "chat_registry", jobStore, spawn: (job) => void runner.runJob(job.id) });
-		assert.deepEqual(Object.keys(tools).sort(), ["demo", "research", "visual"]);
-		for (const name of ["demo", "visual", "research"] as const) {
+		assert.deepEqual(Object.keys(tools).sort(), ["demo", "pdf", "research", "visual"]);
+		for (const name of ["demo", "visual", "research", "pdf"] as const) {
 			assert.equal(typeof (tools[name] as { execute?: unknown }).execute, "function", `${name} executes server-side — fire-and-forget ack per THE ASYNC PROTOCOL`);
 		}
 		assert.equal(demoInputSchema.safeParse({ title: "T", brief: "b" }).success, true);
 		assert.equal(demoInputSchema.safeParse({ brief: "b" }).success, false, "demo requires a title");
 		assert.equal(visualInputSchema.safeParse({ brief: "b" }).success, true);
 		assert.equal(visualInputSchema.safeParse({}).success, false, "visual requires a brief");
+		assert.equal(pdfInputSchema.safeParse({ path: "/tmp/doc.pdf", question: "q" }).success, true);
+		assert.equal(pdfInputSchema.safeParse({ question: "q" }).success, false, "pdf requires a path");
+		assert.equal(pdfInputSchema.safeParse({ path: "/tmp/doc.pdf" }).success, false, "pdf requires a question");
 	});
 
 	it("the artifact renderer registry maps demo/visual to the W6 cards", () => {

@@ -11,7 +11,7 @@ import type { CallUsage, GraphContextData } from "./chat.ts";
 
 // ─── Async sub-agent jobs (vision §2.5; plan.md Wave 0 protocol) ────────────
 
-export type JobKind = "research" | "demo" | "visual" | "graph-context";
+export type JobKind = "research" | "demo" | "visual" | "pdf" | "graph-context";
 export type JobStatus = "running" | "done" | "error";
 
 export interface JobRecord {
@@ -119,7 +119,7 @@ export function accumulateJobUsage(
  * THE ASYNC PROTOCOL — "ack now, steer later" (the pi sub-agents model,
  * vision §2.5):
  *
- *  1. Job tools (research / demo / visual) are SERVER-EXECUTED. The model
+ *  1. Job tools (research / demo / visual / pdf) are SERVER-EXECUTED. The model
  *     calls one MID-TURN; execute creates the job record, fires the
  *     background runner, and resolves IMMEDIATELY with an acknowledgement
  *     ("dispatched — continue your turn"). The teacher's turn does NOT end
@@ -213,6 +213,28 @@ export interface VisualResult {
 	notes?: string;
 }
 
+/** The pdf-reader (sources v0, 2026-09): reads a learner-provided PDF on
+ *  the teacher's behalf — triage, targeted extraction, look-at-the-page
+ *  renders inside its own loop — and returns a text brief with page
+ *  citations (user-decided: rendered images never leave the sub-agent's
+ *  context; the teacher gets text). */
+export interface PdfToolInput {
+	/** Path to the learner's PDF (relative or absolute). */
+	path: string;
+	/** What the teacher needs from the document — focuses the brief. */
+	question: string;
+}
+
+export interface PdfResult {
+	path: string;
+	question: string;
+	/** The distilled brief. Page citations inside the text point at
+	 *  pagesConsulted. Failure shape: /^PDF failed:/i (mirrors research). */
+	brief: string;
+	/** Pages the reader actually consulted. */
+	pagesConsulted: number[];
+}
+
 // ─── Sub-agent steer messages (THE ASYNC PROTOCOL §3–4) ─────────────────────
 
 /** Message metadata marking a sub-agent steer (contracts.ts §3). */
@@ -230,7 +252,7 @@ export interface SubagentResultMeta {
 /** The data-subagent-artifact part payload: what the UI renders. */
 export interface SubagentArtifactData {
 	kind: JobKind;
-	result: ResearchResult | DemoResult | VisualResult;
+	result: ResearchResult | DemoResult | VisualResult | PdfResult;
 }
 
 /**
@@ -270,7 +292,10 @@ export type SteerMessage =
 	| GraphContextSteerMessage;
 
 /** Whether a result is the failure shape (html/svg empty, failure brief). */
-export function isSubagentFailure(kind: JobKind, result: ResearchResult | DemoResult | VisualResult): boolean {
+export function isSubagentFailure(
+	kind: JobKind,
+	result: ResearchResult | DemoResult | VisualResult | PdfResult,
+): boolean {
 	if (kind === "research") {
 		const r = result as ResearchResult;
 		return r.sources.length === 0 && /^Research failed:/i.test(r.brief);
@@ -279,12 +304,16 @@ export function isSubagentFailure(kind: JobKind, result: ResearchResult | DemoRe
 		const r = result as DemoResult;
 		return typeof r.html !== "string" || r.html.length === 0;
 	}
+	if (kind === "pdf") {
+		const r = result as PdfResult;
+		return /^PDF failed:/i.test(r.brief);
+	}
 	const r = result as VisualResult;
 	return typeof r.svg !== "string" || r.svg.length === 0;
 }
 
 /** The model-facing text of a steer: what the result IS, what to do with it. */
-function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualResult): string {
+function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualResult | PdfResult): string {
 	if (isSubagentFailure(kind, result)) {
 		if (kind === "research")
 			return `${(result as ResearchResult).brief}\n\nContinue with what you can establish and flag the uncertainty to the learner.`;
@@ -292,10 +321,14 @@ function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualRe
 			return `The demo "${(result as DemoResult).title}" could not be built: ${
 				(result as DemoResult).notes ?? "unknown reason"
 			}. Fall back to explaining in prose; if the brief was the problem, re-call demo with a tighter one.`;
+		if (kind === "pdf")
+			return `${(result as PdfResult).brief}\n\nContinue with what you can establish from the session and flag the gap to the learner.`;
 		return `The figure could not be made: ${(result as VisualResult).notes ?? "unknown reason"}. Fall back to prose or mermaid, or re-call visual with a tighter brief.`;
 	}
 	if (kind === "research")
 		return `Research complete — the researcher's full brief follows. Weave it into the lesson and cite its sources when you use its findings:\n\n${(result as ResearchResult).brief}`;
+	if (kind === "pdf")
+		return `PDF reading complete — the reader's brief on "${(result as PdfResult).path}" follows, with page citations. Weave it into the lesson and cite pages when you use it:\n\n${(result as PdfResult).brief}`;
 	if (kind === "demo")
 		return `The demo "${(result as DemoResult).title}" is built, headlessly tested, and rendered in the lesson. Builder notes: ${
 			(result as DemoResult).notes ?? "(none)"
@@ -312,7 +345,7 @@ function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualRe
  */
 export function buildSubagentSteer(
 	job: Pick<JobRecord, "id" | "kind" | "toolCallId">,
-	result: ResearchResult | DemoResult | VisualResult,
+	result: ResearchResult | DemoResult | VisualResult | PdfResult,
 ): SubagentSteerMessage {
 	return {
 		id: `steer_${job.id}`,
@@ -352,6 +385,8 @@ function abortText(kind: JobKind): string {
 		return "Research aborted — the learner aborted the research job, so no brief is coming. Acknowledge it in one line and continue teaching without it (or offer to re-dispatch it).";
 	if (kind === "demo")
 		return "The demo job was aborted by the learner — no demo is coming. Acknowledge it in one line and teach the topic in prose instead (a re-dispatch is fine if the learner wants it).";
+	if (kind === "pdf")
+		return "The PDF reading job was aborted by the learner — no brief is coming. Acknowledge it in one line and continue without it (a re-dispatch is fine if the learner wants it).";
 	return "The figure job was aborted by the learner — no figure is coming. Acknowledge it in one line and teach without it (a re-dispatch is fine if the learner wants it).";
 }
 

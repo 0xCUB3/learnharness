@@ -11,6 +11,7 @@ import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
+import { readTool } from "./tools/read.ts";
 
 export { jobTools };
 export type { ProbeDoneContext } from "./tools/probe.ts";
@@ -80,6 +81,9 @@ export function createProberTools(
 			{
 				quiz: probeQuizTool,
 				ask_user_question: askUserQuestionTool,
+				// read is always-on (user-decided 2026-09): the prober inspects
+				// learner-provided source files while assessing the edge.
+				read: readTool,
 				...done,
 			},
 			enabled,
@@ -164,6 +168,9 @@ export function createTeacherTools(
 		{
 			quiz: teachQuizToolFor(ctx),
 			ask_user_question: askUserQuestionTool,
+			// read is always-on (user-decided 2026-09): the teacher reads
+			// learner-provided sources on its own terms — nothing auto-injects.
+			read: readTool,
 			...planTools(ctx),
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn }),
 		},

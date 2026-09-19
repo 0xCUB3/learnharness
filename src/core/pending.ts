@@ -34,13 +34,14 @@ export const JOB_TOOLS = ["research", "demo", "visual"] as const;
 
 /** The tools a user may toggle off in settings (Wave 2 T2a, user-decided
  *  2026-09-15): for now only the SUB-AGENT dispatch tools — quiz,
- *  ask_user_question (and the read tool, when it lands) are always on;
+ *  ask_user_question and the read tool are always on;
  *  the long-term vision is that everything becomes toggleable as new
  *  tool variants (e.g. alternative question tools) ship, so the factory
  *  seam below is GENERIC: it honors any tool name it receives. New
  *  toggleables join this list when settings exposes them.
- *  The names are the MODEL-FACING tool names (research, not researcher). */
-export const TOGGLEABLE_TOOLS = ["research", "demo", "visual"] as const;
+ *  The names are the MODEL-FACING tool names (research, not researcher;
+ *  pdf is the PDF-reader dispatch, sources v0 2026-09). */
+export const TOGGLEABLE_TOOLS = ["research", "demo", "visual", "pdf"] as const;
 
 /** The resolved settings → factory seam shape (Platform wires chat-handler
  *  to pass this through from the settings record; storage and defaults are

@@ -21,6 +21,7 @@ const KIND_LABEL: Record<JobKind, string> = {
 	research: "Research agent",
 	demo: "Demo agent",
 	visual: "Figure agent",
+	pdf: "PDF reader",
 	// The injection is server-initiated — it has no tool part, so never a
 	// dispatch card. The entry exists only for the exhaustive record.
 	"graph-context": "Graph context",

@@ -1,10 +1,10 @@
 "use client";
 
 import { CheckIcon, CircleX } from "lucide-react";
-import type { ResearchResult, SubagentArtifactData, TeacherUIMessage } from "@/src/core";
+import type { PdfResult, ResearchResult, SubagentArtifactData, TeacherUIMessage } from "@/src/core";
 import { isSubagentFailure } from "@/src/core";
 import { DemoOutputCard } from "@/components/artifacts/demo-card";
-import { ResearchBriefCard } from "@/components/artifacts/job-card";
+import { PdfBriefCard, ResearchBriefCard } from "@/components/artifacts/job-card";
 import { VisualOutputCard } from "@/components/artifacts/visual-card";
 
 /**
@@ -48,6 +48,12 @@ export function SubagentSteerCard({ message }: { message: TeacherUIMessage }) {
 			) : (
 				<ResearchCompleteBadge result={data.result as ResearchResult} />
 			);
+		case "pdf":
+			return isSubagentFailure("pdf", data.result as PdfResult) ? (
+				<PdfBriefCard output={data.result} />
+			) : (
+				<PdfCompleteBadge result={data.result as PdfResult} />
+			);
 		case "demo":
 			return <DemoOutputCard output={data.result} />;
 		case "visual":
@@ -65,6 +71,32 @@ function AbortedBadge({ kind }: { kind: string }) {
 			<span className="font-medium uppercase tracking-wide">{kind}</span>
 			<span>aborted by the learner</span>
 		</div>
+	);
+}
+
+/** Quiet one-liner, the research-badge idiom ported to PDF: the brief is
+ * too long to inline by default and the teacher's wake turn weaves it in;
+ * the badge marks delivery, the collapsed details carries the full text
+ * + consulted pages. */
+function PdfCompleteBadge({ result }: { result: PdfResult }) {
+	return (
+		<details data-testid="pdf-complete-badge" className="group w-full text-xs text-muted-foreground">
+			<summary className="flex cursor-pointer select-none list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+				<CheckIcon className="size-3.5" />
+				<span className="font-medium uppercase tracking-wide">PDF</span>
+				<span>reading complete</span>
+				{result.pagesConsulted.length > 0 && (
+					<span>
+						· {result.pagesConsulted.length} page{result.pagesConsulted.length === 1 ? "" : "s"} consulted
+					</span>
+				)}
+				<span className="ml-1 text-xs text-muted-foreground/70 group-open:hidden">view brief</span>
+				<span className="ml-1 hidden text-xs text-muted-foreground/70 group-open:inline">hide brief</span>
+			</summary>
+			<div className="mt-2">
+				<PdfBriefCard output={result} />
+			</div>
+		</details>
 	);
 }
 

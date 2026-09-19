@@ -42,6 +42,27 @@ export function lhTool<TInput, TResult = unknown>(def: LhTool<TInput, TResult>):
 	return def;
 }
 
+/**
+ * Rich tool-result escape hatch (2026-09 sources v0): a tool whose result
+ * includes IMAGES (the read tool reading an image file) returns this shape
+ * instead of a plain value — toPiTool maps it to pi's native tool-result
+ * content parts (TextContent | ImageContent)[] so the vision-capable model
+ * actually SEES the image. `images` carries base64 data + mimeType, exactly
+ * as pi's ImageContent wants. details rides through to the record untouched.
+ */
+export interface LhToolImageResult {
+	text: string;
+	images?: { data: string; mimeType: string }[];
+	/** The record-facing result (client rendering / persistence). */
+	details?: unknown;
+}
+
+function isImageResult(v: unknown): v is LhToolImageResult {
+	return (
+		typeof v === "object" && v !== null && "text" in v && typeof (v as LhToolImageResult).text === "string"
+	);
+}
+
 /** lh's port of the SDK's invalid-input message: what the model retried on. */
 export class ToolInputError extends Error {
 	constructor(
@@ -91,11 +112,26 @@ export function toPiTool(def: LhTool<any, any>): AgentTool<any, any> {
 				};
 			}
 			const result = await def.execute(parsed.data, { toolCallId });
+			// Rich image result: model-facing content parts carry the images
+			// (pi's ToolResultMessage.content is (TextContent | ImageContent)[]).
+			if (isImageResult(result)) {
+				return {
+					content: [
+						{ type: "text", text: result.text },
+						...(result.images ?? []).map((img) => ({
+							type: "image" as const,
+							data: img.data,
+							mimeType: img.mimeType,
+						})),
+					],
+					details: result.details ?? null,
+				};
+			}
 			return {
-				// The model's view: today's parity — string results pass verbatim,
-				// objects as JSON.
-				content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }],
-				details: result,
+					// The model's view: today's parity — string results pass verbatim,
+					// objects as JSON.
+					content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }],
+					details: result,
 			};
 		},
 	};
