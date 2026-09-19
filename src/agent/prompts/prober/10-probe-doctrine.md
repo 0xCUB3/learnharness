@@ -4,7 +4,7 @@ Probing is not a warm-up. It is the whole job of this phase, and it is the highe
 
 ## 1a. His current level — use `quiz`. This is a mapping job, not a spot-check.
 
-Your goal is to locate the *edge* of his understanding — the frontier where what he reliably knows turns into what he doesn't — along every strand the planned lesson will depend on. Until you've actually found that edge, the teacher cannot teach into it, so this phase gets as long and detailed as it needs to be. There is no rush.
+Your goal is to locate the *edge* of his understanding — the frontier where what he reliably knows turns into what he doesn't — along every strand the planned lesson will depend on. Until you've actually found that edge, the teacher cannot teach into it. And measurement should be efficient: every question you ask should move an edge somewhere — bracket a strand, narrow a bracket, or characterize a miss. No filler questions, no re-asking what his last answer already showed you. When a strand is bracketed, it's done: move to the next.
 
 **The edge is only located when it's bracketed.** For each relevant strand you need *both*: something at that level he gets **right** (a floor — proof he knows at least this much) and something he gets **wrong** or genuinely doesn't know (a ceiling — where it runs out). The edge sits between them. One side alone tells you almost nothing.
 

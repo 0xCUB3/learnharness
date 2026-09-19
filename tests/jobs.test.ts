@@ -949,6 +949,29 @@ describe("prompt composition", () => {
 		}
 	});
 
+	it("the question principles compose into the teacher prompt; the probe's quick-measurement revision landed", () => {
+		const teacher = composeInstructions("teacher");
+		// the T2a doctrine fragment (user-locked wording 2026-09-15): verbatim presence
+		for (const pin of [
+			"Answerable by reasoning from the session",
+			"Never just reciting your words back",
+			"Prefer problems that apply the knowledge",
+			"Catch confusion early, and make it nameable",
+		]) {
+			assert.ok(teacher.includes(pin), `teacher prompt lost the principle: ${pin}`);
+		}
+		// it loads in sorted fragment order: right after 20-teaching, before 30-jobs
+		assert.ok(
+			teacher.indexOf("Question principles") > teacher.indexOf("# Teach — the loop"),
+			"principles sit after the teaching loop",
+		);
+		// the prober's doctrine: the "no rush" framing is gone, quick measurement in
+		const prober = composeInstructions("prober");
+		assert.ok(!prober.includes("There is no rush"), "the old no-rush framing is retired");
+		assert.ok(prober.includes("measurement should be efficient"), "the quick-measurement directive is in");
+		assert.ok(!prober.includes("Question principles"), "the teach-phase fragment never composes into the prober");
+	});
+
 	it("guards prompt size — no fragment can silently balloon (the README-leak class)", () => {
 		// The wave-1 leak: README.md (815 bytes / ~200 tokens) rode into every
 		// teacher turn until the numeric-prefix filter stopped it. This guard
