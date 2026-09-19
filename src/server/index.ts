@@ -20,12 +20,12 @@ export {
 	writeSettings as writeSettingsRecord,
 	settingsStore,
 } from "../store/settings.ts";
-export {
-	promptOverrides,
-	effectivePromptSegments,
-	allSegmentPaths,
-	isValidSegmentPath,
-} from "../store/prompt-overrides.ts";
+export { promptOverrides } from "../store/prompt-overrides.ts";
+export { isValidSegmentPath } from "../core/prompt-segments.ts";
+// The canonical segment discovery/resolution lives in the agent layer
+// (composition is an agent concern); the barrel re-exports it for the
+// routes — server→agent is the lawful direction (chat-handler precedent).
+export { effectivePromptSegments, allSegmentPaths, readPromptOverride } from "../agent/prompt-segments.ts";
 export * from "./settings-body.ts";
 export * from "./turn-liveness.ts";
 export * from "./observability.ts";

@@ -1,11 +1,10 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
 import { MODELS } from "../../config.ts";
 import { piEngineFor, thinkingLevelFor, openRouterApiKey, type PiEngine } from "./models.ts";
+import { effectivePromptSegments } from "./prompt-segments.ts";
 import {
 	askUserQuestionTool,
 	createProberTools,
@@ -42,32 +41,40 @@ import { QUESTION_TOOLS, type EnabledTools } from "../core/pending.ts";
 /** Which agent's prompt directory to compose. */
 export type AgentKind = "prober" | "teacher";
 
-const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
-
-/** A prompt fragment: numeric order key + .md (e.g. 20-teaching.md). Nothing else loads. */
-const FRAGMENT_RE = /^\d+-[\w.-]+\.md$/;
-
-/** Load one directory's fragments (sorted filename order, trimmed,
- *  empty ones dropped) — the loader enforces the numeric prefix. */
-function loadFragments(dir: string): string[] {
-	if (!fs.existsSync(dir)) return [];
-	return fs
-		.readdirSync(dir)
-		.filter((f) => FRAGMENT_RE.test(f))
-		.sort()
-		.map((f) => fs.readFileSync(path.join(dir, f), "utf-8").trim())
-		.filter(Boolean);
-}
+// P2 (2026-09-19): segment discovery + override resolution live in ONE
+// canonical place now — src/store/prompt-overrides.ts (listSourceSegments
+// mirrors this loader's rules, shared/ included). The agent imports it for
+// the static-file seam; the local fragment discovery helpers are retired.
 
 /** Exported for tests: assert what composes into the model's prompt.
  *  Composition order: shared base → shared/ fragments (both agents, the
- *  sources-v1 seam for cross-agent doctrine) → the agent's own fragments. */
-export function composeInstructions(kind: AgentKind): string {
-	const base = fs.readFileSync(PATHS.teacherPrompt, "utf-8");
-	const fragments = [...loadFragments(path.join(PROMPTS_DIR, "shared")), ...loadFragments(path.join(PROMPTS_DIR, kind))];
-	return [base.trim(), ...fragments].join("\n\n---\n\n");
+ *  sources-v1 seam for cross-agent doctrine) → the agent's own fragments.
+ *
+ *  P2 reconciliation (2026-09-19): composition is DELEGATED to the store
+ *  module's effectivePromptSegments — one canonical segment-discovery
+ *  rule (its listSourceSegments mirrors this loader's, now including
+ *  shared/) — so per-segment OVERRIDES ride the same path: a segment
+ *  whose switch is ON and whose override file exists composes the
+ *  override text instead of the source. `switches` is the settings
+ *  record's agent.prompts map (absent key = off), threaded per turn via
+ *  AgentBuildOptions.promptSwitches; a switches-less call composes pure
+ *  source (byte-identical to the pre-refactor loader — pinned in
+ *  tests/prompt-overrides.test.ts). Overrides are a static-file read
+ *  through config paths, not request state — the store import carries no
+ *  chat/job machinery. */
+export function composeInstructions(kind: AgentKind, switches?: Record<string, boolean>): string {
+	const segments = effectivePromptSegments(kind, switches ?? {});
+	return segments
+		.map((s) => (s.enabled ? s.overrideText! : s.sourceText))
+		.map((t) => t.trim())
+		.filter(Boolean)
+		.join("\n\n---\n\n");
 }
 
+// The switch-free source composition, cached per kind (module-load once).
+// With promptSwitches provided, baseAgentOptions composes FRESH per turn —
+// an override file written while its switch is ON must flip the next
+// turn's composition; the cache serves only the switches-less path.
 const composedInstructions: Record<AgentKind, string> = {
 	prober: composeInstructions("prober"),
 	teacher: composeInstructions("teacher"),
@@ -97,6 +104,12 @@ export interface AgentBuildOptions {
 	 *  THE DEFINITIVE toggleable set is TOGGLEABLE_TOOLS (job tools only);
 	 *  the filtering is generic, but writes validate against the list). */
 	toolToggles?: EnabledTools;
+	/** Per-segment system-prompt override SWITCHES (the settings record's
+	 *  agent.prompts map, absent key = off — same keys the settings routes
+	 *  and effectivePromptSegments use). Provided → the prompt composes
+	 *  fresh per turn, honoring enabled overrides (switch on + file
+	 *  exists); absent → the cached pure-source composition. */
+	promptSwitches?: Record<string, boolean>;
 }
 
 /**
@@ -133,9 +146,12 @@ function makeStopper(maxTurns: number) {
 function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: AgentTool<any, any>[]) {
 	const engine = opts.engine ?? piEngineFor(kind);
 	const stopper = makeStopper(opts.maxTurns ?? 20);
+	const systemPrompt = opts.promptSwitches
+		? composeInstructions(kind, opts.promptSwitches)
+		: composedInstructions[kind]!;
 	const agent = new Agent({
 		initialState: {
-			systemPrompt: composedInstructions[kind],
+			systemPrompt,
 			model: engine.model,
 			thinkingLevel: thinkingLevelFor(kind),
 			tools,

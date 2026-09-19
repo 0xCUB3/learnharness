@@ -29,6 +29,7 @@ export * from "./layout.ts";
 export * from "./plan-tree.ts";
 export * from "./phases.ts";
 export * from "./pending.ts";
+export * from "./prompt-segments.ts";
 export * from "./math-delims.ts";
 export * from "./ui-message.ts";
 export * from "./tool-parts.ts";

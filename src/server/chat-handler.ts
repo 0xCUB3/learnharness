@@ -222,6 +222,10 @@ export async function handleChatRequest(
 		messages: recordToPiMessages(outgoing),
 		onUsage: collectUsage,
 		toolToggles: effective.agent.tools,
+		// The prompt-override switches (P2, 2026-09-19): same resolution
+		// point as the tool delta — the agent layer composes the system
+		// prompt fresh per turn, swapping in any enabled override segments.
+		promptSwitches: effective.agent.prompts,
 	};
 	const constructed: TeachingAgent = buildAgent
 		? buildAgent(outgoing)

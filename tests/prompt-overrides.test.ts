@@ -12,12 +12,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { PROMPTS_OVERRIDE_DIR } from "../config.ts";
-import {
-	allSegmentPaths,
-	effectivePromptSegments,
-	isValidSegmentPath,
-	promptOverrides,
-} from "../src/store/prompt-overrides.ts";
+import * as teacherAgent from "../src/agent/teacher-agent.ts";
+import { allSegmentPaths, effectivePromptSegments } from "../src/agent/prompt-segments.ts";
+import { isValidSegmentPath } from "../src/core/prompt-segments.ts";
+import { promptOverrides } from "../src/store/prompt-overrides.ts";
 
 after(() => {
 	fs.rmSync(PROMPTS_OVERRIDE_DIR, { recursive: true, force: true });
@@ -28,6 +26,9 @@ describe("isValidSegmentPath (the mirror-layout discipline)", () => {
 		assert.equal(isValidSegmentPath("system-prompt.md"), true);
 		assert.equal(isValidSegmentPath("teacher/20-teaching.md"), true);
 		assert.equal(isValidSegmentPath("prober/10-probe-doctrine.md"), true);
+		// the shared/ fragments dir (sources v1): composed by BOTH agents,
+		// overridable like any other segment
+		assert.equal(isValidSegmentPath("shared/05-learner-files.md"), true);
 		for (const bad of [
 			"", // empty
 			"README.md", // no agent dir
@@ -87,14 +88,30 @@ describe("the source-derived segment list", () => {
 		assert.equal(prober[0]?.shared, true);
 		assert.equal(teacher[0]?.shared, true);
 		assert.equal(prober[0]?.sourceText.length > 0, true, "base prompt text loads");
-		// Fragments track the REAL source tree (numeric order, right agent dir).
+		// Fragments track the REAL source tree (numeric order, right agent dir),
+		// with the shared/ fragments between the base and the agent's own —
+		// the exact order composeInstructions loads them in (P2, 2026-09-19).
 		assert.deepEqual(
 			prober.map((s) => s.path),
-			["system-prompt.md", "prober/10-probe-doctrine.md", "prober/20-teaching-in-brief.md", "prober/30-probe-done.md"],
+			[
+				"system-prompt.md",
+				"shared/05-learner-files.md",
+				"prober/10-probe-doctrine.md",
+				"prober/20-teaching-in-brief.md",
+				"prober/30-probe-done.md",
+			],
 		);
 		assert.equal(teacher.some((s) => s.path === "teacher/10-planning.md"), true);
 		assert.equal(teacher.some((s) => s.path === "teacher/50-probing-in-brief.md"), true);
-		assert.equal(teacher.every((s) => s.path === "system-prompt.md" || s.path.startsWith("teacher/")), true);
+		assert.equal(
+			teacher.every(
+				(s) => s.path === "system-prompt.md" || s.path.startsWith("teacher/") || s.path.startsWith("shared/"),
+			),
+			true,
+		);
+		// the shared fragments compose for BOTH agents, same path key.
+		assert.equal(teacher.some((s) => s.path === "shared/05-learner-files.md" && s.shared), true);
+		assert.equal(prober.some((s) => s.path === "shared/05-learner-files.md" && s.shared), true);
 		// README and other non-numeric files never load.
 		assert.equal(allSegmentPaths().some((p) => p.includes("README")), false);
 	});
@@ -125,5 +142,80 @@ describe("the source-derived segment list", () => {
 		// composing — nothing here can go stale. Pinned by absence:
 		const before = allSegmentPaths().length;
 		assert.equal(before > 5, true, "base + prober fragments + teacher fragments");
+	});
+});
+
+// ─── composeInstructions honors overrides (P2 reconciliation, 2026-09-19) ────
+// This file OWNS PROMPTS_OVERRIDE_DIR (parallel-test discipline), so every
+// override-writing composition test lives here.
+
+describe("composeInstructions: override honoring + the byte-identical source path", () => {
+	const { composeInstructions, createTeacherAgent } = teacherAgent;
+
+	it("switches-less composition is byte-identical to the pre-refactor loader", () => {
+		// The old loader, rebuilt inline: base + shared/ fragments + the
+		// agent's own, trimmed, empties dropped, joined with the separator.
+		const oldLoader = (kind: "prober" | "teacher") => {
+			const fragmentsOf = (dir: string) =>
+				fs
+					.readdirSync(dir)
+					.filter((f) => /^\d+-[\w.-]+\.md$/.test(f))
+					.sort()
+					.map((f) => fs.readFileSync(path.join(dir, f), "utf-8").trim())
+					.filter(Boolean);
+			const base = fs.readFileSync("src/agent/system-prompt.md", "utf-8").trim();
+			return [
+				base,
+				...fragmentsOf("src/agent/prompts/shared"),
+				...fragmentsOf(`src/agent/prompts/${kind}`),
+			].join("\n\n---\n\n");
+		};
+		assert.equal(composeInstructions("teacher"), oldLoader("teacher"));
+		assert.equal(composeInstructions("prober"), oldLoader("prober"));
+	});
+
+	it("an enabled override swaps in; switch off or file absent composes source", () => {
+		promptOverrides.writeOverride("teacher/20-teaching.md", "CUSTOM TEACHING LOOP");
+		try {
+			const on = composeInstructions("teacher", { "teacher/20-teaching.md": true });
+			assert.ok(on.includes("CUSTOM TEACHING LOOP"), "override composes when switch on");
+			assert.ok(!on.includes("# Teach — the loop"), "source text is replaced");
+			// switch off → source default (the file stays on disk)
+			const off = composeInstructions("teacher", {});
+			assert.ok(off.includes("# Teach — the loop"), "source composes when switch off");
+			// switch on for a segment with NO file → source (enabled needs both)
+			const noFile = composeInstructions("teacher", { "teacher/10-planning.md": true });
+			assert.ok(noFile.includes("# Planning"), "file absent → source default");
+		} finally {
+			promptOverrides.deleteOverride("teacher/20-teaching.md");
+		}
+	});
+
+	it("shared/ fragments are overridable — one edit swaps the doctrine in BOTH agents", () => {
+		promptOverrides.writeOverride("shared/05-learner-files.md", "MY SHARED FILES DOCTRINE");
+		try {
+			const switches = { "shared/05-learner-files.md": true };
+			for (const kind of ["teacher", "prober"] as const) {
+				const composed = composeInstructions(kind, switches);
+				assert.ok(composed.includes("MY SHARED FILES DOCTRINE"), `${kind} composes the override`);
+				assert.ok(!composed.includes("## Learner files"), `${kind} source fragment is replaced`);
+			}
+			// switches-less: both keep the source fragment (the cached path)
+			assert.ok(composeInstructions("teacher").includes("## Learner files"));
+		} finally {
+			promptOverrides.deleteOverride("shared/05-learner-files.md");
+		}
+	});
+
+	it("promptSwitches threads through agent construction into the system prompt", () => {
+		promptOverrides.writeOverride("system-prompt.md", "TOTALLY CUSTOM BASE");
+		try {
+			const agent = createTeacherAgent(undefined, { promptSwitches: { "system-prompt.md": true } });
+			assert.ok(agent.state.systemPrompt.includes("TOTALLY CUSTOM BASE"));
+			const source = createTeacherAgent(undefined, {});
+			assert.ok(!source.state.systemPrompt.includes("TOTALLY CUSTOM BASE"), "no switches → cached source");
+		} finally {
+			promptOverrides.deleteOverride("system-prompt.md");
+		}
 	});
 });
