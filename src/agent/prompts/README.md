@@ -8,6 +8,10 @@ System prompts are composed at agent construction (src/agent/teacher-agent.ts), 
 Rules for adding a fragment:
 
 - Name it with a numeric order prefix, inside the right agent directory.
+- `shared/` fragments compose into BOTH agents (before their own, after the base) —
+  cross-agent doctrine only (e.g. `05-learner-files.md`); the "never reference the
+  other agent's tools" rule below still applies, so shared fragments may only cover
+  tools both agents actually hold.
 - One fragment per workstream — your brief tells you which filename you own.
 - Document YOUR agent's tools/behaviors exactly; reference tool input field names verbatim (they must match the zod schemas).
 - Keep it tight: fragments are always in context. No restating the base prompt.

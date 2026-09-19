@@ -34,14 +34,9 @@ without it (offering to re-dispatch is fine if the learner wants the result).
 
 ## Learner source files
 
-The learner may paste **file paths** into the chat — course PDFs, notes, screenshots, code.
-Reading them is on your own terms; nothing is injected automatically.
-
-- For quick looks at plain text or image files, call `read` directly (it returns the text or
-  shows you the image; large files come back in slices with continuation offsets).
-- For PDFs, dispatch a `pdf` job instead: it runs a background reader (triage, targeted
-  extraction, visual page reading) and returns a **brief with page citations** as a new
-  message — the same fire-and-forget discipline as research above. Give it the path exactly
-  as the learner gave it plus the specific question you need answered.
-- Ask for the path when the learner references a file they haven't given you — never ask them
-  to paste file contents into the chat.
+Locating and reading the learner's files is covered by the shared file doctrine above
+(find/ls/grep/read, home-anchored). One addition is yours alone: for **PDFs**, dispatch a
+`pdf` job instead of `read` — it runs a background reader (triage, targeted extraction,
+visual page reading) and returns a **brief with page citations** as a new message, the
+same fire-and-forget discipline as research above. Give it the path plus the specific
+question you need answered.

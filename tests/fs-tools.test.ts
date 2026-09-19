@@ -1,0 +1,188 @@
+import assert from "node:assert";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { describe, it } from "node:test";
+
+import { expandBraces, globToRegex, matchGlob } from "../src/agent/tools/fs-shared.ts";
+import { findTool } from "../src/agent/tools/find.ts";
+import { grepTool } from "../src/agent/tools/grep.ts";
+import { lsTool } from "../src/agent/tools/ls.ts";
+import { readTool } from "../src/agent/tools/read.ts";
+
+/**
+ * The learner-filesystem tools (sources v1, 2026-09-19): ls/find/grep as
+ * pure-Node pi ports, read re-anchored to the home directory. All calls go
+ * through absolute paths — the tools' relative resolution targets the real
+ * home, which tests must not touch.
+ *
+ * Fixture tree (tmpdir):
+ *   notes/calculus.md         "The derivative measures force…"
+ *   notes/linear.txt          eigenvector content
+ *   notes/sub/hidden.md
+ *   code/main.ts
+ *   node_modules/skipme.txt   (excluded from walks)
+ *   Library/alsoskip.txt      (excluded from walks)
+ *   binary.bin                NUL byte — grep skips
+ */
+
+let FIXTURE: string;
+
+async function setup(): Promise<string> {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "lh-fs-"));
+	await fs.mkdir(path.join(root, "notes", "sub"), { recursive: true });
+	await fs.mkdir(path.join(root, "code"), { recursive: true });
+	await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+	await fs.mkdir(path.join(root, "Library"), { recursive: true });
+	await fs.writeFile(path.join(root, "notes", "calculus.md"), "Calculus notes\nThe derivative measures force.\nChapter 1\n");
+	await fs.writeFile(path.join(root, "notes", "linear.txt"), "Eigenvectors keep their direction\nonly scaling remains\n");
+	await fs.writeFile(path.join(root, "notes", "sub", "hidden.md"), "deep file about MU\n");
+	await fs.writeFile(path.join(root, "code", "main.ts"), "const x = 1;\nconst eigenvector = 'here';\n");
+	await fs.writeFile(path.join(root, "node_modules", "skipme.txt"), "eigenvector in node_modules\n");
+	await fs.writeFile(path.join(root, "Library", "alsoskip.txt"), "eigenvector in Library\n");
+	await fs.writeFile(path.join(root, "binary.bin"), Buffer.from([0x00, 0x01, 0x02, 0x65, 0x69, 0x67, 0x03]));
+	return root;
+}
+
+describe("glob helpers (fs-shared)", () => {
+	it("basename mode: a pattern without a slash matches at any depth", () => {
+		assert.equal(matchGlob("notes/sub/calculus.md", "*.md"), true);
+		assert.equal(matchGlob("calculus.md", "*.md"), true);
+		assert.equal(matchGlob("notes/calculus.md", "*.ts"), false);
+	});
+
+	it("star does not cross slashes; double-star does", () => {
+		assert.equal(matchGlob("a/b/c.txt", "*.txt"), true); // basename mode
+		assert.equal(matchGlob("src/x/a.spec.ts", "src/**/*.spec.ts"), true);
+		assert.equal(matchGlob("other/x/a.spec.ts", "src/**/*.spec.ts"), false);
+		assert.equal(matchGlob("src/a.spec.ts", "src/**/*.spec.ts"), true, "** covers zero dirs");
+	});
+
+	it("slash patterns get an implied deep prefix unless anchored", () => {
+		assert.equal(matchGlob("deep/nested/x/main.ts", "**/nested/**/main.ts"), true);
+		assert.equal(matchGlob("x/main.ts", "nested/main.ts"), false, "no implied prefix for anchored-looking patterns");
+	});
+
+	it("brace alternatives expand", () => {
+		assert.deepEqual(expandBraces("*.{ts,tsx}"), ["*.ts", "*.tsx"]);
+		assert.equal(matchGlob("code/main.ts", "*.{ts,tsx,js}"), true);
+		assert.equal(matchGlob("code/main.ts", "*.{js,jsx}"), false);
+	});
+
+	it("question mark is one char, literals are escaped", () => {
+		assert.equal(globToRegex("a?c").test("abc"), true);
+		assert.equal(globToRegex("a?c").test("ac"), false);
+		assert.equal(matchGlob("a.b.txt", "a.b*"), true, "the dot is literal, not any-char");
+	});
+});
+
+describe("ls (pi port)", () => {
+	it("lists sorted, dirs suffixed, dotfiles included", async () => {
+		FIXTURE = await setup();
+		const out = (await lsTool.execute!({ path: FIXTURE }, { toolCallId: "c" })) as string;
+		assert.ok(out.includes("code/"));
+		assert.ok(out.includes("notes/"));
+		assert.ok(out.includes("binary.bin"));
+		// sorted alphabetically, case-insensitive
+		const lines = out.split("\n").filter((l) => !l.startsWith("["));
+		const sorted = [...lines].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+		assert.deepEqual(lines, sorted);
+	});
+
+	it("honors the entry limit with pi's truncation notice", async () => {
+		const out = (await lsTool.execute!({ path: FIXTURE, limit: 2 }, { toolCallId: "c" })) as string;
+		assert.match(out, /\[Truncated: 2 entries limit\]/);
+	});
+
+	it("missing path and non-directory throw (the model sees the error)", async () => {
+		await assert.rejects(async () => lsTool.execute!({ path: "/nonexistent/xyz" }, { toolCallId: "c" }), /Path not found/);
+		await assert.rejects(
+			async () => lsTool.execute!({ path: path.join(FIXTURE, "binary.bin") }, { toolCallId: "c" }),
+			/Not a directory/,
+		);
+	});
+});
+
+describe("find (pi port)", () => {
+	it("finds by glob, relativized to the search root", async () => {
+		const out = (await findTool.execute!({ pattern: "*.md", path: FIXTURE }, { toolCallId: "c" })) as string;
+		assert.ok(out.includes("notes/calculus.md"));
+		assert.ok(out.includes("notes/sub/hidden.md"));
+		assert.ok(!out.includes(FIXTURE), "paths are relative, not absolute");
+	});
+
+	it("never enters node_modules or Library", async () => {
+		const out = (await findTool.execute!({ pattern: "*.txt", path: FIXTURE }, { toolCallId: "c" })) as string;
+		assert.ok(!out.includes("node_modules"));
+		assert.ok(!out.includes("Library"));
+		assert.ok(out.includes("notes/linear.txt"));
+	});
+
+	it("result limit carries pi's notice", async () => {
+		const out = (await findTool.execute!({ pattern: "*", path: FIXTURE, limit: 2 }, { toolCallId: "c" })) as string;
+		assert.match(out, /\[2 results limit reached\]/);
+	});
+
+	it("no-match message matches pi", async () => {
+		const out = (await findTool.execute!({ pattern: "*.nomatch", path: FIXTURE }, { toolCallId: "c" })) as string;
+		assert.equal(out, "No files found matching pattern");
+	});
+
+	it("slash patterns match paths, not basenames", async () => {
+		const out = (await findTool.execute!({ pattern: "notes/**/*.md", path: FIXTURE }, { toolCallId: "c" })) as string;
+		assert.ok(out.includes("notes/sub/hidden.md"));
+		assert.ok(!out.includes("code/"));
+	});
+});
+
+describe("grep (pi port)", () => {
+	it("formats matches pi-style: rel:line: text", async () => {
+		// case-sensitive: the lowercase "eigenvector" hits main.ts but NOT
+		// linear.txt's capital-E "Eigenvectors" (that case lives below).
+		const out = (await grepTool.execute!({ pattern: "eigenvector", path: FIXTURE }, { toolCallId: "c" })) as string;
+		assert.equal(out, "code/main.ts:2: const eigenvector = 'here';");
+		assert.ok(!out.includes("node_modules"), "excluded dirs are not searched");
+		assert.ok(!out.includes("Library"));
+		assert.ok(!out.includes("binary.bin"), "binary files are skipped");
+	});
+
+	it("ignoreCase and literal flags", async () => {
+		const icase = (await grepTool.execute!({ pattern: "EIGENVECTOR", path: FIXTURE, ignoreCase: true }, { toolCallId: "c" })) as string;
+		assert.match(icase, /linear\.txt:1:/);
+		const literal = (await grepTool.execute!({ pattern: "e.gen", literal: true, path: path.join(FIXTURE, "code") }, { toolCallId: "c" })) as string;
+		assert.equal(literal, "No matches found", "dots are literal when literal=true");
+	});
+
+	it("context lines use the dash format", async () => {
+		const out = (await grepTool.execute!({ pattern: "scaling", path: FIXTURE, context: 1 }, { toolCallId: "c" })) as string;
+		assert.match(out, /notes\/linear\.txt:2: only scaling remains/, "the match line uses colons");
+		assert.match(out, /notes\/linear\.txt-1- Eigenvectors keep their direction/, "context before uses dashes");
+		assert.match(out, /notes\/linear\.txt-3- $/, "context after (empty line) uses dashes");
+	});
+
+	it("glob filter restricts files", async () => {
+		const out = (await grepTool.execute!({ pattern: "eigenvector", path: FIXTURE, glob: "*.ts" }, { toolCallId: "c" })) as string;
+		assert.match(out, /main\.ts:2:/);
+		assert.ok(!out.includes("linear.txt"));
+	});
+
+	it("single-file search prints basename; match limit notices pi-style", async () => {
+		const file = path.join(FIXTURE, "notes", "calculus.md");
+		const out = (await grepTool.execute!({ pattern: "e", path: file }, { toolCallId: "c" })) as string;
+		assert.match(out, /^calculus\.md:1: /, "basename for a single-file search");
+		const limited = (await grepTool.execute!({ pattern: "e", path: file, limit: 1 }, { toolCallId: "c" })) as string;
+		assert.match(limited, /\[1 matches limit reached\]/);
+	});
+
+	it("no-match message matches pi", async () => {
+		const out = (await grepTool.execute!({ pattern: "zzzz", path: FIXTURE }, { toolCallId: "c" })) as string;
+		assert.equal(out, "No matches found");
+	});
+});
+
+describe("read (home-anchored re-port)", () => {
+	it("reads a fixture file verbatim through the shared slice machinery", async () => {
+		const out = (await readTool.execute!({ path: path.join(FIXTURE, "notes", "linear.txt") }, { toolCallId: "c" })) as string;
+		assert.match(out, /Eigenvectors keep their direction/);
+	});
+});

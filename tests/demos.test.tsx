@@ -41,6 +41,7 @@ import { sanitizeSvg, VisualCard } from "../components/artifacts/visual-card.tsx
 import { SubagentSteerCard } from "../components/artifacts/steer-card.tsx";
 import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
 import { JobCard, PdfJobCard } from "../components/artifacts/job-card.tsx";
+import { ToolCallCard } from "../components/artifacts/tool-call-card.tsx";
 import { JobsContext } from "../components/jobs-context.ts";
 import { demoInputSchema, jobTools, pdfInputSchema, visualInputSchema } from "../src/agent/tools/jobs.ts";
 import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
@@ -846,5 +847,67 @@ describe("tool + renderer registry wiring", () => {
 		assert.equal(artifactRenderers.visual, VisualCard);
 		// sources v0 — pdf maps to its dispatch card (the live-smoke gap)
 		assert.equal(artifactRenderers.pdf, PdfJobCard);
+		// sources v1 — the learner-filesystem set maps to the generic tool-call card
+		for (const t of ["read", "ls", "find", "grep"]) {
+			assert.equal(artifactRenderers[t], ToolCallCard, `${t} renders the tool-call card`);
+		}
+	});
+
+	it("the tool-call card: collapsed one-liner with the tool name + headline arg; expand shows input and output", () => {
+		const part = {
+			type: "tool-read",
+			state: "output-available",
+			toolCallId: "c1",
+			input: { path: "notes/calculus.md", offset: 1, limit: 20 },
+			output: "Calculus notes\nThe derivative measures force.",
+		};
+		const html = renderToStaticMarkup(<ToolCallCard part={part as never} />);
+		// collapsed headline: tool name + path as given
+		assert.match(html, /read/);
+		assert.match(html, /notes\/calculus\.md/);
+		// expandable payload: input JSON + output text
+		assert.match(html, /Input/);
+		assert.match(html, /Output/);
+		assert.match(html, /The derivative measures force\./);
+		assert.ok(html.includes("<details"), "collapsed by default via a details element");
+	});
+
+	it("the tool-call card: image-bearing read results note the attachment; errors render red", () => {
+		const imgPart = {
+			type: "tool-read",
+			state: "output-available",
+			toolCallId: "c2",
+			input: { path: "shot.png" },
+			output: { text: "Read image file [image/png].", images: [{ data: "AAAA", mimeType: "image/png" }] },
+		};
+		const html = renderToStaticMarkup(<ToolCallCard part={imgPart as never} />);
+		assert.match(html, /Read image file \[image\/png\]\./);
+		assert.match(html, /1 image attached to the model/);
+		assert.ok(!html.includes("AAAA"), "the image payload itself never renders");
+
+		const errPart = {
+			type: "tool-read",
+			state: "output-error",
+			toolCallId: "c3",
+			input: { path: "/gone.md" },
+			errorText: "ENOENT: no such file",
+		};
+		const errHtml = renderToStaticMarkup(<ToolCallCard part={errPart as never} />);
+		assert.match(errHtml, /Error/);
+		assert.match(errHtml, /ENOENT/);
+		assert.match(errHtml, /text-red-500/);
+	});
+
+	it("the tool-call card: find/grep headline the pattern, ls defaults to ~", () => {
+		const findHtml = renderToStaticMarkup(
+			<ToolCallCard part={{ type: "tool-find", state: "output-available", toolCallId: "c", input: { pattern: "*calculus*" }, output: "notes/calculus.md" } as never} />,
+		);
+		assert.match(findHtml, /find/);
+		assert.match(findHtml, /\*calculus\*/);
+		const lsHtml = renderToStaticMarkup(
+			<ToolCallCard part={{ type: "tool-ls", state: "output-available", toolCallId: "c", input: {}, output: "notes/" } as never} />,
+		);
+		assert.match(lsHtml, /ls/);
+		assert.match(lsHtml, /~/);
 	});
 });

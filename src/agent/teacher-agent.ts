@@ -47,17 +47,24 @@ const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
 /** A prompt fragment: numeric order key + .md (e.g. 20-teaching.md). Nothing else loads. */
 const FRAGMENT_RE = /^\d+-[\w.-]+\.md$/;
 
-/** Exported for tests: assert what composes into the model's prompt. */
-export function composeInstructions(kind: AgentKind): string {
-	const base = fs.readFileSync(PATHS.teacherPrompt, "utf-8");
-	const dir = path.join(PROMPTS_DIR, kind);
-	if (!fs.existsSync(dir)) return base;
-	const fragments = fs
+/** Load one directory's fragments (sorted filename order, trimmed,
+ *  empty ones dropped) — the loader enforces the numeric prefix. */
+function loadFragments(dir: string): string[] {
+	if (!fs.existsSync(dir)) return [];
+	return fs
 		.readdirSync(dir)
 		.filter((f) => FRAGMENT_RE.test(f))
 		.sort()
 		.map((f) => fs.readFileSync(path.join(dir, f), "utf-8").trim())
 		.filter(Boolean);
+}
+
+/** Exported for tests: assert what composes into the model's prompt.
+ *  Composition order: shared base → shared/ fragments (both agents, the
+ *  sources-v1 seam for cross-agent doctrine) → the agent's own fragments. */
+export function composeInstructions(kind: AgentKind): string {
+	const base = fs.readFileSync(PATHS.teacherPrompt, "utf-8");
+	const fragments = [...loadFragments(path.join(PROMPTS_DIR, "shared")), ...loadFragments(path.join(PROMPTS_DIR, kind))];
 	return [base.trim(), ...fragments].join("\n\n---\n\n");
 }
 

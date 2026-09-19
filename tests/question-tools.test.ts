@@ -143,10 +143,10 @@ describe("the prober's quiz: no nodeId field at all", () => {
 		assert.equal("nodeId" in smuggled.data, false, "stripped, not tolerated");
 	});
 
-	it("the prober's tool registry carries the nodeId-less quiz, probe_done, and the shared read tool", () => {
+	it("the prober's tool registry carries the nodeId-less quiz, probe_done, and the learner-filesystem set", () => {
 		const chatId = newChat("Prober: registry");
 		const tools = createProberTools({ chatId, chatStore, deliver: () => {} });
-		assert.deepEqual(Object.keys(tools).sort(), ["ask_user_question", "probe_done", "quiz", "read"]);
+		assert.deepEqual(Object.keys(tools).sort(), ["ask_user_question", "find", "grep", "ls", "probe_done", "quiz", "read"]);
 		const schema = quizSchemaOf(tools);
 		assert.equal(schema.safeParse({ ...validQuiz, nodeId: "anything" }).success, true, "no session check to fail");
 	});
@@ -165,15 +165,15 @@ describe("tool toggles (core/pending.ts + factories)", () => {
 	it("createProberTools: absent record = full set; explicit false drops exactly that tool; probe_done survives everything", () => {
 		const chatId = newChat("Prober: toggles");
 		const ctx = { chatId, chatStore, deliver: () => {} };
-		assert.deepEqual(Object.keys(createProberTools(ctx)).sort(), ["ask_user_question", "probe_done", "quiz", "read"]);
+		assert.deepEqual(Object.keys(createProberTools(ctx)).sort(), ["ask_user_question", "find", "grep", "ls", "probe_done", "quiz", "read"]);
 
 		const noAsk = createProberTools(ctx, { ask_user_question: false });
-		assert.deepEqual(Object.keys(noAsk).sort(), ["probe_done", "quiz", "read"]);
+		assert.deepEqual(Object.keys(noAsk).sort(), ["find", "grep", "ls", "probe_done", "quiz", "read"]);
 
 		// quiz off is honored by the generic machinery too (future toggleable),
 		// but probe_done is never droppable — it is how the phase ends.
 		const noQuiz = createProberTools(ctx, { quiz: false });
-		assert.deepEqual(Object.keys(noQuiz).sort(), ["ask_user_question", "probe_done", "read"]);
+		assert.deepEqual(Object.keys(noQuiz).sort(), ["ask_user_question", "find", "grep", "ls", "probe_done", "read"]);
 		assert.ok(createProberTools(ctx, { probe_done: false }).probe_done, "probe_done always-on");
 	});
 
@@ -186,10 +186,10 @@ describe("tool toggles (core/pending.ts + factories)", () => {
 			spawn: () => {},
 		};
 		const full = Object.keys(createTeacherTools(ctx)).sort();
-		assert.deepEqual(full, ["ask_user_question", "demo", "pdf", "plan_init", "quiz", "read", "research", "visual"]);
+		assert.deepEqual(full, ["ask_user_question", "demo", "find", "grep", "ls", "pdf", "plan_init", "quiz", "read", "research", "visual"]);
 
 		const noResearch = Object.keys(createTeacherTools(ctx, { research: false })).sort();
-		assert.deepEqual(noResearch, ["ask_user_question", "demo", "pdf", "plan_init", "quiz", "read", "visual"]);
+		assert.deepEqual(noResearch, ["ask_user_question", "demo", "find", "grep", "ls", "pdf", "plan_init", "quiz", "read", "visual"]);
 
 		// absent = enabled: an empty record and undefined behave identically
 		assert.deepEqual(

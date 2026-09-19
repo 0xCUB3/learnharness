@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
 import { lhTool, type LhToolImageResult } from "../lh-tool.ts";
+import { resolveSourcePath } from "./fs-shared.ts";
 
 /**
  * The read tool — sources v0 (2026-09): a Node port of pi's read semantics
@@ -86,19 +87,19 @@ function readTextSlice(text: string, offset: number | undefined, limit: number |
 	return `${selected.join("\n")}\n\n[Showing lines ${startLine + 1}-${endLineDisplay} of ${totalLines} (${reason}). Use offset=${endLineDisplay + 1} to continue.]`;
 }
 
-/** The read tool, shared verbatim by the prober and the teacher. */
+/**
+ * The read tool, shared verbatim by the prober and the teacher. Sources v1
+ * (2026-09-19): the description is pi-verbatim (user: copy tool usage
+ * guidance exactly) — the teaching doctrine moved to the shared prompt
+ * fragment (prompts/shared/). Relative paths resolve against the
+ * learner's home (fs-shared.ts), the harness's anchor.
+ */
 export const readTool = lhTool({
 	name: "read",
-	description:
-		"Read the contents of a local file — the learner's source material for this lesson " +
-		"(he pastes file paths into the chat; read them on your own terms, never ask him to " +
-		"paste file CONTENTS into the chat). Supports text files and images (jpg, png, gif, " +
-		"webp, bmp) — images are shown to you as attachments. Text output is truncated to " +
-		`2000 lines or 50KB (whichever is hit first); use offset/limit for large files, and ` +
-		"continue with offset until you have what you need.",
+	description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50.0KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
 	schema: readInputSchema,
 	execute: async ({ path: rawPath, offset, limit }): Promise<string | LhToolImageResult> => {
-		const absolute = path.resolve(process.cwd(), rawPath);
+		const absolute = resolveSourcePath(rawPath);
 		const ext = path.extname(absolute).toLowerCase();
 		const mime = IMAGE_MIME[ext];
 		const buffer = await fs.readFile(absolute); // ENOENT/EACCES → error result the model sees

@@ -38,6 +38,23 @@ export type TeacherUITools = {
 	/** The pdf dispatch tool (sources v0): fire-and-forget ack output like
 	 *  research — the brief arrives later as a steer message. */
 	pdf: { input: PdfToolInput; output: string };
+	/** The learner-filesystem tools (sources v1, both agents, always-on):
+	 *  read may return an image-bearing result; the rest are plain text. */
+	read: { input: { path: string; offset?: number; limit?: number }; output: unknown };
+	ls: { input: { path?: string; limit?: number }; output: unknown };
+	find: { input: { pattern: string; path?: string; limit?: number }; output: unknown };
+	grep: {
+		input: {
+			pattern: string;
+			path?: string;
+			glob?: string;
+			ignoreCase?: boolean;
+			literal?: boolean;
+			context?: number;
+			limit?: number;
+		};
+		output: unknown;
+	};
 };
 
 export type TeacherUIDataParts = {

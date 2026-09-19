@@ -1089,6 +1089,21 @@ describe("prompt composition", () => {
 		assert.ok(prober.includes("the `read` tool can inspect it directly"), "the prober knows it can read learner files");
 	});
 
+	it("the sources-v1 shared fragment composes into BOTH agents (find/ls/grep doctrine)", () => {
+		for (const kind of ["teacher", "prober"] as const) {
+			const instructions = composeInstructions(kind);
+			assert.ok(instructions.includes("## Learner files"), `${kind} carries the shared learner-files fragment`);
+			assert.ok(instructions.includes("find it yourself with `find`"), `${kind} knows to locate files itself`);
+			assert.ok(instructions.includes("home directory"), `${kind} knows the home-anchored path rule`);
+		}
+		// shared composes BEFORE the agent's own fragments (the seam's order rule)
+		const teacher = composeInstructions("teacher");
+		assert.ok(
+			teacher.indexOf("## Learner files") < teacher.indexOf("## Learner source files"),
+			"shared fragment precedes the teacher's own 30-jobs section",
+		);
+	});
+
 	it("guards prompt size — no fragment can silently balloon (the README-leak class)", () => {
 		// The wave-1 leak: README.md (815 bytes / ~200 tokens) rode into every
 		// teacher turn until the numeric-prefix filter stopped it. This guard

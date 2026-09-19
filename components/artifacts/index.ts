@@ -4,6 +4,7 @@ import { DemoCard } from "@/components/artifacts/demo-card";
 import { JobCard, PdfJobCard } from "@/components/artifacts/job-card";
 import { VisualCard } from "@/components/artifacts/visual-card";
 import { ProbeDoneCard } from "@/components/artifacts/probe-done-card";
+import { ToolCallCard } from "@/components/artifacts/tool-call-card";
 
 /**
  * Artifact renderer registry — the extension point for tool-part UI.
@@ -29,4 +30,11 @@ export const artifactRenderers: Record<string, ComponentType<ArtifactPartProps>>
 	// The probe conclusion: the assessment belongs to the learner as much as
 	// to the transcript (docs/probe-teach-split.md §2). Plain v1 card.
 	probe_done: ProbeDoneCard,
+	// The learner-filesystem set (sources v1): one quiet expandable
+	// tool-call card each — collapsed one-liner (tool name + headline
+	// argument), full input/output on expand.
+	read: ToolCallCard,
+	ls: ToolCallCard,
+	find: ToolCallCard,
+	grep: ToolCallCard,
 };

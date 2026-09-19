@@ -12,6 +12,9 @@ import { jobTools, type DemoInput, type ResearchInput, type VisualInput } from "
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
 import { readTool } from "./tools/read.ts";
+import { lsTool } from "./tools/ls.ts";
+import { findTool } from "./tools/find.ts";
+import { grepTool } from "./tools/grep.ts";
 
 export { jobTools };
 export type { ProbeDoneContext } from "./tools/probe.ts";
@@ -81,9 +84,13 @@ export function createProberTools(
 			{
 				quiz: probeQuizTool,
 				ask_user_question: askUserQuestionTool,
-				// read is always-on (user-decided 2026-09): the prober inspects
-				// learner-provided source files while assessing the edge.
+				// The learner-filesystem set is always-on (user-decided 2026-09,
+				// sources v1): the prober inspects and LOCATES learner-referenced
+				// files while assessing the edge. Read-only by construction.
 				read: readTool,
+				ls: lsTool,
+				find: findTool,
+				grep: grepTool,
 				...done,
 			},
 			enabled,
@@ -168,9 +175,14 @@ export function createTeacherTools(
 		{
 			quiz: teachQuizToolFor(ctx),
 			ask_user_question: askUserQuestionTool,
-			// read is always-on (user-decided 2026-09): the teacher reads
-			// learner-provided sources on its own terms — nothing auto-injects.
+			// The learner-filesystem set is always-on (user-decided 2026-09,
+			// sources v1): the teacher locates and reads learner-referenced
+			// files on its own terms — nothing auto-injects. Read-only by
+			// construction (fs-shared.ts).
 			read: readTool,
+			ls: lsTool,
+			find: findTool,
+			grep: grepTool,
 			...planTools(ctx),
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn }),
 		},
