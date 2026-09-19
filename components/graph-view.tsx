@@ -61,10 +61,10 @@
  * camera never moves.
  */
 
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
-import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { incrementalLayout, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { GraphCoverageControl } from "./graph-coverage.tsx";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
@@ -209,6 +209,131 @@ function SettingSlider({
 	);
 }
 
+/** Compact token display: 45231 → "45.2k"; absent → "—". */
+function fmtTokens(n: number | undefined): string {
+	if (n === undefined) return "—";
+	if (n < 1000) return String(Math.round(n));
+	if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+	return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+/** Relative time for run rows: "now", "12m", "3h", "2d". */
+function timeAgo(startedAt: number): string {
+	const mins = Math.round((Date.now() - startedAt) / 60_000);
+	if (mins < 1) return "now";
+	if (mins < 60) return `${mins}m`;
+	const hours = Math.round(mins / 60);
+	if (hours < 24) return `${hours}h`;
+	return `${Math.round(hours / 24)}d`;
+}
+
+/** Run/stage cost at 3 decimals (pipeline pennies are real money at this
+ *  scale); headline totals use 2. Null (unpriced model) renders "—". */
+function fmtRunCost(dollars: number | null): string {
+	return dollars === null ? "—" : `$${dollars.toFixed(3)}`;
+}
+
+/**
+ * The graph-pipeline cost control (2026-09-20 placement wave): a bare
+ * cumulative-dollars number — no pill chrome (owner: "just a number"),
+ * hover-highlighted, click toggles the breakdown panel. Same dismiss
+ * pattern as the settings gear: outside click or Escape closes. The
+ * panel is viewport-capped + scrollable like the coverage dropdown.
+ */
+function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
+	const [open, setOpen] = useState(false);
+	// Click anywhere outside (or Escape) closes the panel — the root
+	// wraps button + panel, so the toggle itself keeps working.
+	const rootRef = useRef<HTMLDivElement>(null);
+	usePopoverDismiss(rootRef, open, () => setOpen(false));
+	return (
+		<div ref={rootRef} className="relative">
+			<button
+				type="button"
+				title="Graph pipeline costs — click for the breakdown"
+				aria-expanded={open}
+				onClick={() => setOpen((o) => !o)}
+				className={`rounded-lg px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent ${
+					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+				}`}
+			>
+				${costs.totalDollars.toFixed(2)}
+			</button>
+			{open && (
+				<div className="absolute right-0 top-full mt-2 max-h-[60vh] overflow-y-auto">
+					<GraphCostPanel costs={costs} />
+				</div>
+			)}
+		</div>
+	);
+}
+
+/**
+ * The cost control's expanded panel: stage totals (extraction / audit /
+ * cluster-naming — dollars headline, tokens secondary) + the recent-runs
+ * list. Presentational: the fold happens server-side
+ * (core/cost-summary.ts); dollars are inferred read-time, never stored.
+ */
+function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
+	const stageRows: [string, GraphCostSummary["stages"]["extraction"]][] = [
+		["Extraction", costs.stages.extraction],
+		["Audit", costs.stages.audit],
+		["Cluster naming", costs.stages.naming],
+	];
+	return (
+		<div className="w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
+			<div className="mb-2 flex items-baseline justify-between">
+				<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+					Graph pipeline costs
+				</span>
+				<span className="text-foreground tabular-nums">
+					${costs.totalDollars.toFixed(2)}
+					{costs.unpricedRuns > 0 && (
+						<span className="text-muted-foreground"> · {costs.unpricedRuns} unpriced</span>
+					)}
+				</span>
+			</div>
+			<div className="flex flex-col gap-1">
+				{stageRows.map(([label, stage]) => (
+					<div key={label} className="flex items-baseline justify-between gap-2 text-[11px]">
+						<span className="shrink-0 text-muted-foreground">{label}</span>
+						<span className="min-w-0 text-right tabular-nums">
+							{fmtRunCost(stage.runs === 0 || (stage.unpricedRuns > 0 && stage.dollars === 0) ? null : stage.dollars)}
+							{stage.unpricedRuns > 0 && stage.dollars > 0 && (
+								<span className="text-muted-foreground"> +{stage.unpricedRuns} unpriced</span>
+							)}
+							<span className="text-muted-foreground">
+								{" "}
+								· {fmtTokens(stage.tokens.inputTokens)} in / {fmtTokens(stage.tokens.outputTokens)} out
+							</span>
+						</span>
+					</div>
+				))}
+			</div>
+			<div className="mt-2 flex flex-col gap-0.5 border-t pt-2">
+				{costs.runs.map((run) => (
+					<div key={run.startedAt} className="flex items-baseline justify-between gap-2 text-[11px]">
+						<span className="min-w-0 flex-1 truncate text-muted-foreground">
+							<span className="text-foreground/70">{timeAgo(run.startedAt)}</span>{" "}
+							{run.title}
+							{run.merged && (
+								<span className="text-muted-foreground">
+									{" "}
+									+{run.merged.nodes}n
+								</span>
+							)}
+							{run.kind === "naming" && (
+								<span className="text-muted-foreground"> {run.labels ?? 0} labels</span>
+							)}
+						</span>
+						<span className="shrink-0 tabular-nums">{fmtRunCost(run.dollars)}</span>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
 /**
  * The rendering-settings gear + its collapsible panel (owner, graph-view
  * round 2): its own container at the top right, separate from the search
@@ -236,7 +361,7 @@ function GraphSettingsControl({
 				title="Rendering settings"
 				aria-expanded={open}
 				onClick={() => setOpen((o) => !o)}
-				className={`flex size-11 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
+				className={`flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
 					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
 				}`}
 			>
@@ -248,8 +373,14 @@ function GraphSettingsControl({
 				// floor of free space above the window bottom at any height,
 				// and the overflow-y-auto column (which also zeroes the flex
 				// item's min-height) scrolls instead of stretching the page.
-				<div className="absolute right-0 top-full mt-2 flex max-h-[60vh] w-64 flex-col rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
-					<div className="flex flex-col gap-2 overflow-y-auto">
+				// w-72 + inner pr (owner, 2026-09-20): the scrollbar used to
+				// press against the content — the panel widens so the scroll
+				// gutter gets real air. Spacing concentric: content -> 10px
+				// (pr-2.5) -> scrollbar -> 10px (p-2.5) -> panel edge. The
+				// scrollbar itself does NOT move: it stays pinned at the same
+				// distance from the panel's right border.
+				<div className="absolute right-0 top-full mt-2 flex max-h-[60vh] w-72 flex-col rounded-xl border bg-card/85 p-2.5 shadow-lg backdrop-blur">
+					<div className="flex flex-col gap-2 overflow-y-auto pr-2.5">
 							{/* Size/zoom/region sliders: LADDER-mapped 0-100, step 10 (11
 							    stops, every DEFAULT dead-center at 50, every value a nice
 							    number — src/core/render-settings.ts). Physics keeps the
@@ -751,6 +882,28 @@ export function GraphView() {
 		};
 	}, []);
 
+	// Graph pipeline costs (2026-09 cost metrics wave): the cumulative fold
+	// of every usage channel (chat + notes extraction runs, cluster naming)
+	// behind the bottom-left cost pill. Fetched once on mount and refetched
+	// when a pipeline run finishes (running -> none) so fresh spend lands
+	// without a manual reload. Best-effort: a fetch failure never blocks
+	// the view — the pill just stays on its last numbers.
+	const [costs, setCosts] = useState<GraphCostSummary | null>(null);
+	const refreshCosts = useCallback(() => {
+		fetch("/api/graph/costs")
+			.then((res) => res.json() as Promise<GraphCostSummary>)
+			.then(setCosts)
+			.catch(() => {});
+	}, []);
+	useEffect(() => {
+		refreshCosts();
+	}, [refreshCosts]);
+	const costsHadRunning = useRef(false);
+	useEffect(() => {
+		if (costsHadRunning.current && pipelineRuns.length === 0) refreshCosts();
+		costsHadRunning.current = pipelineRuns.length > 0;
+	}, [pipelineRuns, refreshCosts]);
+
 	// Layout (Option A): the positions ledger (written by the server's
 	// incremental settle after every merge) IS the layout — the renderer
 	// receives it as frozen data. The local one-shot forceAtlas2 pass runs
@@ -987,23 +1140,40 @@ export function GraphView() {
 			    coverage, import, gear — coverage sits between search and
 			    import; the gear keeps the corner. items-start (not center)
 			    so the search container's no-match note can grow downward
-			    without shifting its siblings — every button is 44px tall,
-			    top alignment pins the row. Coverage renders even when the
-			    graph is EMPTY — an empty graph with unextracted sessions is
-			    exactly when it matters (extract → the graph gains nodes).
+			    without shifting its siblings — every control is 36px tall
+			    (header band, 2026-09-20), top alignment pins the row.
+			    Coverage renders even when the graph is EMPTY — an empty
+			    graph with unextracted sessions is exactly when it matters
+			    (extract → the graph gains nodes).
 			    lh-no-drag (2026-09-17): home.tsx's floating drag strip
 			    underlays this row — Electron's drag mask ignores z-index,
 			    so without an explicit carve-out the controls were
-			    unclickable in the desktop app (owner report). max-w + flex-wrap
-			    (narrow-window wave, 2026-09-17): below the sidebar auto-close
-			    threshold the row wraps to a second line instead of overflowing
-			    left over the header toggle cluster (92px gutter + 36px button);
-			    9rem keeps one clear column of air alongside it. */}
-			<div className="lh-no-drag absolute right-3 top-3 z-10 flex max-w-[calc(100%-9rem)] flex-wrap items-start gap-2">
+			    unclickable in the desktop app (owner report). The old
+			    flex-wrap (narrow-window wave, 2026-09-17) folded the row
+			    onto two lines below the sidebar threshold — owner rejected
+			    it (2026-09-20): one row always, the search shrinks (see
+			    the header-band comment on the column below). */}
+			{/* Header band (owner, 2026-09-20): the controls sit IN the
+			    header's visual row — top-2 aligns with the sidebar toggle's
+			    band (header py-2, toggle h-9), every control slimmed to 36px.
+			    The width cap lives HERE on the absolute element (100% resolves
+			    against the full-bleed parent) — the row NEVER wraps (owner
+			    rejected the two-row fold); in narrow windows the search is
+			    the flexible element and shrinks instead. */}
+			<div className="lh-no-drag absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
+			{/* z-20 (2026-09-20): the row paints above the cost number below
+			    it — without this, the later-in-DOM cost control layered over
+			    the settings/coverage dropdowns (owner report), still hoverable
+			    and clickable on top of them. The row is a stacking context, so
+			    its open dropdowns cover the number; clicks land on the panel. */}
+			<div className="relative z-20 flex min-w-0 items-start gap-2">
 				{!isEmpty && (
 					<>
-					{/* Search — its own container (icon + input + no-match note). */}
-					<div className="w-56 rounded-xl border bg-card/85 p-1.5 shadow-lg backdrop-blur">
+					{/* Search — its own container (icon + input + no-match note).
+					    The header band's flexible element: w-56 normally, shrinks
+					    (min-w-0) when the column's width cap binds in narrow
+					    windows — the row's other controls are shrink-0. */}
+					<div className="w-56 min-w-0 shrink rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 						<div className="relative">
 							<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 							<input
@@ -1012,7 +1182,7 @@ export function GraphView() {
 								onChange={(e) => setQuery(e.target.value)}
 								placeholder="Search nodes…"
 								spellCheck={false}
-								className="h-8 w-full rounded-lg border bg-background pl-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+								className="h-7 w-full rounded-lg border bg-background pl-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
 							/>
 						</div>
 						{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
@@ -1028,11 +1198,11 @@ export function GraphView() {
 					with unextracted sessions is exactly when it matters (extract
 					→ the graph gains nodes). The panel re-reads when background
 					runs settle (refreshTick). */}
-				<GraphCoverageControl refreshKey={refreshTick} />
+				<div className="shrink-0"><GraphCoverageControl refreshKey={refreshTick} /></div>
 				{!isEmpty && (
 				<>
-					{/* Import notes — its own container. */}
-					<div className="rounded-xl border bg-card/85 p-1.5 shadow-lg backdrop-blur">
+					{/* Import notes — its own container (36px, header band). */}
+					<div className="shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 						<input
 							ref={fileInputRef}
 							type="file"
@@ -1048,7 +1218,7 @@ export function GraphView() {
 							type="button"
 							disabled={importing}
 							onClick={() => fileInputRef.current?.click()}
-							className="flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+							className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
 						>
 							<UploadIcon className="size-3" />
 							{importing ? "Importing…" : "Import notes…"}
@@ -1062,22 +1232,25 @@ export function GraphView() {
 				)}
 			</div>
 
-			{/* Background pipeline status: what is currently running. */}
-			{pipelineRuns.length > 0 && (
-				<div className="absolute bottom-3 left-3 z-10 flex flex-col gap-1.5">
-					{pipelineRuns.map((run) => (
-						<div
-							key={run.chatId}
-							className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
-						>
-							<Loader2Icon className="size-3.5 shrink-0 animate-spin" />
-							<span className="capitalize">{run.phase}</span>
-							<span className="max-w-48 truncate text-foreground">{run.title}</span>
-							<span className="tabular-nums">{Math.max(0, Math.round((Date.now() - run.startedAt) / 1000))}s</span>
-						</div>
-					))}
+			{/* Top-right tail (owner, 2026-09-20): the pipeline cost number —
+			    just a number, hover-highlighted, dropdown breakdown — then
+			    the running-pipeline pills under it. Lives BELOW the actions
+			    row so narrow windows can never push it over the composer
+			    the way the old bottom-left stack did; the whole top-right
+			    cluster is one column, right-aligned. */}
+			{costs && costs.runs.length > 0 && <GraphCostControl costs={costs} />}
+			{pipelineRuns.map((run) => (
+				<div
+					key={run.chatId}
+					className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
+				>
+					<Loader2Icon className="size-3.5 shrink-0 animate-spin" />
+					<span className="capitalize">{run.phase}</span>
+					<span className="max-w-48 truncate text-foreground">{run.title}</span>
+					<span className="tabular-nums">{Math.max(0, Math.round((Date.now() - run.startedAt) / 1000))}s</span>
 				</div>
-			)}
+			))}
+			</div>
 
 			{selected && !isEmpty && (
 				<div

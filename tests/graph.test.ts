@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
 import type { UIMessage } from "ai";
-import type { AuditResult } from "../src/core/contracts.ts";
+import type { AuditResult, NamingRunUsage } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
 import { clusterContentId, getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
 import { graphStore } from "../src/store/graph.ts";
@@ -590,6 +590,29 @@ describe("graph ledger store", () => {
 		assert.equal(nodes[0]!.name, "Store test");
 		assert.equal(nodes[0]!.statement, "Store test, elaborated.");
 		assert.deepEqual(nodes[0]!.provenance, [{ chatId: "chat_c", messageId: "m1" }]);
+	});
+
+	it("appendNamingUsage is idempotent per startedAt and strict-reads foreign shapes", () => {
+		const run: NamingRunUsage = {
+			startedAt: 1789800000000,
+			at: "2026-09-17T00:00:00.000Z",
+			durationMs: 1234,
+			model: "z-ai/glm-5.3-flash",
+			steps: [{ inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: undefined, reasoningTokens: 0 }],
+			stats: { detected: 4, claimed: 3, named: 1, appended: 1 },
+		};
+		graphStore.appendNamingUsage(run);
+		graphStore.appendNamingUsage(run); // re-append: same startedAt — no-op
+		// A torn append + a foreign shape (missing stats) — skipped by the guard.
+		fs.appendFileSync(
+			LEDGER_FILES.namingRuns,
+			`{not json}\n${JSON.stringify({ startedAt: 1789800000001, at: "x", durationMs: 1, model: "m", steps: [] })}\n`,
+			"utf-8",
+		);
+		const runs = graphStore.readNamingRuns().filter((r) => r.startedAt >= 1789800000000);
+		assert.equal(runs.length, 1, "one record — idempotent append, corrupt/foreign lines skipped");
+		assert.deepEqual(runs[0]!.stats, { detected: 4, claimed: 3, named: 1, appended: 1 });
+		assert.equal(runs[0]!.steps.length, 1);
 	});
 
 	it("returns RAW node lines — repeated ids (link-appends) are each their own line; getGraph merges", () => {

@@ -33,6 +33,7 @@ import type {
 	GraphEdge,
 	GraphNode,
 	LedgerEvent,
+	NamingRunUsage,
 	NodeMapping,
 	NotesSource,
 	SessionCheckpoint,
@@ -70,6 +71,7 @@ function memoryLedgers() {
 	const coverage: CoverageEntry[] = [];
 	const sources = new Map<string, NotesSource>();
 	const clusterLabels: ClusterLabeling[] = [];
+	const namingRuns: NamingRunUsage[] = [];
 	const positions = new Map<string, { x: number; y: number }>();
 	const embeddings = {
 		model: "",
@@ -111,6 +113,11 @@ function memoryLedgers() {
 			if (!clusterLabels.some((x) => x.id === l.id)) clusterLabels.push(l);
 		},
 		readClusterLabels: () => clusterLabels.map((l) => ({ ...l, core: [...l.core] })),
+		// Cluster-naming run usage — mirrors the real store: dedupe per startedAt.
+		appendNamingUsage: (entry: NamingRunUsage) => {
+			if (!namingRuns.some((r) => r.startedAt === entry.startedAt)) namingRuns.push(entry);
+		},
+		readNamingRuns: () => namingRuns.map((r) => ({ ...r, steps: [...r.steps], stats: { ...r.stats } })),
 		// The layout ledger — settleGraphLayout writes it after each merge.
 		readPositions: () => Object.fromEntries([...positions].map(([id, p]) => [id, { ...p }])),
 		writePositions: (next) => {
@@ -799,6 +806,18 @@ describe("cluster naming (the post-extraction garnish)", () => {
 		assert.equal(again.appended, 0);
 		assert.ok(again.claimed >= 1);
 		assert.equal(ledgers.readClusterLabels().length, 1, "no duplicate records");
+		// Money channel (2026-09 cost metrics): the naming call billed —
+		// ONE run record with the faux model, deterministic > 0 usage, and
+		// the refresh stats. The second refresh named nothing (no model
+		// call — early return), so no second record.
+		const namingRuns = ledgers.readNamingRuns();
+		assert.equal(namingRuns.length, 1, "one naming run billed");
+		assert.equal(namingRuns[0]!.model, labeler.model.id);
+		assert.ok(namingRuns[0]!.steps.length >= 1, "at least one billed step");
+		assert.ok((namingRuns[0]!.steps[0]!.inputTokens ?? 0) > 0, "usage estimated > 0");
+		assert.equal(namingRuns[0]!.stats.appended, 1);
+		assert.equal(namingRuns[0]!.stats.named, 1);
+		assert.ok(namingRuns[0]!.durationMs >= 0);
 	});
 
 	it("naming failure never fails the run", async () => {

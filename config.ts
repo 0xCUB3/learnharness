@@ -115,6 +115,9 @@ export const LEDGER_FILES = {
 	coverage: path.join(PATHS.graph, "coverage.jsonl"),
 	/** LLM-named community records (contracts/graph.ts ClusterLabeling). */
 	clusterLabels: path.join(PATHS.graph, "cluster-labels.jsonl"),
+	/** Cluster-naming run usage (contracts/graph.ts NamingRunUsage) — the
+	 *  money channel's third stage; graph-global, so its own ledger. */
+	namingRuns: path.join(PATHS.graph, "naming-runs.jsonl"),
 } as const;
 
 /**

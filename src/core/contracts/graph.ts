@@ -20,7 +20,7 @@
 /** Two relations only (DECIDED 2026-09-02): follows = b is derivable from a;
  *  supports = a grounds b without entailing it. No scalars, no encoded
  *  strength — strength is derived at read time from topology. */
-import type { ExtractionRunUsage } from "./chat.ts";
+import type { CallUsage, ExtractionRunUsage } from "./chat.ts";
 
 export type EdgeType = "follows" | "supports";
 
@@ -63,6 +63,41 @@ export interface NotesSource {
 	/** The run's usage log — same append-only discipline as
 	 *  ChatRecord.extractions, idempotent per startedAt. */
 	extractions?: ExtractionRunUsage[];
+}
+
+/** What one cluster-naming refresh did — the namer's ClusterRefreshStats,
+ *  contract-shaped so the agent layer needs no contracts import.
+ *  Structural twins stay interchangeable. */
+export interface NamingRunStats {
+	/** Communities the current graph divides into (all sizes). */
+	detected: number;
+	/** Communities that kept a label via core-survival. */
+	claimed: number;
+	/** Communities sent to the namer (unnamed, size >= MIN_CLUSTER_SIZE). */
+	named: number;
+	/** Labeling records actually appended (idempotent dedupe may shrink). */
+	appended: number;
+}
+
+/** One cluster-naming run's usage record — the money channel's THIRD stage
+ *  (graph cost metrics, 2026-09). The namer is graph-global (tied to no
+ *  chat or source), so runs live in their own append-only ledger
+ *  (config.LEDGER_FILES.namingRuns). Appended when a run actually called
+ *  the model; skipped refreshes (nothing to name) never bill and never
+ *  append. Idempotent per startedAt — same discipline as every usage
+ *  channel. Cost is INFERRED at read time from steps + model
+ *  (core/prices.ts) — dollars are never stored. */
+export interface NamingRunUsage {
+	/** ms epoch — the idempotency key. */
+	startedAt: number;
+	/** ISO — wall-clock time of the run. */
+	at: string;
+	durationMs: number;
+	/** The labeler role's model id. */
+	model: string;
+	/** Every billed call (usually ONE — the namer is single-submit). */
+	steps: CallUsage[];
+	stats: NamingRunStats;
 }
 
 export interface GraphNode {

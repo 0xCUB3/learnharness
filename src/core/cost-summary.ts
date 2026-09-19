@@ -1,0 +1,185 @@
+/**
+ * Graph-pipeline cost summary (2026-09 graph cost metrics wave) — the pure
+ * fold behind the graph view's cost pill. Three usage channels in: chat
+ * extraction runs (ChatRecord.extractions), notes-source runs
+ * (NotesSource.extractions), and cluster-naming runs (naming-runs.jsonl).
+ * Out: per-stage totals (extraction / audit / cluster-naming) + a capped
+ * recent-runs list.
+ *
+ * MONEY CHANNEL LAW: dollars are INFERRED here at read time via
+ * core/prices.ts — never stored anywhere. An unpriced model contributes
+ * ZERO dollars but is counted in `unpricedRuns` so the UI can render
+ * "— unpriced" honestly, never a silent zero. Tokens always sum.
+ *
+ * Client-safe: pure types + math, no node imports; exposed via the core
+ * barrel so the pill/panel components carry no cost math.
+ */
+
+import type { CallUsage, EmissionStats, ExtractionRunUsage, NamingRunUsage } from "./contracts.ts";
+import { callCost, sumSteps } from "./prices.ts";
+
+/** One pipeline stage's cumulative cost across every run. */
+export interface StageCost {
+	/** Inferred USD summed over PRICED runs (partial when unpricedRuns > 0). */
+	dollars: number;
+	/** Stage-runs whose model is missing from PRICES (render "—", never zero). */
+	unpricedRuns: number;
+	/** Runs that billed this stage. */
+	runs: number;
+	/** Token totals across every run. */
+	tokens: CallUsage;
+}
+
+/** One run in the recent-runs list (extraction or naming). */
+export interface RecentRun {
+	startedAt: number;
+	/** ISO wall-clock. */
+	at: string;
+	durationMs: number;
+	/** "extraction" covers both front doors (chat + notes). */
+	kind: "extraction" | "naming";
+	/** Chat title / source file path / fixed label for naming runs. */
+	title: string;
+	/** Whole-run inferred USD; null only when EVERY stage is unpriced. */
+	dollars: number | null;
+	tokens: CallUsage;
+	/** What the run merged into the graph; absent on failed runs. */
+	merged?: EmissionStats;
+	/** Naming runs: labeling records appended (extraction runs omit it). */
+	labels?: number;
+}
+
+/** The cost pill's whole payload: stage totals + recent runs. */
+export interface GraphCostSummary {
+	/** Inferred USD across all priced stages of all runs. */
+	totalDollars: number;
+	/** Runs where EVERY stage was unpriced (totalDollars excludes them). */
+	unpricedRuns: number;
+	/** The three billable pipeline stages (merger/embedder are free). */
+	stages: {
+		extraction: StageCost;
+		audit: StageCost;
+		naming: StageCost;
+	};
+	/** Newest first, capped at `recentCap` (default 10). */
+	runs: RecentRun[];
+}
+
+/** What the fold reads: already-collected run records, front-door-tagged. */
+export interface CostSummaryInput {
+	/** Chat-front-door runs: chat title + the record's usage log. */
+	chats: { title: string; extractions: ExtractionRunUsage[] }[];
+	/** Notes-front-door runs: imported file path + the source's usage log. */
+	sources: { filePath: string; extractions: ExtractionRunUsage[] }[];
+	/** Cluster-naming runs (graph-global ledger). */
+	naming: NamingRunUsage[];
+	recentCap?: number;
+}
+
+const ZERO_TOKENS: CallUsage = {
+	inputTokens: undefined,
+	outputTokens: undefined,
+	cacheReadTokens: undefined,
+	cacheWriteTokens: undefined,
+	reasoningTokens: undefined,
+};
+
+const emptyStage = (): StageCost => ({ dollars: 0, unpricedRuns: 0, runs: 0, tokens: { ...ZERO_TOKENS } });
+
+/** One stage's dollars over its steps; null when the model is unpriced
+ *  (all-or-nothing: a stage runs one model). */
+function stageDollars(model: string, steps: readonly CallUsage[]): number | null {
+	let total = 0;
+	for (const step of steps) {
+		const c = callCost(step, model);
+		if (c === null) return null;
+		total += c;
+	}
+	return total;
+}
+
+/** Merge one step-set's tokens into an accumulating CallUsage. */
+function mergeTokens(into: CallUsage, steps: readonly CallUsage[]): void {
+	const summed = sumSteps(steps);
+	into.inputTokens = (into.inputTokens ?? 0) + (summed.inputTokens ?? 0);
+	into.outputTokens = (into.outputTokens ?? 0) + (summed.outputTokens ?? 0);
+	into.cacheReadTokens = (into.cacheReadTokens ?? 0) + (summed.cacheReadTokens ?? 0);
+	into.cacheWriteTokens = (into.cacheWriteTokens ?? 0) + (summed.cacheWriteTokens ?? 0);
+	into.reasoningTokens = (into.reasoningTokens ?? 0) + (summed.reasoningTokens ?? 0);
+}
+
+/** Fold every usage channel into the pill's payload. Pure: same input,
+ *  same output — no clock, no fs, no store reads. */
+export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
+	const extraction = emptyStage();
+	const audit = emptyStage();
+	const naming = emptyStage();
+	const runs: RecentRun[] = [];
+
+	const foldExtractionRun = (run: ExtractionRunUsage, title: string) => {
+		const stages = run.stages ?? { extractor: { model: "unknown", steps: [] }, auditor: { model: "unknown", steps: [] } };
+		// Per-stage: tokens always count; dollars only when priced.
+		extraction.runs++;
+		mergeTokens(extraction.tokens, stages.extractor.steps);
+		const extDollars = stageDollars(stages.extractor.model, stages.extractor.steps);
+		if (extDollars === null) extraction.unpricedRuns++;
+		else extraction.dollars += extDollars;
+
+		audit.runs++;
+		mergeTokens(audit.tokens, stages.auditor.steps);
+		const audDollars = stageDollars(stages.auditor.model, stages.auditor.steps);
+		if (audDollars === null) audit.unpricedRuns++;
+		else audit.dollars += audDollars;
+
+		// Run-level: null only when BOTH stages are unpriced.
+		const priced = extDollars ?? 0;
+		const runDollars = extDollars === null && audDollars === null ? null : priced + (audDollars ?? 0);
+		const allSteps = [...stages.extractor.steps, ...stages.auditor.steps];
+		runs.push({
+			startedAt: run.startedAt,
+			at: run.at,
+			durationMs: run.durationMs,
+			kind: "extraction",
+			title,
+			dollars: runDollars,
+			tokens: sumSteps(allSteps),
+			...(run.stats ? { merged: run.stats } : {}),
+		});
+	};
+
+	for (const chat of input.chats) {
+		for (const run of chat.extractions) foldExtractionRun(run, chat.title);
+	}
+	for (const source of input.sources) {
+		for (const run of source.extractions) foldExtractionRun(run, source.filePath);
+	}
+	for (const run of input.naming) {
+		naming.runs++;
+		mergeTokens(naming.tokens, run.steps);
+		const dollars = stageDollars(run.model, run.steps);
+		if (dollars === null) naming.unpricedRuns++;
+		else naming.dollars += dollars;
+		runs.push({
+			startedAt: run.startedAt,
+			at: run.at,
+			durationMs: run.durationMs,
+			kind: "naming",
+			title: "Cluster naming",
+			dollars,
+			tokens: sumSteps(run.steps),
+			labels: run.stats.appended,
+		});
+	}
+
+	runs.sort((a, b) => b.startedAt - a.startedAt);
+	const capped = runs.slice(0, input.recentCap ?? 10);
+
+	// A run is "unpriced" when it billed nothing countable at all.
+	const unpricedRuns = runs.filter((r) => r.dollars === null).length;
+	return {
+		totalDollars: extraction.dollars + audit.dollars + naming.dollars,
+		unpricedRuns,
+		stages: { extraction, audit, naming },
+		runs: capped,
+	};
+}
