@@ -19,7 +19,8 @@ import { z } from "zod";
 import { lhTool, toPiTools } from "../lh-tool.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
-import type { GraphNode } from "../../core/contracts.ts";
+import type { CallUsage, GraphNode, NamingRunUsage } from "../../core/contracts.ts";
+import { callUsage } from "./extraction.ts";
 import { getGraph, clusterContentId } from "../../core/graph.ts";
 import { matchClusterLabelings, MIN_CLUSTER_SIZE, type Community } from "../../core/clusters.ts";
 import type { GraphStore } from "../../core/ports.ts";
@@ -68,6 +69,7 @@ async function nameClusters(
 	engine: PiEngine | undefined,
 	signal: AbortSignal | undefined,
 	unnamed: UnnamedCluster[],
+	onStep?: (usage: CallUsage, model: string) => void,
 ): Promise<{ key: string; label: string }[]> {
 	let submitted: { key: string; label: string }[] | undefined;
 	await runSubagent(
@@ -98,6 +100,7 @@ async function nameClusters(
 			),
 			maxTurns: 4,
 			abortSignal: signal,
+			onAssistantMessage: (message) => onStep?.(callUsage(message.usage), message.model),
 			shouldStop: (_message, toolResults) =>
 				toolResults.some((r) => r.toolName === "submit_labels" && !r.isError),
 		},
@@ -156,23 +159,49 @@ async function doRefresh(deps: {
 
 	if (unnamed.length === 0) return { detected: communities.length, claimed, named: 0, appended: 0 };
 
-	const labels = await nameClusters(engine, signal, unnamed);
+	// Money channel (2026-09 graph cost metrics): the naming call is the
+	// pipeline's third billable stage — capture per-step usage + model as
+	// they bill, then persist ONE record for the run, success or failure
+	// (money spent either way, same discipline as extraction runs).
+	const startedAt = Date.now();
+	const t0 = performance.now();
+	const steps: NamingRunUsage["steps"] = [];
+	let model = "unknown";
 	let appended = 0;
-	const seen = new Set<string>();
-	for (const { key, members } of unnamed) {
-		if (seen.has(key)) continue;
-		const label = labels.find((l) => l.key === key)?.label?.trim();
-		if (!label) continue;
-		seen.add(key);
-		graphStore.appendClusterLabel({
-			id: clusterContentId(members),
-			label,
-			core: members,
-			createdAt: new Date().toISOString(),
+	try {
+		const labels = await nameClusters(engine, signal, unnamed, (usage, modelId) => {
+			steps.push(usage);
+			model = modelId;
 		});
-		appended++;
+		const seen = new Set<string>();
+		for (const { key, members } of unnamed) {
+			if (seen.has(key)) continue;
+			const label = labels.find((l) => l.key === key)?.label?.trim();
+			if (!label) continue;
+			seen.add(key);
+			graphStore.appendClusterLabel({
+				id: clusterContentId(members),
+				label,
+				core: members,
+				createdAt: new Date().toISOString(),
+			});
+			appended++;
+		}
+		return { detected: communities.length, claimed, named: unnamed.length, appended };
+	} finally {
+		// The finally (not just success) keeps failed/aborted runs billed
+		// too — zero appended, steps as far as they got. Runs whose model
+		// never billed a step (aborted before the first message) still
+		// record: the idempotency key is this run's startedAt.
+		graphStore.appendNamingUsage({
+			startedAt,
+			at: new Date().toISOString(),
+			durationMs: Math.round(performance.now() - t0),
+			model,
+			steps,
+			stats: { detected: communities.length, claimed, named: unnamed.length, appended },
+		});
 	}
-	return { detected: communities.length, claimed, named: unnamed.length, appended };
 }
 
 let namingTail: Promise<unknown> = Promise.resolve();

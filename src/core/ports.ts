@@ -28,6 +28,7 @@ import type {
 	TurnUsage,
 	NotesSource,
 	ClusterLabeling,
+	NamingRunUsage,
 	EmbeddingsLedger,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
@@ -100,6 +101,11 @@ export interface GraphStore {
 	 *  sorted core, so identical member sets dedupe). */
 	appendClusterLabel(labeling: ClusterLabeling): void;
 	readClusterLabels(): ClusterLabeling[];
+
+	/** Append one cluster-naming run's usage (graph-global money channel) —
+	 *  idempotent per startedAt. */
+	appendNamingUsage(entry: NamingRunUsage): void;
+	readNamingRuns(): NamingRunUsage[];
 
 	/** Upsert one imported-notes source record (config.SOURCES_FILE — a
 	 *  JSON map, not a ledger; an upsert keeps the existing usage log). */

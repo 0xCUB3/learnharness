@@ -34,6 +34,7 @@ export * from "./math-delims.ts";
 export * from "./ui-message.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
+export * from "./cost-summary.ts";
 export * from "./fuzzy.ts";
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved

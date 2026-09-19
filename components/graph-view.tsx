@@ -61,10 +61,10 @@
  * camera never moves.
  */
 
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
-import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { CoinsIcon, FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
+import { incrementalLayout, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { GraphCoverageControl } from "./graph-coverage.tsx";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
@@ -206,6 +206,97 @@ function SettingSlider({
 				className="h-1.5 w-full accent-primary"
 			/>
 		</label>
+	);
+}
+
+/** Compact token display: 45231 → "45.2k"; absent → "—". */
+function fmtTokens(n: number | undefined): string {
+	if (n === undefined) return "—";
+	if (n < 1000) return String(Math.round(n));
+	if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+	return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+/** Relative time for run rows: "now", "12m", "3h", "2d". */
+function timeAgo(startedAt: number): string {
+	const mins = Math.round((Date.now() - startedAt) / 60_000);
+	if (mins < 1) return "now";
+	if (mins < 60) return `${mins}m`;
+	const hours = Math.round(mins / 60);
+	if (hours < 24) return `${hours}h`;
+	return `${Math.round(hours / 24)}d`;
+}
+
+/** Run/stage cost at 3 decimals (pipeline pennies are real money at this
+ *  scale); headline totals use 2. Null (unpriced model) renders "—". */
+function fmtRunCost(dollars: number | null): string {
+	return dollars === null ? "—" : `$${dollars.toFixed(3)}`;
+}
+
+/**
+ * The graph-pipeline cost pill's expanded panel (2026-09 graph cost
+ * metrics wave): stage totals (extraction / audit / cluster-naming —
+ * dollars headline, tokens secondary) + the recent-runs list. Presenta-
+ * tional: the fold happens server-side (core/cost-summary.ts); dollars
+ * are inferred read-time, never stored.
+ */
+function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
+	const stageRows: [string, GraphCostSummary["stages"]["extraction"]][] = [
+		["Extraction", costs.stages.extraction],
+		["Audit", costs.stages.audit],
+		["Cluster naming", costs.stages.naming],
+	];
+	return (
+		<div className="w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
+			<div className="mb-2 flex items-baseline justify-between">
+				<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+					Graph pipeline costs
+				</span>
+				<span className="text-foreground tabular-nums">
+					${costs.totalDollars.toFixed(2)}
+					{costs.unpricedRuns > 0 && (
+						<span className="text-muted-foreground"> · {costs.unpricedRuns} unpriced</span>
+					)}
+				</span>
+			</div>
+			<div className="flex flex-col gap-1">
+				{stageRows.map(([label, stage]) => (
+					<div key={label} className="flex items-baseline justify-between gap-2 text-[11px]">
+						<span className="shrink-0 text-muted-foreground">{label}</span>
+						<span className="min-w-0 text-right tabular-nums">
+							{fmtRunCost(stage.runs === 0 || (stage.unpricedRuns > 0 && stage.dollars === 0) ? null : stage.dollars)}
+							{stage.unpricedRuns > 0 && stage.dollars > 0 && (
+								<span className="text-muted-foreground"> +{stage.unpricedRuns} unpriced</span>
+							)}
+							<span className="text-muted-foreground">
+								{" "}
+								· {fmtTokens(stage.tokens.inputTokens)} in / {fmtTokens(stage.tokens.outputTokens)} out
+							</span>
+						</span>
+					</div>
+				))}
+			</div>
+			<div className="mt-2 flex flex-col gap-0.5 border-t pt-2">
+				{costs.runs.map((run) => (
+					<div key={run.startedAt} className="flex items-baseline justify-between gap-2 text-[11px]">
+						<span className="min-w-0 flex-1 truncate text-muted-foreground">
+							<span className="text-foreground/70">{timeAgo(run.startedAt)}</span>{" "}
+							{run.title}
+							{run.merged && (
+								<span className="text-muted-foreground">
+									{" "}
+									+{run.merged.nodes}n
+								</span>
+							)}
+							{run.kind === "naming" && (
+								<span className="text-muted-foreground"> {run.labels ?? 0} labels</span>
+							)}
+						</span>
+						<span className="shrink-0 tabular-nums">{fmtRunCost(run.dollars)}</span>
+					</div>
+				))}
+			</div>
+		</div>
 	);
 }
 
@@ -751,6 +842,29 @@ export function GraphView() {
 		};
 	}, []);
 
+	// Graph pipeline costs (2026-09 cost metrics wave): the cumulative fold
+	// of every usage channel (chat + notes extraction runs, cluster naming)
+	// behind the bottom-left cost pill. Fetched once on mount and refetched
+	// when a pipeline run finishes (running -> none) so fresh spend lands
+	// without a manual reload. Best-effort: a fetch failure never blocks
+	// the view — the pill just stays on its last numbers.
+	const [costs, setCosts] = useState<GraphCostSummary | null>(null);
+	const [costsOpen, setCostsOpen] = useState(false);
+	const refreshCosts = useCallback(() => {
+		fetch("/api/graph/costs")
+			.then((res) => res.json() as Promise<GraphCostSummary>)
+			.then(setCosts)
+			.catch(() => {});
+	}, []);
+	useEffect(() => {
+		refreshCosts();
+	}, [refreshCosts]);
+	const costsHadRunning = useRef(false);
+	useEffect(() => {
+		if (costsHadRunning.current && pipelineRuns.length === 0) refreshCosts();
+		costsHadRunning.current = pipelineRuns.length > 0;
+	}, [pipelineRuns, refreshCosts]);
+
 	// Layout (Option A): the positions ledger (written by the server's
 	// incremental settle after every merge) IS the layout — the renderer
 	// receives it as frozen data. The local one-shot forceAtlas2 pass runs
@@ -1062,9 +1176,25 @@ export function GraphView() {
 				)}
 			</div>
 
-			{/* Background pipeline status: what is currently running. */}
-			{pipelineRuns.length > 0 && (
-				<div className="absolute bottom-3 left-3 z-10 flex flex-col gap-1.5">
+			{/* Bottom-left stack (2026-09-17 merge): the graph-pipeline cost
+			    pill + its expandable panel, and the running-pipeline pills —
+			    one container so they stack instead of overlapping. The pill
+			    shows cumulative pipeline spend (dollars headline, inferred
+			    read-time — never stored); click toggles the breakdown. */}
+			{(costs?.runs.length ?? 0) > 0 || pipelineRuns.length > 0 ? (
+				<div className="absolute bottom-3 left-3 z-10 flex flex-col items-start gap-1.5">
+					{costsOpen && costs && <GraphCostPanel costs={costs} />}
+					{costs && costs.runs.length > 0 && (
+						<button
+							type="button"
+							onClick={() => setCostsOpen((open) => !open)}
+							className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:bg-accent"
+							aria-expanded={costsOpen}
+						>
+							<CoinsIcon className="size-3.5 shrink-0" />
+							<span className="text-foreground tabular-nums">${costs.totalDollars.toFixed(2)}</span>
+						</button>
+					)}
 					{pipelineRuns.map((run) => (
 						<div
 							key={run.chatId}
@@ -1077,7 +1207,7 @@ export function GraphView() {
 						</div>
 					))}
 				</div>
-			)}
+			) : null}
 
 			{selected && !isEmpty && (
 				<div

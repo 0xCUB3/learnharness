@@ -44,6 +44,7 @@ import type {
 	ProvenancePoint,
 	CoverageEntry,
 	SessionCheckpoint,
+	NamingRunUsage,
 } from "../core/contracts.ts";
 import type { GraphStore } from "../core/ports.ts";
 
@@ -89,6 +90,19 @@ function readValid<T>(file: string, isValid: (v: unknown) => v is T): T[] {
 /** Provenance points are (chatId, messageId) pairs — message-granular. */
 const isProvenancePoint = (v: unknown): v is ProvenancePoint =>
 	isRecord(v) && isString(v.chatId) && isString(v.messageId);
+
+const isNamingStats = (v: unknown): v is NamingRunUsage["stats"] =>
+	isRecord(v) &&
+	["detected", "claimed", "named", "appended"].every((k) => typeof v[k] === "number");
+
+const isNamingRun = (v: unknown): v is NamingRunUsage =>
+	isRecord(v) &&
+	typeof v.startedAt === "number" &&
+	isString(v.at) &&
+	typeof v.durationMs === "number" &&
+	isString(v.model) &&
+	Array.isArray(v.steps) &&
+	isNamingStats(v.stats);
 
 const isClusterLabeling = (v: unknown): v is ClusterLabeling =>
 	isRecord(v) &&
@@ -196,6 +210,18 @@ export const graphStore: GraphStore = {
 	},
 	readClusterLabels(): ClusterLabeling[] {
 		return readValid(LEDGER_FILES.clusterLabels, isClusterLabeling);
+	},
+
+	// ── cluster-naming run usage (config.LEDGER_FILES.namingRuns) ──
+
+	/** Idempotent per startedAt — the same discipline as every usage
+	 *  channel (chats.appendExtractionUsage, appendSourceUsage). */
+	appendNamingUsage(entry: NamingRunUsage): void {
+		if (this.readNamingRuns().some((r) => r.startedAt === entry.startedAt)) return;
+		appendLine(LEDGER_FILES.namingRuns, entry);
+	},
+	readNamingRuns(): NamingRunUsage[] {
+		return readValid(LEDGER_FILES.namingRuns, isNamingRun);
 	},
 
 	// ── imported-notes bookkeeping (config.SOURCES_FILE — a JSON map) ──

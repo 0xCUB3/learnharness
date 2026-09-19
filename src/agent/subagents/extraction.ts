@@ -588,6 +588,22 @@ export interface ExtractionPipeline {
 	importNotes(input: NotesImportInput): Promise<EmissionStats>;
 }
 
+/** pi's per-step usage, flattened to the persisted CallUsage fields
+ *  (the money channel's capture shape, contracts/chat.ts). Exported for
+ *  the cluster namer — the same capture shape (2026-09 graph cost
+ *  metrics wave). Module scope: no closure deps, pure projection. */
+export function callUsage(usage: Usage): CallUsage {
+	return {
+		inputTokens: usage.input,
+		outputTokens: usage.output,
+		cacheReadTokens: usage.cacheRead,
+		cacheWriteTokens: usage.cacheWrite,
+		// Optional in pi's Usage (providers that never emit reasoning
+		// tokens leave it unset) — persisted as 0, never dropped.
+		reasoningTokens: usage.reasoning ?? 0,
+	};
+}
+
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
 	const { chatStore, graphStore, embedder: embed } = deps;
 	// THE SHARED REGISTRIES (runs() above — globalThis): every pipeline
@@ -619,19 +635,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		run.usage[stage]!.steps.push(usage);
 	}
 
-	/** pi's per-step usage, flattened to the persisted CallUsage fields
-	 *  (the money channel's capture shape, contracts/chat.ts). */
-	function callUsage(usage: Usage): CallUsage {
-		return {
-			inputTokens: usage.input,
-			outputTokens: usage.output,
-			cacheReadTokens: usage.cacheRead,
-			cacheWriteTokens: usage.cacheWrite,
-			// Optional in pi's Usage (providers that never emit reasoning
-			// tokens leave it unset) — persisted as 0, never dropped.
-			reasoningTokens: usage.reasoning ?? 0,
-		};
-	}
 
 	async function extract(chatId: string, view: string): Promise<SessionFindings> {
 		const signal = runningExtractions.get(chatId)?.controller.signal;
