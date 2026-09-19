@@ -102,7 +102,7 @@ export function GraphCoverageControl({ refreshKey = 0 }: { refreshKey?: number }
 				title="Extraction coverage — what the knowledge graph has covered"
 				aria-expanded={open}
 				onClick={() => setOpen((o) => !o)}
-				className={`flex size-9 items-center justify-center rounded-sm border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
+				className={`flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
 					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
 				}`}
 			>

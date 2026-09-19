@@ -253,7 +253,7 @@ function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 				title="Graph pipeline costs — click for the breakdown"
 				aria-expanded={open}
 				onClick={() => setOpen((o) => !o)}
-				className={`rounded-sm px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent ${
+				className={`rounded-lg px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent ${
 					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
 				}`}
 			>
@@ -361,7 +361,7 @@ function GraphSettingsControl({
 				title="Rendering settings"
 				aria-expanded={open}
 				onClick={() => setOpen((o) => !o)}
-				className={`flex size-9 items-center justify-center rounded-sm border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
+				className={`flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
 					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
 				}`}
 			>
@@ -1154,7 +1154,7 @@ export function GraphView() {
 			    against the full-bleed parent) — the row NEVER wraps (owner
 			    rejected the two-row fold); in narrow windows the search is
 			    the flexible element and shrinks instead. */}
-			<div className="lh-no-drag absolute right-3 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
+			<div className="lh-no-drag absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
 			{/* z-20 (2026-09-20): the row paints above the cost number below
 			    it — without this, the later-in-DOM cost control layered over
 			    the settings/coverage dropdowns (owner report), still hoverable
@@ -1167,7 +1167,7 @@ export function GraphView() {
 					    The header band's flexible element: w-56 normally, shrinks
 					    (min-w-0) when the column's width cap binds in narrow
 					    windows — the row's other controls are shrink-0. */}
-					<div className="w-56 min-w-0 shrink rounded-sm border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+					<div className="w-56 min-w-0 shrink rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 						<div className="relative">
 							<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 							<input
@@ -1176,7 +1176,7 @@ export function GraphView() {
 								onChange={(e) => setQuery(e.target.value)}
 								placeholder="Search nodes…"
 								spellCheck={false}
-								className="h-7 w-full rounded-sm border bg-background pl-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+								className="h-7 w-full rounded-lg border bg-background pl-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
 							/>
 						</div>
 						{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
@@ -1196,7 +1196,7 @@ export function GraphView() {
 				{!isEmpty && (
 				<>
 					{/* Import notes — its own container (36px, header band). */}
-					<div className="shrink-0 rounded-sm border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+					<div className="shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 						<input
 							ref={fileInputRef}
 							type="file"
@@ -1212,7 +1212,7 @@ export function GraphView() {
 							type="button"
 							disabled={importing}
 							onClick={() => fileInputRef.current?.click()}
-							className="flex h-7 items-center gap-1.5 rounded-sm px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+							className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
 						>
 							<UploadIcon className="size-3" />
 							{importing ? "Importing…" : "Import notes…"}
