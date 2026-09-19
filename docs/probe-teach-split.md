@@ -106,9 +106,12 @@ presents the plan → **accept** → **teach (teacher)**
   Accept plan / red Decline) while the verdict pends; accept sends a user
   message carrying a `data-plan-accepted` data part — THE plan→teach seam
   (`phaseAt3` reads it; `convertToModelMessages` drops data parts, so the
-  teacher sees only the text). Decline asks for a revision; side questions
-  stay possible (Enter sends a plain message, phase unmoved). Mid-lesson
-  rewrites need no fresh verdict: acceptance happens once.
+  teacher sees only the text). Decline asks for a revision. While the
+  verdict pends, Enter ACCEPTS the plan — typed text rides the acceptance
+  as its note, an empty box accepts too (user-decided 2026-09-19; formerly
+  Enter sent a plain message, which left the verdict still pending on the
+  next message — a side question now rides the acceptance note instead).
+  Mid-lesson rewrites need no fresh verdict: acceptance happens once.
 - The session picker phase derives from transcript markers the same way.
 
 ## 5. No global-graph context in sessions (for now)

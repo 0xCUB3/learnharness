@@ -12,6 +12,7 @@ import { layout as dagreLayout } from "dagre-d3-es/src/dagre/index.js";
 // Mermaid's default flowchart edge curve: dagre's waypoints drawn through
 // d3's curveBasis (the exact recipe dagre-d3's own renderer uses).
 import { curveBasis, line } from "d3-shape";
+import { fitGraphView, fitZoomFor, zoomedGraphView, type Viewport } from "@/components/pan-zoom";
 import type { PlanBlockData, PlanNodeStatus, PlanTree } from "@/src/core";
 import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
 
@@ -24,7 +25,9 @@ import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
  *   scales to the full column width (viewBox = layout extent + GRAPH_PAD,
  *   so strokes/glow never clip), natural height, capped at the chat prose
  *   font size (TEXT_CAP_SCALE — fills the column, never oversizes text).
- * - Clicking opens the full plan in a full-screen popup overlay —
+ * - Clicking opens the full plan in a session-scoped focus overlay
+ *   (absolute inside the session area, below the drag bar — chrome-melt
+ *   wave, 2026-09-19; was a fixed inset-0 full-screen popup) —
  *   the LIVE plan: the latest tree from the transcript with statuses
  *   derived at click time (contracts/plan.ts derivePlanStatuses). Blocks
  *   are frozen snapshots rendered exactly as carried (never re-derived);
@@ -584,54 +587,26 @@ export function latestTree(messages: readonly PopupMessage[]): PlanTree | null {
 	return null;
 }
 
-/** Zoom bounds: never below fit (fully zoomed out IS the fit — the whole
- *  graph visible, whichever axis binds — owner, plan-graph round 2), never
- *  above ZOOM_MAX (raised 2×→4× for reading node titles closely, owner,
- *  plan-graph round 3). The old 0.15 floor could sit ABOVE a true fit for
- *  wide graphs; the fit itself is the floor now. */
-const ZOOM_MAX = 4;
-const FIT_PAD = 16;
 /** The popup shows the glow, so its frame pads by the glow's reach —
  *  the in-chat block (monochrome, no glow) stays tight at GRAPH_PAD. */
 const POPUP_PAD = GLOW_REACH;
-const FIT_ZOOM_MAX = 1.5;
 
-interface GraphView {
-	zoom: number;
-	x: number;
-	y: number;
-}
-
-function fitZoomFor(box: { w: number; h: number }, viewport: { w: number; h: number }): number {
-	if (!viewport.w || !viewport.h || box.w === 0) return 1;
-	// No artificial floor: a wide graph must fit even below 0.15× — the
-	// epsilon only guards degenerate viewports.
-	return Math.max(0.02, Math.min((viewport.w - FIT_PAD) / box.w, (viewport.h - FIT_PAD) / box.h, FIT_ZOOM_MAX));
-}
-
-function fitGraphView(box: { w: number; h: number }, viewport: { w: number; h: number }, zoom: number): GraphView {
-	return { zoom, x: (viewport.w - box.w * zoom) / 2, y: (viewport.h - box.h * zoom) / 2 };
-}
-
-function zoomedGraphView(
-	view: GraphView,
-	factor: number,
-	floor: number,
-	focus: { x: number; y: number },
-	box: { w: number; h: number },
-	viewport: { w: number; h: number },
-): GraphView {
-	const zoom = Math.min(Math.max(view.zoom * factor, floor), ZOOM_MAX);
-	if (zoom === view.zoom) return view;
-	if (zoom <= floor) return fitGraphView(box, viewport, floor);
-	const k = zoom / view.zoom;
-	return { zoom, x: focus.x - (focus.x - view.x) * k, y: focus.y - (focus.y - view.y) * k };
-}
+// The pan/zoom math now lives in components/pan-zoom.ts (shared with the
+// mermaid focus overlay since the session-overlay wave, 2026-09-19) — same
+// fit-floor semantics: fully zoomed out IS the fit, panning locks at the
+// floor, zoom ceiling 4× for reading node titles closely.
 
 /**
  * The full plan, live: latest tree + statuses derived at click time. Esc,
  * backdrop click, or the X close it; drag pans, wheel zooms to the cursor,
  * the zoom floor is the fit (panning locks at it — nothing to move).
+ *
+ * SESSION-SCOPED since the chrome-melt wave (2026-09-19): it mounts
+ * ABSOLUTE inside the chat page's session-area div (chat.tsx) — below the
+ * 60px drag bar, right of the sidebar — instead of a fixed inset-0 overlay.
+ * The top bar stays sharp and draggable, and the X can never land in drag
+ * territory. Surface 80% + blur (owner decision): the transcript ghosts
+ * through while the focus owns the session area.
  */
 export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessage[]; onClose: () => void }) {
 	const tree = useMemo(() => latestTree(messages), [messages]);
@@ -671,7 +646,7 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	);
 	const fitZoom = useMemo(() => fitZoomFor(box, size), [box, size]);
 
-	const [view, setView] = useState<GraphView>({ x: 0, y: 0, zoom: 1 });
+	const [view, setView] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
 	const userAdjustedRef = useRef(false);
 	const atFloor = view.zoom <= fitZoom + 1e-9;
 	// The transition stays off until the FIRST fit has been applied — the
@@ -756,7 +731,10 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	return (
 		<div
 			data-testid="plan-popup"
-			className="fixed inset-0 z-50 flex flex-col bg-background/95 p-4 backdrop-blur-sm"
+			// SESSION-SCOPED (absolute, not fixed): the chat page mounts this
+			// INSIDE the session-area div — below the drag bar, right of the
+			// sidebar. 80% + blur: the transcript ghosts through.
+			className="absolute inset-0 z-40 flex flex-col bg-background/80 p-4 backdrop-blur-sm"
 			role="dialog"
 			aria-modal="true"
 			aria-label="The full plan"
@@ -794,8 +772,16 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 							className="absolute top-0 left-0 origin-top-left"
 							style={{
 								transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
+								// Hidden until the first fit has APPLIED — the fit runs in an
+								// effect (after paint), so an opacity-gated chart can never flash
+								// at the initial top-left zoom:1 state (same fix as the mermaid
+								// overlay; transition-gating alone didn't hide the fly-in the
+								// owner kept seeing in rounds 4–7).
+								opacity: settled ? 1 : 0,
 								transition:
-									panning || !settled ? "none" : "transform 180ms ease-out",
+									panning || !settled
+										? "none"
+										: "transform 180ms ease-out, opacity 160ms ease-out",
 							}}
 						>
 							<PlanDiagram

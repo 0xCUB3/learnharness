@@ -225,15 +225,22 @@ function createWindow(url) {
 	});
 
 	const allowedOrigin = () => new URL(url).origin;
-	// Deny-by-default; the ONLY grants are media (mic/STT groundwork) from
-	// our own loopback origin. Electron's default is auto-approve-everything
-	// — we do not ship that.
+	// Deny-by-default; the ONLY grants are media (mic/STT groundwork) and
+	// clipboard-sanitized-write — the copy affordances in the transcript
+	// (md-blocks copy corners) call navigator.clipboard.writeText(), which
+	// Chromium only honors with that permission (chrome-melt tweaks wave,
+	// 2026-09-19; before this grant every copy silently rejected). Still
+	// loopback-origin only — Electron's default is auto-approve-everything,
+	// and we do not ship that.
+	const allowedPermissions = new Set(["media", "clipboard-sanitized-write"]);
+	const fromOwnOrigin = (origin, permission) =>
+		origin === allowedOrigin() && allowedPermissions.has(permission);
 	session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
 		const requestOrigin = details.requestingUrl ? new URL(details.requestingUrl).origin : null;
-		callback(requestOrigin === allowedOrigin() && permission === "media");
+		callback(fromOwnOrigin(requestOrigin, permission));
 	});
 	session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => {
-		return origin === allowedOrigin() && permission === "media";
+		return fromOwnOrigin(origin, permission);
 	});
 
 	win.webContents.on("will-navigate", (event, target) => {

@@ -478,8 +478,14 @@ function runNotesAuditor(
 
 // ─── the pipeline status registry ─────────────────────────────────────────────
 
-/** The pipeline phases, in order — what the home status endpoint shows. */
-export type ExtractionPhase = "extracting" | "auditing" | "merging";
+/** The pipeline phases, in order — what the home status endpoint shows.
+ *  `embedding` is its own phase (accuracy wave, 2026-09-19): the post-batch
+ *  tail — embed every uncovered proposition, re-cluster, settle the layout
+ *  — used to hide inside `merging`, so a run that had already merged every
+ *  batch sat on "merging" for the whole embedding tail (model load +
+ *  cold-start backfill on first runs = minutes). The phases must tell the
+ *  truth about what the loop is actually waiting on. */
+export type ExtractionPhase = "extracting" | "auditing" | "merging" | "embedding";
 
 /** One in-flight pipeline run. Module-level: one process, one registry.
  *  Exported for the status payload's consumer typing (the dock). */
@@ -502,15 +508,34 @@ export interface RunningExtraction {
 	controller: AbortController;
 }
 
-const runningExtractions = new Map<string, RunningExtraction>();
+interface LhExtractionGlobal {
+	__lhExtractionRuns?: {
+		/** In-flight pipeline runs, keyed chatId (chat) / src id (notes). */
+		running: Map<string, RunningExtraction>;
+		/** The single-flight guard, shared by every pipeline instance. */
+		inFlight: Set<string>;
+		/** Last minted startedAt — kept monotonic so two runs starting in the
+		 *  same millisecond never collide on the usage idempotency key. */
+		lastStartedAt: number;
+	};
+}
 
-/** Last minted startedAt — kept monotonic so two runs starting in the same
- *  millisecond never collide on the usage idempotency key. */
-let lastStartedAt = 0;
+/** THE RUN REGISTRIES live on globalThis, not module level — the
+ *  turn-liveness lesson: Next dev compiles each route entry as its own
+ *  module instance, so a module-level Map is a different object in the
+ *  /api/activity route than in the pipeline's chat-handler instance —
+ *  the status routes would read an always-empty registry. One process,
+ *  one truth — the same idiom as the turn, wake, and abort registries
+ *  (moved 2026-09-19, the observability-accuracy wave; also makes the
+ *  single-flight guard cross route instances). */
+function runs(): NonNullable<LhExtractionGlobal["__lhExtractionRuns"]> {
+	const g = globalThis as typeof globalThis & LhExtractionGlobal;
+	return (g.__lhExtractionRuns ??= { running: new Map(), inFlight: new Set(), lastStartedAt: 0 });
+}
 
 /** In-flight pipeline runs (oldest first) — the /api/graph/status payload. */
 export function extractionStatuses(): RunningExtraction[] {
-	return [...runningExtractions.values()].sort((a, b) => a.startedAt - b.startedAt);
+	return [...runs().running.values()].sort((a, b) => a.startedAt - b.startedAt);
 }
 
 /** True cancellation of the in-flight run for a chat (the dock's abort
@@ -519,7 +544,7 @@ export function extractionStatuses(): RunningExtraction[] {
  *  nothing merged, nothing checkpointed, partial usage still persisted.
  *  Returns false when no run is in flight (idempotent no-op). */
 export function abortExtraction(chatId: string): boolean {
-	const run = runningExtractions.get(chatId);
+	const run = runs().running.get(chatId);
 	if (!run) return false;
 	run.controller.abort();
 	return true;
@@ -565,17 +590,22 @@ export interface ExtractionPipeline {
 
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
 	const { chatStore, graphStore, embedder: embed } = deps;
-	const inFlight = new Set<string>();
+	// THE SHARED REGISTRIES (runs() above — globalThis): every pipeline
+	// instance (route entries in dev, tests) sees the same runs, the same
+	// single-flight guard. No module-level state left in this factory.
+	const runningExtractions = runs().running;
+	const inFlight = runs().inFlight;
 
 	function setPhase(chatId: string, phase: ExtractionPhase, kind: "chat" | "notes", label?: string): void {
+		const R = runs();
 		const prev = runningExtractions.get(chatId);
-		if (!prev) lastStartedAt = Math.max(Date.now(), lastStartedAt + 1);
+		if (!prev) R.lastStartedAt = Math.max(Date.now(), R.lastStartedAt + 1);
 		runningExtractions.set(chatId, {
 			chatId,
 			kind,
 			label: prev?.label ?? label, // phase changes never lose the label
 			phase,
-			startedAt: prev?.startedAt ?? lastStartedAt,
+			startedAt: prev?.startedAt ?? R.lastStartedAt,
 			usage: prev?.usage ?? {}, // phase changes never lose usage
 			controller: prev?.controller ?? new AbortController(),
 		});
@@ -742,6 +772,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				);
 			}
 			const stats = total;
+			// The embedding tail gets its own phase — the honest label for what
+			// the run is waiting on here (see ExtractionPhase above).
+			setPhase(chatId, "embedding", "chat");
 			// Semantic embeddings (DECIDED 2026-09-13): topics come from
 			// MEANING, so embed the new propositions BEFORE the settle and
 			// the namer look at clusters. Failure is non-fatal — clustering
@@ -868,7 +901,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			const auditResult: AuditResult = { ...notesResult, attribution: { quiz: {} } };
 			const stats = mergeFindings(id, auditResult, { chatStore, graphStore }, { messages: null, foldedAt: input.importedAt });
 			// Same post-merge chain as the chat path: embeddings first
-			// (topics from meaning), then the settle, then the namer.
+			// (topics from meaning), then the settle, then the namer —
+			// under their own phase, exactly like the chat path.
+			setPhase(id, "embedding", "notes", input.filePath);
 			await embed(graphStore).catch((err) => {
 				console.error(`[extraction ${id}] embedding failed (non-fatal):`, err);
 			});

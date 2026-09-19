@@ -49,7 +49,8 @@ import { createTeacherTools } from "../src/agent/tools.ts";
 import { webTools } from "../src/agent/tools/web.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
-import { abortJob, claimSteers, deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
+import { abortJob, claimSteers, deliverJobResult, recoverStaleJobs, setJobRespawn, setTurnRunner } from "../src/server/jobs.ts";
+import { registerJobAbort, unregisterJobAbort } from "../src/agent/subagents/aborts.ts";
 import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { persistTurn, withMessageIds } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -1118,5 +1119,83 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 		trackJob(job.id);
 		jobStore.updateJob(job.id, { status: "done", activity: "delivered" });
 		assert.deepEqual(abortJob(job.id), { ok: false, reason: "not_running" });
+	});
+});
+
+// ─── 7. crash recovery, LIVENESS-GATED (observability-accuracy wave, 2026-09-19) ──
+//
+// The sweep (recoverStaleJobs) keys on the abort registry (subagents/aborts.ts
+// isJobLive), not record age: a "running" record with a live registration
+// belongs to a loop executing in THIS process (hung or slow — never re-run
+// beside itself); without one it is a process-death orphan and recovers at
+// once. The old 15-minute STALE_JOB_MS heuristic is gone — these tests prove
+// immediacy by running the sweep on FRESH records.
+
+describe("stale-job recovery sweep (liveness-gated)", () => {
+	/** Reset the sweep's 30s throttle — tests fire it directly, repeatedly. */
+	function resetSweepThrottle(): void {
+		const g = globalThis as { __lhWakePipeline?: { lastSweepAt: number } };
+		if (g.__lhWakePipeline) g.__lhWakePipeline.lastSweepAt = 0;
+	}
+
+	/** A FRESH "running" record (no loop registration): the orphan shape.
+	 *  Freshness is the point — the old code needed 15 minutes of age. */
+	function orphanJob(withResult?: ResearchResult): { chatId: string; jobId: string } {
+		const chat = chatStore.createChat("Test: stale sweep");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] }] as never);
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: `call-sweep-${createdJobs.length}` });
+		trackJob(job.id);
+		if (withResult) jobStore.updateJob(job.id, { result: withResult, activity: "delivering result" });
+		return { chatId: chat.id, jobId: job.id };
+	}
+
+	it("a running record with a LIVE loop registration is never recovered — however old (the double-run guard)", () => {
+		const { jobId } = orphanJob();
+		// Backdate the record well past every plausible in-flight run: age
+		// alone must NOT trigger recovery anymore.
+		jobStore.updateJob(jobId, { updatedAt: new Date(Date.now() - 30 * 60_000).toISOString() });
+		registerJobAbort(jobId, new AbortController()); // a loop is executing
+		let respawned = 0;
+		setJobRespawn(() => {
+			respawned++;
+		});
+		resetSweepThrottle();
+		recoverStaleJobs();
+		assert.equal(respawned, 0, "a live loop is provably executing — no respawn beside it");
+		assert.equal(jobStore.getJob(jobId)!.activity, "starting", "the record is untouched");
+		// Hermetic teardown: settle + unregister so later sweeps in THIS suite
+		// never see this fixture as a fresh orphan.
+		jobStore.updateJob(jobId, { status: "done", activity: "settled (test)" });
+		unregisterJobAbort(jobId);
+	});
+
+	it("a running record WITHOUT a registration is an orphan: the loop is re-spawned immediately (no age wait)", () => {
+		const { jobId } = orphanJob();
+		let respawned: string | null = null;
+		setJobRespawn((id) => {
+			respawned = id;
+		});
+		resetSweepThrottle();
+		recoverStaleJobs();
+		assert.equal(respawned, jobId, "the orphan's loop is re-spawned at once");
+		assert.equal(jobStore.getJob(jobId)!.activity, "recovering: re-running");
+		// Hermetic teardown (see above) — the respawned loop is the TEST's
+		// fake seam, nothing real runs.
+		jobStore.updateJob(jobId, { status: "done", activity: "settled (test)" });
+	});
+
+	it("an orphan WITH a stored result is re-delivered: the wake fires and the job flips done", async () => {
+		const { jobId } = orphanJob({ brief: "Done: it works.", sources: [] });
+		let fired = 0;
+		setTurnRunner(async () => {
+			fired++;
+			return 200;
+		});
+		resetSweepThrottle();
+		recoverStaleJobs();
+		await waitFor(() => fired > 0, 8000, "recovery wake fired");
+		await waitFor(() => jobStore.getJob(jobId)!.status !== "running", 8000, "orphan settled after re-delivery");
+		assert.equal(jobStore.getJob(jobId)!.status, "done");
 	});
 });

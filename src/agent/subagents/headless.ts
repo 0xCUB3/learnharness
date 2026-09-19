@@ -179,6 +179,72 @@ function svgViewport(svg: string, opts: RenderSvgOptions): { width: number; heig
 	};
 }
 
+/** Canonicalize a raw Chrome screenshot for the model's eyes (2026-09-19 fix).
+ *
+ *  WHY: Chrome writes PNGs with a SPLIT IDAT stream (4KB chunks) — and
+ *  Alibaba's vision decoder (behind OpenRouter's qwen3.8-flash, the
+ *  visual-maker's look-model) rejected those outright during the
+ *  2026-09-18/19 window: "The image format is illegal and cannot be opened",
+ *  deterministically, at every size (50–800px) — while every single-IDAT
+ *  form passed (a handcrafted 1×1, and sharp re-encodes). On a later re-test
+ *  raw Chrome PNGs passed too (the upstream decoder was fixed or is flaky
+ *  per backend), but the canonical form stays: PNG spec says the IDAT chunks
+ *  are an arbitrary SPLIT of one zlib stream, so merging them is the more
+ *  standard shape, byte-identical stream, zero re-encoding.
+ *
+ *  Pure Node on purpose (no sharp): the process already loads transformers'
+ *  nested sharp + libvips, and importing the root sharp (Next's optional
+ *  dependency) put a SECOND libvips into the process — macOS's ObjC runtime
+ *  warns (duplicate GNotificationCenterDelegate, "mysterious crashes").
+ *  One native image lib per process; app code carries none. */
+export function providerSafePng(png: Buffer): Buffer {
+	const SIG_LEN = 8;
+	if (png.length < SIG_LEN + 12 || png.subarray(0, SIG_LEN).toString("hex") !== "89504e470d0a1a0a") return png;
+	// Walk the chunks once, merging the IDAT split into its canonical
+	// single-chunk form (first IDAT's position, concatenated payload).
+	const parts: Array<{ type: string; data: Buffer }> = [];
+	let off = SIG_LEN;
+	while (off + 12 <= png.length) {
+		const len = png.readUInt32BE(off);
+		if (off + 12 + len > png.length) break; // truncated tail — leave as-is
+		parts.push({ type: png.subarray(off + 4, off + 8).toString("ascii"), data: png.subarray(off + 8, off + 8 + len) });
+		off += 12 + len;
+	}
+	const idats = parts.filter((p) => p.type === "IDAT");
+	if (idats.length < 2) return png; // already canonical
+	const merged = Buffer.concat(idats.map((p) => p.data));
+	let emittedIdat = false;
+	const out: Buffer[] = [png.subarray(0, SIG_LEN)];
+	for (const p of parts) {
+		if (p.type !== "IDAT") out.push(chunk(p.type, p.data));
+		else if (!emittedIdat) {
+			out.push(chunk("IDAT", merged));
+			emittedIdat = true;
+		}
+	}
+	return Buffer.concat(out);
+}
+
+/** One PNG chunk (length + type + data + CRC32) — the spec's exact layout. */
+function chunk(type: string, data: Buffer): Buffer {
+	const out = Buffer.alloc(12 + data.length);
+	out.writeUInt32BE(data.length, 0);
+	out.write(type, 4, "ascii");
+	data.copy(out, 8);
+	out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+	return out;
+}
+
+/** CRC-32 (PNG's polynomial, table-less) for chunk checksums. */
+function crc32(buf: Buffer): number {
+	let c = ~0;
+	for (const byte of buf) {
+		c ^= byte;
+		for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+	}
+	return ~c >>> 0;
+}
+
 async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buffer> {
 	const dir = tempDir("lh-visual-");
 	const file = path.join(dir, "figure.html");
@@ -194,8 +260,11 @@ async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buff
 		const { width, height } = svgViewport(svg, opts);
 		await page.setViewport({ width, height });
 		await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
-		const png = (await page.screenshot({ fullPage: true, type: "png" })) as Buffer;
-		return png;
+		const shot = (await page.screenshot({ fullPage: true, type: "png" })) as Buffer;
+		// Chrome's raw split-IDAT PNG is canonicalized before it reaches a
+		// provider (see providerSafePng) — the visual-maker feeds this exact
+		// buffer back to the vision model as its only way to "look".
+		return providerSafePng(Buffer.from(shot));
 	} finally {
 		await browser.close().catch(() => {});
 		try {

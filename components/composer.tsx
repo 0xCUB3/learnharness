@@ -11,6 +11,20 @@ import { cn } from "@/lib/utils";
  * Corner-radius math (concentric with the shell): shell rounded-2xl (16px) −
  * row padding p-1.5 (6px) = button rounded-[10px] = 25% of the 40px button.
  */
+/** What one Enter press does, in precedence order (the plan-verdict
+ *  behavior is user-decided 2026-09-19, docs/probe-teach-split.md §4):
+ *  stop a busy stream; ACCEPT when the plan verdict pends — typed text
+ *  rides the acceptance as the note (the green button's exact semantics;
+ *  an empty box accepts too, so Enter can never strand the verdict);
+ *  otherwise send the message. Pure so the static-render harness can pin
+ *  the decision (key events can't be simulated in renderToStaticMarkup). */
+export function enterAction(state: { busy: boolean; verdictPending: boolean; canSend: boolean }): "stop" | "accept" | "send" | "none" {
+	if (state.busy) return "stop";
+	if (state.verdictPending) return "accept";
+	if (state.canSend) return "send";
+	return "none";
+}
+
 export function Composer({
 	busy,
 	value,
@@ -43,8 +57,10 @@ export function Composer({
 			className="flex items-end gap-1.5 p-1.5"
 			onSubmit={(e) => {
 				e.preventDefault();
-				if (busy) onStop();
-				else if (canSend) onSend();
+				const action = enterAction({ busy, verdictPending: Boolean(verdict), canSend });
+				if (action === "stop") onStop();
+				else if (action === "accept") verdict?.onAccept();
+				else if (action === "send") onSend();
 			}}
 		>
 			<textarea
@@ -64,11 +80,15 @@ export function Composer({
 					// Chat convention: Enter sends, Shift+Enter is a newline.
 					// ⌘/Ctrl+Enter also sends — the universal submit shortcut
 					// across every input in the app (thinking field, answers).
+					// While the plan verdict pends, Enter ACCEPTS the plan instead
+					// (enterAction — user-decided 2026-09-19).
 					if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
 						e.preventDefault();
-						if (busy) onStop();
-						else if (canSend) onSend();
-					}
+							const action = enterAction({ busy, verdictPending: Boolean(verdict), canSend });
+							if (action === "stop") onStop();
+							else if (action === "accept") verdict?.onAccept();
+							else if (action === "send") onSend();
+						}
 				}}
 				placeholder="Ask, answer, or steer the lesson…"
 				autoFocus={autoFocus}
@@ -78,8 +98,10 @@ export function Composer({
 			{verdict && !busy ? (
 				// The plan verdict (docs/probe-teach-split.md §4): accept
 				// sanctions teaching (phase plan→teach); decline sends the
-				// revision request. Enter keeps sending a plain message —
-				// side questions stay possible while the verdict pends.
+					// revision request. Enter accepts too (user-decided 2026-09-19 —
+					// it formerly sent a plain message, which left the verdict
+					// pending on the next message; a side question now rides the
+					// acceptance as its note instead).
 				<div className="flex shrink-0 flex-col justify-end gap-1" data-testid="plan-verdict-buttons">
 					<button
 						type="button"

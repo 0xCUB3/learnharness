@@ -178,6 +178,16 @@ body {
 	color: var(--lh-ink-italic);
 }
 
+/* Markdown headings render at the font's BLACK weight (owner ask,
+   2026-09-19) — 900, not streamdown's font-semibold 600. The variable
+   Source Sans 3 axis spans 200–900 (next/font loads the full range), so
+   900 draws the real Black cut. Unlayered CSS beats the utility layer;
+   :where keeps specificity zero. Chrome titles (CMU Serif) don't live
+   under .lh-prose and stay untouched. */
+.lh-prose :where(h1, h2, h3, h4, h5, h6) {
+	font-weight: 900;
+}
+
 /* lh-input (owner, typography round 2): lh-prose's 1.5 READING leading
    makes typing carets tower over the glyphs — the caret fills the line
    box (24px at 16px text, ~2× the glyph height). Inputs are not
@@ -262,6 +272,74 @@ body {
 .katex-display {
 	overflow-x: auto;
 	overflow-y: hidden;
+}
+
+/* ============================================================
+ * Chrome melt (owner wave, 2026-09-19) — tables and code blocks stop
+ * being boxes: blocks read as part of the message. These rules override
+ * streamdown's Tailwind utilities (utilities live in a cascade LAYER;
+ * unlayered author CSS wins regardless of order).
+ * ============================================================ */
+
+/* Code blocks: no header bar — one quiet rounded tint so code reads as a
+   unit. The tint is DARKER than the page (muted #1c1c1c was LIGHTER than the
+   background #141414 and read as raised — owner note, chrome-melt tweaks
+   2026-09-19) plus a subtle hairline outline. (md-blocks renders its own
+   hover copy corner.) */
+[data-streamdown="code-block"] {
+	border: 1px solid var(--border);
+	background: color-mix(in oklab, var(--background) 86%, black);
+	border-radius: 0.75rem;
+	padding: 0.375rem;
+}
+[data-streamdown="code-block-header"] {
+	display: none;
+}
+[data-streamdown="code-block-body"] {
+	border: 0;
+	background: transparent;
+	padding: 0.75rem 1rem;
+}
+
+/* Tables: hairline row rules + header underline, and a full outer border
+   — actual RECTANGLES outlined on all four sides (owner note, chrome-melt
+   tweaks 2026-09-19: the melt left the shape missing its left/right/top
+   edges). border-collapse merges the outer border with the row rules, so
+   no edge doubles. (md-blocks supplies the wrapper + the copy corner.) */
+[data-streamdown="table"] {
+	border: 1px solid var(--border);
+	/* Tables run at the SESSION prose size (owner note, 2026-09-19: they
+	   visibly lagged the 16px chat text at streamdown's 12.5px text-sm).
+	   Unlayered CSS beats the cells' own utility-layer text-sm, and the
+	   :where keeps specificity zero — the override wins on layering alone. */
+	font-size: var(--lh-prose-size);
+}
+[data-streamdown="table"] :where(th, td) {
+	font-size: inherit;
+}
+/* Column separators: a hairline left rule on every cell but the first in
+   its row (owner ask, 2026-09-19) — border-collapse merges it with the row
+   rules and the outer border, no doubled lines anywhere. */
+[data-streamdown="table"] :where(th, td):not(:first-child) {
+	border-left: 1px solid var(--border);
+}
+[data-streamdown="table-header"] {
+	background: transparent;
+	border-bottom: 1px solid var(--border);
+}
+[data-streamdown="table-body"] [data-streamdown="table-row"] {
+	border-bottom: 1px solid var(--border);
+}
+
+/* The mermaid focus overlay's chart wrapper: the svg fills the wrapper
+   (which is sized to the chart's viewBox — pan-zoom.ts math centers on it),
+   overriding mermaid's inline max-width cap. Later + same-specificity
+   than the column rule above, so the !important tie breaks our way; the
+   overlay's svg never sits under [data-streamdown="mermaid"] anyway. */
+[data-lh-overlay-chart] svg {
+	max-width: none !important;
+	width: 100% !important;
+	height: auto !important;
 }
 
 /* ============================================================

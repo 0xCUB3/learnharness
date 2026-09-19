@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { ListChecksIcon, Loader2Icon } from "lucide-react";
+import { useActivity } from "@/components/activity-dock";
 import { formatTokens } from "@/components/usage-format";
 
 /**
@@ -35,6 +36,8 @@ interface CoverageChat {
 
 export function GraphCoverageControl({ refreshKey = 0 }: { refreshKey?: number }) {
 	const [open, setOpen] = useState(false);
+	// The dock's start-site nudge seam (accuracy wave, 2026-09-19) — see onExtract.
+	const refreshActivity = useActivity().refresh;
 	// Click anywhere outside (or Escape) closes the panel (2026-09-17) —
 	// the root wraps button + panel, so the toggle itself keeps working.
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -81,6 +84,11 @@ export function GraphCoverageControl({ refreshKey = 0 }: { refreshKey?: number }
 			// 409 = already running (e.g. the trigger raced us): the row's
 			// running flag takes over on the next poll.
 			void load();
+			// The dock's start-site nudge (accuracy wave, 2026-09-19): the 202
+			// means setPhase already registered the run (synchronous, before the
+			// response) — a refresh here is race-free; the 409 also refreshes so
+			// an unseen in-flight run adopts at once.
+			refreshActivity();
 		} catch {
 			setExtracting((ids) => ids.filter((id) => id !== chatId));
 		}

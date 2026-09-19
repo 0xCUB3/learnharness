@@ -15,10 +15,8 @@ import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { createMathPlugin } from "@streamdown/math";
-import { createMermaidPlugin } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
-import type { MermaidConfig } from "mermaid";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
 import {
   createContext,
@@ -31,11 +29,10 @@ import {
 } from "react";
 import remarkBreaks from "remark-breaks";
 import {
-  type MermaidOptions,
   Streamdown,
   type PluginConfig,
 } from "streamdown";
-import { MermaidError } from "@/components/mermaid-error.tsx";
+import { mdComponents } from "@/components/md-blocks";
 import { transformMathDelimiters } from "@/src/core";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -344,8 +341,10 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 // metastring parsing. The slot appends after the defaults, which is the
 // standard remark-gfm → remark-breaks order.
 //
-// mermaid: the plugin supplies the renderer; the `mermaid` PROP (below)
-// carries the dark theme + the error fallback component.
+// MERMAID is app-owned since the chrome-melt wave (2026-09-19): the md-blocks
+// `code` override intercepts mermaid fences and renders via
+// components/mermaid-render.ts — streamdown's internal mermaid machinery
+// (the plugin entry + the `mermaid` prop) is retired with it.
 export const streamdownPlugins = {
   cjk: {
     ...cjk,
@@ -353,21 +352,7 @@ export const streamdownPlugins = {
   },
   code,
   math: createMathPlugin({ singleDollarTextMath: false }),
-  mermaid: createMermaidPlugin(),
 } as unknown as PluginConfig;
-
-// The app is dark-only (html.dark in the root layout) — diagrams render in
-// mermaid's dark theme; parse failures degrade to the dark-styled fallback.
-const mermaidTheme: MermaidConfig = {
-  fontFamily: "ui-sans-serif, system-ui, sans-serif",
-  securityLevel: "strict",
-  theme: "dark",
-};
-
-export const mermaidOptions: MermaidOptions = {
-  config: mermaidTheme,
-  errorComponent: MermaidError,
-};
 
 export const MessageResponse = memo(
   ({ className, children, ...props }: MessageResponseProps) => {
@@ -389,7 +374,7 @@ export const MessageResponse = memo(
           "lh-prose size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
           className
         )}
-        mermaid={mermaidOptions}
+        components={mdComponents}
         plugins={streamdownPlugins}
         {...props}
       >

@@ -42,7 +42,7 @@ import {
 	type SteerMessage,
 } from "../core/contracts.ts";
 import { findPendingToolCall } from "../core/pending.ts";
-import { fireJobAbort } from "../agent/subagents/aborts.ts";
+import { fireJobAbort, isJobLive } from "../agent/subagents/aborts.ts";
 import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
 
@@ -445,16 +445,24 @@ async function waitForIdle(chatId: string): Promise<void> {
 
 // ─── crash recovery ──────────────────────────────────────────────────────────
 
-/** Jobs this old with status "running" are orphans (crash/restart). */
-const STALE_JOB_MS = 15 * 60_000;
 const SWEEP_THROTTLE_MS = 30_000;
 
 /**
- * Lazy sweep (called off the /api/jobs poll, throttled): every stale
- * "running" job either has a result (the wake never fired — re-deliver,
- * idempotently) or doesn't (the loop itself died — re-spawn it).
+ * Lazy sweep (called off the /api/jobs poll, throttled), LIVENESS-GATED
+ * (accuracy wave, 2026-09-19): a "running" record without a live loop
+ * registration (subagents/aborts.ts) is an orphan of a process death —
+ * re-deliver its stored result (idempotently) or re-spawn the loop, at
+ * once (the old 15-minute age heuristic waited on ghosts AND re-ran
+ * hung-but-alive loops beside themselves — the figure-maker incident,
+ * 2026-09-18). A record WITH a live registration is provably executing
+ * in THIS process — never touched, however old: a hung first model call
+ * (zero usage ever billed) stays honestly "running" in the dock until
+ * END kills it. The abort registration spans loop start to delivery
+ * completion, so a live registration can never belong to a dead run.
  */
-function recoverStaleJobs(): void {
+/** Re-run a job's sub-agent loop — exposed for the sweep's tests (the
+ *  /api/jobs poll is its only production caller, disabled under NODE_ENV=test). */
+export function recoverStaleJobs(): void {
 	const s = state();
 	const now = Date.now();
 	if (now - s.lastSweepAt < SWEEP_THROTTLE_MS) return;
@@ -463,7 +471,7 @@ function recoverStaleJobs(): void {
 		for (const chat of stores.chatStore.listChats()) {
 			for (const job of stores.jobStore.listJobs(chat.id)) {
 				if (job.status !== "running") continue;
-				if (now - Date.parse(job.updatedAt) < STALE_JOB_MS) continue;
+				if (isJobLive(job.id)) continue; // provably executing here — never re-run beside it
 				if (!stores.chatStore.getChat(job.chatId)) continue;
 				if (isTurnRunning(job.chatId)) continue; // a wake turn may be delivering it right now
 				if (job.kind === "graph-context") {

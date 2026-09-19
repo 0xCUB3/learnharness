@@ -27,6 +27,7 @@ import { useActivity } from "@/components/activity-dock";
 import { mergeAdopted, type ChatSettings } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia } from "@/components/plan-window";
+import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
 import { WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
@@ -350,7 +351,14 @@ export function Chat({
 		adoptionWindowOpenRef.current = true;
 		const timers = [400, 1000, 2000].map((ms) =>
 			setTimeout(() => {
-				if (adoptionWindowOpenRef.current) void adoptAppendOnly();
+				if (adoptionWindowOpenRef.current) {
+					void adoptAppendOnly();
+					// Turn-start nudge re-fire (accuracy wave): the graph-context
+					// job starts at send — the initial refresh above can race the
+					// server's job-record write; the window's ticks retry it so the
+					// dock always catches the job within the window (≤2s).
+					refreshActivity();
+				}
 			}, ms),
 		);
 		// Deliberately no cleanup here: this effect re-runs on every status
@@ -371,6 +379,11 @@ export function Chat({
 	// The live plan popup (wave 4): opened by any transcript plan block, the
 	// top-bar plan chip, and the dock band's marginalia.
 	const [planOpen, setPlanOpen] = useState(false);
+	// The mermaid focus (chrome-melt wave, 2026-09-19): md-blocks' expand
+	// button registers the chart source here; the overlay (and the plan
+	// popup) mount INSIDE the session-area div — both are session-scoped, so
+	// the drag bar stays sharp and draggable while a focus owns the area.
+	const [mermaidFocus, setMermaidFocus] = useState<string | null>(null);
 	// The session's live plan (drives the top-bar chip; the marginalia
 	// derives its own from the same transcript).
 	const planTree = useMemo(() => latestTree(messages), [messages]);
@@ -472,6 +485,14 @@ export function Chat({
 			// immediate: turns-only refetch — the stats bar updates even while
 			// the server's persist/endTurn lags the client by milliseconds
 			void syncTurns();
+			// Turn-end nudge (accuracy wave, 2026-09-19): the extraction
+			// pipeline fires at this turn's onFinish — the dock's poll would
+			// discover a started run up to 10s late. Refetch the activity feed
+			// now (stream settle) and again at +600/+1500ms (bounded window —
+			// covers onFinish→triggerExtraction→setPhase lag); the feed's own
+			// fast interval takes over once it sees the run.
+			refreshActivity();
+			const nudgeTimers = [600, 1500].map((ms) => setTimeout(() => refreshActivity(), ms));
 			let cancelled = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			let adopted = false;
@@ -503,10 +524,11 @@ export function Chat({
 			return () => {
 				cancelled = true;
 				if (timer) clearTimeout(timer);
+				nudgeTimers.forEach(clearTimeout);
 			};
 		}
 		prevStatusRef.current = status;
-	}, [status, chatId, syncFromServer, syncTurns]);
+	}, [status, chatId, syncFromServer, syncTurns, refreshActivity]);
 
 	// ── Central job observability (contracts.ts "THE ASYNC PROTOCOL" §4) ──
 	// ONE poll of /api/jobs drives every job surface (transcript dispatch
@@ -540,9 +562,41 @@ export function Chat({
 	const jobStatusRef = useRef<Map<string, string>>(new Map());
 	// A settle seen during a busy turn — the sync is owed, not dropped.
 	const pendingSyncRef = useRef(false);
+	// Dispatch nudge (accuracy wave, 2026-09-19): a research/demo/visual part
+	// that cleared input streaming proves the server-side execute ran (the
+	// bridge emits input-available only at tool_execution_end — AFTER
+	// dispatch() created the job record on disk), so nudging the activity
+	// feed here is race-free. The dock learns a dispatched job at the moment
+	// of cause, not at the next idle poll tick (up to 10s). Keyed by
+	// toolCallId; the persistent set makes each dispatch nudge exactly once
+	// (transcript parts stay forever — the diff only fires on new ids).
+	const dispatchedRef = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		const live = new Set<string>();
+		for (const m of messages) {
+			for (const p of m.parts) {
+				if (
+					(p.type === "tool-research" || p.type === "tool-demo" || p.type === "tool-visual") &&
+					p.toolCallId &&
+					p.state !== "input-streaming" &&
+					p.state !== "output-error"
+				) {
+					live.add(p.toolCallId);
+				}
+			}
+		}
+		for (const id of live) {
+			if (!dispatchedRef.current.has(id)) refreshActivity();
+		}
+		dispatchedRef.current = live;
+	}, [messages, refreshActivity]);
 	useEffect(() => {
 		if (pollMs === 0) return;
 		let cancelled = false;
+		// First-tick guard: the poll's first read adopts existing history
+		// (jobs recorded before mount) without nudging — a nudge is only owed
+		// for a running job the feed hasn't seen THIS session.
+		let firstPoll = jobStatusRef.current.size === 0;
 		const poll = async () => {
 			if (cancelled) return;
 			try {
@@ -551,9 +605,11 @@ export function Chat({
 				const data = (await res.json()) as { jobs?: JobRecord[]; turnInFlight?: boolean };
 				if (cancelled) return;
 				const list = data.jobs ?? [];
+				let nudgeActivity = false; // settle or new running job this tick
 				for (const j of list) {
 					const prev = jobStatusRef.current.get(j.id);
 					if (prev === "running" && j.status !== "running") {
+						nudgeActivity = true; // a settle — the blob should leave the feed NOW
 						// The record is only guaranteed complete when no turn is in
 						// flight — locally or server-side (a coalesced settle fires
 						// mid-turn by design), so the FULL sync waits for idle.
@@ -567,8 +623,13 @@ export function Chat({
 							void syncFromServer();
 						}
 					}
+					// A running job this feed has never seen (wake/respawn started
+					// server-side, or a dispatch in ANOTHER tab) — nudge so the
+					// dock adopts it at once.
+					if (prev === undefined && j.status === "running" && !firstPoll) nudgeActivity = true;
 					jobStatusRef.current.set(j.id, j.status);
 				}
+				firstPoll = false;
 				if (
 					pendingSyncRef.current &&
 					!localStreamRef.current &&
@@ -578,6 +639,7 @@ export function Chat({
 					void syncFromServer();
 				}
 				setJobs(list);
+				if (nudgeActivity) refreshActivity();
 				// Wake-turn adoption: a server-side teacher turn with no client request
 				// of ours (sub-agent delivery) — the same machinery as returning
 				// mid-turn: busy state + record poll to completion.
@@ -592,7 +654,7 @@ export function Chat({
 			cancelled = true;
 			clearInterval(timer);
 		};
-	}, [pollMs, jobPartCount, chatId, syncFromServer, adoptAppendOnly]);
+	}, [pollMs, jobPartCount, chatId, syncFromServer, adoptAppendOnly, refreshActivity]);
 
 	// Re-attach after mid-turn navigation (the key fix): poll the record until
 	// the orphaned turn finishes (turnInFlight flips false server-side in
@@ -647,6 +709,7 @@ export function Chat({
 
 	return (
 		<ChatActionsContext.Provider value={{ chatId, syncFromServer, sendText: (t: string) => void sendMessage({ text: t }) }}>
+		<SessionMermaidContext.Provider value={{ openMermaid: setMermaidFocus }}>
 		<JobsContext.Provider value={jobs}>
 		{/* The session surface: the transcript column (header + scroller) and
 		    the plan-tree panel as full-height SIBLINGS — the panel spans top to
@@ -932,11 +995,20 @@ export function Chat({
 				/>
 				<ConversationScrollButton />
 				</Conversation>
+
+				{/* The session-scoped focuses (chrome-melt wave, 2026-09-19): mounted
+				    INSIDE the session area — absolute inset-0 siblings of the scroller,
+				    so they own the area below the drag bar, right of the sidebar, and
+				    the top bar stays sharp + draggable while a focus is open. */}
+				{mermaidFocus !== null && (
+					<MermaidOverlay chart={mermaidFocus} onClose={() => setMermaidFocus(null)} />
+				)}
+				{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
 				</div>
 			</div>
 		</div>
-		{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
 		</JobsContext.Provider>
+		</SessionMermaidContext.Provider>
 		</ChatActionsContext.Provider>
 	);
 }

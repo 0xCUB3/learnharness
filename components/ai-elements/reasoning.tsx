@@ -22,7 +22,8 @@ import {
 import { Streamdown } from "streamdown";
 
 import { transformMathDelimiters } from "@/src/core";
-import { mermaidOptions, streamdownPlugins } from "./message";
+import { streamdownPlugins } from "./message";
+import { mdComponents } from "@/components/md-blocks";
 import { Shimmer } from "./shimmer";
 
 interface ReasoningContextValue {
@@ -215,7 +216,7 @@ export const ReasoningContent = memo(
       )}
       {...props}
     >
-      <Streamdown mermaid={mermaidOptions} plugins={streamdownPlugins}>
+      <Streamdown components={mdComponents} plugins={streamdownPlugins}>
         {transformMathDelimiters(children)}
       </Streamdown>
     </CollapsibleContent>

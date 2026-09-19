@@ -457,6 +457,49 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		assert.equal(extractionStatuses().length, 0, "the registry clears when the run ends");
 	});
 
+	it("labels the post-batch embedding tail as its own phase — not 'merging' (2026-09-19 accuracy fix)", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		// Gate the embedder so we can observe the registry WHILE the tail
+		// runs — mergeFindings has already returned, every batch is merged.
+		let releaseEmbed!: () => void;
+		const embedGate = new Promise<void>((resolve) => {
+			releaseEmbed = resolve;
+		});
+		let observed: string | undefined;
+		const gatedEmbedder = async (store: GraphStore) => {
+			await embedGate;
+			observed = extractionStatuses().find((r) => r.chatId === chatId)?.phase;
+			await fakeEmbedder(store);
+		};
+		const verdict: AuditResult = { propositions: FINDINGS.propositions, edges: [], attribution: { quiz: {} }, dropped: [] };
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: gatedEmbedder,
+			extractor: submitModel("submit_findings", FINDINGS),
+			auditor: submitModel("submit_review", verdict),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+		const run = pipeline.runExtraction(chatId);
+		// Wait for the tail: the phase must flip to "embedding" while the
+		// embedder hangs — the incident this fixes is minutes of "merging"
+		// AFTER the last merge, so the flip itself is the assertion.
+		const t0 = Date.now();
+		while (extractionStatuses().find((r) => r.chatId === chatId)?.phase !== "embedding") {
+			if (Date.now() - t0 > 2000) {
+				releaseEmbed();
+				await run;
+				assert.fail("the tail never flipped to embedding (stuck at 'merging'?)");
+			}
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		releaseEmbed();
+		await run;
+		assert.equal(observed, "embedding", "still embedding through the tail, never back to 'merging'");
+		assert.equal(extractionStatuses().length, 0, "clears when done");
+	});
+
 	it("captures per-stage usage live, persists the run's usage into the chat record", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
@@ -585,6 +628,61 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 
 		release();
 		await assert.rejects(first, /the extractor never submitted findings/);
+	});
+
+	it("registers runs on the process-wide registry (route-instance safety): a second pipeline instance sees the same single-flight state", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+
+		// Gated extractor: the first call hangs until released, so the run
+		// stays registered while we observe it.
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let calls = 0;
+		const gatedExtractor = fauxEngine([
+			async () => {
+				calls++;
+				if (calls === 1) await gate;
+				return fauxAssistantMessage("…");
+			},
+		]);
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			extractor: gatedExtractor,
+			auditor: silentModel(),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+		// A SECOND instance over DIFFERENT ledgers — the observer a separate
+		// route entry's module instance is in dev (the turn-liveness lesson:
+		// module instances split; globalThis does not).
+		const observer = createExtractionPipeline({
+			chatStore,
+			graphStore: memoryLedgers(),
+			embedder: fakeEmbedder,
+			extractor: silentModel(),
+			auditor: silentModel(),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+
+		const first = pipeline.runExtraction(chatId);
+		// The synchronous prefix (setPhase at batch start) registers BEFORE
+		// the first await — the run is visible the moment it starts.
+		assert.ok(
+			extractionStatuses().some((run) => run.chatId === chatId && run.phase === "extracting"),
+			"the run is registered at start",
+		);
+		const g = globalThis as { __lhExtractionRuns?: { running: Map<string, unknown> } };
+		assert.ok(g.__lhExtractionRuns?.running.has(chatId), "the registry lives on globalThis — no module-instance split can hide runs");
+		assert.deepEqual(await observer.runExtraction(chatId), { nodes: 0, edges: 0, events: 0 }, "single-flight spans pipeline instances");
+
+		release();
+		await assert.rejects(first, /the extractor never submitted findings/);
+		assert.ok(!extractionStatuses().some((run) => run.chatId === chatId), "the registry entry clears when the run ends (however it ends)");
+		assert.ok(!g.__lhExtractionRuns?.running.has(chatId), "nothing leaks into the global registry");
 	});
 
 	it("throws for unknown chats", async () => {

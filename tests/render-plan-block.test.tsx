@@ -193,6 +193,12 @@ describe("plan popup (live derivation)", () => {
 		// Arrows into not-yet-visited nodes are grayed out (owner, round 6).
 		assert.match(html, /marker-end="url\(#.*-dim\)"/);
 		assert.match(html, /live — statuses derive from your check outcomes/);
+		// No top-left flash: at static render settled=false, so the diagram
+		// wrapper paints at opacity 0 — the fit runs in an effect AFTER the
+		// first paint and the chart would otherwise flash at the initial
+		// top-left zoom:1 state for a frame (owner report, 2026-09-19;
+		// transition-gating alone didn't hide it).
+		assert.match(html, /opacity: ?0[;,}]/, "diagram hidden until the first fit applies");
 	});
 
 	it("renders the empty state when the session has no plan", () => {

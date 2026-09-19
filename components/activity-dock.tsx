@@ -75,6 +75,15 @@ const ActivityContext = createContext<{ feed: ActivityFeed; refresh: () => void 
  * Polls /api/activity for the whole app shell. Adaptive interval: fast while
  * anything runs, slow when idle, ~4× slower on hidden tabs. A failed fetch
  * keeps the last feed (the dock never flickers to empty on a blip).
+ *
+ * ACCURACY (2026-09-19): polling alone can only be as fresh as its interval,
+ * so the start sites that the client can know about nudge refresh()
+ * directly (chat.tsx at turn start/end and dispatch; the extract/import
+ * buttons), and THIS provider adds the last client-known event: visibility —
+ * a tab becoming visible refetches at once, so hidden-tab staleness (×4)
+ * ends the moment the learner looks. The poll stays the safety net for
+ * everything with no client-visible cause (other tabs, wake turns,
+ * recovery).
  */
 export function ActivityProvider({ children }: { children: React.ReactNode }) {
 	const [feed, setFeed] = useState<ActivityFeed>(EMPTY_FEED);
@@ -91,7 +100,7 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 				if (res.ok) {
 					const data = (await res.json()) as Partial<ActivityFeed>;
 					if (alive)
-						setFeed({ jobs: data.jobs ?? [], extractions: data.extractions ?? [] });
+					setFeed({ jobs: data.jobs ?? [], extractions: data.extractions ?? [] });
 				}
 			} catch {
 				// transport blip: keep the last feed, try again
@@ -106,6 +115,16 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 			if (timer) clearTimeout(timer);
 		};
 	}, [hasRunning, nonce]);
+
+	// The visibility nudge: returning to the tab refetches immediately (and
+	// the re-run effect below resets the poll timer — no double polling).
+	useEffect(() => {
+		const onVisibility = () => {
+			if (document.visibilityState === "visible") setNonce((n) => n + 1);
+		};
+		document.addEventListener("visibilitychange", onVisibility);
+		return () => document.removeEventListener("visibilitychange", onVisibility);
+	}, []);
 
 	return <ActivityContext.Provider value={{ feed, refresh }}>{children}</ActivityContext.Provider>;
 }
@@ -128,7 +147,7 @@ export interface ActivityBlob {
 	process: "job" | "extraction";
 	/** Sub-agent kind for jobs (extraction blobs have none). */
 	jobKind?: JobKind;
-	/** Extraction phase (extracting/auditing/merging); jobs carry none. */
+	/** Extraction phase (extracting/auditing/merging/embedding); jobs carry none. */
 	phase?: string;
 	title: string;
 	chatId: string;

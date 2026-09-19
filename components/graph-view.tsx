@@ -68,6 +68,7 @@ import { incrementalLayout, type GraphNode, type GraphSnapshot } from "@/src/cor
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { GraphCoverageControl } from "./graph-coverage.tsx";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
+import { useActivity } from "@/components/activity-dock";
 import {
 	ARROW_LENGTH_LADDER,
 	CHARGE_RANGE,
@@ -704,9 +705,16 @@ export function GraphView() {
 	// graph refetches when they finish (the runs-empty transition).
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [importing, setImporting] = useState(false);
+	// The dock's start-site nudge (accuracy wave, 2026-09-19): the import
+	// POST awaits the WHOLE pipeline server-side, so the run registers long
+	// before the response — nudge at click and again at +600ms to catch the
+	// start; the dock's fast active interval carries the run from there.
+	const refreshActivity = useActivity().refresh;
 	const onImportFiles = (files: FileList | null) => {
 		if (!files || files.length === 0) return;
 		setImporting(true);
+		refreshActivity();
+		setTimeout(() => refreshActivity(), 600);
 		const form = new FormData();
 		for (const file of Array.from(files)) form.append("files", file);
 		fetch("/api/graph/import", { method: "POST", body: form })

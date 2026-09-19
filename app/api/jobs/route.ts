@@ -1,5 +1,7 @@
 import { isTurnRunning, listJobs } from "@/src/server";
 
+export const dynamic = "force-dynamic";
+
 /**
  * Job status polling endpoint (contracts.ts "THE ASYNC PROTOCOL" §4): the
  * client's ONE central poller fetches this while any job runs (and slowly
