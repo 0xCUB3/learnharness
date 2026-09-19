@@ -104,7 +104,7 @@ presents the plan → **accept** → **teach (teacher)**
   plan (`plan_init`) does NOT move the phase — the learner's **accept**
   does. The composer's send square becomes two stacked buttons (green
   Accept plan / red Decline) while the verdict pends; accept sends a user
-  message carrying a `data-plan-accepted` data part — THE plan→teach seam
+  message carrying a `data-verdict` data part — THE plan→teach seam
   (`phaseAt3` reads it; `convertToModelMessages` drops data parts, so the
   teacher sees only the text). Decline asks for a revision. While the
   verdict pends, Enter ACCEPTS the plan — typed text rides the acceptance
@@ -141,7 +141,7 @@ live-derived movement.
 ## 7. Deferred / later waves (designed, not now)
 
 - ~~**Accept-plan UI**~~ — **landed 2026-09-11** (see §4): stacked
-  Accept/Decline buttons; the `data-plan-accepted` part is the seam.
+  Accept/Decline buttons; the `data-verdict` part is the seam.
 - **Assessment viewer** — the strand assessments displayed to the learner
   as a proper card (data already durable in the transcript; the plain v1
   probe-done card renders the assessment meanwhile).
