@@ -2,6 +2,7 @@ import type { UIMessage } from "ai";
 import type {
 	DemoToolInput,
 	GraphContextData,
+	PdfToolInput,
 	PlanVerdictData,
 	PlanBlockData,
 	ProbeDoneInput,
@@ -34,6 +35,9 @@ export type TeacherUITools = {
 	research: { input: ResearchToolInput; output: string };
 	demo: { input: DemoToolInput; output: string };
 	visual: { input: VisualToolInput; output: string };
+	/** The pdf dispatch tool (sources v0): fire-and-forget ack output like
+	 *  research — the brief arrives later as a steer message. */
+	pdf: { input: PdfToolInput; output: string };
 };
 
 export type TeacherUIDataParts = {

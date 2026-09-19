@@ -19,6 +19,17 @@ export function JobCard({ part }: ArtifactPartProps) {
 }
 
 /**
+ * The pdf dispatch box (sources v0) — the same async-protocol idiom as
+ * JobCard: the ack output drives a DispatchCard (live "PDF reader" status
+ * via the central jobs poll); the brief itself rides the steer message
+ * and renders under the PDF-complete badge in the transcript.
+ */
+export function PdfJobCard({ part }: ArtifactPartProps) {
+	if (part.state !== "output-available") return null;
+	return <DispatchCard toolCallId={part.toolCallId} kind="pdf" />;
+}
+
+/**
  * The PDF reading brief (sources v0) — markdown body + the consulted-pages
  * line. Exported: the steer card renders it under the PDF-complete badge,
  * the same expand-on-demand idiom as research.

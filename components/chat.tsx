@@ -549,7 +549,14 @@ export function Chat({
 				(n, m) =>
 					n +
 					m.parts.filter(
-						(p) => p.type === "tool-research" || p.type === "tool-demo" || p.type === "tool-visual",
+						// sources v0 — "tool-pdf" added to the job-part enumerations
+						// (mechanical, UI-stream review at merge): poll cadence +
+						// dispatch nudge + settle-sync all key on these parts.
+						(p) =>
+							p.type === "tool-research" ||
+							p.type === "tool-demo" ||
+							p.type === "tool-visual" ||
+							p.type === "tool-pdf",
 					).length,
 				0,
 			),
@@ -576,7 +583,10 @@ export function Chat({
 		for (const m of messages) {
 			for (const p of m.parts) {
 				if (
-					(p.type === "tool-research" || p.type === "tool-demo" || p.type === "tool-visual") &&
+					(p.type === "tool-research" ||
+						p.type === "tool-demo" ||
+						p.type === "tool-visual" ||
+						p.type === "tool-pdf") && // sources v0 — see the poll-cadence enumeration above
 					p.toolCallId &&
 					p.state !== "input-streaming" &&
 					p.state !== "output-error"

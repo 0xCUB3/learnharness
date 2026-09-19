@@ -40,7 +40,7 @@ import {
 import { sanitizeSvg, VisualCard } from "../components/artifacts/visual-card.tsx";
 import { SubagentSteerCard } from "../components/artifacts/steer-card.tsx";
 import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
-import { JobCard } from "../components/artifacts/job-card.tsx";
+import { JobCard, PdfJobCard } from "../components/artifacts/job-card.tsx";
 import { JobsContext } from "../components/jobs-context.ts";
 import { demoInputSchema, jobTools, pdfInputSchema, visualInputSchema } from "../src/agent/tools/jobs.ts";
 import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
@@ -288,6 +288,48 @@ describe("dispatch card rendering (the tool-call ack box)", () => {
 			</JobsContext.Provider>,
 		);
 		assert.equal(html, "");
+	});
+
+	// sources v0 — the live browser smoke (2026-09-19) caught the pdf dispatch
+	// part rendering nothing: PdfJobCard is the fix.
+	it("pdf dispatch renders the live PDF-reader card while the job runs", () => {
+		const pdfJob: JobRecord = ({
+			id: "jp1",
+			kind: "pdf",
+			chatId: "c",
+			toolCallId: "call-1",
+			status: "running",
+			activity: 'pdf_render: 42-44 @150dpi',
+			createdAt: new Date(Date.now() - 5000).toISOString(),
+			updatedAt: new Date().toISOString(),
+		}) as JobRecord;
+		const html = renderToStaticMarkup(
+			<JobsContext.Provider value={[pdfJob]}>
+				<PdfJobCard part={ackPart as never} />
+			</JobsContext.Provider>,
+		);
+		assert.match(html, /PDF reader/);
+		assert.match(html, /pdf_render/);
+	});
+
+	it("pdf dispatch settles to the delivered one-liner", () => {
+		const pdfJob: JobRecord = ({
+			id: "jp1",
+			kind: "pdf",
+			chatId: "c",
+			toolCallId: "call-1",
+			status: "done",
+			activity: "delivered",
+			createdAt: new Date(Date.now() - 5000).toISOString(),
+			updatedAt: new Date().toISOString(),
+		}) as JobRecord;
+		const html = renderToStaticMarkup(
+			<JobsContext.Provider value={[pdfJob]}>
+				<PdfJobCard part={ackPart as never} />
+			</JobsContext.Provider>,
+		);
+		assert.match(html, /PDF reader/);
+		assert.match(html, /delivered/);
 	});
 });
 
@@ -802,5 +844,7 @@ describe("tool + renderer registry wiring", () => {
 	it("the artifact renderer registry maps demo/visual to the W6 cards", () => {
 		assert.equal(artifactRenderers.demo, DemoCard);
 		assert.equal(artifactRenderers.visual, VisualCard);
+		// sources v0 — pdf maps to its dispatch card (the live-smoke gap)
+		assert.equal(artifactRenderers.pdf, PdfJobCard);
 	});
 });
