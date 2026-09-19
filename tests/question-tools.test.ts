@@ -155,10 +155,12 @@ describe("the prober's quiz: no nodeId field at all", () => {
 
 describe("tool toggles (core/pending.ts + factories)", () => {
 	it("TOGGLEABLE_TOOLS: the sub-agent dispatch tools; quiz/ask/read stay off the list", () => {
-		// The user-toggleable vocabulary Platform's settings validates against.
-		// quiz/ask_user_question/read are always-on FOR NOW (user-decided
-		// 2026-09-15, sources v0); they join when settings exposes them — the
-		// factory seam is generic.
+		// THE DEFINITIVE vocabulary (adjudicated with the user 2026-09-19, P2
+		// reconciliation): the job tools only. quiz/ask_user_question are
+		// permanently always-on (the prober's assessment + teaching doctrine
+		// are built on graded questions — the wedge danger), as are the
+		// learner-fs set, plan tools, and probe_done. The settings WRITE side
+		// validates against this list (settings-body).
 		assert.deepEqual(TOGGLEABLE_TOOLS, ["research", "demo", "visual", "pdf"]);
 	});
 

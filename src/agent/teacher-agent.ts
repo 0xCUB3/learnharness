@@ -15,7 +15,7 @@ import {
 } from "./tools.ts";
 import { toPiTools, type LhTool } from "./lh-tool.ts";
 import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
-import { QUESTION_TOOLS } from "../core/pending.ts";
+import { QUESTION_TOOLS, type EnabledTools } from "../core/pending.ts";
 
 /**
  * The two teaching-side agents (docs/probe-teach-split.md): the PROBER and
@@ -88,8 +88,15 @@ export interface AgentBuildOptions {
 	onUsage?: StepUsageCollector;
 	/** Safety net (the old stepCountIs). Default 20 turns. */
 	maxTurns?: number;
-	/** Tests may pass a bare tool registry to drive deterministic flows. */
+	/** Tests may pass a bare tool registry to drive deterministic flows.
+	 *  An explicit registry is NEVER toggle-filtered — the caller owns it. */
 	tools?: Record<string, LhTool<any, any>>;
+	/** The resolved per-user tool toggles (core/pending EnabledTools — the
+	 *  2026-09-19 P2 bridge: Platform's chat-handler passes
+	 *  effective.agent.tools; the factories drop any tool explicitly false.
+	 *  THE DEFINITIVE toggleable set is TOGGLEABLE_TOOLS (job tools only);
+	 *  the filtering is generic, but writes validate against the list). */
+	toolToggles?: EnabledTools;
 }
 
 /**
@@ -159,7 +166,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
  * handler keys teacher construction on.
  */
 export function createProberAgent(ctx: ProbeDoneContext, opts: AgentBuildOptions = {}) {
-	return baseAgentOptions("prober", opts, toPiTools(createProberTools(ctx)));
+	return baseAgentOptions("prober", opts, toPiTools(createProberTools(ctx, opts.toolToggles)));
 }
 
 /**
@@ -175,7 +182,8 @@ export function createTeacherAgent(
 	ctx?: TeacherToolContext,
 	opts: AgentBuildOptions = {},
 ) {
-	const tools = opts.tools ?? (ctx ? createTeacherTools(ctx) : bareQuestionTools());
+	const tools =
+		opts.tools ?? (ctx ? createTeacherTools(ctx, opts.toolToggles) : bareQuestionTools());
 	return baseAgentOptions("teacher", opts, toPiTools(tools));
 }
 

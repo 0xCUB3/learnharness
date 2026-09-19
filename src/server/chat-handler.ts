@@ -210,13 +210,14 @@ export async function handleChatRequest(
 	// Tests inject a factory: the agent is stateless per turn (docs/
 	// pi-engine-swap.md §2), so each request builds a fresh one off the
 	// transcript — the factory mirrors that seam exactly.
-	// CROSS-STREAM SEAM (agreed 2026-09-19, settings wave): `toolToggles`
+	// CROSS-STREAM SEAM (P2 reconciliation, 2026-09-19): `toolToggles`
 	// rides the build opts as the user-level DELTA map (absent key =
-	// enabled — quiz, ask_user_question, research, demo, visual). The
-	// Teacher stream adds the field to AgentBuildOptions + the filtering in
-	// createTeacherTools / the prober's registry this same wave; until that
-	// merge, the extra property is structurally ignored (a harmless no-op).
-	const agentOpts: AgentBuildOptions & { toolToggles?: Record<string, boolean> } = {
+	// enabled). The definitive toggleable set is TOGGLEABLE_TOOLS — the
+	// sub-agent JOB tools (research/demo/visual/pdf; adjudicated with the
+	// user: quiz/ask/fs/plan/probe_done are always-on). First-class on
+	// AgentBuildOptions; the factories drop anything explicitly false and
+	// the settings write side rejects unknown keys.
+	const agentOpts: AgentBuildOptions = {
 		engine,
 		messages: recordToPiMessages(outgoing),
 		onUsage: collectUsage,

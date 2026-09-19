@@ -32,15 +32,20 @@ export const JOB_TOOLS = ["research", "demo", "visual"] as const;
 
 // ─── Tool availability (2026-09 settings seam) ─────────────────────────────
 
-/** The tools a user may toggle off in settings (Wave 2 T2a, user-decided
- *  2026-09-15): for now only the SUB-AGENT dispatch tools — quiz,
- *  ask_user_question and the read tool are always on;
- *  the long-term vision is that everything becomes toggleable as new
- *  tool variants (e.g. alternative question tools) ship, so the factory
- *  seam below is GENERIC: it honors any tool name it receives. New
- *  toggleables join this list when settings exposes them.
- *  The names are the MODEL-FACING tool names (research, not researcher;
- *  pdf is the PDF-reader dispatch, sources v0 2026-09). */
+/** The tools a user may toggle off in settings — THE DEFINITIVE LIST
+ *  (adjudicated 2026-09-19, P2 reconciliation: the sub-agent JOB tools
+ *  only — research/demo/visual/pdf). Deliberately NOT toggleable, ever:
+ *  quiz + ask_user_question (the prober's flow is graded-quiz brackets →
+ *  probe_done; quiz-off would collapse the assessment and teaching
+ *  doctrine is built on graded verification — the wedge danger), the
+ *  learner-filesystem set (user-decided 2026-09, sources v1: always-on),
+ *  plan tools, and probe_done (it is how the phase ENDS — a prober that
+ *  can never conclude is a lockout).
+ *  The write side validates against this list (settings-body.ts: unknown
+ *  key = 400 with the supported list); the read-side sanitizer stays
+ *  lenient for forward-compat. The names are the MODEL-FACING tool names
+ *  (research, not researcher; pdf is the PDF-reader dispatch, sources v0
+ *  2026-09). */
 export const TOGGLEABLE_TOOLS = ["research", "demo", "visual", "pdf"] as const;
 
 /** The resolved settings → factory seam shape (Platform wires chat-handler

@@ -22,6 +22,7 @@ import type {
 	RoleModelOverride,
 } from "../core/settings.ts";
 import { BACKGROUND_MODEL_ROLES } from "../core/settings.ts";
+import { TOGGLEABLE_TOOLS } from "../core/pending.ts";
 
 /** Parsed-or-rejected — `ok: false` carries the 400's error message. */
 export type SettingsBodyResult<T> =
@@ -166,7 +167,20 @@ export function parseAgentSettingsBody(body: unknown): SettingsBodyResult<AgentS
 	}
 	const tools = parseBooleanMap(raw.tools, "tools");
 	if (tools.error) return { ok: false, error: tools.error };
-	if (tools.map) settings.tools = tools.map;
+	if (tools.map) {
+		// Unknown tool keys are rejected at WRITE time (user decision
+		// 2026-09-19): the delta is inert while unread, but once the bridge
+		// honors it a persisted `quiz: false` would genuinely drop the quiz —
+		// and the definitive list is the adjudicated job-tools-only set.
+		// The read-side sanitizer stays lenient for forward-compat.
+		const supported = TOGGLEABLE_TOOLS as readonly string[];
+		for (const key of Object.keys(tools.map)) {
+			if (!supported.includes(key)) {
+				return { ok: false, error: `unknown tool "${key}" (supported: ${supported.join(", ")})` };
+			}
+		}
+		settings.tools = tools.map;
+	}
 	const prompts = parseBooleanMap(raw.prompts, "prompts");
 	if (prompts.error) return { ok: false, error: prompts.error };
 	if (prompts.map) settings.prompts = prompts.map;
