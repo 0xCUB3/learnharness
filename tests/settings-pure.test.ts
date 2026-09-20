@@ -155,18 +155,20 @@ describe("classifyKeys — the Keys section's two-group projection", () => {
 		{ id: "openrouter", envVar: "OPENROUTER_API_KEY", label: "OpenRouter" },
 	];
 
-	it("OpenRouter is pinned: synthesized when absent (first boot), found when present", () => {
+	it("OpenRouter is UN-pinned (wave-5 owner ruling): no row when absent, a row when stored", () => {
 		const none = classifyKeys([], providers);
-		assert.equal(none.openrouter.id, "OPENROUTER_API_KEY");
-		assert.ok(!none.openrouter.present);
+		assert.equal(none.providerRows.length, 0); // nothing synthesized
+		assert.ok(none.addable.some((p) => p.id === "openrouter")); // it's just an Add option
 		const stored = classifyKeys([synth("OPENROUTER_API_KEY", true)], providers);
-		assert.ok(stored.openrouter.present);
+		assert.equal(stored.providerRows.length, 1);
+		assert.equal(stored.providerRows[0]!.id, "OPENROUTER_API_KEY");
+		assert.ok(!stored.addable.some((p) => p.id === "openrouter"));
 	});
 
-	it("stored provider keys land in providerRows with their provider entry", () => {
+	it("stored provider keys land in providerRows; the Add dropdown drops them", () => {
 		const out = classifyKeys([synth("GROQ_API_KEY", true)], providers);
 		assert.equal(out.providerRows.length, 1);
-		assert.equal(out.providerRows[0]!.provider?.id, "groq");
+		assert.equal(out.providerRows[0]!.id, "GROQ_API_KEY");
 		// the Add dropdown no longer offers groq
 		assert.ok(!out.addable.some((p) => p.id === "groq"));
 		assert.ok(out.addable.some((p) => p.id === "deepseek"));
@@ -195,19 +197,22 @@ describe("classifyKeys — the Keys section's two-group projection", () => {
 	});
 });
 
-describe("keyStatusLine — the masked at-a-glance state", () => {
-	it("present file key: tail, chars, source", () => {
+describe("keyStatusLine — the minimal at-a-glance state", () => {
+	it("present file key: tail + chars, no source suffix", () => {
 		assert.equal(
 			keyStatusLine({ id: "X", info: null, present: true, masked: "…ab12 (64 chars)", source: "file", shadowedByEnv: false }),
-			"…ab12 · 64 chars · saved",
+			"…ab12 · 64",
 		);
 	});
 
-	it("env-sourced key reads 'environment'", () => {
-		assert.ok(keyStatusLine({ id: "X", info: null, present: true, masked: "…ab12 (64 chars)", source: "env", shadowedByEnv: false })?.endsWith("environment"));
+	it("env-owned key carries the 'env' marker (the row renders read-only)", () => {
+		assert.equal(
+			keyStatusLine({ id: "X", info: null, present: true, masked: "…ca10 (73 chars)", source: "env", shadowedByEnv: false }),
+			"…ca10 · 73 · env",
+		);
 	});
 
-	it("absent key has no line", () => {
-		assert.equal(keyStatusLine({ id: "X", info: null, present: false, masked: null, source: "none", shadowedByEnv: false }), null);
+	it("absent key reads 'not set'", () => {
+		assert.equal(keyStatusLine({ id: "X", info: null, present: false, masked: null, source: "none", shadowedByEnv: false }), "not set");
 	});
 });
