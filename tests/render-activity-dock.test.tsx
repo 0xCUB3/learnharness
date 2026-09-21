@@ -48,7 +48,7 @@ describe("activity dock pure layer", () => {
 	it("folds cost with jobCost; absent usage is null, never zero", () => {
 		const priced = job({
 			usage: {
-				model: "z-ai/glm-5.3-flash",
+				model: "openrouter:z-ai/glm-5.3-flash",
 				inputTokens: 10_000,
 				outputTokens: 1000,
 				cacheReadTokens: 5000,
@@ -67,7 +67,7 @@ describe("activity dock pure layer", () => {
 
 	it("context line = LAST step's tokens vs the model limit, never a cumulative sum", () => {
 		const base = {
-			model: "z-ai/glm-5.3-flash",
+			model: "openrouter:z-ai/glm-5.3-flash",
 			inputTokens: 400_000, // running total (much bigger — must NOT feed the line)
 			outputTokens: 8_000,
 			cacheReadTokens: 0,
@@ -166,7 +166,7 @@ describe("activity section render", () => {
 
 	it("shows total running cost when jobs are priced", () => {
 		const usage = {
-			model: "z-ai/glm-5.3-flash",
+			model: "openrouter:z-ai/glm-5.3-flash",
 			inputTokens: 10_000,
 			outputTokens: 1000,
 			cacheReadTokens: 0,

@@ -86,7 +86,8 @@ export const GRAPH_CONTEXT_TOKENS_STOPS = [0, 64, 256, 1024, 4096, 16384] as con
  *  billed (CallUsage per agent step). Steps, not a sum: cost and context
  *  folds happen at read time (core/prices.ts). */
 export interface ExtractionStageUsage {
-	/** The OpenRouter model id that ran this stage. */
+	/** The model that ran this stage, provider-qualified ("provider:id" —
+	 *  model slots wave, 2026-09-20; matches PRICES' uniform keys). */
 	model: string;
 	steps: CallUsage[];
 }
@@ -142,7 +143,8 @@ export interface TurnUsage {
 	 *  entry to the transcript (the block this turn "belongs" to). */
 	messageId: string;
 	at: string;
-	/** The OpenRouter model id that ran the turn. */
+	/** The model that ran the turn, provider-qualified ("provider:id" —
+	 *  model slots wave, 2026-09-20; matches PRICES' uniform keys). */
 	model: string;
 	/** One entry per agent step (model call) in this turn. */
 	steps: CallUsage[];

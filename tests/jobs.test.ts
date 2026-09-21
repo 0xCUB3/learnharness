@@ -1218,7 +1218,9 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 				assert.equal(job.status, "error");
 			assert.equal(job.error, "Aborted by learner");
 				assert.equal(job.usage!.steps, 1, "usage-so-far persisted by the runner's finally");
-				assert.equal(job.usage!.model, "z-ai/glm-5.3-flash", "the config role's OpenRouter id");
+				// model slots wave: the stamp is the ENGINE's actual model,
+				// provider-qualified — the scripted faux engine here.
+				assert.equal(job.usage!.model, "faux:faux-1");
 				// faux estimates tokens from the prompt/response text — the
 				// pinned fact is that the ONE completed step's spend survived.
 				assert.ok(job.usage!.inputTokens! > 0, "input tokens billed");

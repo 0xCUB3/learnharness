@@ -293,7 +293,10 @@ async function runSubmitAgent<T>(opts: {
 			onAssistantMessage: (message, step) =>
 				opts.onStep(
 					message.usage,
-					message.model,
+					// Provider-qualified stamp (model slots wave, 2026-09-20):
+					// pi reports the bare id; usage stamps carry provider:id to
+					// match the price table's uniform keys.
+					`${message.provider}:${message.model}`,
 					step,
 					message.stopReason,
 					message.content.filter((c) => c.type === "toolCall").map((c) => (c as { name: string }).name).join(", ") || "(none)",

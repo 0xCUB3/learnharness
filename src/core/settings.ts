@@ -57,6 +57,51 @@ export interface RoleModelOverride {
 	thinkingLevel?: ThinkingLevel;
 }
 
+// ─── Model slots (model slots wave, 2026-09-20) ──────────────────────────────
+
+/** The capability tiers a user can pin models into (owner-settled mapping):
+ *  strong = prober + teacher (also the per-session default-teacher
+ *  starting point); cheap = researcher, demo-builder, extractor, auditor,
+ *  labeler; vision = visual-maker + pdf-reader. Resolution per role:
+ *  ROLE OVERRIDE → slot → factory pin. */
+export const MODEL_SLOTS = ["strong", "cheap", "vision"] as const;
+export type ModelSlotName = (typeof MODEL_SLOTS)[number];
+
+/** One slot's override — same per-field independence as a role override:
+ *  absent model keeps the tier's current model, absent thinkingLevel keeps
+ *  its thinking budget. */
+export interface ModelSlot {
+	/** The model swap: both coordinates or neither. */
+	model?: { provider: string; id: string };
+	/** The thinking budget swap. */
+	thinkingLevel?: ThinkingLevel;
+}
+
+/** The `models` settings section (owner decision 2026-09-20: a dedicated
+ *  section — slots are engine-level choices, not one session's). All slots
+ *  optional: an absent slot means every role of its tier runs whatever the
+ *  deeper tiers of the chain resolve to (per-role override → factory pin). */
+export interface ModelsSettings {
+	strong?: ModelSlot;
+	cheap?: ModelSlot;
+	vision?: ModelSlot;
+}
+
+/** Which slot a role draws from (model slots wave, 2026-09-20). Includes the
+ *  conversation pair and pdfReader (not BackgroundModelRoles — the slot
+ *  tier spans every role; only background roles surface per-role overrides). */
+export const ROLE_SLOT: Readonly<Record<string, ModelSlotName>> = {
+	prober: "strong",
+	teacher: "strong",
+	researcher: "cheap",
+	demoBuilder: "cheap",
+	extractor: "cheap",
+	auditor: "cheap",
+	labeler: "cheap",
+	visualMaker: "vision",
+	pdfReader: "vision",
+};
+
 /** General settings — app-level behavior. Version DISPLAY and plans login
  *  live outside the record (package.json / auth.json) by owner decision. */
 export interface GeneralSettings {
@@ -140,6 +185,8 @@ export interface UserSettings {
 	 *  controls. NOT shown in the settings panel (owner decision). */
 	chat?: ChatSettings;
 	agent?: AgentSettings;
+	/** The strong/cheap/vision model slots (model slots wave, 2026-09-20). */
+	models?: ModelsSettings;
 	appearance?: AppearanceSettings;
 	graph?: GraphSettings;
 	[key: string]: unknown;
@@ -242,6 +289,18 @@ function sanitizeRoleOverride(raw: unknown): RoleModelOverride | undefined {
 		out.thinkingLevel = r.thinkingLevel as ThinkingLevel;
 	}
 	return Object.keys(out).length ? out : undefined;
+}
+
+/** The models section (model slots wave, 2026-09-20): each slot keeps
+ *  only well-formed parts — the same shape rules as a role override, so a
+ *  stale client can't park junk in a slot. */
+function sanitizeModels(raw: Record<string, unknown>): ModelsSettings {
+	const out: ModelsSettings = {};
+	for (const slot of MODEL_SLOTS) {
+		const cleaned = sanitizeRoleOverride(raw[slot]);
+		if (cleaned) out[slot] = cleaned;
+	}
+	return out;
 }
 
 function sanitizeBooleanMap(raw: unknown): Record<string, boolean> | undefined {
@@ -347,6 +406,10 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 	}
 	if (r.appearance !== null && typeof r.appearance === "object" && !Array.isArray(r.appearance)) {
 		out.appearance = sanitizeAppearance(r.appearance as Record<string, unknown>);
+	}
+	if (r.models !== null && typeof r.models === "object" && !Array.isArray(r.models)) {
+		const models = sanitizeModels(r.models as Record<string, unknown>);
+		if (Object.keys(models).length) out.models = models;
 	}
 	if (r.graph !== null && typeof r.graph === "object" && !Array.isArray(r.graph)) {
 		out.graph = sanitizeGraph(r.graph as Record<string, unknown>);

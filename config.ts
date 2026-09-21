@@ -46,7 +46,12 @@ export const PATHS = {
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ModelSpec {
-	/** OpenRouter model id (e.g. "z-ai/glm-5.3-flash") — must exist in pi-ai's catalog. */
+	/** The provider that owns the model (model slots wave, 2026-09-20):
+	 *  pi-ai provider id. Native ids are plain strings ("glm-5.3-flash" on
+	 *  zai); OpenRouter ids are vendor slugs ("z-ai/glm-5.3-flash"). The
+	 *  factory pins stay OpenRouter (the BYOK default provider). */
+	provider: string;
+	/** The model id on that provider — must exist in pi-ai's catalog. */
 	model: string;
 	/** Thinking budget — what the model may spend on reasoning tokens. */
 	effort: ThinkingLevel;
@@ -54,28 +59,28 @@ export interface ModelSpec {
 
 export const MODELS = {
 	/** The prober (agent A) — edge-bracketing questions; keep it lively and adaptive. */
-	prober: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	prober: { provider: "openrouter", model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** The teacher (agent B) — planning + streaming, lesson-facing: smart, but keep it lively. */
-	teacher: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	teacher: { provider: "openrouter", model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** Background sub-agents: fast and cheap beats deep thought. */
-	researcher: { model: "z-ai/glm-5.3-flash", effort: "low" },
-	demoBuilder: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	researcher: { provider: "openrouter", model: "z-ai/glm-5.3-flash", effort: "low" },
+	demoBuilder: { provider: "openrouter", model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** Must be vision-capable: it looks at rendered SVGs. */
-	visualMaker: { model: "qwen/qwen3.8-flash", effort: "low" },
+	visualMaker: { provider: "openrouter", model: "qwen/qwen3.8-flash", effort: "low" },
 	/** SEAM (master-approved 2026-09, revised by the user 2026-09-19): the
 	 *  pdf-reader sub-agent. Must be vision-capable — it looks at rendered
 	 *  PDF pages; its briefs are text. The user overrode the initial
 	 *  glm-5.3-flash pick (catalog says it accepts images, but qwen is
 	 *  proven for exactly this look-at-renders job — visualMaker's daily
 	 *  workload). */
-	pdfReader: { model: "qwen/qwen3.8-flash", effort: "low" },
+	pdfReader: { provider: "openrouter", model: "qwen/qwen3.8-flash", effort: "low" },
 	/** Extraction is judgment over given evidence — light thinking suffices. */
-	extractor: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	extractor: { provider: "openrouter", model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** The auditor verifies evidence exists; keep it cheap. */
-	auditor: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	auditor: { provider: "openrouter", model: "z-ai/glm-5.3-flash", effort: "low" },
 	/** Names detected communities — one singular call, given member names
 	 * + statements. Purely a labeling flourish; keep it cheap. */
-	labeler: { model: "z-ai/glm-5.3-flash", effort: "low" },
+	labeler: { provider: "openrouter", model: "z-ai/glm-5.3-flash", effort: "low" },
 } satisfies Record<string, ModelSpec>;
 
 export type ModelRole = keyof typeof MODELS;

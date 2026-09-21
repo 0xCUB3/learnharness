@@ -21,13 +21,14 @@
  * lands here.
  */
 
-import type { AgentSettings, ChatSettings } from "@/src/core";
+import type { AgentSettings, ChatSettings, ModelsSettings } from "@/src/core";
 import {
 	SETTINGS_SECTIONS,
 	allSegmentPaths,
 	promptOverrides,
 	readSettingsRecord,
 	validateChatSettings,
+	validateModelsSettings,
 	writeSettingsRecord,
 	type SettingsBodyResult,
 } from "@/src/server";
@@ -56,6 +57,15 @@ export async function PUT(request: Request, ctx: { params: Promise<{ section: st
 	// store) — the parsers only see shapes.
 	if (section === "chat") {
 		const verdict = validateChatSettings(parsed.settings as ChatSettings);
+		if (!verdict.ok) {
+			return Response.json({ error: verdict.error, supported: verdict.supported }, { status: 400 });
+		}
+	}
+	// Model slots wave (2026-09-20): the models section gets the same
+	// catalog gate the chat section gets — a slot must name a real
+	// provider+model and a thinking level it supports.
+	if (section === "models") {
+		const verdict = validateModelsSettings(parsed.settings as ModelsSettings);
 		if (!verdict.ok) {
 			return Response.json({ error: verdict.error, supported: verdict.supported }, { status: 400 });
 		}

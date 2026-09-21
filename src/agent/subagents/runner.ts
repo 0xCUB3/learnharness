@@ -19,7 +19,7 @@ import {
 	type VisualToolInput,
 } from "../../core/contracts.ts";
 import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
-import { MODELS } from "../../../config.ts";
+import { MODELS, type ModelRole } from "../../../config.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
@@ -68,6 +68,14 @@ export interface JobRunnerDeps {
 	 * flipped); rejects when delivery fails unrecoverably.
 	 */
 	deliver: (steer: SubagentSteerMessage) => Promise<void>;
+	/**
+	 * Settings-resolved engine per role (model slots wave, 2026-09-20): the
+	 * role-override → slot → factory-pin chain, read FRESH per job (the
+	 * server wiring passes effectiveSettings-based resolution). Closes the
+	 * old gap where per-role settings overrides never reached job engines.
+	 * Test overrides (below) still win; absent → config pins.
+	 */
+	engineFor?: (role: ModelRole) => PiEngine;
 }
 
 export interface JobRunner {
@@ -89,18 +97,26 @@ interface LoopContext {
 	onUsage: (step: UsageStepLike) => void;
 }
 
-/** The OpenRouter model id for a job kind — JobUsage.model. The kind→role
- * table mirrors MODELS in config.ts (research→researcher, demo→demoBuilder,
- * visual→visualMaker); the id is taken from config so a price-table sync
- * re-prices jobs for free. Model overrides (tests) still bill under the
- * configured model — usage is what is being captured, not which instance.
- * Context-injection jobs make NO model call ("" — onUsage never fires for
- * them; the kind is deliberately absent from the runners below). */
+/** The kind→role table (model slots wave, 2026-09-20): which ModelRole's
+ * engine each sub-agent kind runs — the engineFor injection key. */
+const KIND_ROLE: Record<Exclude<JobKind, "graph-context">, ModelRole> = {
+	research: "researcher",
+	demo: "demoBuilder",
+	visual: "visualMaker",
+	pdf: "pdfReader",
+};
+
+/** The config-pin model stamp for a job kind — JobUsage.model when no
+ * engine was resolved (engineFor absent AND no test override). Stamps are
+ * provider-qualified ("provider:id") since the model slots wave, matching
+ * the price table's uniform keys. Context-injection jobs make NO model
+ * call ("" — onUsage never fires for them; the kind is deliberately
+ * absent from the runners below). */
 const KIND_MODEL: Record<JobKind, string> = {
-	research: MODELS.researcher.model,
-	demo: MODELS.demoBuilder.model,
-	visual: MODELS.visualMaker.model,
-	pdf: MODELS.pdfReader.model,
+	research: `${MODELS.researcher.provider}:${MODELS.researcher.model}`,
+	demo: `${MODELS.demoBuilder.provider}:${MODELS.demoBuilder.model}`,
+	visual: `${MODELS.visualMaker.provider}:${MODELS.visualMaker.model}`,
+	pdf: `${MODELS.pdfReader.provider}:${MODELS.pdfReader.model}`,
 	"graph-context": "",
 };
 
@@ -111,8 +127,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	 * then writes through the job store so the poll sees progress). */
 	const usageTotals = new Map<string, JobUsage>();
 
-	function makeLoopContext(jobId: string, kind: JobKind): LoopContext {
-		const model = KIND_MODEL[kind];
+	function makeLoopContext(jobId: string, kind: JobKind, engine?: PiEngine): LoopContext {
+		// Provider-qualified stamp (model slots wave): the engine's actual
+		// model, else the legacy config-pin id (see KIND_MODEL).
+		const model = engine ? `${engine.model.provider}:${engine.model.id}` : KIND_MODEL[kind];
 		// Real-kill wiring (2026-09 abort semantics): the controller is what
 		// the abort endpoint fires (agent/subagents/aborts.ts registry); the
 		// signal rides into every model call of the loop.
@@ -143,14 +161,28 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	 *  them below rather than guessing wrong. */
 	// Each kind's runner narrows the union input itself (dispatch-time inputs
 	// are kind-correct by construction; transcript fallbacks are cast after).
+	/** The engine one job runs on: test override first (the old seam —
+	 *  tests swap scripted engines without touching deps), then the injected
+	 *  settings-resolved engineFor (model slots wave, 2026-09-20), else
+	 *  undefined → the sub-agent factories fall back to config pins. */
+	function pickEngine(kind: Exclude<JobKind, "graph-context">): PiEngine | undefined {
+		const testOverride: Record<string, { current?: PiEngine } | undefined> = {
+			researcher: researchModelOverride,
+			demoBuilder: demoModelOverride,
+			visualMaker: visualModelOverride,
+			pdfReader: pdfModelOverride,
+		};
+		return testOverride[KIND_ROLE[kind]]?.current ?? deps.engineFor?.(KIND_ROLE[kind]);
+	}
+
 	const KIND_RUNNERS: Record<
 		Exclude<JobKind, "graph-context">,
-		(jobId: string, input: JobToolInput | undefined, loop: LoopContext) => Promise<void>
+		(jobId: string, engine: PiEngine | undefined, input: JobToolInput | undefined, loop: LoopContext) => Promise<void>
 	> = {
-		research: (jobId, input, loop) => runResearchJob(jobId, researchModelOverride.current, input, loop),
-		demo: (jobId, input, loop) => runDemoJob(jobId, demoModelOverride.current, input, loop),
-		visual: (jobId, input, loop) => runVisualJob(jobId, visualModelOverride.current, input, loop),
-		pdf: (jobId, input, loop) => runPdfJob(jobId, pdfModelOverride.current, input, loop),
+		research: (jobId, engine, input, loop) => runResearchJob(jobId, engine, input, loop),
+		demo: (jobId, engine, input, loop) => runDemoJob(jobId, engine, input, loop),
+		visual: (jobId, engine, input, loop) => runVisualJob(jobId, engine, input, loop),
+		pdf: (jobId, engine, input, loop) => runPdfJob(jobId, engine, input, loop),
 	};
 
 	async function runJob(jobId: string, input?: JobToolInput): Promise<void> {
@@ -173,7 +205,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			return;
 		}
 		try {
-			await run(jobId, input, makeLoopContext(jobId, job.kind));
+			const engine = pickEngine(job.kind);
+			await run(jobId, engine, input, makeLoopContext(jobId, job.kind, engine));
 		} finally {
 			unregisterJobAbort(jobId);
 			// The last usage write may have been mid-flight when the loop died;

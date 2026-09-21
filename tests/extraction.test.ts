@@ -553,7 +553,8 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const run = record.extractions![0]!;
 		assert.equal(run.stats?.nodes, 0); // linked, not created
 		assert.equal(run.stats?.events, 3);
-		assert.equal(run.stages.extractor.model, "faux-1"); // the scripted engine's model id
+		// the scripted engine's model, provider-qualified (model slots wave)
+		assert.equal(run.stages.extractor.model, "faux:faux-1");
 		assert.equal(run.stages.extractor.steps.length, 1); // the submit call — the run STOPS after a clean submit
 		const step = run.stages.extractor.steps[0]!;
 		assert.ok(step.inputTokens! > 0 && step.outputTokens! > 0, "estimated usage captured");

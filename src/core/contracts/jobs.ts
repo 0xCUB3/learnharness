@@ -41,7 +41,8 @@ export interface JobRecord {
  * field NO model call reported stays undefined — absent is not zero (the
  * money-channel doctrine; cost renders "—", never $0). */
 export interface JobUsage {
-	/** The OpenRouter model id that ran the sub-agent. */
+	/** The model that ran the sub-agent, provider-qualified ("provider:id" —
+	 *  model slots wave, 2026-09-20; matches PRICES' uniform keys). */
 	model: string;
 	/** Running totals summed over the run's model calls so far. */
 	inputTokens: number | undefined;

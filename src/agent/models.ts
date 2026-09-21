@@ -6,7 +6,7 @@ import {
 	type Models,
 	type StreamFunction,
 } from "@earendil-works/pi-ai";
-import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { MODELS, type ModelRole } from "../../config.ts";
 import type { ChatSettings } from "../core/contracts/chat.ts";
@@ -42,11 +42,18 @@ export function thinkingLevelFor(role: ModelRole): ThinkingLevel {
 
 let collection: ReturnType<typeof createModels> | undefined;
 
-/** The process-wide pi-ai Models collection (OpenRouter catalog). */
+/** The process-wide pi-ai Models collection — EVERY builtin provider's
+ *  catalog (model slots wave, 2026-09-20): engines and the picker resolve
+ *  against all of pi-ai's per-provider catalogs, so a settings slot can pin
+ *  any native model id. Auth is resolved per request by pi-ai itself from
+ *  the environment (the keys seam reflects file-saved keys into env), and
+ *  a provider with no key simply fails its stream with "not configured" —
+ *  honest, late, and unreachable through the picker, which gates on
+ *  keyPresent. */
 export function piModels() {
 	if (!collection) {
 		collection = createModels();
-		collection.setProvider(openrouterProvider());
+		for (const provider of builtinProviders()) collection.setProvider(provider);
 	}
 	return collection;
 }
@@ -56,23 +63,28 @@ export function openRouterApiKey(): string | undefined {
 	return process.env.OPENROUTER_API_KEY || undefined;
 }
 
-/** The production engine for one agent role. `settings` is the chat's
- * model-control override (prober/teacher only — sub-agent callers pass
- * nothing and get config.ts's pin): any absent field falls back to the
- * config spec, and the thinking level is CLAMPED to the model's supported
- * list (pi's thinkingLevelMap — e.g. GLM-5.3-flash accepts low|high|max),
- * so a settings change between models can never send an invalid level. */
-export function piEngineFor(role: ModelRole, settings?: ChatSettings): PiEngine {
+/** A fully-resolved model pin — the shape every engine now comes from
+ *  (model slots wave, 2026-09-20): the settings-resolution chain's output.
+ *  Every field concrete; the CALLER resolved the chain (role override →
+ *  slot → factory pin, or the chat's conversation chain). */
+export interface ResolvedModelSpec {
+	provider: string;
+	id: string;
+	thinkingLevel: ThinkingLevel;
+}
+
+/** The production engine for a RESOLVED spec (model slots wave,
+ *  2026-09-20): provider-aware catalog lookup + thinking clamp. The API
+ *  key is resolved by pi-ai itself from the environment per request (the
+ *  keys seam reflects file-saved keys into env), so the engine never
+ *  hardcodes OpenRouter's. */
+export function piEngineForSpec(spec: ResolvedModelSpec): PiEngine {
 	const models: Models = piModels();
-	const spec = MODELS[role];
-	const modelId = settings?.model?.id ?? spec.model;
-	const providerId = settings?.model?.provider ?? "openrouter";
-	const model = models.getModel(providerId, modelId);
+	const model = models.getModel(spec.provider, spec.id);
 	if (!model) {
-		throw new Error(`${providerId} catalog has no model ${modelId} (role ${role})`);
+		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
-	const requested = settings?.thinkingLevel ?? thinkingLevelFor(role);
-	const level = clampThinkingLevel(model, requested);
+	const level = clampThinkingLevel(model, spec.thinkingLevel);
 	return {
 		model,
 		level,
@@ -83,7 +95,21 @@ export function piEngineFor(role: ModelRole, settings?: ChatSettings): PiEngine 
 			models.streamSimple(requestModel, context, {
 				...options,
 				reasoning: level === "off" ? undefined : level,
-				apiKey: options?.apiKey ?? openRouterApiKey(),
 			}),
 	};
+}
+
+/** The production engine for one agent role — the LEGACY fallback path:
+ *  the chat's model-control override over config.ts's pin. Production
+ *  callers (chat-handler) now resolve the full chain (chat override →
+ *  strong slot → factory pin) and call piEngineForSpec; this stays for
+ *  direct config-pin fallbacks (sub-agents without an injected engine —
+ *  the job runner injects one — and tests). */
+export function piEngineFor(role: ModelRole, settings?: ChatSettings): PiEngine {
+	const spec = MODELS[role];
+	return piEngineForSpec({
+		provider: settings?.model?.provider ?? spec.provider,
+		id: settings?.model?.id ?? spec.model,
+		thinkingLevel: settings?.thinkingLevel ?? thinkingLevelFor(role),
+	});
 }

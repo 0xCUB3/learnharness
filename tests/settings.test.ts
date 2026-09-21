@@ -63,6 +63,10 @@ describe("sanitizeUserSettings", () => {
 				prompts: { "system-prompt.md": true, "teacher/20-teaching.md": false },
 				search: { engine: "brave" },
 			},
+			models: {
+				strong: { model: { provider: "zai", id: "glm-5.3-flash" }, thinkingLevel: "low" },
+				cheap: { thinkingLevel: "medium" },
+			},
 			appearance: {
 				mode: "light",
 				background: "#ffffff",

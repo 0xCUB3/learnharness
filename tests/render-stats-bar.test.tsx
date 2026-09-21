@@ -18,7 +18,7 @@ function turn(over: Partial<TurnUsage> = {}): TurnUsage {
 		id: "t1",
 		messageId: "m1",
 		at: "2026-09-09T12:00:00Z",
-		model: "z-ai/glm-5.3-flash",
+		model: "openrouter:z-ai/glm-5.3-flash",
 		steps: [step(10_000, 1_000)],
 		...over,
 	};

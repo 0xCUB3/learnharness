@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	parseAgentSettingsBody,
+	parseModelsSettingsBody,
 	parseAppearanceSettingsBody,
 	parseGeneralSettingsBody,
 	parseGraphSettingsBody,
@@ -158,7 +159,47 @@ describe("parseGraphSettingsBody", () => {
 });
 
 describe("SETTINGS_SECTIONS (the route's section map)", () => {
-	it("maps exactly the five record sections", () => {
-		assert.deepEqual(Object.keys(SETTINGS_SECTIONS), ["general", "chat", "agent", "appearance", "graph"]);
+	it("maps exactly the six record sections", () => {
+		assert.deepEqual(Object.keys(SETTINGS_SECTIONS), ["general", "chat", "agent", "appearance", "graph", "models"]);
+	});
+});
+
+describe("parseModelsSettingsBody (model slots wave, 2026-09-20)", () => {
+	it("parses the three slot tiers, each field independent", () => {
+		const r = parseModelsSettingsBody({
+			strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } },
+			cheap: { thinkingLevel: "high" },
+			vision: { model: { provider: "zai", id: "glm-5.3-flash" }, thinkingLevel: "low" },
+		});
+		assert.ok(r.ok);
+		assert.deepEqual(r.settings, {
+			strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } },
+			cheap: { thinkingLevel: "high" },
+			vision: { model: { provider: "zai", id: "glm-5.3-flash" }, thinkingLevel: "low" },
+		});
+	});
+
+	it("{} is the legal clear-slots write", () => {
+		const r = parseModelsSettingsBody({});
+		assert.ok(r.ok);
+		assert.deepEqual(r.settings, {});
+	});
+
+	it("unknown slots are 400s with the supported list", () => {
+		const bad = parseModelsSettingsBody({ mega: { thinkingLevel: "high" } });
+		assert.equal(bad.ok, false);
+		if (!bad.ok) assert.match(bad.error, /unknown slot "mega" \(supported: strong, cheap, vision\)/);
+	});
+
+	it("a present-but-empty slot object is rejected (absent slot = unset)", () => {
+		const bad = parseModelsSettingsBody({ strong: {} });
+		assert.equal(bad.ok, false);
+		if (!bad.ok) assert.match(bad.error, /slot "strong" must set model or thinkingLevel/);
+	});
+
+	it("malformed slot shapes are 400s", () => {
+		assert.equal(parseModelsSettingsBody({ cheap: { model: { provider: "x" } } }).ok, false);
+		assert.equal(parseModelsSettingsBody({ vision: { thinkingLevel: 7 } }).ok, false);
+		assert.equal(parseModelsSettingsBody("nope").ok, false);
 	});
 });

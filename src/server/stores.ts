@@ -22,20 +22,25 @@ export const stores = {
 
 export type Stores = typeof stores;
 
-/** config.ts's MODELS narrowed to the background roles — the compiled
- *  factory layer the resolution reads. core stays pure (it takes this as a
- *  parameter, never imports config at runtime); the prober/teacher pins
- *  are chat-settings-controlled and deliberately absent here. Tests pin
- *  that the role set matches core's BACKGROUND_MODEL_ROLES. */
-const BACKGROUND_MODEL_PINS: ModelRoleSpecs = {
+/** config.ts's MODELS as the compiled factory layer the resolution reads —
+ *  ALL NINE roles since the model-slots wave (2026-09-20): the strong
+ *  slot's factory fallback IS the prober pin. core stays pure (it takes
+ *  this as a parameter, never imports config at runtime). Per-role
+ *  OVERRIDES stay background-only (the conversation pair is
+ *  chat-settings-controlled) — that split lives in core's
+ *  BACKGROUND_MODEL_ROLES, unchanged. */
+const MODEL_PINS: ModelRoleSpecs = {
+	prober: MODELS.prober,
+	teacher: MODELS.teacher,
 	researcher: MODELS.researcher,
 	demoBuilder: MODELS.demoBuilder,
 	visualMaker: MODELS.visualMaker,
+	pdfReader: MODELS.pdfReader,
 	extractor: MODELS.extractor,
 	auditor: MODELS.auditor,
 	labeler: MODELS.labeler,
 };
-export { BACKGROUND_MODEL_PINS };
+export { MODEL_PINS };
 
 /**
  * The resolved view of the settings record (core/settings-resolution.ts):
@@ -44,5 +49,5 @@ export { BACKGROUND_MODEL_PINS };
  * no caching layer (stale toggles after a settings PUT would be worse).
  */
 export function effectiveSettings(): EffectiveSettings {
-	return resolveSettings(settingsStore.readSettings(), BACKGROUND_MODEL_PINS);
+	return resolveSettings(settingsStore.readSettings(), MODEL_PINS);
 }

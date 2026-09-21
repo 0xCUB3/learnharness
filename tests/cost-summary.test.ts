@@ -16,7 +16,7 @@ import type { CallUsage, ExtractionRunUsage, NamingRunUsage } from "../src/core/
 import { PRICES, callCost } from "../src/core/prices.ts";
 
 /** A model with full published pricing (from the generated registry). */
-const PRICED = "z-ai/glm-5.3-flash";
+const PRICED = "openrouter:z-ai/glm-5.3-flash";
 assert.ok(PRICES[PRICED], "fixture model must exist in PRICES");
 
 const step = (input: number, output: number): CallUsage => ({

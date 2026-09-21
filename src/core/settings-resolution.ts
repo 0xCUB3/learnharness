@@ -23,23 +23,40 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ModelRole } from "../../config.ts";
 import type { ChatSettings } from "./contracts/chat.ts";
 import type { SearchEngineId } from "./search.ts";
 import {
 	BACKGROUND_MODEL_ROLES,
 	FACTORY_SETTINGS,
+	MODEL_SLOTS,
+	ROLE_SLOT,
 	type AgentSettings,
 	type BackgroundModelRole,
 	type FactorySettings,
 	type GeneralSettings,
 	type GraphSettings,
+	type ModelSlot,
+	type ModelSlotName,
 	type RoleModelOverride,
 	type UserSettings,
 } from "./settings.ts";
 
 /** The factory layer for model roles — config.ts's MODELS shape (types only
- *  here; the runtime object is threaded in by the caller). */
-export type ModelRoleSpecs = Record<BackgroundModelRole, { model: string; effort: ThinkingLevel }>;
+ *  here; the runtime object is threaded in by the caller). Model slots
+ *  (2026-09-20): the factory map spans ALL nine roles (the strong slot's
+ *  factory fallback is the prober pin), while per-role OVERRIDES stay
+ *  background-only (the conversation pair is chat-settings-controlled). */
+export type ModelRoleSpecs = Record<ModelRole, { provider: string; model: string; effort: ThinkingLevel }>;
+
+/** A fully-resolved model slot: the tier's concrete model (slot over factory
+ *  rep pin) — strong's factory rep is the prober pin, cheap's the researcher
+ *  pin, vision's the visualMaker pin (owner-settled tier mapping). */
+export interface EffectiveSlot {
+	provider: string;
+	id: string;
+	thinkingLevel: ThinkingLevel;
+}
 
 /** A fully-resolved model pin for one background role. */
 export interface EffectiveModelSpec {
@@ -68,23 +85,78 @@ export interface EffectiveSettings {
 		 *  lives in server/search.ts, where keys are visible. */
 		search: { engine?: SearchEngineId };
 	};
+	/** The resolved strong/cheap/vision slots (model slots wave,
+	 *  2026-09-20): each tier's concrete model (slot over factory rep pin)
+	 *  — the per-role chain (override → slot → pin) is resolved into
+	 *  agent.models; these are the tier-level views the picker captions. */
+	models: Record<ModelSlotName, EffectiveSlot>;
 	appearance: EffectiveAppearance;
 	graph: Required<GraphSettings>;
 }
 
-/** Resolve one background role's spec: record override per field,
- *  config.ts pin per absent field (provider pinned to openrouter today). */
+/** Full-chain resolution for ANY role (model slots wave, 2026-09-20):
+ *  per-role override (background roles only) → slot → factory pin. The
+ *  conversation pair (prober/teacher) resolves the same chain MINUS the
+ *  role override (their override is the chat's own settings — the
+ *  chat-handler overlays it itself). This is the engine wiring's one call. */
+export function resolveRoleSpec(
+	role: ModelRole,
+	record: UserSettings | null,
+	factory: ModelRoleSpecs,
+): EffectiveModelSpec {
+	const bg = BACKGROUND_MODEL_ROLES as readonly string[];
+	const override = bg.includes(role) ? record?.agent?.models?.[role as BackgroundModelRole] : undefined;
+	return resolveModelSpec(role as BackgroundModelRole, override, factory, record?.models);
+}
+
+/** The factory representative pin for a slot tier — the pin the slot
+ *  falls back to when unset (owner-settled mapping: strong's rep is the
+ *  prober pin — prober and teacher share the strong tier — cheap's the
+ *  researcher pin, vision's the visualMaker pin). */
+export function factorySlotRep(slot: ModelSlotName, factory: ModelRoleSpecs): EffectiveSlot {
+	const rep =
+		slot === "strong" ? factory.prober : slot === "cheap" ? factory.researcher : factory.visualMaker;
+	// The factory contract spans all nine roles (stores.ts MODEL_PINS) —
+	// the rep lookup cannot miss; the cast is for the checker only.
+	const r = rep as { provider: string; model: string; effort: ThinkingLevel };
+	return { provider: r.provider, id: r.model, thinkingLevel: r.effort };
+}
+
+/** Resolve one slot: the slot override per field, the factory rep pin per
+ *  absent field (model slots wave, 2026-09-20). */
+export function resolveSlot(
+	slot: ModelSlotName,
+	override: ModelSlot | undefined,
+	factory: ModelRoleSpecs,
+): EffectiveSlot {
+	const rep = factorySlotRep(slot, factory);
+	return {
+		provider: override?.model?.provider ?? rep.provider,
+		id: override?.model?.id ?? rep.id,
+		thinkingLevel: override?.thinkingLevel ?? rep.thinkingLevel,
+	};
+}
+
+/** Resolve one background role's spec — the model slots chain (owner
+ *  decision 2026-09-20): role override → SLOT → factory pin, each field
+ *  independent (a role can borrow only the slot's model, or only its
+ *  thinking budget). An absent provider coordinate anywhere resolves to
+ *  the factory pin's provider (the BYOK default, openrouter today) —
+ *  legacy ids without a provider ride the factory provider. */
 export function resolveModelSpec(
 	role: BackgroundModelRole,
 	override: RoleModelOverride | undefined,
 	factory: ModelRoleSpecs,
+	slots?: Partial<Record<ModelSlotName, ModelSlot>>,
 ): EffectiveModelSpec {
-	const spec = factory[role];
-	const model = override?.model;
+	// The factory contract spans all nine roles; background roles always hit.
+	const spec = factory[role] as { provider: string; model: string; effort: ThinkingLevel };
+	const slotName = ROLE_SLOT[role] as ModelSlotName | undefined;
+	const slot = slotName ? slots?.[slotName] : undefined;
 	return {
-		provider: model?.provider ?? "openrouter",
-		id: model?.id ?? spec.model,
-		thinkingLevel: override?.thinkingLevel ?? spec.effort,
+		provider: override?.model?.provider ?? slot?.model?.provider ?? spec.provider,
+		id: override?.model?.id ?? slot?.model?.id ?? spec.model,
+		thinkingLevel: override?.thinkingLevel ?? slot?.thinkingLevel ?? spec.effort,
 	};
 }
 
@@ -92,6 +164,7 @@ export function resolveModelSpec(
  *  field then lands on its factory default. */
 export function resolveSettings(record: UserSettings | null, factory: ModelRoleSpecs): EffectiveSettings {
 	const agent = record?.agent ?? {};
+	const modelsSection = record?.models ?? {};
 	const appearance = record?.appearance ?? {};
 	const md = appearance.mdRendering ?? {};
 	const graph = record?.graph ?? {};
@@ -99,7 +172,7 @@ export function resolveSettings(record: UserSettings | null, factory: ModelRoleS
 	const factoryMd = factoryAppearance.mdRendering;
 	const models = {} as Record<BackgroundModelRole, EffectiveModelSpec>;
 	for (const role of BACKGROUND_MODEL_ROLES) {
-		models[role] = resolveModelSpec(role, agent.models?.[role], factory);
+		models[role] = resolveModelSpec(role, agent.models?.[role], factory, modelsSection);
 	}
 	return {
 		general: {
@@ -111,6 +184,11 @@ export function resolveSettings(record: UserSettings | null, factory: ModelRoleS
 			tools: agent.tools ?? {},
 			prompts: agent.prompts ?? {},
 			search: agent.search ?? {},
+		},
+		models: {
+			strong: resolveSlot("strong", modelsSection.strong, factory),
+			cheap: resolveSlot("cheap", modelsSection.cheap, factory),
+			vision: resolveSlot("vision", modelsSection.vision, factory),
 		},
 		appearance: {
 			mode: appearance.mode ?? factoryAppearance.mode,

@@ -19,9 +19,10 @@ import type {
 	BackgroundModelRole,
 	GeneralSettings,
 	GraphSettings,
+	ModelsSettings,
 	RoleModelOverride,
 } from "../core/settings.ts";
-import { BACKGROUND_MODEL_ROLES } from "../core/settings.ts";
+import { BACKGROUND_MODEL_ROLES, MODEL_SLOTS } from "../core/settings.ts";
 import { TOGGLEABLE_TOOLS } from "../core/pending.ts";
 
 /** Parsed-or-rejected — `ok: false` carries the 400's error message. */
@@ -292,6 +293,31 @@ export function parseGraphSettingsBody(body: unknown): SettingsBodyResult<GraphS
 	return { ok: true, settings };
 }
 
+/** models: { strong?, cheap?, vision? } — the slot tiers (model slots
+ *  wave, 2026-09-20). Each slot is the same shape as a role override; a
+ *  present-but-empty slot object is rejected (absent slot = unset; say
+ *  what you mean). Catalog validity is checked by the route
+ *  (validateChatSettings discipline). */
+export function parseModelsSettingsBody(body: unknown): SettingsBodyResult<ModelsSettings> {
+	const raw = asRecord(body);
+	if (!raw) return { ok: false, error: "Invalid JSON body" };
+	const settings: ModelsSettings = {};
+	for (const key of Object.keys(raw)) {
+		const known = MODEL_SLOTS as readonly string[];
+		if (!known.includes(key)) {
+			return { ok: false, error: `unknown slot "${key}" (supported: ${known.join(", ")})` };
+		}
+		const parsed = parseRoleOverride(raw[key], key);
+		if (!parsed.ok) return { ok: false, error: parsed.error };
+		if (Object.keys(parsed.override).length) {
+			settings[key as (typeof MODEL_SLOTS)[number]] = parsed.override;
+		} else {
+			return { ok: false, error: `slot "${key}" must set model or thinkingLevel (absent slot = unset)` };
+		}
+	}
+	return { ok: true, settings };
+}
+
 /** The section→parser map for PUT /api/settings/[section] (the route also
  *  carries the special prompts sub-resource). */
 export const SETTINGS_SECTIONS = {
@@ -300,6 +326,7 @@ export const SETTINGS_SECTIONS = {
 	agent: parseAgentSettingsBody,
 	appearance: parseAppearanceSettingsBody,
 	graph: parseGraphSettingsBody,
+	models: parseModelsSettingsBody,
 } as const;
 
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;

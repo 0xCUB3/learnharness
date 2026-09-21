@@ -40,7 +40,7 @@ test("sumSteps folds steps; absent stays absent until a value appears", () => {
 });
 
 test("callCost: glm-5.3-flash math — fresh input, cached read, output", () => {
-	const cost = callCost(call({ inputTokens: 100_000, outputTokens: 20_000, cacheReadTokens: 10_000 }), "z-ai/glm-5.3-flash");
+	const cost = callCost(call({ inputTokens: 100_000, outputTokens: 20_000, cacheReadTokens: 10_000 }), "openrouter:z-ai/glm-5.3-flash");
 	assert.ok(cost !== null);
 	// fresh 90k @ $0.075/M + cached 10k @ $0.015/M + output 20k @ $0.25/M
 	// (pi-ai catalog prices — regenerated tables, scripts/sync-pricing)
@@ -50,7 +50,7 @@ test("callCost: glm-5.3-flash math — fresh input, cached read, output", () => 
 test("callCost: cache writes bill at the cacheWrite rate", () => {
 	const cost = callCost(
 		call({ inputTokens: 1_000_000, outputTokens: 0, cacheWriteTokens: 500_000 }),
-		"qwen/qwen3.8-max-0902",
+		"openrouter:qwen/qwen3.8-max-0902",
 	);
 	assert.ok(cost !== null);
 	// fresh 1M @ $2/M + cache write 500k @ $2.5/M
@@ -59,7 +59,7 @@ test("callCost: cache writes bill at the cacheWrite rate", () => {
 
 test("callCost: unknown model and absent fields are null, never zero", () => {
 	assert.equal(callCost(call({ inputTokens: 100, outputTokens: 5 }), "not/a-model"), null);
-	assert.equal(callCost(call({ inputTokens: 100, outputTokens: undefined }), "z-ai/glm-5.3-flash"), null);
+	assert.equal(callCost(call({ inputTokens: 100, outputTokens: undefined }), "openrouter:z-ai/glm-5.3-flash"), null);
 });
 
 test("turnCost sums steps; sessionCost reports unpriced turns", () => {
@@ -67,7 +67,7 @@ test("turnCost sums steps; sessionCost reports unpriced turns", () => {
 		id: "t1",
 		messageId: "m1",
 		at: "2026-09-09T00:00:00Z",
-		model: "z-ai/glm-5.3-flash",
+		model: "openrouter:z-ai/glm-5.3-flash",
 		steps: [call({ inputTokens: 10_000, outputTokens: 2_000 }), call({ inputTokens: 12_000, outputTokens: 1_000 })],
 	};
 	assert.ok(turnCost(turn) !== null);
@@ -81,12 +81,12 @@ test("turnCost sums steps; sessionCost reports unpriced turns", () => {
 test("contextWindow: last call's footprint against the model's limit", () => {
 	const cw = contextWindow({
 		turns: [
-			{ id: "t1", messageId: "m1", at: "x", model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] },
-			{ id: "t2", messageId: "m2", at: "x", model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 90_000, outputTokens: 10_000 })] },
+			{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] },
+			{ id: "t2", messageId: "m2", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 90_000, outputTokens: 10_000 })] },
 		],
 	});
 	assert.ok(cw);
-	assert.equal(cw.model, "z-ai/glm-5.3-flash");
+	assert.equal(cw.model, "openrouter:z-ai/glm-5.3-flash");
 	assert.equal(cw.usedTokens, 100_000);
 	assert.equal(cw.limit, 1_048_576);
 	assert.equal(contextWindow({ turns: [] }), null);
@@ -96,7 +96,7 @@ test("jobCost: null without usage, computed with it", () => {
 	assert.equal(jobCost({}), null);
 	const job: Pick<JobRecord, "usage"> = {
 		usage: {
-			model: "z-ai/glm-5.3-flash",
+			model: "openrouter:z-ai/glm-5.3-flash",
 			inputTokens: 1_000_000,
 			outputTokens: 100_000,
 			cacheReadTokens: 0,
@@ -117,7 +117,7 @@ test("appendTurnUsage: appends, idempotent per turn id, continuation turns (same
 		id: "turn_1",
 		messageId: "msg_a",
 		at: "2026-09-09T00:00:00Z",
-		model: "z-ai/glm-5.3-flash",
+		model: "openrouter:z-ai/glm-5.3-flash",
 		steps: [call({ inputTokens: 100, outputTokens: 10 })],
 	};
 	chatStore.appendTurnUsage(record.id, entry);
@@ -149,8 +149,8 @@ test("appendExtractionUsage: appends, idempotent per startedAt, not in list payl
 		durationMs: 42_000,
 		stats: { nodes: 1, edges: 2, events: 3 },
 		stages: {
-			extractor: { model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 100, outputTokens: 10 })] },
-			auditor: { model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 50, outputTokens: 5 })] },
+			extractor: { model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 100, outputTokens: 10 })] },
+			auditor: { model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 50, outputTokens: 5 })] },
 		},
 	});
 	chatStore.appendExtractionUsage(record.id, runEntry(1));
@@ -186,8 +186,8 @@ test("appendSourceUsage: appends to the source record, idempotent per startedAt,
 			durationMs: 42_000,
 			stats: { nodes: 1, edges: 2, events: 3 },
 			stages: {
-				extractor: { model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 100, outputTokens: 10 })] },
-				auditor: { model: "z-ai/glm-5.3-flash", steps: [call({ inputTokens: 50, outputTokens: 5 })] },
+				extractor: { model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 100, outputTokens: 10 })] },
+				auditor: { model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 50, outputTokens: 5 })] },
 			},
 		});
 		const id = "src_usagetest01";

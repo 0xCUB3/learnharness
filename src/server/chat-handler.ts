@@ -1,7 +1,7 @@
 import type { UIMessage } from "ai";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createProberAgent, createTeacherAgent, type AgentBuildOptions, type TeachingAgent } from "../agent/teacher-agent.ts";
-import { piEngineFor } from "../agent/models.ts";
+import { piEngineForSpec } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { runGraphContextJob, type GraphContextDeps } from "../agent/subagents/graph-context.ts";
@@ -10,8 +10,8 @@ import type { ModelRole } from "../../config.ts";
 import { claimSteers, deliverJobResult, setContextRespawn, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { createPiTurnResponse } from "./pi/ui-stream.ts";
-import { effectiveSettings, stores } from "./stores.ts";
-import { extractionEnabled, graphContextEnabled } from "../core/settings-resolution.ts";
+import { effectiveSettings, MODEL_PINS, stores } from "./stores.ts";
+import { extractionEnabled, graphContextEnabled, resolveRoleSpec } from "../core/settings-resolution.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { persistTurn, triggerExtraction, triggerGraphContext, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
@@ -39,6 +39,12 @@ const jobRunner = createJobRunner({
 	chatStore: stores.chatStore,
 	jobStore: stores.jobStore,
 	deliver: deliverJobResult,
+	// Model slots wave (2026-09-20): job engines resolve the full chain —
+	// role override → slot → factory pin — read FRESH per job (a settings
+	// PUT between dispatch and spawn lands). Closes the old gap where
+	// per-role overrides reached rolePins but never the engines.
+	engineFor: (role) =>
+		piEngineForSpec(resolveRoleSpec(role, stores.settingsStore.readSettings(), MODEL_PINS)),
 });
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports
@@ -205,8 +211,18 @@ export async function handleChatRequest(
 	// for the conversation agents; piEngineFor falls back to config on absent
 	// fields and clamps the thinking level to the model's supported list).
 	const settings = stores.chatStore.getChat(chatId)?.settings;
-	const engine = piEngineFor(role, settings);
-	const modelId = engine.model.id;
+	// Model slots wave (2026-09-20): the conversation chain is the chat's
+	// own override over the STRONG slot (prober + teacher's tier) over the
+	// factory pin — each field independent, same discipline as the roles.
+	const strong = effective.models.strong;
+	const engine = piEngineForSpec({
+		provider: settings?.model?.provider ?? strong.provider,
+		id: settings?.model?.id ?? strong.id,
+		thinkingLevel: settings?.thinkingLevel ?? strong.thinkingLevel,
+	});
+	// Provider-qualified stamp (model slots wave): matches the price table's
+	// provider:id keys.
+	const modelId = `${engine.model.provider}:${engine.model.id}`;
 	// Tests inject a factory: the agent is stateless per turn (docs/
 	// pi-engine-swap.md §2), so each request builds a fresh one off the
 	// transcript — the factory mirrors that seam exactly.
