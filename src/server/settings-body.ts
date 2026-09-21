@@ -184,6 +184,16 @@ export function parseAgentSettingsBody(body: unknown): SettingsBodyResult<AgentS
 	const prompts = parseBooleanMap(raw.prompts, "prompts");
 	if (prompts.error) return { ok: false, error: prompts.error };
 	if (prompts.map) settings.prompts = prompts.map;
+	if (raw.search !== undefined) {
+		const search = asRecord(raw.search);
+		if (!search) return { ok: false, error: "search must be an object" };
+		if (search.engine !== undefined) {
+			if (search.engine !== "tavily" && search.engine !== "brave") {
+				return { ok: false, error: 'search.engine must be "tavily" or "brave"' };
+			}
+			settings.search = { engine: search.engine };
+		}
+	}
 	return { ok: true, settings };
 }
 

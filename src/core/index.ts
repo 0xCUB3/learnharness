@@ -41,6 +41,7 @@ export * from "./fuzzy.ts";
 // view. Browser-safe — the Wave-4 panel imports these directly.
 export * from "./settings.ts";
 export * from "./settings-resolution.ts";
+export * from "./search.ts"; // search port (search wave, 2026-09-20)
 // auth-keys.ts (auth-keys wave, 2026-09-19): the curated key catalog +
 // shape rules + masking — pure, browser-safe (the auth page binds to the
 // /api/keys routes built on it).

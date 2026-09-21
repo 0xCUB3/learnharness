@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { lhTool } from "../lh-tool.ts";
+// The search-hit shape lives in the core port since the search wave
+// (2026-09-20) — this module keeps the historical alias so callers don't
+// churn; the tool's rewiring onto the port is the Teacher stream's.
+import type { SearchHit as WebSearchResult } from "../../core/search.ts";
+export type { WebSearchResult };
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
@@ -22,12 +27,7 @@ import TurndownService from "turndown";
  */
 
 // ── web_search ───────────────────────────────────────────────────────────────
-
-export interface WebSearchResult {
-	title: string;
-	url: string;
-	snippet: string;
-}
+// (WebSearchResult is the core SearchHit, re-exported above.)
 
 function searchCredentials(): { apiKey: string; cseId: string } | null {
 	const apiKey = process.env.GOOGLE_SEARCH_API_KEY;

@@ -28,7 +28,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { type AuthKeyStatus } from "@/src/core";
+import { AUTH_KEYS, type AuthKeyStatus } from "@/src/core";
 import { SettingsGroup, SettingsRow } from "./controls.tsx";
 
 /** One pi-ai provider with plain API-key auth (the Platform seam). */
@@ -58,7 +58,10 @@ const OPENROUTER_FALLBACK = {
 
 /** The curated tools group, pinned by id (the catalog owns the copy;
  *  these ids are the contract). */
-const TOOL_IDS = ["DEEPGRAM_API_KEY", "GOOGLE_SEARCH_API_KEY", "GOOGLE_CSE_ID"] as const;
+// The curated app-service keys, derived from the catalog (search wave,
+// 2026-09-20: the Google CSE pair retired, Tavily + Brave joined) — the
+// section can never drift from core/auth-keys.ts again.
+const TOOL_IDS = AUTH_KEYS.map((k) => k.id) as readonly string[];
 
 /** The classification that drives the section's two groups. Pure —
  *  exported for tests. */

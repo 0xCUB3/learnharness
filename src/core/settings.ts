@@ -27,6 +27,7 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ChatSettings } from "./contracts/chat.ts";
+import type { SearchEngineId } from "./search.ts";
 
 /** The schema version this code understands. Bump ONLY for breaking shape
  *  changes (a field renamed/meaning changed); pure additions never bump. */
@@ -70,6 +71,13 @@ export interface AgentSettings {
 	/** Tool toggles keyed by tool id (absent key = enabled). User-level
 	 *  only — no per-chat override (owner decision 2026-09-19). */
 	tools?: Record<string, boolean>;
+	/** Search-engine preference (search wave, 2026-09-20). OPTIONAL by
+	 *  owner decision: setting a key auto-activates its engine — the user
+	 *  never chooses an engine to make search work. An explicit choice only
+	 *  pins the preference (e.g. when BOTH keys are present); the chosen
+	 *  engine must still have its key, else search is honestly unavailable.
+	 *  Absent + no key = unavailable (no silent fallback, no default). */
+	search?: { engine?: SearchEngineId };
 	/** System-prompt override SWITCHES keyed by segment path (absent key =
 	 *  off). Switch-on requires the override file to exist (enforced by the
 	 *  route); the switch is explicit so users keep a file on disk but run
@@ -261,6 +269,13 @@ function sanitizeAgent(raw: Record<string, unknown>): AgentSettings {
 	if (tools) out.tools = tools;
 	const prompts = sanitizeBooleanMap(raw.prompts);
 	if (prompts) out.prompts = prompts;
+	// Search preference: lenient read side (an unknown engine id drops;
+	// the write side's parser is strict — a stale client can't brick the
+	// record, it just loses the pin and auto-detection resumes).
+	if (raw.search !== null && typeof raw.search === "object" && !Array.isArray(raw.search)) {
+		const engine = (raw.search as Record<string, unknown>).engine;
+		if (engine === "tavily" || engine === "brave") out.search = { engine };
+	}
 	return out;
 }
 

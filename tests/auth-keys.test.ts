@@ -1,7 +1,8 @@
 /**
- * The curated auth-key catalog + shape rules (auth-keys wave, 2026-09-19)
+ * The curated auth-key catalog + shape rules (auth-keys wave, 2026-09-19;
+ * search wave 2026-09-20: the Google CSE pair retired, Tavily + Brave in)
  * — PURE module, so this file owns no fs. Owner decisions being pinned:
- *  - the catalog is exactly the four known keys, ids = env-var names;
+ *  - the catalog is exactly the three known keys, ids = env-var names;
  *  - validation is SHAPE-ONLY (no live pings) and bad pastes are 400s;
  *  - masking is last-4 + length — plaintext never leaves the store.
  */
@@ -14,7 +15,7 @@ describe("the catalog", () => {
 	it("is exactly the three CURATED app-service keys (provider keys live in the provider table)", () => {
 		assert.deepEqual(
 			AUTH_KEYS.map((k) => k.id),
-			["DEEPGRAM_API_KEY", "GOOGLE_SEARCH_API_KEY", "GOOGLE_CSE_ID"],
+			["DEEPGRAM_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY"],
 		);
 		for (const k of AUTH_KEYS) {
 			assert.ok(k.label.length > 0, `${k.id} has a label`);
@@ -22,13 +23,17 @@ describe("the catalog", () => {
 			assert.ok(k.docsUrl.startsWith("https://"), `${k.id} has a docs link`);
 		}
 		// OPENROUTER_API_KEY graduated to the provider table (owner decision,
-		// provider-keys interlude) — not curated anymore.
+		// provider-keys interlude) — not curated anymore. The Google CSE
+		// pair retired with its engine (search wave, 2026-09-20).
 		assert.ok(!isKnownAuthKey("OPENROUTER_API_KEY"));
+		assert.ok(!isKnownAuthKey("GOOGLE_SEARCH_API_KEY"), "the CSE pair is retired");
+		assert.ok(!isKnownAuthKey("GOOGLE_CSE_ID"));
 	});
 
 	it("isKnownAuthKey: catalog yes, everything else no", () => {
 		assert.ok(isKnownAuthKey("DEEPGRAM_API_KEY"));
-		assert.ok(isKnownAuthKey("GOOGLE_CSE_ID"));
+		assert.ok(isKnownAuthKey("TAVILY_API_KEY"));
+		assert.ok(isKnownAuthKey("BRAVE_API_KEY"));
 		assert.ok(!isKnownAuthKey("OPENROUTER_API_KEY"));
 		assert.ok(!isKnownAuthKey("OPENAI_API_KEY"), "provider vars are a separate surface");
 		assert.ok(!isKnownAuthKey("FUTURE_PLANS_TOKEN"));
@@ -37,18 +42,17 @@ describe("the catalog", () => {
 });
 
 describe("validateKeyShape (the 400 gate — curated keys)", () => {
-	it("Google API key: AIza prefix required", () => {
-		assert.ok(validateKeyShape("GOOGLE_SEARCH_API_KEY", "AIzaSyD-abcdef1234").ok);
-		assert.ok(!validateKeyShape("GOOGLE_SEARCH_API_KEY", "sk-or-v1-abcdefghij").ok, "wrong family");
-		assert.ok(!validateKeyShape("GOOGLE_SEARCH_API_KEY", "AIza").ok, "prefix alone fails");
+	it("Tavily: tvly- prefix required, length floor past it", () => {
+		assert.ok(validateKeyShape("TAVILY_API_KEY", "tvly-abc123def456ghi78").ok);
+		assert.ok(!validateKeyShape("TAVILY_API_KEY", "sk-or-v1-abcdefghij").ok, "wrong family");
+		assert.ok(!validateKeyShape("TAVILY_API_KEY", "tvly-").ok, "prefix alone is a truncation");
+		assert.ok(!validateKeyShape("TAVILY_API_KEY", "  ").ok, "empty fails");
 	});
 
-	it("CSE ID: legacy digits:digits OR plain token form", () => {
-		assert.ok(validateKeyShape("GOOGLE_CSE_ID", "017576662512468239146:omuauf_lfve").ok);
-		assert.ok(validateKeyShape("GOOGLE_CSE_ID", "a1b2c3d4e5f6g7h8j9k0lmnop").ok);
-		assert.ok(!validateKeyShape("GOOGLE_CSE_ID", "17:short").ok, "short legacy form fails");
-		assert.ok(!validateKeyShape("GOOGLE_CSE_ID", "has whitespace here").ok);
-		assert.ok(!validateKeyShape("GOOGLE_CSE_ID", "sk-or-v1-abcdefg").ok, "wrong family");
+	it("Brave: no public format — a ≥20-char truncation guard, no whitespace", () => {
+		assert.ok(validateKeyShape("BRAVE_API_KEY", "b".repeat(40)).ok);
+		assert.ok(!validateKeyShape("BRAVE_API_KEY", "b".repeat(19)).ok, "truncated paste");
+		assert.ok(!validateKeyShape("BRAVE_API_KEY", "has whitespace here").ok);
 	});
 
 	it("Deepgram: no public format — a ≥20-char truncation guard, no whitespace", () => {

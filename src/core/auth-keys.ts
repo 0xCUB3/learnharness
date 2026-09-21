@@ -37,16 +37,16 @@ export const AUTH_KEYS: readonly AuthKeyInfo[] = [
 		docsUrl: "https://console.deepgram.com/",
 	},
 	{
-		id: "GOOGLE_SEARCH_API_KEY",
-		label: "Google Search API key",
-		description: "Web-search half of the Google pair (with the CSE ID) — powers the researcher sub-agent.",
-		docsUrl: "https://developers.google.com/custom-search/v1/introduction",
+		id: "TAVILY_API_KEY",
+		label: "Tavily",
+		description: "Web-search engine for the researcher sub-agent (AI-native search API). Setting the key activates it — no engine toggle needed.",
+		docsUrl: "https://app.tavily.com/",
 	},
 	{
-		id: "GOOGLE_CSE_ID",
-		label: "Google CSE ID",
-		description: "Programmable Search Engine ID — which engine the search API queries.",
-		docsUrl: "https://programmablesearchengine.google.com/controlpanel",
+		id: "BRAVE_API_KEY",
+		label: "Brave Search",
+		description: "Web-search engine for the researcher sub-agent — the alternative to Tavily. Setting the key activates it.",
+		docsUrl: "https://brave.com/search/api/",
 	},
 ] as const;
 
@@ -138,8 +138,8 @@ export type KeyShapeResult = { ok: true } | { ok: false; error: string };
  * a truncated or wrong-family key can never land in the store). Values are
  * TRIMMED first (paste hygiene); empty-after-trim always fails.
  *
- * CURATED keys carry family rules (Google AIza…, the CSE forms,
- * Deepgram's length floor — a truncation guard; it publishes no format).
+ * CURATED keys carry family rules (Tavily's tvly-… prefix; Brave and
+ * Deepgram publish no format — length floors + paste hygiene only).
  * MODEL-PROVIDER keys use genericProviderKeyGuard below instead (families
  * vary by provider — only paste hygiene applies; owner spec: min length
  * ~12, no whitespace). OPENROUTER_API_KEY moved to the generic guard with
@@ -152,16 +152,13 @@ export function validateKeyShape(id: string, rawValue: string): KeyShapeResult {
 			? { ok: true as const }
 			: { ok: false as const, error: `${id} must be at least ${min} characters with no whitespace` };
 	switch (id) {
-		case "GOOGLE_SEARCH_API_KEY":
-			return value.startsWith("AIza")
-				? nonEmpty(10)
-				: { ok: false, error: `${id} must start with "AIza" (Google's API-key format)` };
-		case "GOOGLE_CSE_ID":
-			return (
-				/^[0-9]{6,}:[0-9A-Za-z_-]+$/.test(value) || /^[0-9A-Za-z]{12,}$/.test(value)
-			)
-				? { ok: true }
-				: { ok: false, error: `${id} must be the Programmable Search Engine ID (digits:digits, or the plain alphanumeric form)` };
+		case "TAVILY_API_KEY":
+			return value.startsWith("tvly-")
+				? nonEmpty(20)
+				: { ok: false, error: `${id} must start with "tvly-" (Tavily's key format)` };
+		case "BRAVE_API_KEY":
+			// No public format — a length floor + paste hygiene only.
+			return nonEmpty(20);
 		case "DEEPGRAM_API_KEY":
 			// No public format — the length floor only catches truncated pastes.
 			return nonEmpty(20);

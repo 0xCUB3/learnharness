@@ -61,6 +61,7 @@ describe("sanitizeUserSettings", () => {
 				},
 				tools: { research: false, quiz: true },
 				prompts: { "system-prompt.md": true, "teacher/20-teaching.md": false },
+				search: { engine: "brave" },
 			},
 			appearance: {
 				mode: "light",
@@ -151,6 +152,15 @@ describe("sanitizeUserSettings", () => {
 		assert.deepEqual(models.researcher, { model: { provider: "openrouter", id: "x/y" } });
 		assert.deepEqual(models.labeler, { thinkingLevel: "high" });
 		assert.equal("auditor" in models, false);
+	});
+
+	it("search engine pin survives; unknown engine ids drop (auto-detect resumes) — search wave, 2026-09-20", () => {
+		const good = sanitizeUserSettings({ version: 1, agent: { search: { engine: "tavily" } } });
+		assert.deepEqual(good?.agent?.search, { engine: "tavily" });
+		const bad = sanitizeUserSettings({ version: 1, agent: { search: { engine: "google" } } });
+		assert.equal(bad?.agent?.search, undefined);
+		const notObject = sanitizeUserSettings({ version: 1, agent: { search: "tavily" } });
+		assert.equal(notObject?.agent?.search, undefined);
 	});
 
 	it("partial maps: booleans survive, non-boolean entries drop individually", () => {
