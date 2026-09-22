@@ -96,6 +96,19 @@ export function composeTool(agent: AgentSettings | undefined, id: string, on: bo
 	return { ...agent, tools: { ...agent?.tools, [id]: on } };
 }
 
+/** The research tool runs on the search port — the teacher registry DROPS
+ *  it when no engine is live (chat-handler's searchAvailable, the same
+ *  /api/search signal the section fetches). Pure — exported for tests.
+ *  Teacher-stream flag 2026-09-22: the settings row grays on the SAME
+ *  signal, so the row and the actual registry availability can never
+ *  disagree. `search === null` (loading/failed) grays NOTHING. */
+export function researchToolUnavailable(
+	toolId: string,
+	search: { available: boolean } | null,
+): boolean {
+	return toolId === "research" && search !== null && !search.available;
+}
+
 /** Compose: one slot's model/thinking override. Empty model = absent
  *  override (Default — falls to the factory pin); empty thinking = the
  *  tier keeps its resolved thinking budget. Per-field independence, same
@@ -295,7 +308,6 @@ export function AgentSection({
 			.then((r) => r.json())
 			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body))
 			.catch(() => setPrompts(null));
-		refreshSearch();
 		fetch("/api/keys")
 			.then((r) => r.json())
 			.then((body: { keys: { id: string; present: boolean }[] }) => {
@@ -308,6 +320,14 @@ export function AgentSection({
 			})
 			.catch(() => {});
 	}, []);
+
+	// The reason line re-reads /api/search AFTER an engine write lands —
+	// the write updates the `agent` prop (the dialog's record mirror), so
+	// keying on the pin avoids the race where the fetch beat the PUT and
+	// the hint contradicted the trigger it sits under.
+	useEffect(() => {
+		refreshSearch();
+	}, [agent?.search?.engine]);
 
 	// The dropdown contract (the chat model selector's, mirrored): any
 	// click outside the open menu — or an Esc — closes it. Esc is CLAIMED
@@ -393,6 +413,7 @@ export function AgentSection({
 		onPick: () => void,
 	) => (
 		<button
+			key={id}
 			type="button"
 			data-testid={`engine-option-${id}`}
 			onClick={onPick}
@@ -597,15 +618,28 @@ export function AgentSection({
 			</SettingsGroup>
 
 			<SettingsGroup label="Tools" testid="group-tools">
-				{TOGGLE_TOOLS.map((id) => (
-					<SettingsRow key={id} label={`Tool · ${id}`} testid={`tool-row-${id}`}>
-						<Toggle
-							checked={agent?.tools?.[id] ?? true}
-							label={`tool ${id}`}
-							onChange={(on) => onSectionChange(composeTool(agent, id, on))}
-						/>
-					</SettingsRow>
-				))}
+				{TOGGLE_TOOLS.map((id) => {
+					// Research needs a live search engine; the row + toggle gray
+					// on the same signal the registry drops the tool on (see
+					// researchToolUnavailable). The reason rides as the hint.
+					const searchDown = researchToolUnavailable(id, search);
+					return (
+						<SettingsRow
+							key={id}
+							label={`Tool · ${id}`}
+							hint={searchDown ? search?.reason : undefined}
+							testid={`tool-row-${id}`}
+							dimmed={searchDown}
+						>
+							<Toggle
+								checked={agent?.tools?.[id] ?? true}
+								disabled={searchDown}
+								label={`tool ${id}`}
+								onChange={(on) => onSectionChange(composeTool(agent, id, on))}
+							/>
+						</SettingsRow>
+					);
+				})}
 				{(() => {
 					const engine = agent?.search?.engine ?? null;
 					const anyKey = engineKeys.tavily === true || engineKeys.brave === true;
@@ -637,13 +671,11 @@ export function AgentSection({
 										{engineOption("auto", "Automatic", engine === null, null, () => {
 											onSectionChange(composeSearchEngine(agent, null));
 											setOpenMenu(null);
-											refreshSearch();
 										})}
 										{SEARCH_ENGINES.map((id) =>
 											engineOption(id, id === "tavily" ? "Tavily" : "Brave", engine === id, engineKeys[id] ?? false, () => {
 												onSectionChange(composeSearchEngine(agent, id));
 												setOpenMenu(null);
-												refreshSearch();
 											}),
 										)}
 									</AnchoredMenu>

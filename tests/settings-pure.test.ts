@@ -8,7 +8,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { appearanceVars, derivedPalette, resolveAppearance } from "../components/settings/appearance.tsx";
-import { composePromptSwitch, composeSearchEngine, composeSlotModel, composeTool } from "../components/settings/agent-section.tsx";
+import {
+	composePromptSwitch,
+	composeSearchEngine,
+	composeSlotModel,
+	composeTool,
+	researchToolUnavailable,
+} from "../components/settings/agent-section.tsx";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
 import { classifyKeys, keyStatusLine, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
 import type { AgentSettings, AuthKeyStatus, ModelsSettings } from "../src/core";
@@ -280,5 +286,20 @@ describe("first-run gate — slotsConfigured + setupStage (model-slots wave)", (
 		assert.equal(setupStage([]), "keys", "no providers = keys");
 		assert.equal(setupStage([{ id: "zai", keyPresent: false }]), "keys", "provider present but keyless");
 		assert.equal(setupStage([{ id: "zai", keyPresent: false }, { id: "openai", keyPresent: true }]), "pickers", "one keyed provider widens the pickers");
+	});
+});
+
+describe("researchToolUnavailable — the row grays on the registry's own signal", () => {
+	it("research grays exactly when the live search status says unavailable", () => {
+		// the SAME /api/search signal chat-handler's searchAvailable uses —
+		// the row and the registry can never disagree (Teacher flag 2026-09-22)
+		assert.equal(researchToolUnavailable("research", { available: false }), true);
+		assert.equal(researchToolUnavailable("research", { available: true }), false);
+		// loading/failed fetch grays nothing (never a false-negative row)
+		assert.equal(researchToolUnavailable("research", null), false);
+		// only research — the other tools never touch the search port
+		for (const id of ["demo", "visual", "pdf"]) {
+			assert.equal(researchToolUnavailable(id, { available: false }), false);
+		}
 	});
 });
