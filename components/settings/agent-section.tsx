@@ -44,6 +44,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MenuShell } from "@/components/menu-shell";
 import { useSettingsSaved } from "@/components/settings-signal";
+import { defaultOrderLevel, populateLevel } from "@/components/thinking-default";
 import type React from "react";
 import {
 	MODEL_SLOTS,
@@ -506,7 +507,10 @@ export function AgentSection({
 									widthClass="min-w-20"
 								/>
 								<MenuTrigger
-									value={thinking}
+									// Legacy display (chunk 2 item 4): no stored level + a known
+									// model → the RESOLVED level (the ordering's first supported —
+									// what the engine build runs). Display-only until a pick writes.
+									value={thinking || (chosen ? defaultOrderLevel(levels) : "")}
 									emptyLabel="—"
 									ariaLabel={`${SLOT_META[slot].label} thinking`}
 									testid={`slot-thinking-${slot}`}
@@ -526,7 +530,11 @@ export function AgentSection({
 											effectiveId={modelId}
 											effectiveProvider={provider}
 											onPick={(entry) => {
-												onModelsChange(composeSlotModel(models, slot, entry.provider, entry.id, thinking));
+												// Auto-populate (chunk 2, owner: "populate everywhere"): the
+												// fresh pick writes a level — the stored one rides as-is
+												// (the write clamps server-side), else the ordering's level.
+												const next = populateLevel(thinking || undefined, entry.supportedLevels);
+												onModelsChange(composeSlotModel(models, slot, entry.provider, entry.id, next));
 												setOpenMenu(null);
 											}}
 											footer={
@@ -546,7 +554,9 @@ export function AgentSection({
 									>
 										<ThinkingMenuList
 											levels={levels.map(String)}
-											effectiveLevel={thinking || undefined}
+											// The ✓ sits on the RESOLVED level for legacy unset records —
+											// the same one the trigger shows.
+											effectiveLevel={thinking || (chosen ? defaultOrderLevel(levels) : undefined)}
 											onPick={(level) => {
 												onModelsChange(composeSlotModel(models, slot, provider, modelId, level));
 												setOpenMenu(null);

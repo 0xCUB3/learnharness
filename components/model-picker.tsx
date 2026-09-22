@@ -8,6 +8,7 @@ import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-men
 import { composeSlotModel } from "@/components/settings/agent-section";
 import { MenuShell } from "@/components/menu-shell";
 import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-signal";
+import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
 
 /** GET /api/models is cached per page load for instant menu opens, but
  *  the federation is LIVE per call — keys saved mid-session widen the
@@ -63,16 +64,6 @@ function useModelCatalog(): { catalog: ModelCatalogResponse | undefined; refresh
 	return { catalog, refresh };
 }
 
-const LEVEL_LABEL: Record<string, string> = {
-	off: "Off",
-	minimal: "Minimal",
-	low: "Low",
-	medium: "Medium",
-	high: "High",
-	xhigh: "Xhigh",
-	max: "Max",
-};
-
 /**
  * THE STRONG-SLOT CONTROL (fix wave, owner ruling: "one and the same").
  * The composer's model + thinking pills ARE the strong slot — the tier
@@ -120,11 +111,16 @@ export function ModelControl() {
 	const override = models?.strong;
 	const effectiveId = override?.model?.id;
 	const effectiveProvider = override?.model?.provider;
-	const effectiveLevel = override?.thinkingLevel;
+	const storedLevel = override?.thinkingLevel;
 	const entry = catalog?.models.find(
 		(m) => m.id === effectiveId && m.provider === effectiveProvider,
 	);
 	const levels = entry?.supportedLevels ?? [];
+	// Legacy display (chunk 2 item 4, owner): a record with a model but no
+	// stored level shows the RESOLVED level — the ordering's first supported
+	// — because that is exactly what the engine build would run. Display-
+	// only: the record stays unset until a fresh pick populates it.
+	const effectiveLevel = storedLevel ?? (entry ? defaultOrderLevel(levels) : undefined);
 
 	// The intuitive dropdown contract (owner, stats-control round 1): any
 	// click outside the open menu — or an Esc keypress — closes it. The
@@ -216,9 +212,16 @@ export function ModelControl() {
 	// thinking level only when the new model supports it — otherwise
 	// drop it (a carry-over would 400 at the server's catalog gate).
 	const pickModel = (m: ModelCatalogEntry) => {
-		const nextLevel =
-			effectiveLevel !== undefined && m.supportedLevels.includes(effectiveLevel) ? effectiveLevel : undefined;
-		void save(composeSlotModel(models, "strong", m.provider, m.id, nextLevel ?? ""));
+		// Auto-populate (chunk 2, owner: "populate everywhere"): a fresh pick
+		// ALWAYS writes a level — the STORED one rides as-is (the write clamps
+		// server-side when the new model doesn't support it; the signal
+		// re-reads and the clamped truth displays), and a record with no
+		// stored level populates the ordering's level. The unset state can
+		// never re-enter through this door. (The DERIVED display level never
+		// rides — it belongs to the OLD model; the fresh pick's level comes
+		// from the fresh model's own ladder.)
+		const nextLevel = populateLevel(storedLevel, m.supportedLevels);
+		void save(composeSlotModel(models, "strong", m.provider, m.id, nextLevel));
 	};
 
 	// Stale-while-revalidate on manual open too (⌘K covers the keyboard
@@ -259,7 +262,7 @@ export function ModelControl() {
 				{/* Just the level — the button reads like the model button reads
 				   the model name (owner, stats-control round 1). */}
 				<span className="text-card-foreground">
-					{effectiveLevel === undefined ? "—" : (LEVEL_LABEL[effectiveLevel] ?? effectiveLevel)}
+					{effectiveLevel === undefined ? "—" : (THINKING_LABEL[effectiveLevel] ?? effectiveLevel)}
 				</span>
 				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>

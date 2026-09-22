@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { parseModelsRefusal } from "../components/chat.tsx";
-import { prefillFromSlots, setupStage } from "../components/setup-dialog.tsx";
+import { prefillFromSlots, prefillLevelFromPin, setupStage } from "../components/setup-dialog.tsx";
 import { isModelsRefusal, modelsNotConfigured } from "../src/core/settings.ts";
 import type { ModelCatalogEntry, ModelSlotName } from "../src/core/index.ts";
 
@@ -87,6 +87,24 @@ describe("prefillFromSlots — the SetupDialog prefill (BYOK wave)", () => {
 	it("absent slots payload (older shape) prefills nothing", () => {
 		const pre = prefillFromSlots(catalog, undefined);
 		assert.deepEqual(pre, {});
+	});
+});
+
+describe("prefillLevelFromPin — the setup dialog's level prefill (chunk 2)", () => {
+	const entry = (levels: string[]) =>
+		({ id: "m", name: "M", provider: "p", reasoning: true, input: ["text"], supportedLevels: levels, cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 1000 }) as never;
+
+	it("a stored level the pinned model still supports prefills as-is", () => {
+		assert.equal(prefillLevelFromPin(entry(["low", "high"]), { thinkingLevel: "high" }), "high");
+	});
+
+	it("a stored level the model LOST rides as-is — Save clamps server-side (bd68486)", () => {
+		assert.equal(prefillLevelFromPin(entry(["minimal", "medium"]), { thinkingLevel: "xhigh" }), "xhigh");
+	});
+
+	it("a legacy pin with no stored level prefills the ordering's level", () => {
+		assert.equal(prefillLevelFromPin(entry(["low", "medium"]), {}), "medium");
+		assert.equal(prefillLevelFromPin(entry(["low", "medium"]), null), "medium");
 	});
 });
 

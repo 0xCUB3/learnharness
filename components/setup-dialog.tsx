@@ -37,6 +37,9 @@ import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
 import { MenuShell } from "@/components/menu-shell";
 import { notifySettingsSaved } from "@/components/settings-signal";
+import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
+import { ThinkingMenuList } from "@/components/settings/model-menu";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 /** The pickers' slot identity — same roster language as the Agent
  *  section's slot rows. */
@@ -54,7 +57,7 @@ interface ModelsBody {
 	/** The three tiers' RESOLVED pins (BYOK: NULL per unset tier) — the
 	 *  PREFILL + "needed" marks (owner, 2026-09-22): pinned tiers open
 	 *  with their pick, unpinned tiers carry the mark. */
-	slots?: Record<ModelSlotName, { model: { provider: string; id: string } } | null>;
+	slots?: Record<ModelSlotName, { model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel } | null>;
 }
 
 /** Pure: which stage the flow opens at — no keyed provider = keys first
@@ -86,6 +89,18 @@ export function prefillFromSlots(
 	return pre;
 }
 
+/** Level prefill (chunk 2): a pinned tier opens with its STORED level
+ *  as-is (Save clamps server-side if the ladder lapsed), else the
+ *  ordering's level for that model — the level a fresh pick would
+ *  populate (owner: the ordering's only purpose is first assignment).
+ *  Exported pure for tests. */
+export function prefillLevelFromPin(
+	entry: ModelCatalogEntry,
+	pin: { thinkingLevel?: ThinkingLevel } | null | undefined,
+): ThinkingLevel {
+	return populateLevel(pin?.thinkingLevel, entry.supportedLevels);
+}
+
 export function SetupDialog({
 	open,
 	onClose,
@@ -103,10 +118,13 @@ export function SetupDialog({
 	const [body, setBody] = useState<ModelsBody | null>(null);
 	const [failed, setFailed] = useState(false);
 	const [picked, setPicked] = useState<Partial<Record<ModelSlotName, ModelCatalogEntry>>>({});
+	/** Per-slot thinking level (chunk 2): populated from the ordering on
+	 *  every fresh model pick, editable — an explicit pick always wins. */
+	const [levels, setLevels] = useState<Partial<Record<ModelSlotName, ThinkingLevel>>>({});
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [openSlot, setOpenSlot] = useState<ModelSlotName | null>(null);
-	/** The open slot's trigger wrapper — the shared shell's anchor (fix
+	const [openMenu, setOpenMenu] = useState<{ slot: ModelSlotName; kind: "model" | "thinking" } | null>(null);
+	/** The open menu's trigger wrapper — the shared shell's anchor (fix
 	 *  wave chunk B): one menu open at a time, so one ref suffices, and
 	 *  the menu PORTALS out of this dialog's overflow-hidden frame — it
 	 *  extends beyond the dialog exactly like the settings menus do. */
@@ -117,6 +135,7 @@ export function SetupDialog({
 	useEffect(() => {
 		if (!open) return;
 		setPicked({});
+		setLevels({});
 		setError(null);
 		fetch("/api/models")
 			.then((r) => r.json())
@@ -127,7 +146,16 @@ export function SetupDialog({
 				// pick (matched in the FEDERATED catalog — a lapsed key's pin
 				// does not prefill); unpinned tiers stay empty and carry the
 				// "needed" mark. First-run = nothing pinned → all three marked.
-				setPicked(prefillFromSlots(b.models, b.slots));
+				const pre = prefillFromSlots(b.models, b.slots);
+				setPicked(pre);
+				// Levels prefill with the pins (chunk 2): stored level if still
+				// supported, else the ordering's level for the pinned model.
+				const preLevels: Partial<Record<ModelSlotName, ThinkingLevel>> = {};
+				for (const slot of SLOT_ORDER) {
+					const entry = pre[slot];
+					if (entry) preLevels[slot] = prefillLevelFromPin(entry, b.slots?.[slot]);
+				}
+				setLevels(preLevels);
 			})
 			.catch(() => setFailed(true));
 	}, [open]);
@@ -140,14 +168,16 @@ export function SetupDialog({
 		if (!open) return;
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape") return;
-			if (openSlot !== null) setOpenSlot(null);
+			if (openMenu !== null) setOpenMenu(null);
 			else onClose();
 		};
 		const onPointerDown = (e: PointerEvent) => {
-			if (openSlot === null) return;
+			if (openMenu === null) return;
 			const t = e.target as Element;
-			if (t.closest("[data-lh-menu]") || t.closest(`[data-testid="setup-trigger-${openSlot}"]`)) return;
-			setOpenSlot(null);
+			const triggerTestid =
+				openMenu.kind === "model" ? `setup-trigger-${openMenu.slot}` : `setup-thinking-${openMenu.slot}`;
+			if (t.closest("[data-lh-menu]") || t.closest(`[data-testid="${triggerTestid}"]`)) return;
+			setOpenMenu(null);
 		};
 		window.addEventListener("keydown", onKey);
 		document.addEventListener("pointerdown", onPointerDown);
@@ -155,7 +185,7 @@ export function SetupDialog({
 			window.removeEventListener("keydown", onKey);
 			document.removeEventListener("pointerdown", onPointerDown);
 		};
-	}, [open, onClose, openSlot]);
+	}, [open, onClose, openMenu]);
 
 	if (!open) return null;
 
@@ -167,7 +197,13 @@ export function SetupDialog({
 		setSaving(true);
 		setError(null);
 		const models: ModelsSettings = {};
-		for (const slot of SLOT_ORDER) models[slot] = { model: { provider: picked[slot]!.provider, id: picked[slot]!.id } };
+		for (const slot of SLOT_ORDER) {
+			const level = levels[slot];
+			models[slot] = {
+				model: { provider: picked[slot]!.provider, id: picked[slot]!.id },
+				...(level ? { thinkingLevel: level } : {}),
+			};
+		}
 		const res = await fetch("/api/settings/models", {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
@@ -235,6 +271,8 @@ export function SetupDialog({
 						</p>
 						{SLOT_ORDER.map((slot) => {
 							const entry = picked[slot];
+							const level = levels[slot];
+							const levelsForEntry = entry?.supportedLevels ?? [];
 							const catalog =
 								slot === "vision" ? body?.models.filter((m) => m.input.includes("image")) : body?.models;
 							return (
@@ -251,40 +289,91 @@ export function SetupDialog({
 										)}
 									</span>
 									<span className="text-xs text-muted-foreground/70">{SLOT_META[slot].roster}</span>
-									<div ref={openSlot === slot ? triggerRef : undefined} className="relative">
-										<button
-											type="button"
-											aria-label={`${SLOT_META[slot].label} model`}
-											data-testid={`setup-trigger-${slot}`}
-											aria-expanded={openSlot === slot}
-											onClick={() => setOpenSlot(openSlot === slot ? null : slot)}
-											className="flex h-7 min-w-40 items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
-										>
-											<span className="min-w-0 flex-1 truncate">{entry ? prettyModel(entry.id) : "Pick a model…"}</span>
-											<span aria-hidden className="text-muted-foreground">
-												▾
-											</span>
-										</button>
-										{openSlot === slot && (
-											<MenuShell
-												anchorRef={triggerRef}
-												testid={`setup-menu-${slot}`}
-												preferredSide="down"
-												align="left"
-												menuClass="flex w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
+									<div className="flex items-center gap-2">
+										<div ref={openMenu?.slot === slot && openMenu.kind === "model" ? triggerRef : undefined} className="relative flex-1">
+											<button
+												type="button"
+												aria-label={`${SLOT_META[slot].label} model`}
+												data-testid={`setup-trigger-${slot}`}
+												aria-expanded={openMenu?.slot === slot && openMenu.kind === "model"}
+												onClick={() => setOpenMenu(openMenu?.slot === slot && openMenu.kind === "model" ? null : { slot, kind: "model" })}
+												className="flex h-7 min-w-40 w-full items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
 											>
-												<ModelMenuList
-													models={catalog}
-													effectiveId={entry?.id}
-													effectiveProvider={entry?.provider}
-													onPick={(m) => {
-														setPicked((prev) => ({ ...prev, [slot]: m }));
-														setOpenSlot(null);
-													}}
-													footer={catalog && catalog.length === 0 ? "No image-capable models — widen the provider keys" : undefined}
-												/>
-											</MenuShell>
-										)}
+												<span className="min-w-0 flex-1 truncate">{entry ? prettyModel(entry.id) : "Pick a model…"}</span>
+												<span aria-hidden className="text-muted-foreground">
+													▾
+												</span>
+											</button>
+											{openMenu?.slot === slot && openMenu.kind === "model" && (
+												<MenuShell
+													anchorRef={triggerRef}
+													testid={`setup-menu-${slot}`}
+													preferredSide="down"
+													align="left"
+													menuClass="flex w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
+												>
+													<ModelMenuList
+														models={catalog}
+														effectiveId={entry?.id}
+														effectiveProvider={entry?.provider}
+														onPick={(m) => {
+															setPicked((prev) => ({ ...prev, [slot]: m }));
+															// Auto-populate (chunk 2, owner: "populate
+															// everywhere"): no explicit level → the
+															// ordering's level for the fresh pick; an
+															// explicit one rides (Save clamps server-side).
+															setLevels((prev) => ({
+																...prev,
+																[slot]: populateLevel(prev[slot], m.supportedLevels),
+															}));
+															setOpenMenu(null);
+														}}
+														footer={catalog && catalog.length === 0 ? "No image-capable models — widen the provider keys" : undefined}
+													/>
+												</MenuShell>
+											)}
+										</div>
+										{/* Thinking selector (chunk 2): editable, pre-populated from
+										    the ordering per picked model — no model, no levels. */}
+										<div
+											ref={openMenu?.slot === slot && openMenu.kind === "thinking" ? triggerRef : undefined}
+											className="relative"
+										>
+											<button
+												type="button"
+												aria-label={`${SLOT_META[slot].label} thinking`}
+												data-testid={`setup-thinking-${slot}`}
+												aria-expanded={openMenu?.slot === slot && openMenu.kind === "thinking"}
+												disabled={!entry}
+												onClick={() => setOpenMenu(openMenu?.slot === slot && openMenu.kind === "thinking" ? null : { slot, kind: "thinking" })}
+												className="flex h-7 w-24 items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 disabled:cursor-not-allowed disabled:opacity-40"
+											>
+												<span className="min-w-0 flex-1 truncate text-left">
+													{entry ? (level ? THINKING_LABEL[level] ?? level : "…") : "—"}
+												</span>
+												<span aria-hidden className="text-muted-foreground">
+													▾
+												</span>
+											</button>
+											{openMenu?.slot === slot && openMenu.kind === "thinking" && (
+												<MenuShell
+													anchorRef={triggerRef}
+													testid={`setup-thinking-menu-${slot}`}
+													preferredSide="down"
+													align="left"
+													menuClass="flex w-44 flex-col gap-0.5 rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
+												>
+													<ThinkingMenuList
+														levels={levelsForEntry.map(String)}
+														effectiveLevel={level}
+														onPick={(lv) => {
+															setLevels((prev) => ({ ...prev, [slot]: lv as ThinkingLevel }));
+															setOpenMenu(null);
+														}}
+													/>
+												</MenuShell>
+											)}
+										</div>
 									</div>
 								</div>
 							);
