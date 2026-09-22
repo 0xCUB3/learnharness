@@ -1373,9 +1373,21 @@ describe("BYOK job refusal (no factory floor)", () => {
 		await runner.runJob(job.id);
 
 		const done = jobStore.getJob(job.id)!;
+		// The refusal lands through the SAME convention as every other
+		// failed job (BYOK review fix, Teacher stream 2026-09-22): the kind's
+		// failure result steers the teacher — a dispatched job is never
+		// stranded waiting for a result that will never come — and
+		// finalizeJob flips the record to error after the delivery.
 		assert.equal(done.status, "error", "the job lands error, never a phantom run");
 		assert.match(done.error ?? "", /No model configured/);
 		assert.match(done.error ?? "", /missing: cheap/);
-		assert.equal(delivery.steers.length, 0, "no result steer — nothing ran");
+		assert.equal(delivery.steers.length, 1, "the refusal STEERED — the teacher is not stranded");
+		const text = delivery.steers[0]!.parts[0];
+		assert.ok(
+			text.type === "text" && text.text.includes("Research failed: No model configured"),
+			"the steer carries the kind's failure shape",
+		);
+		const result = done.result as ResearchResult;
+		assert.equal(result.sources.length, 0, "the failure result matches the research convention");
 	});
 });

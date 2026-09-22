@@ -70,16 +70,12 @@ export interface JobRunnerDeps {
 	 * flipped); rejects when delivery fails unrecoverably.
 	 */
 	deliver: (steer: SubagentSteerMessage) => Promise<void>;
-	/**
-	 * Settings-resolved engine per role (model slots wave, 2026-09-20): the
-	 * role-override → slot → factory-pin chain, read FRESH per job (the
-	 * server wiring passes effectiveSettings-based resolution). Closes the
-	 * old gap where per-role settings overrides never reached job engines.
-	 * Test overrides (below) still win; absent → config pins.
-	 */
-	/** Settings-resolved engine per role — BYOK (owner, 2026-09-22): the
-	 *  chain (role override → slot → NOTHING) may end empty → undefined;
-	 *  runJob then refuses the spawn honestly instead of guessing. */
+	/** Settings-resolved engine per role (model slots wave, 2026-09-20):
+	 *  the role-override → slot chain, read FRESH per job (the server
+	 *  wiring passes effectiveSettings-based resolution). Test overrides
+	 *  (below) still win. BYOK (owner, 2026-09-22): the chain may end
+	 *  EMPTY → undefined; runJob then refuses the spawn honestly instead
+	 *  of guessing a model. */
 	engineFor?: (role: ModelRole) => PiEngine | undefined;
 	/** The search seam (search port wave, 2026-09-20): resolves the LIVE
 	 *  provider fresh per job — server/search.ts composition injected by
@@ -205,16 +201,44 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		const engine = pickEngine(job.kind);
 		if (!engine) {
 			// BYOK per-need refusal (owner, 2026-09-22): this kind's tier has
-			// no model — the job record surfaces the honest error (dock +
-			// teacher read it), and no engine-less loop ever starts.
+			// no model. Refuse through the SAME convention as every other
+			// failed job — record the honest error (no status flip:
+			// finalizeJob owns the terminal flip after delivery), then steer
+			// the kind's failure shape through finishJob so the wake
+			// pipeline resumes the lesson and the teacher reads the refusal
+			// instead of waiting forever on a job it already dispatched.
 			const tier = ROLE_SLOT[KIND_ROLE[job.kind]];
 			const envelope = modelsNotConfigured([tier]);
+			const reason = `${envelope.error} (missing: ${tier})`;
 			console.info(`[job ${jobId}] refused — ${JSON.stringify(envelope)}`);
-			jobStore.updateJob(jobId, {
-				status: "error",
-				error: `${envelope.error} (missing: ${tier})`,
-				activity: "failed",
-			});
+			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
+			const resolved = resolveInput(job, input) as
+				| ResearchToolInput
+				| DemoToolInput
+				| VisualToolInput
+				| PdfToolInput
+				| undefined;
+			const pdf = resolved as PdfToolInput | undefined;
+			const failure: ResearchResult | DemoResult | VisualResult | PdfResult =
+				job.kind === "research"
+					? { brief: `Research failed: ${reason}`, sources: [] }
+					: job.kind === "demo"
+						? {
+								title: typeof (resolved as DemoToolInput | undefined)?.title === "string" && (resolved as DemoToolInput).title.trim() ? (resolved as DemoToolInput).title : "Interactive demo",
+								html: "",
+								tested: true,
+								notes: `FAILED: ${reason}`,
+							}
+						: job.kind === "visual"
+							? { svg: "", notes: `FAILED: ${reason}` }
+							: {
+									path: typeof pdf?.path === "string" ? pdf.path : "",
+									question: typeof pdf?.question === "string" ? pdf.question : "",
+									brief: `PDF failed: ${reason}`,
+									pagesRead: [],
+									pagesConsulted: [],
+								};
+			await finishJob(jobId, failure);
 			return;
 		}
 		try {
