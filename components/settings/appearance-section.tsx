@@ -73,6 +73,13 @@ export function AppearanceSection({
 					ariaLabel="prose font size"
 					testid="input-prose-size"
 					onCommit={(v) => {
+						// Empty = factory default (owner, fix wave): omit the key so the record
+						// UNSETS and the field stays empty (absence, not null, is the
+						// unset for numbers). Number("") is 0, so the old clamp wrote 12.
+						if (v === "") {
+							onSectionChange({ ...appearance, proseFontSize: undefined });
+							return;
+						}
 						const n = Number(v);
 						if (!Number.isFinite(n)) return; // bad input: no write, factory stays
 						onSectionChange({ ...appearance, proseFontSize: Math.min(24, Math.max(12, Math.round(n))) });
@@ -94,6 +101,12 @@ export function AppearanceSection({
 					ariaLabel="heading weight"
 					testid="input-heading-weight"
 					onCommit={(v) => {
+						// Empty = factory default (owner, fix wave): Number("") is 0, so
+						// Absence is the unset representation — the old clamp wrote 100.
+						if (v === "") {
+							onSectionChange({ ...appearance, mdRendering: { ...md, headingWeight: undefined } });
+							return;
+						}
 						const n = Number(v);
 						if (!Number.isFinite(n)) return;
 						onSectionChange({

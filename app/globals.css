@@ -104,7 +104,6 @@
 	   code-block chrome + mermaid-error + demo-card all use them. */
 	--font-ui: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
 	--font-prose: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
-	--font-title: "lh-cmu", serif;
 	--font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, monospace;
 	--font-sans: var(--font-sans3), ui-sans-serif, system-ui, sans-serif;
 	/* The modular type ladder — each size carries its own line-height.
@@ -114,6 +113,12 @@
 	   legibility floor; quiet labels get their quiet from color +
 	   tracking, not a notch of size. Reading prose = the 16px rung via
 	   --lh-prose-size.) */
+	/* --font-title lives in the NON-inline @theme below: inline tokens get
+	   their literal values baked into the utilities (.font-title{font-family:
+	   lh-cmu,serif}), which made the appearance "session names in serif"
+	   toggle write a runtime --font-title no consumer ever read (owner, fix
+	   wave: toggle looked dead). Non-inline emits :root { --font-title: … }
+	   and the utility reads var(--font-title) — appearance overrides win. */
 	--text-xs: 11px;
 	--text-xs--line-height: 1.4;
 	--text-sm: 12.5px;
@@ -443,4 +448,11 @@ body {
 }
 .lh-electron .lh-closed-toggle {
 	margin-left: 92px;
+}
+
+/* --font-title deliberately NOT @theme inline (see comment above): the
+   session-name-serif toggle overrides this var at runtime, so the
+   .font-title utility must read it through var(), not carry a baked copy. */
+@theme {
+	--font-title: "lh-cmu", serif;
 }
