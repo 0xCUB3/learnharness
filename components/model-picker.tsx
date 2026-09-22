@@ -247,7 +247,11 @@ export function ModelControl() {
 				onClick={() => openMenu("model")}
 				aria-expanded={open === "model"}
 				title="Strong tier model (prober + teacher) — set app-wide"
-				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
+				// Chrome look (owner, fix wave round 3): matches the graph
+				// view's floating top-right buttons (import notes, gear,
+				// coverage) — blurred, fuller opacity, shadowed — so the
+				// graph no longer bleeds through these pills.
+				className="flex items-center gap-1.5 rounded-full border bg-card/85 px-2.5 py-1 shadow-lg backdrop-blur transition-colors hover:border-border hover:bg-muted"
 			>
 				<span className="text-card-foreground">{effectiveId ? prettyModel(effectiveId) : "—"}</span>
 				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
@@ -263,7 +267,11 @@ export function ModelControl() {
 				}}
 				aria-expanded={open === "thinking"}
 				title="Strong tier thinking level — set app-wide"
-				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
+				// Chrome look (owner, fix wave round 3): matches the graph
+				// view's floating top-right buttons (import notes, gear,
+				// coverage) — blurred, fuller opacity, shadowed — so the
+				// graph no longer bleeds through these pills.
+				className="flex items-center gap-1.5 rounded-full border bg-card/85 px-2.5 py-1 shadow-lg backdrop-blur transition-colors hover:border-border hover:bg-muted"
 			>
 				{/* Just the level — the button reads like the model button reads
 				   the model name (owner, stats-control round 1). */}

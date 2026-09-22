@@ -178,6 +178,16 @@ body {
 	line-height: var(--lh-prose-leading);
 }
 
+/* Session-name weight (owner, fix wave round 3): with the serif toggle
+   OFF, --font-title resolves to the prose font — Source Sans 3 is loaded
+   as a VARIABLE font, and without an explicit weight the titles render at
+   400, a whisper next to CMU's bold-only face. Request 900: the variable
+   font takes it, and CMU (a single 700 face) snaps to its nearest
+   available weight — the same rendering it already had. */
+.font-title {
+	font-weight: 900;
+}
+
 .lh-prose :where(strong, b) {
 	color: var(--lh-ink-strong);
 	font-weight: 700;

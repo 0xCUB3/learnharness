@@ -459,7 +459,9 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 				title={error ?? "Dictate into the composer"}
 				aria-label={error ? `Dictation failed: ${error}` : "Start dictation"}
 				data-testid="dictation-toggle"
-				className="flex h-7 w-full items-center justify-center gap-1.5 rounded-md border border-border/50 text-xs text-muted-foreground/70 transition-colors hover:border-border hover:text-muted-foreground"
+				// Same blurring as the floating chrome (owner, fix wave round 3),
+			// but lower opacity — the mic stays quieter than the model pills.
+			className="flex h-7 w-full items-center justify-center gap-1.5 rounded-md border border-border/50 bg-card/50 text-xs text-muted-foreground/70 shadow-lg backdrop-blur transition-colors hover:border-border hover:text-muted-foreground"
 			>
 				<MicIcon className="size-3.5" />
 				<span className="max-w-full truncate">{error ?? "Dictate"}</span>
