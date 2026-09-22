@@ -85,9 +85,10 @@ interface SegmentInfo {
 /** The GET /api/models response fields this section consumes. */
 interface ModelsBody {
 	models: ModelCatalogEntry[];
-	/** The three tiers' RESOLVED pins (override → factory) — the honest
-	 *  "what runs now" the Default rows and hints speak from. */
-	slots: Record<ModelSlotName, { model: { provider: string; id: string }; thinkingLevel?: string }>;
+	/** The three tiers' RESOLVED pins (BYOK: NULL per unset tier — no
+	 *  factory floor) — machinery only (the thinking list fallback); the
+	 *  rows' displays read the record override, never a phantom pin. */
+	slots: Record<ModelSlotName, { model: { provider: string; id: string }; thinkingLevel?: string } | null>;
 }
 
 /** Compose: one tool toggled, the rest of the section carried verbatim.

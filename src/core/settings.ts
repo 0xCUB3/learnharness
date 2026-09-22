@@ -91,6 +91,14 @@ export function modelsNotConfigured(missing: ModelSlotName[]): ModelsNotConfigur
 		missing,
 	};
 }
+
+/** The refusal error text (BYOK, 2026-09-22): job/turn surfaces compose the
+ *  record wording around this prefix; UI consumers detect refused work by
+ *  it (info tone, not scary-error) — the envelope's home module owns the
+ *  string so the writer and the matcher can never drift. */
+export function isModelsRefusal(error: string | undefined): boolean {
+	return !!error && error.startsWith(modelsNotConfigured([]).error);
+}
 /** The typed throw for in-process seams (extraction pipeline): callers
  *  catch it to skip honestly (trigger) or surface the 503 envelope
  *  (routes) instead of logging a failure. */

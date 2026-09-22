@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ActivityIcon, BookOpenIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
-import { CONTEXT_LIMITS, jobCost } from "@/src/core";
+import { CONTEXT_LIMITS, isModelsRefusal, jobCost } from "@/src/core";
 import { formatTokens, formatUsd } from "@/components/usage-format";
 
 /**
@@ -184,7 +184,10 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 			startedAt: Date.parse(job.createdAt) || 0,
 			cost: jobCost(job),
 			context,
-			activity: job.activity ?? "",
+			// BYOK (owner, 2026-09-22): a refusal is info, not failure —
+			// the honest line the runner left ("failed") reads as setup
+			// needed, matching the dispatch card's quiet tone.
+			activity: isModelsRefusal(job.error) ? "needs model setup" : (job.activity ?? ""),
 			model: usage?.model,
 			steps: usage?.steps,
 		};

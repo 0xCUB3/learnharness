@@ -50,6 +50,10 @@ const SLOT_ORDER: readonly ModelSlotName[] = ["strong", "cheap", "vision"];
 interface ModelsBody {
 	models: ModelCatalogEntry[];
 	providers: { id: string; keyPresent: boolean }[];
+	/** The three tiers' RESOLVED pins (BYOK: NULL per unset tier) — the
+	 *  PREFILL + "needed" marks (owner, 2026-09-22): pinned tiers open
+	 *  with their pick, unpinned tiers carry the mark. */
+	slots?: Record<ModelSlotName, { model: { provider: string; id: string } } | null>;
 }
 
 /** Pure: which stage the flow opens at — no keyed provider = keys first
@@ -59,6 +63,26 @@ export function setupStage(
 ): "keys" | "pickers" {
 	if (providers === null) return "keys"; // fetch failed → the honest fallback
 	return providers.some((p) => p.keyPresent) ? "pickers" : "keys";
+}
+
+/** Prefill (owner, BYOK wave 2026-09-22): each pinned tier opens with its
+ *  pick — matched in the FEDERATED catalog (a lapsed key's pin does not
+ *  prefill); unpinned tiers stay empty and carry the "needed" mark.
+ *  First-run = nothing pinned → all three empty + marked. Exported pure
+ *  for tests. */
+export function prefillFromSlots(
+	models: ModelCatalogEntry[],
+	slots: Record<ModelSlotName, { model: { provider: string; id: string } } | null> | undefined,
+): Partial<Record<ModelSlotName, ModelCatalogEntry>> {
+	const pre: Partial<Record<ModelSlotName, ModelCatalogEntry>> = {};
+	for (const slot of SLOT_ORDER) {
+		const pin = slots?.[slot];
+		const entry = pin?.model
+			? models.find((m) => m.provider === pin.model!.provider && m.id === pin.model!.id)
+			: undefined;
+		if (entry) pre[slot] = entry;
+	}
+	return pre;
 }
 
 export function SetupDialog({
@@ -98,6 +122,11 @@ export function SetupDialog({
 			.then((b: ModelsBody) => {
 				setBody(b);
 				setFailed(false);
+				// Prefill (owner, 2026-09-22): each pinned tier opens with its
+				// pick (matched in the FEDERATED catalog — a lapsed key's pin
+				// does not prefill); unpinned tiers stay empty and carry the
+				// "needed" mark. First-run = nothing pinned → all three marked.
+				setPicked(prefillFromSlots(b.models, b.slots));
 			})
 			.catch(() => setFailed(true));
 	}, [open]);
@@ -208,7 +237,17 @@ export function SetupDialog({
 								slot === "vision" ? body?.models.filter((m) => m.input.includes("image")) : body?.models;
 							return (
 								<div key={slot} data-testid={`setup-slot-${slot}`} className="flex flex-col gap-1.5">
-									<span className="font-ui text-sm text-foreground">{SLOT_META[slot].label}</span>
+									<span className="flex items-center gap-1.5">
+										<span className="font-ui text-sm text-foreground">{SLOT_META[slot].label}</span>
+										{!body?.slots?.[slot]?.model && !picked[slot] && (
+											<span
+												data-testid={`setup-needed-${slot}`}
+												className="rounded-sm border border-border px-1 py-0.5 text-[10px] font-normal tracking-wide text-muted-foreground"
+											>
+												needed
+											</span>
+										)}
+									</span>
 									<span className="text-xs text-muted-foreground/70">{SLOT_META[slot].roster}</span>
 									<div ref={openSlot === slot ? triggerRef : undefined} className="relative">
 										<button

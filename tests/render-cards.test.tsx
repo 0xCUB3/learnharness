@@ -18,6 +18,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { QuestionDock } from "../components/question-dock.tsx";
 import { ProbeDoneCard } from "../components/artifacts/probe-done-card.tsx";
+import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
+import { JobsContext } from "../components/jobs-context.ts";
+import { ChatActionsContext } from "../components/chat.tsx";
+import type { JobRecord } from "../src/core/contracts.ts";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 
@@ -62,6 +66,54 @@ function renderDock(props: { toolName: "quiz" | "ask_user_question"; toolCallId:
 		<QuestionDock {...props} expanded={true} onExpand={() => {}} onSubmit={props.onSubmit ?? (() => {})} />,
 	);
 }
+
+describe("DispatchCard — the BYOK refusal tone (owner, 2026-09-22)", () => {
+	const job = (over: Partial<JobRecord>): JobRecord => ({
+		id: "j1",
+		kind: "research",
+		chatId: "c1",
+		toolCallId: "t1",
+		status: "error",
+		activity: "",
+		createdAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+		...over,
+	});
+	const inJobs = (jobs: JobRecord[]) => (
+		<JobsContext.Provider value={jobs}>
+			<ChatActionsContext.Provider
+				value={{ chatId: "c1", syncFromServer: async () => {}, sendText: () => {}, openSetup: () => {} }}
+			>
+				<DispatchCard toolCallId="t1" kind="research" />
+			</ChatActionsContext.Provider>
+		</JobsContext.Provider>
+	);
+
+	it("a models-refused job is INFO: quiet card, 'needs model setup', deep-link to the dialog", () => {
+		const html = renderToStaticMarkup(
+			inJobs([job({ error: "No model configured — set up your models first (missing: cheap)" })]),
+		);
+		assert.ok(html.includes('data-testid="dispatch-refused"'));
+		assert.ok(html.includes("needs model setup"));
+		assert.ok(html.includes('data-testid="dispatch-setup-link"'));
+		assert.ok(html.includes("Set up models"));
+		assert.ok(!html.includes("failed"));
+		assert.ok(!html.includes("text-red-500"));
+	});
+
+	it("a real failure keeps the honest red failure", () => {
+		const html = renderToStaticMarkup(inJobs([job({ error: "FAILED: headless crashed" })]));
+		assert.ok(html.includes('data-testid="dispatch-settled"'));
+		assert.ok(html.includes("failed"));
+		assert.ok(html.includes("text-red-500"));
+		assert.ok(!html.includes("dispatch-refused"));
+	});
+
+	it("a delivered job reads delivered, untouched by the wave", () => {
+		const html = renderToStaticMarkup(inJobs([job({ status: "done", error: undefined })]));
+		assert.ok(html.includes("delivered"));
+	});
+});
 
 describe("render smoke tests", () => {
 	it("QuizCard renders question, options, and the automatic 'I don't know'", () => {

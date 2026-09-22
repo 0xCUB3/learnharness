@@ -65,6 +65,20 @@ describe("activity dock pure layer", () => {
 		assert.equal(absent.cost, null);
 	});
 
+	it("a models-refused job reads as info — 'needs model setup', not 'failed' (BYOK, 2026-09-22)", () => {
+		const refused = job({
+			status: "error",
+			activity: "failed",
+			error: "No model configured — set up your models first (missing: vision)",
+		});
+		const blob = toBlobs({ jobs: [refused], extractions: [] })[0]!;
+		assert.equal(blob.activity, "needs model setup");
+		// A real failure keeps the runner's honest wording.
+		const crashed = job({ status: "error", activity: "failed", error: "FAILED: headless crashed" });
+		const real = toBlobs({ jobs: [crashed], extractions: [] })[0]!;
+		assert.equal(real.activity, "failed");
+	});
+
 	it("context line = LAST step's tokens vs the model limit, never a cumulative sum", () => {
 		const base = {
 			model: "openrouter:z-ai/glm-5.3-flash",

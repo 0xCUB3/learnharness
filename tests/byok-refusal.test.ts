@@ -1,0 +1,99 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { parseModelsRefusal } from "../components/chat.tsx";
+import { prefillFromSlots, setupStage } from "../components/setup-dialog.tsx";
+import { isModelsRefusal, modelsNotConfigured } from "../src/core/settings.ts";
+import type { ModelCatalogEntry, ModelSlotName } from "../src/core/index.ts";
+
+/**
+ * The BYOK universal gate rendered honestly (owner, 2026-09-22): the server
+ * refuses ALL turns with 503 {error, code: "models_not_configured", missing}
+ * when a slot tier is unset. These pin the client's pure seams: the refusal
+ * detector (the transport throws the 503 body verbatim as the error text),
+ * the job-record refusal matcher, and the SetupDialog's prefill.
+ */
+
+const REFUSAL = JSON.stringify(modelsNotConfigured(["strong"]));
+
+describe("parseModelsRefusal — the send refusal detector", () => {
+	it("reads the missing tiers from the envelope text", () => {
+		assert.deepEqual(parseModelsRefusal(REFUSAL), ["strong"]);
+		assert.deepEqual(parseModelsRefusal(JSON.stringify(modelsNotConfigured(["strong", "vision"]))), [
+			"strong",
+			"vision",
+		]);
+	});
+
+	it("anything else is a real error — null, the honest banner stays", () => {
+		assert.equal(parseModelsRefusal(undefined), null);
+		assert.equal(parseModelsRefusal("Something went wrong"), null); // not JSON
+		assert.equal(parseModelsRefusal('{"error":"A turn is already running"}'), null); // JSON, wrong code
+		assert.equal(parseModelsRefusal('{"code":"models_not_configured","missing":"strong"}'), null); // missing not an array
+		assert.equal(parseModelsRefusal('{"code":"models_not_configured","missing":[42]}'), null); // tiers are strings
+	});
+});
+
+describe("isModelsRefusal — the job-record matcher", () => {
+	it("matches the runner's composed wording, not real failures", () => {
+		assert.equal(isModelsRefusal(`${modelsNotConfigured(["vision"]).error} (missing: vision)`), true);
+		assert.equal(isModelsRefusal(modelsNotConfigured(["cheap"]).error), true);
+		assert.equal(isModelsRefusal(undefined), false);
+		assert.equal(isModelsRefusal("FAILED: headless crashed"), false);
+	});
+});
+
+describe("prefillFromSlots — the SetupDialog prefill (BYOK wave)", () => {
+	const entry = (id: string, provider: string): ModelCatalogEntry => ({
+		id,
+		name: id,
+		provider,
+		reasoning: false,
+		input: ["text"],
+		supportedLevels: ["low"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 8192,
+		maxTokens: 1024,
+	});
+	const catalog = [entry("glm-5.3-flash", "z-ai"), entry("qwen3.8-flash", "qwen")];
+	const pins = (strong: boolean, vision: boolean) => ({
+		strong: strong ? { model: { provider: "z-ai", id: "glm-5.3-flash" } } : null,
+		cheap: null,
+		vision: vision ? { model: { provider: "qwen", id: "qwen3.8-flash" } } : null,
+	});
+
+	it("prefills exactly the pinned tiers, matched by provider AND id", () => {
+		const pre = prefillFromSlots(catalog, pins(true, true));
+		assert.equal(pre.strong?.id, "glm-5.3-flash");
+		assert.equal(pre.vision?.id, "qwen3.8-flash");
+		assert.equal(pre.cheap, undefined);
+	});
+
+	it("nothing pinned (first-run) → nothing prefilled — all three marked needed", () => {
+		const pre = prefillFromSlots(catalog, pins(false, false));
+		assert.deepEqual(pre, {});
+	});
+
+	it("a pin whose model left the federated catalog does not prefill (lapsed key)", () => {
+		const pre = prefillFromSlots(catalog, { strong: { model: { provider: "gone", id: "vanished" } }, cheap: null, vision: null });
+		assert.deepEqual(pre, {});
+	});
+
+	it("provider collisions never cross-pollute (same id, different provider)", () => {
+		const both = [entry("shared-id", "openai"), entry("shared-id", "openrouter")];
+		const pre = prefillFromSlots(both, { strong: { model: { provider: "openrouter", id: "shared-id" } }, cheap: null, vision: null });
+		assert.equal(pre.strong?.provider, "openrouter");
+	});
+
+	it("absent slots payload (older shape) prefills nothing", () => {
+		const pre = prefillFromSlots(catalog, undefined);
+		assert.deepEqual(pre, {});
+	});
+});
+
+describe("setupStage — unchanged by the BYOK wave", () => {
+	it("keys first (owner ordering), pickers when a provider is keyed", () => {
+		assert.equal(setupStage(null), "keys");
+		assert.equal(setupStage([{ id: "x", keyPresent: false }]), "keys");
+		assert.equal(setupStage([{ id: "x", keyPresent: true }]), "pickers");
+	});
+});

@@ -4,6 +4,8 @@ import { createContext, Fragment, useCallback, useEffect, useLayoutEffect, useMe
 import { useChat } from "@ai-sdk/react";
 import { lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { createChatTransport } from "@/components/chat-transport";
+import { SetupDialog } from "@/components/setup-dialog";
+import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
 	Conversation,
@@ -24,7 +26,7 @@ import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { GraphContextMarker } from "@/components/graph-context-marker";
 import { useActivity } from "@/components/activity-dock";
-import { mergeAdopted, type ChatSettings } from "@/src/core";
+import { mergeAdopted, type ChatSettings, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
@@ -78,7 +80,29 @@ export const ChatActionsContext = createContext<{
 	syncFromServer: () => Promise<void>;
 	/** Send a user message into the session (demo error-fix loop, W6). */
 	sendText: (text: string) => void;
+	/** Opens the model setup dialog (BYOK, 2026-09-22): refused job cards
+	 *  deep-link into the same SetupDialog the send interception uses. */
+	openSetup: () => void;
 } | null>(null);
+
+/** The BYOK refusal envelope from the transport's error text: the
+ *  DefaultChatTransport throws the 503 body VERBATIM as the error message,
+ *  so the machine-readable {code, missing} shape survives to here. Real
+ *  errors (any other text) read as null and keep the honest banner.
+ *  Exported pure for tests. */
+export function parseModelsRefusal(message: string | undefined): ModelSlotName[] | null {
+	if (!message) return null;
+	try {
+		const body = JSON.parse(message) as { code?: unknown; missing?: unknown };
+		if (body.code === "models_not_configured" && Array.isArray(body.missing)
+			&& body.missing.every((s) => typeof s === "string")) {
+			return body.missing as ModelSlotName[];
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
 
 /** useLayoutEffect that is silent during SSR (client components still render on the server in Next). */
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
@@ -118,6 +142,7 @@ export function Chat({
 	initialMessages,
 	initialPrompt,
 	initiallyInFlight,
+	initialConfigured = false,
 }: {
 	chatId: string;
 	title: string;
@@ -126,8 +151,12 @@ export function Chat({
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
 	initiallyInFlight?: boolean;
+	/** slotsConfigured(server record) — the persistent setup CTA keys on
+	 *  it (BYOK, owner 2026-09-22). The server gate stays the truth; this
+	 *  only decides whether the pill rides the composer. */
+	initialConfigured?: boolean;
 }) {
-	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop } =
+	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop, clearError } =
 		useChat<TeacherUIMessage>({
 			id: chatId,
 			messages: initialMessages,
@@ -267,6 +296,55 @@ export function Chat({
 	const streamingActivity = !pending ? streamingToolActivity(messages) : null;
 
 	const [text, setText] = useState("");
+	// The BYOK setup flow (owner, 2026-09-22): the persistent CTA and the
+	// refusal interception share one SetupDialog mount. `configured` is
+	// seeded server-side (slotsConfigured on the record) and flips on Save.
+	const [configured, setConfigured] = useState(initialConfigured);
+	const [setupOpen, setSetupOpen] = useState(false);
+	const { open: openSettings } = useSettingsDialog();
+	/** The last explicitly-sent draft (composer send, verdict note): the
+	 *  refusal flow restores it into the composer and Save replays it.
+	 *  Auto-continuations (probe answers) never set it — their refusal
+	 *  opens the dialog with no replay. */
+	const draftRef = useRef<string | null>(null);
+
+	// THE BYOK REFUSAL (owner, 2026-09-22): a send that lands the server's
+	// 503 models_not_configured envelope renders as the SETUP FLOW, never
+	// the error banner. The gate refuses BEFORE the write-ahead persist,
+	// so the server record is the truth minus the refused send — the
+	// optimistic message is an orphan that goes HOME: refetch the record,
+	// drop the orphan, put the draft back in the composer, open the
+	// dialog (the prefilled tiers carry their picks, the unpinned ones the
+	// "needed" marks). Esc keeps the draft; Save replays it.
+	useEffect(() => {
+		if (!error) return;
+		const missing = parseModelsRefusal(error.message);
+		if (!missing) return; // a real error keeps the honest banner
+		// ORDER MATTERS: clearError() flips this effect's own dep (`error`)
+		// and would cancel the in-flight work below — so the banner dismiss,
+		// the draft restore, and the dialog open all land TOGETHER after the
+		// record refetch (the honest truth minus the refused send).
+		let cancelled = false;
+		void (async () => {
+			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}`);
+			if (!cancelled && res.ok) {
+				const record = (await res.json().catch(() => null)) as { messages?: TeacherUIMessage[] } | null;
+				if (Array.isArray(record?.messages)) setMessages(record.messages);
+			}
+			if (cancelled) return;
+			if (draftRef.current !== null) {
+				setText(draftRef.current);
+				draftRef.current = null;
+			}
+			clearError();
+			setSetupOpen(true);
+		})();
+		return () => {
+			cancelled = true;
+		};
+		// (setMessages/clearError are stable per useChat instance — the
+		//  dep pair [error, chatId] is what the flow actually keys on.)
+	}, [error, chatId]);
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of
 	// the current text (the page owns the separator, dictate-flush style);
 	// interims ghost in the stats bar's middle slot next to the meter.
@@ -397,6 +475,7 @@ export function Chat({
 	const sendVerdict = useCallback(
 		(accepted: boolean) => {
 			const note = text.trim();
+			if (note) draftRef.current = note; // refusal flow: the note replays as text
 			setText("");
 			// TWO REAL MESSAGES, ONE TURN (the custom-message scheme, user-decided
 			// 2026-09-12): a typed note is the learner's own user message, and the
@@ -709,12 +788,20 @@ export function Chat({
 	const onSend = () => {
 		const t = text.trim();
 		if (!t || busy || pending) return;
+		draftRef.current = t; // the refusal flow's preserve-and-replay seam
 		setText("");
 		void sendMessage({ text: t });
 	};
 
 	return (
-		<ChatActionsContext.Provider value={{ chatId, syncFromServer, sendText: (t: string) => void sendMessage({ text: t }) }}>
+		<ChatActionsContext.Provider
+			value={{
+				chatId,
+				syncFromServer,
+				sendText: (t: string) => void sendMessage({ text: t }),
+				openSetup: () => setSetupOpen(true),
+			}}
+		>
 		<SessionMermaidContext.Provider value={{ openMermaid: setMermaidFocus }}>
 		<JobsContext.Provider value={jobs}>
 		{/* The session surface: the transcript column (header + scroller) and
@@ -967,6 +1054,20 @@ export function Chat({
 					onReserve={setDockReserve}
 					dictationSlot={<DictationBar dictation={dictation} />}
 					dictationCancel={dictation.cancel}
+					setupCta={
+						!configured && (
+							<div className="pointer-events-auto mb-2 flex justify-center">
+								<button
+									type="button"
+									data-testid="setup-cta"
+									onClick={() => setSetupOpen(true)}
+									className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+								>
+									Set up your models
+								</button>
+							</div>
+						)
+					}
 					composer={
 						<Composer
 							// Stop applies only to a LOCAL stream: a server-side turn has no
@@ -1013,6 +1114,31 @@ export function Chat({
 		</div>
 		</JobsContext.Provider>
 		</SessionMermaidContext.Provider>
+		{/* The BYOK setup flow (owner, 2026-09-22): one mount serves the
+		    persistent CTA, the refused-send interception, and the job cards'
+		    deep-link. Save replays the preserved draft automatically; Esc
+		    keeps it in the composer (the dialog is closable by design — the
+		    gate is the server, not this modal). */}
+		<SetupDialog
+			open={setupOpen}
+			onClose={() => setSetupOpen(false)}
+			onDone={() => {
+				setSetupOpen(false);
+				setConfigured(true);
+				// Draft-preserving replay (owner ruling): the draft went home
+				// into the composer at refusal time; Save sends it onward.
+				const t = text.trim();
+				if (t) {
+					setText("");
+					draftRef.current = t;
+					void sendMessage({ text: t });
+				}
+			}}
+			onOpenKeys={() => {
+				setSetupOpen(false);
+				openSettings("keys");
+			}}
+		/>
 		</ChatActionsContext.Provider>
 	);
 }
@@ -1053,6 +1179,7 @@ function DockOverlay({
 	onOpenPlan,
 	dictationSlot,
 	dictationCancel,
+	setupCta,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
@@ -1079,6 +1206,9 @@ function DockOverlay({
 	/** Esc in a pending question's field stops dictation (the strip is the
 	 *  stats bar's; the stop belongs to the page-owned hook, threaded down). */
 	dictationCancel?: () => void;
+	/** The persistent setup CTA (BYOK, owner 2026-09-22): the same pill
+	 *  home and /chat/new carry, above the composer while slots are unset. */
+	setupCta?: React.ReactNode;
 }) {
 	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
 	// Teach-phase mount (session reload with a pending check): the dock starts
@@ -1317,6 +1447,7 @@ function DockOverlay({
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 			<div ref={blockRef} className="relative bg-background pb-5">
 				<div className={DOCK}>
+					{setupCta}
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
 							{pending ? (

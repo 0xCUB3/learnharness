@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { Chat } from "@/components/chat";
-import type { TeacherUIMessage } from "@/src/core";
-import { getChat, isTurnRunning } from "@/src/server";
+import { slotsConfigured, type TeacherUIMessage } from "@/src/core";
+import { getChat, isTurnRunning, readSettingsRecord } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -15,12 +15,17 @@ export default async function ChatPage({
 	const [{ id }, { prompt }] = await Promise.all([params, searchParams]);
 	const chat = getChat(id);
 	if (!chat) notFound();
+	// The persistent setup CTA's seed (BYOK, owner 2026-09-22): slotsConfigured
+	// over the settings record, server-read — the same gate home/new read. The
+	// server's 503 stays the truth; this only decides whether the pill rides.
+	const record = readSettingsRecord();
 	return (
 		<Chat
 			key={chat.id}
 			chatId={chat.id}
 			title={chat.title}
 			initialMessages={chat.messages as TeacherUIMessage[]}
+			initialConfigured={slotsConfigured(record?.models)}
 			initialPrompt={prompt}
 			// A teacher turn that outlived its client: the remounted view must
 			// attach (busy shimmer + poll), never resurrect the stale record.
