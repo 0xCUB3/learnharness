@@ -25,6 +25,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
+import { effectiveSettings } from "../src/server/stores.ts";
 import { isTurnRunning } from "../src/server/turn-liveness.ts";
 import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -98,6 +99,17 @@ function post(chatId: string, messages: unknown[]): Request {
 	});
 }
 
+
+/** BYOK turn gate (owner, 2026-09-22): no factory floor — a chat needs a
+ *  conversation model before any turn streams. The scripted tests give
+ *  each chat a per-chat pin exactly like the setup flow does in
+ *  production (the injected faux engine still runs the loop). */
+function createConfiguredChat(title: string) {
+	const chat = chatStore.createChat(title);
+	chatStore.saveSettings(chat.id, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } });
+	return chat;
+}
+
 const createdChats: string[] = [];
 after(() => {
 	for (const id of createdChats) {
@@ -112,7 +124,7 @@ after(() => {
 describe("teacher chat flow (scripted model)", () => {
 	it("quiz tool call persists as a pending part; the answer continues the lesson", async () => {
 		const { engine, calls } = scriptedTeacher(defaultLesson);
-		const chat = chatStore.createChat("Test: solar system");
+		const chat = createConfiguredChat("Test: solar system");
 		createdChats.push(chat.id);
 
 		// ── Turn 1: learner opens with a topic; teacher probes with a quiz ──
@@ -199,7 +211,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// tool-input-start chunk. If a transport change ever stopped emitting
 		// it, the indicator would silently die — pin the protocol.
 		const { engine } = scriptedTeacher(defaultLesson);
-		const chat = chatStore.createChat("Test: protocol pin");
+		const chat = createConfiguredChat("Test: protocol pin");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
 		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
@@ -212,7 +224,7 @@ describe("teacher chat flow (scripted model)", () => {
 
 	it("persists even when the stream is aborted (resume keeps partial state)", async () => {
 		const { engine } = scriptedTeacher(defaultLesson);
-		const chat = chatStore.createChat("Test: abort");
+		const chat = createConfiguredChat("Test: abort");
 		createdChats.push(chat.id);
 
 		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] }]);
@@ -260,7 +272,7 @@ describe("teacher chat flow (scripted model)", () => {
 		];
 		const { engine, calls } = scriptedTeacher(steps);
 
-		const chat = chatStore.createChat("Test: bad quiz retry");
+		const chat = createConfiguredChat("Test: bad quiz retry");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
 		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
@@ -332,7 +344,7 @@ describe("teacher chat flow (scripted model)", () => {
 		];
 		const { engine } = scriptedTeacher(() => steps);
 
-		const chat = chatStore.createChat("Test: string options");
+		const chat = createConfiguredChat("Test: string options");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
 		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
@@ -374,7 +386,7 @@ describe("teacher chat flow (scripted model)", () => {
 			),
 		]);
 
-		const chat = chatStore.createChat("Test: parallel quizzes");
+		const chat = createConfiguredChat("Test: parallel quizzes");
 		createdChats.push(chat.id);
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me twice" }] };
 		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
@@ -441,7 +453,7 @@ describe("chat store", () => {
 describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 	it("one turn per chat: a concurrent request is 409'd; the next one after finish is accepted", async () => {
 		const { engine } = scriptedTeacher(defaultLesson);
-		const chat = chatStore.createChat("Test: turn guard");
+		const chat = createConfiguredChat("Test: turn guard");
 		createdChats.push(chat.id);
 
 		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
@@ -462,7 +474,7 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 
 	it("write-ahead: the learner's answer is durable BEFORE the turn finishes", async () => {
 		const { engine } = scriptedTeacher(defaultLesson);
-		const chat = chatStore.createChat("Test: write-ahead");
+		const chat = createConfiguredChat("Test: write-ahead");
 		createdChats.push(chat.id);
 
 		// Turn 1: the teacher asks the quiz (pending part in the record).
@@ -511,7 +523,7 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 	});
 
 	it("a turn that fails to start (malformed messages) clears the registry — no lockout", async () => {
-		const chat = chatStore.createChat("Test: turn failed to start");
+		const chat = createConfiguredChat("Test: turn failed to start");
 		createdChats.push(chat.id);
 		// A text part with no text: fails message validation before the stream
 		// exists — the path where no onFinish will ever run.
@@ -555,5 +567,48 @@ describe("renameChat (the header's click-to-edit title)", () => {
 		createdChats.push(chat.id);
 		const renamed = chatStore.renameChat(chat.id, "   ");
 		assert.equal(renamed.title, "Untitled session");
+	});
+});
+
+describe("the BYOK turn gate (no factory floor — owner, 2026-09-22)", () => {
+	it("a chat with no model refuses the turn with the 503 envelope — nothing lingers", async () => {
+		const chat = chatStore.createChat("Test: unconfigured chat");
+		createdChats.push(chat.id);
+
+		// The record's strong slot belongs to settings-store.test.ts (the
+		// one-fs-owner policy) — READ the resolved truth, never write it.
+		// Refusal holds when the chain is empty; a record-carried strong
+		// slot legitimately opens the gate (the chain is honest both ways).
+		const expectRefusal = effectiveSettings().models.strong === null;
+
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
+		const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
+
+		if (expectRefusal) {
+			assert.equal(res.status, 503, "the universal turn gate refuses before beginTurn");
+			const body = (await res.json()) as { error: string; code: string; missing: string[] };
+			assert.equal(body.code, "models_not_configured");
+			assert.deepEqual(body.missing, ["strong"]);
+			assert.match(body.error, /No model configured/);
+		} else {
+			assert.equal(res.status, 200, "the record's strong slot satisfies the conversation chain");
+			await drain(res);
+		}
+
+		// Either way: no phantom liveness, nothing durable from a refused turn.
+		if (expectRefusal) {
+			assert.equal(isTurnRunning(chat.id), false, "the refusal never registers a live turn");
+			const saved = chatStore.getChat(chat.id)!;
+			assert.equal(saved.messages.length, 0, "no write-ahead persist before the gate");
+		}
+	});
+
+	it("a per-chat model alone opens the gate (the setup flow's exact write)", async () => {
+		const chat = createConfiguredChat("Test: per-chat pin only");
+		createdChats.push(chat.id);
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
+		const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
+		assert.equal(res.status, 200, "chat.settings.model satisfies the chain without any record slot");
+		await drain(res);
 	});
 });

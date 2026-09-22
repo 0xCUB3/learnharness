@@ -754,6 +754,9 @@ describe("demo/visual job runners", () => {
 	it("dispatch through a teacher turn: the call acks mid-turn and the runner completes in the background", async () => {
 		const chat = chatStore.createChat("Test: demo spawn dispatch");
 		createdChats.push(chat.id);
+		// BYOK turn gate (owner, 2026-09-22): the scripted chat needs a
+		// conversation model — the per-chat pin, exactly like the setup flow.
+		chatStore.saveSettings(chat.id, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } });
 
 		// A teacher that calls demo on turn 1, then continues in the SAME turn.
 		const teacher = scriptedModel([

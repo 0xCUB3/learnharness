@@ -14,7 +14,7 @@
  * /api/graph/status, as with session runs.
  */
 import { extraction } from "@/src/server";
-import type { EmissionStats } from "@/src/core";
+import { ModelsNotConfiguredError, type EmissionStats } from "@/src/core";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +23,10 @@ interface ImportResult {
 	ok: boolean;
 	stats?: EmissionStats;
 	error?: string;
+	/** The machine discriminator when ok:false is the BYOK refusal (owner,
+	 *  2026-09-22) — the client can open the setup flow off it. */
+	code?: "models_not_configured";
+	missing?: string[];
 }
 
 export async function POST(request: Request) {
@@ -43,6 +47,16 @@ export async function POST(request: Request) {
 				const stats = await extraction.importNotes({ filePath: file.name, text });
 				results.push({ filePath: file.name, ok: true, stats });
 			} catch (err) {
+				if (err instanceof ModelsNotConfiguredError) {
+					results.push({
+						filePath: file.name,
+						ok: false,
+						error: err.envelope.error,
+						code: "models_not_configured",
+						missing: err.envelope.missing,
+					});
+					continue;
+				}
 				results.push({ filePath: file.name, ok: false, error: err instanceof Error ? err.message : String(err) });
 			}
 		}

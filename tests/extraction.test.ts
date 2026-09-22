@@ -41,6 +41,7 @@ import type {
 } from "../src/core/contracts.ts";
 import type { GraphStore } from "../src/core/ports.ts";
 import { abortExtraction, createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
+import { ModelsNotConfiguredError } from "../src/core/settings.ts";
 import { batchTag, coverageOf, coverageSlots } from "../src/core/coverage.ts";
 import { clusterNamingSettled, refreshClusterLabels } from "../src/agent/subagents/cluster-namer.ts";
 import { semanticClusters } from "../src/core/semantic-clusters.ts";
@@ -394,12 +395,53 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		assert.equal(covered.length, record.messages.length);
 		assert.ok(covered.every((c) => c.chatId === chatId && c.fp.length === 64 && c.tokens > 0));
 		assert.equal(ledgers.readCheckpoints().length, 0, "the chat path writes coverage, not the legacy checkpoint");
+
 		assert.equal(
 			coverageOf(record.messages as UIMessage[], covered, chatId).uncoveredCount,
 			0,
 			"every message is now covered",
 		);
 	});
+
+	it("BYOK refusal: no stage engines anywhere → the run throws honestly before any stage (owner, 2026-09-22)", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		// No direct engines AND no engineFor — the chain came up empty.
+		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers, embedder: fakeEmbedder });
+		await assert.rejects(pipeline.runExtraction(chatId), (err: unknown) => {
+			assert.ok(err instanceof ModelsNotConfiguredError);
+			assert.deepEqual(err.envelope.missing, ["cheap"]); // extractor + auditor are the cheap tier
+			assert.equal(err.envelope.code, "models_not_configured");
+			return true;
+		});
+		// nothing ran: no phase residue, no usage, no coverage writes
+		assert.equal(ledgers.readCoverage().length, 0);
+	});
+
+	it("a labeler-less run merges fine and SKIPS cluster naming honestly (BYOK, 2026-09-22)", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		// Identity-pass verdict: p1 becomes a new node, p2 dropped (no links).
+		const verdict: AuditResult = {
+			propositions: [{ ...FINDINGS.propositions[0]! }],
+			edges: [],
+			attribution: { quiz: { "probe-1": "p1" } },
+			dropped: [{ ref: "p2", reason: "evidence not found" }],
+		};
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			extractor: submitModel("submit_findings", FINDINGS),
+			auditor: submitModel("submit_review", verdict),
+			// NO labeler: the cluster-naming garnish skips (console line),
+			// the merge itself is unaffected.
+		});
+		const stats = await pipeline.runExtraction(chatId);
+		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 3 });
+	});
+
+
 
 	it("engineFor fills the stages (model slots wave): the chain replaces config pins", async () => {
 		const { chatId } = fixtureChat();

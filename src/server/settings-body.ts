@@ -309,11 +309,14 @@ export function parseModelsSettingsBody(body: unknown): SettingsBodyResult<Model
 		}
 		const parsed = parseRoleOverride(raw[key], key);
 		if (!parsed.ok) return { ok: false, error: parsed.error };
-		if (Object.keys(parsed.override).length) {
-			settings[key as (typeof MODEL_SLOTS)[number]] = parsed.override;
-		} else {
-			return { ok: false, error: `slot "${key}" must set model or thinkingLevel (absent slot = unset)` };
+		// BYOK (owner, 2026-09-22): a slot IS a model choice — no factory
+		// floor exists, so a thinkingLevel alone can never run; every slot
+		// write must carry the model (the level is an optional rider). An
+		// absent slot key clears the tier (replace-whole section).
+		if (!parsed.override.model) {
+			return { ok: false, error: `slot "${key}" must set a model (thinkingLevel alone cannot run — absent slot = unset)` };
 		}
+		settings[key as (typeof MODEL_SLOTS)[number]] = parsed.override;
 	}
 	return { ok: true, settings };
 }

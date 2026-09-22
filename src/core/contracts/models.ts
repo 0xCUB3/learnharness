@@ -26,38 +26,46 @@ export interface ModelCatalogEntry {
 	maxTokens: number;
 }
 
-/** The conversation agents' config pin (config.ts MODELS prober/teacher —
- *  one controller, so one pin): what a chat without settings runs. */
+/** The conversation agents' resolved default (BYOK, owner 2026-09-22): the
+ *  chat's model override over the STRONG slot — one controller, so one
+ *  default. thinkingLevel is optional: unset resolves from the baked
+ *  DEFAULT_THINKING_ORDER at engine build. */
 export interface CatalogDefaults {
 	model: { provider: string; id: string };
-	thinkingLevel: ThinkingLevel;
+	thinkingLevel?: ThinkingLevel;
 }
 
-/** One background role's RESOLVED pin (settings interlude, 2026-09-19):
- *  the user's agent-models override falling back to the config.ts MODELS
- *  pin — what that role actually runs today. The settings UI shows each
- *  agent-role row's "Default: <this>" caption from it. */
+/** One background role's RESOLVED pin (BYOK, owner 2026-09-22): what that
+ *  role actually runs today — role override → tier slot → NOTHING. NULL
+ *  = the role's chain is empty (the per-need gates refuse its work); the
+ *  settings UI shows "not configured" from it. */
 export type RolePins = Record<
 	BackgroundModelRole,
-	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel }
+	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel } | null
 >;
 
-/** One slot tier's RESOLVED pin (model slots wave, 2026-09-20): the
- *  strong/cheap/vision tier's concrete model — slot override falling back
- *  to the factory rep pin. The settings UI captions each slot row with it
- *  and the picker pre-fills from it. */
-export type SlotPins = Record<ModelSlotName, { model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel }>;
+/** One slot tier's RESOLVED pin (BYOK, owner 2026-09-22): NULL = the tier
+ *  holds no model. The settings UI captions each slot row with it and the
+ *  picker pre-fills from it. */
+export type SlotPins = Record<
+	ModelSlotName,
+	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel } | null
+>;
 
 /** GET /api/models response. */
 export interface ModelCatalogResponse {
 	models: ModelCatalogEntry[];
-	defaults: CatalogDefaults;
+	/** The conversation agents' resolved default — NULL when the
+	 *  conversation chain is empty (no factory floor; the turn gate
+	 *  refuses with 503 models_not_configured). */
+	defaults: CatalogDefaults | null;
 	/** The six background roles' resolved pins (same resolution the agent
-	 *  factories use — src/server/stores.ts effectiveSettings). */
+	 *  factories use — src/server/stores.ts effectiveSettings); NULL per
+	 *  role = chain empty. */
 	rolePins: RolePins;
-	/** The three slot tiers' resolved pins (model slots wave, 2026-09-20):
-	 *  same resolution chain — role override → slot → factory pin — reported
-	 *  at tier granularity; effectiveSettings().models verbatim. */
+	/** The three slot tiers' resolved pins: role override → slot at tier
+	 *  granularity; effectiveSettings().models verbatim, NULL per unset
+	 *  tier. */
 	slots: SlotPins;
 	/** Providers with a PRESENT key, and which env var gates each — the
 	 *  model slots wave's federation surface (2026-09-20): the picker lists

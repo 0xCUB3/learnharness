@@ -39,63 +39,77 @@ import { BACKGROUND_MODEL_ROLES, type BackgroundModelRole, type ModelSlotName, t
 /** The picker's client-safe model entry (contract: core/contracts/models.ts). */
 export type ModelDto = ModelCatalogEntry;
 
-/** The conversation agents' resolved default pin (pure form — the record's
- *  chat section in, CatalogDefaults out; `catalogDefaults()` below is the
- *  fs wrapper). Absent fields (or no record — BYOK first boot) fall back
- *  to the config pin, exactly as before. */
-export function catalogDefaultsFor(chat: ChatSettings | undefined, strong: EffectiveSlot): CatalogDefaults {
+/** The conversation agents' resolved default (pure form — the record's chat
+ *  section + the strong slot in, CatalogDefaults out; `catalogDefaults()`
+ *  below is the fs wrapper). BYOK (owner, 2026-09-22): there is no factory
+ *  floor — when neither the chat section nor the strong slot names a
+ *  model, the default is NULL and the turn gate refuses with the 503
+ *  models_not_configured envelope. An unset thinkingLevel resolves from
+ *  DEFAULT_THINKING_ORDER at engine build (reported as absent here). */
+export function catalogDefaultsFor(
+	chat: ChatSettings | undefined,
+	strong: EffectiveSlot | null,
+): CatalogDefaults | null {
+	const model = chat?.model ?? (strong ? { provider: strong.provider, id: strong.id } : undefined);
+	if (!model) return null;
+	const level = chat?.thinkingLevel ?? strong?.thinkingLevel;
 	return {
-		model: chat?.model ?? { provider: strong.provider, id: strong.id },
-		thinkingLevel: chat?.thinkingLevel ?? strong.thinkingLevel,
+		model,
+		...(level !== undefined ? { thinkingLevel: level } : {}),
 	};
 }
 
-/** The conversation agents' config pin — what a settings-less chat runs.
- *  (settings-storage wave, 2026-09-19): the user's picked default rides in
- *  the settings record's `chat` section; the picker's defaults row shows
- *  it once chosen. */
-export function catalogDefaults(): CatalogDefaults {
+/** The conversation agents' resolved default — what a settings-less chat
+ *  runs. (settings-storage wave, 2026-09-19): the user's picked default
+ *  rides in the settings record's `chat` section; the picker's defaults
+ *  row shows it once chosen. */
+export function catalogDefaults(): CatalogDefaults | null {
 	return catalogDefaultsFor(settingsStore.readSettings()?.chat, effectiveSettings().models.strong);
 }
 
 /** Project the resolved per-role specs to the client DTO (pure — the
  *  settings UI's "Default: <actual pinned model>" caption reads this).
- *  thinkingLevel is always concrete in the resolved view; the contract
- *  keeps it optional so the UI tolerates a future role without one. */
-export function rolePinsFor(models: Record<BackgroundModelRole, EffectiveModelSpec>): RolePins {
+ *  BYOK (owner, 2026-09-22): an empty chain projects to NULL — the caption
+ *  honestly shows "not configured", never a phantom default. */
+export function rolePinsFor(
+	models: Record<BackgroundModelRole, EffectiveModelSpec | undefined>,
+): RolePins {
 	const pins = {} as RolePins;
 	for (const role of BACKGROUND_MODEL_ROLES) {
 		const spec = models[role];
-		pins[role] = {
-			model: { provider: spec.provider, id: spec.id },
-			thinkingLevel: spec.thinkingLevel,
-		};
+		pins[role] = spec
+			? {
+					model: { provider: spec.provider, id: spec.id },
+					...(spec.thinkingLevel !== undefined ? { thinkingLevel: spec.thinkingLevel } : {}),
+				}
+			: null;
 	}
 	return pins;
 }
 
-/** The six background roles' RESOLVED pins (settings interlude,
- *  2026-09-19): the user's agent-models override falling back to the
- *  config.ts MODELS pin — the same resolution the agent factories use
- *  (src/server/stores.ts effectiveSettings), so the caption can never
- *  drift from what actually runs. */
+/** The six background roles' RESOLVED pins: the user's agent-models
+ *  override → tier slot → nothing — the same resolution the agent wiring
+ *  uses (src/server/stores.ts effectiveSettings), so the caption can
+ *  never drift from what actually runs. */
 export function catalogRolePins(): RolePins {
 	return rolePinsFor(effectiveSettings().agent.models);
 }
 
-/** The three slot tiers' RESOLVED pins (model slots wave, 2026-09-20) —
- *  effectiveSettings().models verbatim: slot over factory rep pin, the
- *  same resolution the engine wiring uses, so the Models settings page's
- *  captions cannot drift from what actually runs. */
+/** The three slot tiers' RESOLVED pins — effectiveSettings().models
+ *  verbatim: the same resolution the engine wiring uses, so the Models
+ *  settings page's captions cannot drift from what actually runs. NULL
+ *  per tier that holds no model. */
 export function catalogSlots(): SlotPins {
 	const slots = effectiveSettings().models;
 	const pins = {} as SlotPins;
 	for (const name of ["strong", "cheap", "vision"] as const) {
-		const slot: EffectiveSlot = slots[name];
-		pins[name] = {
-			model: { provider: slot.provider, id: slot.id },
-			thinkingLevel: slot.thinkingLevel,
-		};
+		const slot: EffectiveSlot | null = slots[name];
+		pins[name] = slot
+			? {
+					model: { provider: slot.provider, id: slot.id },
+					...(slot.thinkingLevel !== undefined ? { thinkingLevel: slot.thinkingLevel } : {}),
+				}
+			: null;
 	}
 	return pins;
 }
@@ -183,11 +197,14 @@ export function validateChatSettings(settings: ChatSettings): SettingsValidation
 		}
 	}
 	if (settings.thinkingLevel !== undefined) {
-		// The conversation chain's fallback is the strong slot (model slots
-		// wave, 2026-09-20) — the model a settings-less chat would run.
+		// The conversation chain's fallback is the strong slot — the model
+		// a settings-less chat would run. BYOK (owner, 2026-09-22): with no
+		// model to check against (no chat.model, no strong slot), the level
+		// rides unchecked — it clamps against whatever the chain later holds.
 		const strong = effectiveSettings().models.strong;
-		const provider = settings.model?.provider ?? strong.provider;
-		const id = settings.model?.id ?? strong.id;
+		const provider = settings.model?.provider ?? strong?.provider;
+		const id = settings.model?.id ?? strong?.id;
+		if (!provider || !id) return { ok: true };
 		const model = piModels().getModel(provider, id);
 		if (!model) return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		const supported = getSupportedThinkingLevels(model);
@@ -202,9 +219,10 @@ export function validateChatSettings(settings: ChatSettings): SettingsValidation
 	return { ok: true };
 }
 /** Validate a models-section write (PUT /api/settings/models) against the
- *  catalog — the same gate the chat section gets. Model swaps must name a
- *  real provider+model; a thinkingLevel must be supported by the model the
- *  slot would resolve to (the slot's own model, else the factory rep pin).
+ *  catalog — the same gate the chat section gets. A slot must NAME a real
+ *  provider+model (owner, 2026-09-22: no factory floor exists, so a level
+ *  alone can never run — the parser rejects it, this gate re-checks the
+ *  model); a thinkingLevel must be supported by the slot's own model.
  *  keyPresent is NOT gated here (a stored pin for a provider whose key
  *  lapsed stays valid — it fails honestly at stream time, and the picker
  *  stops offering it). */
@@ -230,8 +248,14 @@ function validateSlotSpec(name: ModelSlotName, slot: { model?: { provider: strin
 		}
 	}
 	if (slot.thinkingLevel !== undefined) {
-		const provider = slot.model?.provider ?? effectiveSettings().models[name].provider;
-		const id = slot.model?.id ?? effectiveSettings().models[name].id;
+		// The write-side parser requires slot.model (owner, 2026-09-22 — a
+		// level-only slot can never run), so this fallback is tolerance for
+		// future callers; with no model to check against, accept (the
+		// engine build clamps whatever the chain later holds).
+		const resolved = effectiveSettings().models[name];
+		const provider = slot.model?.provider ?? resolved?.provider;
+		const id = slot.model?.id ?? resolved?.id;
+		if (!provider || !id) return { ok: true };
 		const model = piModels().getModel(provider, id);
 		if (!model) return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		const supported = getSupportedThinkingLevels(model);

@@ -4,6 +4,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { lhTool, toPiTools } from "../lh-tool.ts";
 import type { ModelRole } from "../../../config.ts";
+import { ModelsNotConfiguredError, ROLE_SLOT, type ModelSlotName } from "../../core/settings.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import type {
@@ -562,11 +563,12 @@ export interface ExtractionModels {
 	auditor?: PiEngine;
 	/** Test seam for the cluster namer (post-extraction garnish). */
 	labeler?: PiEngine;
-	/** Settings-resolved engine per role (model slots wave, 2026-09-20) —
-	 *  the same slot treatment the job runner got: the role-override →
-	 *  slot → factory-pin chain, read FRESH per stage call (a settings PUT
-	 *  between stages lands). Absent → config pins, unchanged. */
-	engineFor?: (role: ModelRole) => PiEngine;
+	/** Settings-resolved engine per role — the same slot treatment the
+	 *  job runner got, read FRESH per stage call (a settings PUT between
+	 *  stages lands). BYOK (owner, 2026-09-22): the chain (role override →
+	 *  slot → NOTHING) may end EMPTY → undefined; the front doors refuse
+	 *  with ModelsNotConfiguredError before any stage runs. */
+	engineFor?: (role: ModelRole) => PiEngine | undefined;
 }
 
 export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {
@@ -615,13 +617,24 @@ export function callUsage(usage: Usage): CallUsage {
 
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
 	const { chatStore, graphStore, embedder: embed } = deps;
-	// Stage-engine resolution (model slots wave, 2026-09-20): a direct test
-	// value wins; otherwise the engineFor chain (role override → slot →
-	// factory pin, resolved FRESH per stage call server-side) — the job
-	// runner's exact treatment, closing the flagged gap where extraction
-	// stayed config-pin-bound.
+	// Stage-engine resolution: a direct test value wins; otherwise the
+	// engineFor chain (role override → slot → nothing, resolved FRESH per
+	// stage call server-side) — the job runner's exact treatment. undefined
+	// = the BYOK chain came up empty; the front-door guards turn that into
+	// an honest refusal.
 	const stageEngine = (role: ModelRole, override?: PiEngine): PiEngine | undefined =>
 		override ?? deps.engineFor?.(role);
+	/** The per-need refusal guard: which slot tiers the pipeline's stages
+	 *  found unset (test values count as configured — they ARE engines). */
+	function refuseIfStagesUnconfigured(): void {
+		const missing = new Set<ModelSlotName>();
+		if (!stageEngine("extractor", deps.extractor)) missing.add(ROLE_SLOT.extractor);
+		if (!stageEngine("auditor", deps.auditor)) missing.add(ROLE_SLOT.auditor);
+		if (missing.size > 0) {
+			console.info(`[extraction] refused — no model configured for: ${[...missing].join(", ")}`);
+			throw new ModelsNotConfiguredError([...missing]);
+		}
+	}
 	// THE SHARED REGISTRIES (runs() above — globalThis): every pipeline
 	// instance (route entries in dev, tests) sees the same runs, the same
 	// single-flight guard. No module-level state left in this factory.
@@ -743,6 +756,10 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		try {
 			const record = chatStore.getChat(chatId);
 			if (!record) throw new Error(`Chat not found: ${chatId}`);
+			// BYOK per-need gate (owner, 2026-09-22): the write channel needs
+			// extractor + auditor engines; an empty chain refuses BEFORE any
+			// stage runs (typed — the trigger skips, routes surface 503).
+			refuseIfStagesUnconfigured();
 			const covered = coverageOf(record.messages as UIMessage[], graphStore.readCoverage(), chatId);
 			if (covered.uncovered.length === 0) {
 				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
@@ -811,11 +828,16 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			);
 			// Post-extraction garnish (DECIDED 2026-09-13): name new/changed
 			// clusters. Fire-and-forget — naming never fails the run.
-			refreshClusterLabels({
-				graphStore,
-				engine: stageEngine("labeler", deps.labeler),
-				signal: runningExtractions.get(chatId)?.controller.signal,
-			}).catch(() => {});
+			const labelerEngine = stageEngine("labeler", deps.labeler);
+			if (labelerEngine) {
+				refreshClusterLabels({
+					graphStore,
+					engine: labelerEngine,
+					signal: runningExtractions.get(chatId)?.controller.signal,
+				}).catch(() => {});
+			} else {
+				console.info(`[extraction ${chatId}] cluster naming skipped — no labeler model configured`);
+			}
 			return stats;
 		} catch (err) {
 			persistRunUsage(chatId, Math.round(performance.now() - t0), batchesDone > 0 ? total : undefined);
@@ -908,6 +930,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		inFlight.add(id);
 		const t0 = performance.now();
 		try {
+			// BYOK per-need gate (owner, 2026-09-22): same refusal as the chat
+			// front door — no extractor/auditor engines, no run.
+			refuseIfStagesUnconfigured();
 			console.info(`[extraction ${id}] notes pipeline start (${input.filePath})`);
 			setPhase(id, "extracting", "notes", input.filePath);
 			const findings = await notesExtract(input);
@@ -933,11 +958,16 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
 					`(${Math.round(performance.now() - t0)}ms total)`,
 			);
-			refreshClusterLabels({
-				graphStore,
-				engine: stageEngine("labeler", deps.labeler),
-				signal: runningExtractions.get(id)?.controller.signal,
-			}).catch(() => {});
+			const labelerEngine = stageEngine("labeler", deps.labeler);
+			if (labelerEngine) {
+				refreshClusterLabels({
+					graphStore,
+					engine: labelerEngine,
+					signal: runningExtractions.get(id)?.controller.signal,
+				}).catch(() => {});
+			} else {
+				console.info(`[extraction ${id}] cluster naming skipped — no labeler model configured`);
+			}
 			return stats;
 		} catch (err) {
 			persistRunUsage(id, Math.round(performance.now() - t0), undefined);

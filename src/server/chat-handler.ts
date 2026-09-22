@@ -1,7 +1,7 @@
 import type { UIMessage } from "ai";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createProberAgent, createTeacherAgent, type AgentBuildOptions, type TeachingAgent } from "../agent/teacher-agent.ts";
-import { piEngineForSpec } from "../agent/models.ts";
+import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { runGraphContextJob, type GraphContextDeps } from "../agent/subagents/graph-context.ts";
@@ -10,9 +10,15 @@ import type { ModelRole } from "../../config.ts";
 import { claimSteers, deliverJobResult, setContextRespawn, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { createPiTurnResponse } from "./pi/ui-stream.ts";
-import { effectiveSettings, MODEL_PINS, stores } from "./stores.ts";
+import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
-import { extractionEnabled, graphContextEnabled, resolveRoleSpec } from "../core/settings-resolution.ts";
+import {
+	extractionEnabled,
+	graphContextEnabled,
+	resolveConversationSpec,
+	resolveRoleSpec,
+} from "../core/settings-resolution.ts";
+import { modelsNotConfigured } from "../core/settings.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { persistTurn, triggerExtraction, triggerGraphContext, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
@@ -40,12 +46,12 @@ const jobRunner = createJobRunner({
 	chatStore: stores.chatStore,
 	jobStore: stores.jobStore,
 	deliver: deliverJobResult,
-	// Model slots wave (2026-09-20): job engines resolve the full chain —
-	// role override → slot → factory pin — read FRESH per job (a settings
-	// PUT between dispatch and spawn lands). Closes the old gap where
-	// per-role overrides reached rolePins but never the engines.
+	// BYOK (owner, 2026-09-22): job engines resolve the chain — role
+	// override → slot → NOTHING — read FRESH per job (a settings PUT
+	// between dispatch and spawn lands); an empty chain flows through as
+	// undefined and the runner refuses the spawn honestly.
 	engineFor: (role) =>
-		piEngineForSpec(resolveRoleSpec(role, stores.settingsStore.readSettings(), MODEL_PINS)),
+		resolveEngine(role),
 	// Search port wave (2026-09-20): the researcher's web_search runs on the
 	// injected port — resolved FRESH per job (key rotations land immediately).
 	// null = honestly unavailable; the dispatch-level drop (below) uses the
@@ -60,13 +66,12 @@ export const extraction = createExtractionPipeline({
 	// The REAL embedder (local transformer model): post-merge embedding
 	// batch — semantic clusters are computed and persisted here.
 	embedder: embedNewNodes,
-	// Model slots wave (2026-09-20): the extraction stages resolve the FULL
-	// chain — role override → slot → factory pin — read FRESH per stage call
-	// (the flagged gap: ExtractionModels deps were engine VALUES, keeping
-	// extractor/auditor/labeler config-pin-bound while the job runner went
-	// slot-native). Direct test values still win inside the pipeline.
+	// BYOK (owner, 2026-09-22): the extraction stages resolve the chain —
+	// role override → slot → NOTHING — read FRESH per stage call; an empty
+	// chain flows through as undefined and the pipeline refuses the run
+	// with the typed ModelsNotConfiguredError. Direct test values still win.
 	engineFor: (role) =>
-		piEngineForSpec(resolveRoleSpec(role, stores.settingsStore.readSettings(), MODEL_PINS)),
+		resolveEngine(role),
 });
 
 /** Graph context injection (vision-context-injection.md): the runner's
@@ -97,6 +102,15 @@ setTurnRunner(async (chatId, messages) => {
 	await res.arrayBuffer().catch(() => undefined);
 	return res.status;
 });
+/** The settings-resolved engine for one role — BYOK (owner, 2026-09-22):
+ *  the chain (role override → slot → NOTHING) may end empty, and undefined
+ *  flows through to the per-need refusal gates (runner/extraction), read
+ *  FRESH so a settings PUT between dispatch and spawn lands. */
+function resolveEngine(role: ModelRole): PiEngine | undefined {
+	const spec = resolveRoleSpec(role, stores.settingsStore.readSettings());
+	return spec ? piEngineForSpec(spec) : undefined;
+}
+
 setJobRespawn((jobId) => void jobRunner.runJob(jobId));
 setContextRespawn((jobId) => void runGraphContextJob(graphContext, jobId));
 
@@ -135,6 +149,25 @@ export async function handleChatRequest(
 		return Response.json({ error: "messages must be an array" }, { status: 400 });
 	}
 
+	// THE UNIVERSAL TURN GATE (BYOK, owner, 2026-09-22): a turn needs the
+	// CONVERSATION chain — the chat's own model override over the strong
+	// slot — and there is no factory floor; when both are empty the turn
+	// refuses honestly with the machine-readable 503 envelope (new sessions
+	// and continuing ones alike — wake-pipeline turns ride this same path).
+	// Placement is deliberate: BEFORE beginTurn (no liveness effects), the
+	// write-ahead persist (nothing durable changes), and every downstream
+	// resolution (jobs/extraction gate per-need on their own tiers).
+	const effective = effectiveSettings();
+	const conversation = resolveConversationSpec(
+		stores.chatStore.getChat(chatId)?.settings,
+		effective.models.strong,
+	);
+	if (!conversation) {
+		const envelope = modelsNotConfigured(["strong"]);
+		console.info(`[chat ${chatId}] turn refused — ${JSON.stringify(envelope)}`);
+		return Response.json(envelope, { status: 503 });
+	}
+
 	// One turn per chat, ever. A second request while a turn runs means a
 	// stale/remounted client raced a live one — its message list is outdated,
 	// and letting it through would double-run the teacher and clobber the
@@ -158,10 +191,8 @@ export async function handleChatRequest(
 	) as UIMessage[];
 
 	// THE SETTINGS VIEW (settings-storage wave, 2026-09-19): resolved fresh
-	// per turn — graph gates, tool toggles, and (via the store) the record's
-	// chat defaults all read from ONE small file. No caching: a stale toggle
-	// after a settings PUT would be worse than the read.
-	const effective = effectiveSettings();
+	// per turn (the gate above owns the read) — graph gates, tool toggles,
+	// and the record's chat defaults all read from ONE small file.
 
 	// Write-ahead persistence: the request body IS the client's canonical
 	// state, so it goes on disk BEFORE the stream starts. The learner's answer
@@ -220,19 +251,10 @@ export async function handleChatRequest(
 	// steers, usage, extraction) — only the agent differs.
 	const teaching = outgoing.some((m) => m.parts.some((p) => p.type === "tool-probe_done"));
 	const role: ModelRole = teaching ? "teacher" : "prober";
-	// The chat's model-control settings (prober/teacher only — one controller
-	// for the conversation agents; piEngineFor falls back to config on absent
-	// fields and clamps the thinking level to the model's supported list).
-	const settings = stores.chatStore.getChat(chatId)?.settings;
-	// Model slots wave (2026-09-20): the conversation chain is the chat's
-	// own override over the STRONG slot (prober + teacher's tier) over the
-	// factory pin — each field independent, same discipline as the roles.
-	const strong = effective.models.strong;
-	const engine = piEngineForSpec({
-		provider: settings?.model?.provider ?? strong.provider,
-		id: settings?.model?.id ?? strong.id,
-		thinkingLevel: settings?.thinkingLevel ?? strong.thinkingLevel,
-	});
+	// BYOK (owner, 2026-09-22): the conversation chain was resolved by the
+	// turn gate above (chat.model override → strong slot → refused) — the
+	// engine build is pure from here; thinking levels clamp natively.
+	const engine = piEngineForSpec(conversation);
 	// Provider-qualified stamp (model slots wave): matches the price table's
 	// provider:id keys.
 	const modelId = `${engine.model.provider}:${engine.model.id}`;

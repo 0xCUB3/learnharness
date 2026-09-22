@@ -5,8 +5,10 @@
  *
  * DELTA SEMANTICS (owner decision, 2026-09-19): the record stores EXPLICIT
  * user choices only — ABSENT keys resolve to the factory defaults compiled
- * into this module (FACTORY_SETTINGS) and config.ts's MODELS (the compiled
- * factory layer for model roles). A software update that ADDS a knob (new
+ * into this module (FACTORY_SETTINGS). MODELS are the exception (owner,
+ * 2026-09-22 — BYOK all the way down): no factory pins exist, so an absent
+ * model key resolves to EMPTY and the per-need gates refuse honestly. A
+ * software update that ADDS a knob (new
  * tool, new role, new appearance field) therefore needs no migration: old
  * records simply lack the new keys. `version` is a PRIVATE schema counter
  * for BREAKING shape changes only (field renamed / meaning changed) —
@@ -26,6 +28,7 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ModelRole } from "../../config.ts";
 import type { ChatSettings } from "./contracts/chat.ts";
 import type { SearchEngineId } from "./search.ts";
 
@@ -34,9 +37,8 @@ import type { SearchEngineId } from "./search.ts";
 export const CURRENT_SETTINGS_VERSION = 1;
 
 /** The background-agent roles whose models the Agent settings expose.
- *  Derived from config.ts's MODELS minus the conversation pair — prober and
- *  teacher stay chat-settings-controlled (one controller, the model picker).
- *  Keep in sync with config.ts's MODELS (tests pin the set). */
+ *  The conversation pair (prober/teacher) stays out — chat-controlled via
+ *  the strong slot (one controller, the model picker). Tests pin the set. */
 export const BACKGROUND_MODEL_ROLES = [
 	"researcher",
 	"demoBuilder",
@@ -67,9 +69,44 @@ export interface RoleModelOverride {
 export const MODEL_SLOTS = ["strong", "cheap", "vision"] as const;
 export type ModelSlotName = (typeof MODEL_SLOTS)[number];
 
-/** One slot's override — same per-field independence as a role override:
- *  absent model keeps the tier's current model, absent thinkingLevel keeps
- *  its thinking budget. */
+/** The machine-readable NOT-CONFIGURED refusal envelope (owner, 2026-09-22):
+ *  every per-need gate — the turn gate in chat-handler, a job spawn, a
+ *  notes import — refuses with this exact shape. HTTP callers get 503 +
+ *  this JSON; in-band consumers (the job record's error field) carry the
+ *  human `error` line. `missing` names the slot TIER(S) the refused
+ *  action needs and found unset. */
+export const MODELS_NOT_CONFIGURED_CODE = "models_not_configured" as const;
+export interface ModelsNotConfigured {
+	/** Human-readable — safe to render as-is. */
+	error: string;
+	/** The machine discriminator the client switches on. */
+	code: typeof MODELS_NOT_CONFIGURED_CODE;
+	/** Which slot tiers the refused action needs ("strong" | "cheap" | "vision"). */
+	missing: ModelSlotName[];
+}
+export function modelsNotConfigured(missing: ModelSlotName[]): ModelsNotConfigured {
+	return {
+		error: "No model configured — set up your models first",
+		code: MODELS_NOT_CONFIGURED_CODE,
+		missing,
+	};
+}
+/** The typed throw for in-process seams (extraction pipeline): callers
+ *  catch it to skip honestly (trigger) or surface the 503 envelope
+ *  (routes) instead of logging a failure. */
+export class ModelsNotConfiguredError extends Error {
+	readonly envelope: ModelsNotConfigured;
+	constructor(missing: ModelSlotName[]) {
+		super(modelsNotConfigured(missing).error);
+		this.name = "ModelsNotConfiguredError";
+		this.envelope = modelsNotConfigured(missing);
+	}
+}
+
+/** One slot's stored state. BYOK (owner, 2026-09-22): the WRITE side
+ *  requires model (a level alone can never run — no factory floor); the
+ *  sanitizer keeps whatever is on disk, but RESOLUTION treats a slot
+ *  without a model as unset (inert level, no phantom default). */
 export interface ModelSlot {
 	/** The model swap: both coordinates or neither. */
 	model?: { provider: string; id: string };
@@ -99,7 +136,7 @@ export function slotsConfigured(models: ModelsSettings | undefined): boolean {
 /** Which slot a role draws from (model slots wave, 2026-09-20). Includes the
  *  conversation pair and pdfReader (not BackgroundModelRoles — the slot
  *  tier spans every role; only background roles surface per-role overrides). */
-export const ROLE_SLOT: Readonly<Record<string, ModelSlotName>> = {
+export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	prober: "strong",
 	teacher: "strong",
 	researcher: "cheap",
@@ -201,11 +238,11 @@ export interface UserSettings {
 	[key: string]: unknown;
 }
 
-/** Factory defaults for everything core can pin (owner decisions 2026-09-19).
- *  Model-role defaults live in config.ts's MODELS (the compiled factory
- *  layer); the chat section has NO factory model (BYOK first boot doctrine
- *  — "no model" until the user picks one); tools default on; prompts
- *  default off — hence their absence here. */
+/** Factory defaults for everything core can pin (owner decisions
+ *  2026-09-19). NO factory models exist anywhere (owner, 2026-09-22 — BYOK
+ *  all the way down): the chat section and every slot stay empty until the
+ *  user picks, and the per-need gates refuse honestly; tools default on;
+ *  prompts default off — hence their absence here. */
 export interface FactorySettings {
 	version: number;
 	general: Required<GeneralSettings>;

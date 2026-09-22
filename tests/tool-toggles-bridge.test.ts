@@ -18,6 +18,15 @@ import type { ProberToolContext } from "../src/agent/tools.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { parseAgentSettingsBody } from "../src/server/settings-body.ts";
 import { chatStore } from "../src/store/chats.ts";
+import { createFauxCore } from "@earendil-works/pi-ai";
+import type { PiEngine } from "../src/agent/models.ts";
+
+/** A scripted pi engine — the agent builds need an injected engine since
+ *  BYOK removed the factory pins (owner, 2026-09-22). */
+function fauxEngine(): PiEngine {
+	const faux = createFauxCore({});
+	return { model: faux.getModel(), streamFn: faux.streamSimple };
+}
 import type { AgentSettings } from "../src/core/settings.ts";
 
 describe("AgentBuildOptions.toolToggles (the P2 bridge)", () => {
@@ -27,14 +36,14 @@ describe("AgentBuildOptions.toolToggles (the P2 bridge)", () => {
 	it("flows into the teacher's registry: a job-tool delta is a no-op on the bare set", () => {
 		// No ctx → bare agent: quiz/ask only. A job-tool delta names tools
 		// that don't exist there — the bridge must not crash on it.
-		const bare = createTeacherAgent(undefined, { toolToggles: { research: false } });
+		const bare = createTeacherAgent(undefined, { engine: fauxEngine(), toolToggles: { research: false } });
 		assert.deepEqual(toolNames(bare), ["ask_user_question", "quiz"]);
 	});
 
 	it("flows into the prober's registry; probe_done survives everything", () => {
 		const chatId = chatStore.createChat("Toggle bridge test").id;
 		const ctx: ProberToolContext = { chatId, chatStore, deliver: () => {}, jobStore, spawn: () => {} };
-		const prober = createProberAgent(ctx, { toolToggles: { ask_user_question: false } });
+		const prober = createProberAgent(ctx, { engine: fauxEngine(), toolToggles: { ask_user_question: false } });
 		const names = toolNames(prober);
 		assert.ok(!names.includes("ask_user_question"), "the delta dropped the tool");
 		assert.ok(names.includes("probe_done"), "probe_done always-on");
@@ -42,6 +51,7 @@ describe("AgentBuildOptions.toolToggles (the P2 bridge)", () => {
 
 	it("an explicitly injected opts.tools registry is NEVER toggle-filtered", () => {
 		const teacher = createTeacherAgent(undefined, {
+			engine: fauxEngine(),
 			tools: {
 				quiz: { name: "quiz", description: "test", clientQuestion: true, schema: z.object({}) },
 			},

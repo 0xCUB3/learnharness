@@ -1,6 +1,7 @@
 import {
 	clampThinkingLevel,
 	createModels,
+	getSupportedThinkingLevels,
 	type Api,
 	type Model,
 	type Models,
@@ -8,19 +9,18 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { MODELS, type ModelRole } from "../../config.ts";
-import type { ChatSettings } from "../core/contracts/chat.ts";
+import { DEFAULT_THINKING_ORDER, type ModelRole } from "../../config.ts";
 
 /**
  * The one engine factory every agent's model comes from (the pi-ai swap,
- * docs/pi-engine-swap.md). Model choice and thinking budget live in
- * config.ts (MODELS) — the single tuning table; this module only wires them
- * to pi-ai's OpenRouter provider.
+ * docs/pi-engine-swap.md). BYOK ALL THE WAY DOWN (owner, 2026-09-22):
+ * there are no factory pins — every engine resolves from a RESOLVED SPEC
+ * (the settings chain's output) and the one builder here wires it to
+ * pi-ai's federated catalogs.
  *
  * An "engine" is the model + the stream function the agent loop runs on —
  * the two things a test fake replaces. Production engines resolve the model
- * from pi-ai's static catalog (glm-5.3-flash and qwen3.8-max are both in
- * 0.85.1's built-ins — no overlay fetch) and stream through the same Models
+ * from pi-ai's static catalogs and stream through the same Models
  * collection.
  */
 
@@ -33,12 +33,6 @@ export interface PiEngine {
 }
 
 export type { ThinkingLevel };
-
-/** The role's config thinking level (config's scale IS pi's since the
- * model-control wave — no mapping needed). */
-export function thinkingLevelFor(role: ModelRole): ThinkingLevel {
-	return MODELS[role].effort;
-}
 
 let collection: ReturnType<typeof createModels> | undefined;
 
@@ -63,14 +57,26 @@ export function openRouterApiKey(): string | undefined {
 	return process.env.OPENROUTER_API_KEY || undefined;
 }
 
-/** A fully-resolved model pin — the shape every engine now comes from
- *  (model slots wave, 2026-09-20): the settings-resolution chain's output.
- *  Every field concrete; the CALLER resolved the chain (role override →
- *  slot → factory pin, or the chat's conversation chain). */
+/** A fully-resolved model pin — the shape every engine now comes from:
+ *  the settings-resolution chain's output (role override → slot, or the
+ *  chat's conversation chain). thinkingLevel is OPTIONAL: unset means
+ *  the baked default resolves here (owner 2026-09-22) — the first entry
+ *  of DEFAULT_THINKING_ORDER the model supports. */
 export interface ResolvedModelSpec {
 	provider: string;
 	id: string;
-	thinkingLevel: ThinkingLevel;
+	thinkingLevel?: ThinkingLevel;
+}
+
+/** The first entry of the baked default order the model supports (owner,
+ *  2026-09-22). A non-reasoning model reports exactly ["off"], so the
+ *  order walk lands there naturally. */
+function defaultThinkingLevel(model: Model<Api>): ThinkingLevel {
+	const supported = getSupportedThinkingLevels(model);
+	for (const level of DEFAULT_THINKING_ORDER) {
+		if (supported.includes(level)) return level;
+	}
+	return supported[0] ?? "off";
 }
 
 /** The production engine for a RESOLVED spec (model slots wave,
@@ -84,7 +90,12 @@ export function piEngineForSpec(spec: ResolvedModelSpec): PiEngine {
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
-	const level = clampThinkingLevel(model, spec.thinkingLevel);
+	// UNSET level → the baked default order (first entry the model
+	// supports); SET level → pi's native nearest-clamp (model swaps keep
+	// the user's intent and adapt honestly).
+	const level = spec.thinkingLevel
+		? clampThinkingLevel(model, spec.thinkingLevel)
+		: defaultThinkingLevel(model);
 	return {
 		model,
 		level,
@@ -99,17 +110,14 @@ export function piEngineForSpec(spec: ResolvedModelSpec): PiEngine {
 	};
 }
 
-/** The production engine for one agent role — the LEGACY fallback path:
- *  the chat's model-control override over config.ts's pin. Production
- *  callers (chat-handler) now resolve the full chain (chat override →
- *  strong slot → factory pin) and call piEngineForSpec; this stays for
- *  direct config-pin fallbacks (sub-agents without an injected engine —
- *  the job runner injects one — and tests). */
-export function piEngineFor(role: ModelRole, settings?: ChatSettings): PiEngine {
-	const spec = MODELS[role];
-	return piEngineForSpec({
-		provider: settings?.model?.provider ?? spec.provider,
-		id: settings?.model?.id ?? spec.model,
-		thinkingLevel: settings?.thinkingLevel ?? thinkingLevelFor(role),
-	});
+/** The LEGACY role entry point — BYOK made it an honest THROWER (owner,
+ *  2026-09-22): no factory pins exist to fall back to, and this module
+ *  cannot read settings (architecture law — the agent layer never
+ *  imports the server layer). Production resolves the chain in
+ *  chat-handler and ALWAYS injects engines; reaching this means a
+ *  wiring bug, so it fails loudly instead of guessing a model. */
+export function piEngineFor(role: ModelRole): PiEngine {
+	throw new Error(
+		`no configured model for role "${role}" — set your model slots (settings → models)`,
+	);
 }

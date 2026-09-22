@@ -1,6 +1,6 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
-import { openRouterApiKey, piEngineFor, thinkingLevelFor, type PiEngine } from "../models.ts";
+import { openRouterApiKey, piEngineFor, type PiEngine } from "../models.ts";
 import type { ModelRole } from "../../../config.ts";
 
 /**
@@ -47,6 +47,9 @@ export interface SubagentRunResult {
 }
 
 export function subagentEngine(role: ModelRole, override?: PiEngine): PiEngine {
+	// BYOK (owner, 2026-09-22): no factory pins — the override is the only
+	// real path (the runner injects settings-resolved engines); a missed
+	// injection hits the honest thrower in models.ts instead of a guess.
 	return override ?? piEngineFor(role);
 }
 
@@ -57,7 +60,7 @@ export async function runSubagent(tools: AgentTool<any, any>[], opts: SubagentRu
 		initialState: {
 			systemPrompt: opts.systemPrompt,
 			model: engine.model,
-			thinkingLevel: thinkingLevelFor(opts.role),
+			thinkingLevel: engine.level,
 			tools,
 			messages: opts.messages ?? [],
 		},

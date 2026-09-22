@@ -2,8 +2,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
-import { MODELS } from "../../config.ts";
-import { piEngineFor, thinkingLevelFor, openRouterApiKey, type PiEngine } from "./models.ts";
+import { piEngineFor, openRouterApiKey, type PiEngine } from "./models.ts";
 import { effectivePromptSegments } from "./prompt-segments.ts";
 import {
 	askUserQuestionTool,
@@ -154,7 +153,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		initialState: {
 			systemPrompt,
 			model: engine.model,
-			thinkingLevel: thinkingLevelFor(kind),
+			thinkingLevel: engine.level,
 			tools,
 			messages: opts.messages ?? [],
 		},
@@ -227,7 +226,3 @@ export type ProberAgent = ReturnType<typeof createProberAgent>;
 export type TeacherAgent = ReturnType<typeof createTeacherAgent>;
 export type TeachingAgent = ProberAgent | TeacherAgent;
 
-/** The model id a role's engine resolves to (observability). */
-export function modelIdFor(kind: AgentKind): string {
-	return MODELS[kind].model;
-}

@@ -1,7 +1,7 @@
 import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { lhTool, piToolDeclarations, type LhTool } from "../lh-tool.ts";
-import { piEngineFor, thinkingLevelFor, type PiEngine } from "../models.ts";
+import { piEngineFor, type PiEngine, type ThinkingLevel } from "../models.ts";
 import type { VisualResult } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
 
@@ -132,7 +132,9 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 	const tools = createVisualTools();
 	const toolDeclarations = piToolDeclarations(tools);
 	const engine = opts.engine ?? piEngineFor("visualMaker");
-	const reasoning = thinkingLevelFor("visualMaker");
+	// BYOK (owner, 2026-09-22): the level rides the injected engine — no
+	// factory pin to consult (engine.level is the resolved/clamped value).
+	const reasoning = engine.level;
 	const prompt = [
 		"Brief for ONE precise figure (from the teacher, verbatim — it is everything you know):",
 		brief,
@@ -300,11 +302,11 @@ async function streamOnce(
 	systemPrompt: string,
 	messages: Message[],
 	tools: ReturnType<typeof piToolDeclarations>,
-	reasoning: ReturnType<typeof thinkingLevelFor>,
+	reasoning: ThinkingLevel | undefined,
 	abortSignal?: AbortSignal,
 ): Promise<AssistantMessage> {
 	const stream = engine.streamFn(engine.model, { systemPrompt, messages, tools }, {
-		reasoning: reasoning === "off" ? undefined : reasoning,
+		reasoning: reasoning && reasoning !== "off" ? reasoning : undefined,
 		apiKey: process.env.OPENROUTER_API_KEY || undefined,
 		signal: abortSignal,
 	} as never);

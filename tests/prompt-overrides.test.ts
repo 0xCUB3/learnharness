@@ -16,6 +16,15 @@ import * as teacherAgent from "../src/agent/teacher-agent.ts";
 import { allSegmentPaths, effectivePromptSegments } from "../src/agent/prompt-segments.ts";
 import { isValidSegmentPath } from "../src/core/prompt-segments.ts";
 import { promptOverrides } from "../src/store/prompt-overrides.ts";
+import { createFauxCore } from "@earendil-works/pi-ai";
+import type { PiEngine } from "../src/agent/models.ts";
+
+/** A scripted pi engine (pi-ai's faux provider) — the agent build needs an
+ *  injected engine since BYOK removed the factory pins (owner, 2026-09-22). */
+function fauxEngine(): PiEngine {
+	const faux = createFauxCore({});
+	return { model: faux.getModel(), streamFn: faux.streamSimple };
+}
 
 after(() => {
 	fs.rmSync(PROMPTS_OVERRIDE_DIR, { recursive: true, force: true });
@@ -210,9 +219,13 @@ describe("composeInstructions: override honoring + the byte-identical source pat
 	it("promptSwitches threads through agent construction into the system prompt", () => {
 		promptOverrides.writeOverride("system-prompt.md", "TOTALLY CUSTOM BASE");
 		try {
-			const agent = createTeacherAgent(undefined, { promptSwitches: { "system-prompt.md": true } });
+			// BYOK (owner, 2026-09-22): no factory pins — the agent build needs
+			// an injected engine; a scripted faux one stands in (the prompt is
+			// what's under test here, not the model).
+			const engine = fauxEngine();
+			const agent = createTeacherAgent(undefined, { engine, promptSwitches: { "system-prompt.md": true } });
 			assert.ok(agent.state.systemPrompt.includes("TOTALLY CUSTOM BASE"));
-			const source = createTeacherAgent(undefined, {});
+			const source = createTeacherAgent(undefined, { engine });
 			assert.ok(!source.state.systemPrompt.includes("TOTALLY CUSTOM BASE"), "no switches → cached source");
 		} finally {
 			promptOverrides.deleteOverride("system-prompt.md");

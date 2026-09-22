@@ -1,72 +1,41 @@
 /**
  * Tests for the resolution layer (settings-storage wave, 2026-09-19;
- * model-slots wave 2026-09-20 adds the slot tier): core/settings-resolution.ts
- * — the delta→concrete projection. The factory layer is threaded in as a
- * parameter (core stays pure; server/stores.ts threads config.ts's MODELS),
- * so these tests use a small synthetic pin spanning ALL NINE roles (the
- * factory contract since the slots wave — the strong slot's rep IS the
- * prober pin).
+ * model-slots wave 2026-09-20; BYOK all-the-way-down wave 2026-09-22):
+ * core/settings-resolution.ts — the delta→concrete projection. There are
+ * NO factory pins anymore: a model chain that ends empty resolves to
+ * null/undefined, and the per-need refusal gates (turn, job spawn,
+ * extraction) fire on exactly that.
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	extractionEnabled,
-	factorySlotRep,
 	graphContextEnabled,
+	resolveConversationSpec,
 	resolveModelSpec,
+	resolveRoleSpec,
 	resolveSettings,
 	resolveSlot,
-	type ModelRoleSpecs,
 } from "../src/core/settings-resolution.ts";
-import { BACKGROUND_MODEL_ROLES, type ModelSlotName, type UserSettings } from "../src/core/settings.ts";
-
-const FACTORY_PINS = Object.fromEntries(
-	[
-		"prober",
-		"teacher",
-		"researcher",
-		"demoBuilder",
-		"visualMaker",
-		"pdfReader",
-		"extractor",
-		"auditor",
-		"labeler",
-	].map((role, i) => [
-		role,
-		{ provider: i === 5 ? "other" : "openrouter", model: `factory/model-${i}`, effort: i % 2 === 0 ? "low" : "off" },
-	]),
-) as ModelRoleSpecs;
+import { BACKGROUND_MODEL_ROLES, type UserSettings } from "../src/core/settings.ts";
 
 describe("resolveSettings", () => {
-	it("null record (first boot): every knob lands on its factory default", () => {
-		const eff = resolveSettings(null, FACTORY_PINS);
+	it("null record (first boot): non-model knobs land on factory defaults; every model view is EMPTY", () => {
+		const eff = resolveSettings(null);
 		assert.deepEqual(eff.general, { autoUpdate: true });
 		assert.deepEqual(eff.chat, {}); // BYOK: no default model, ever
 		assert.deepEqual(eff.agent.tools, {});
 		assert.deepEqual(eff.agent.prompts, {});
 		assert.deepEqual(eff.agent.search, {});
+		// BYOK (owner, 2026-09-22): no factory floor — every role undefined,
+		// every slot null. No phantom ids anywhere.
 		for (const role of BACKGROUND_MODEL_ROLES) {
-			assert.equal(eff.agent.models[role].id, FACTORY_PINS[role]!.model);
-			assert.equal(eff.agent.models[role].provider, FACTORY_PINS[role]!.provider);
-			assert.equal(eff.agent.models[role].thinkingLevel, FACTORY_PINS[role]!.effort);
+			assert.equal(eff.agent.models[role], undefined, role);
 		}
-		// slots with no record: every tier lands on its factory rep pin
-		assert.deepEqual(eff.models.strong, {
-			provider: "openrouter",
-			id: FACTORY_PINS.prober!.model,
-			thinkingLevel: FACTORY_PINS.prober!.effort,
-		});
-		assert.deepEqual(eff.models.cheap, {
-			provider: "openrouter",
-			id: FACTORY_PINS.researcher!.model,
-			thinkingLevel: FACTORY_PINS.researcher!.effort,
-		});
-		assert.deepEqual(eff.models.vision, {
-			provider: "openrouter",
-			id: FACTORY_PINS.visualMaker!.model,
-			thinkingLevel: FACTORY_PINS.visualMaker!.effort,
-		});
+		assert.equal(eff.models.strong, null);
+		assert.equal(eff.models.cheap, null);
+		assert.equal(eff.models.vision, null);
 		assert.equal(eff.appearance.mode, "dark");
 		assert.equal(eff.appearance.background, null);
 		assert.equal(eff.appearance.fontFamily, null);
@@ -90,13 +59,15 @@ describe("resolveSettings", () => {
 			appearance: { mode: "light", proseFontSize: 20, mdRendering: { headingWeight: 600 } },
 			graph: { enabled: false },
 		};
-		const eff = resolveSettings(record, FACTORY_PINS);
+		const eff = resolveSettings(record);
 		assert.equal(eff.general.autoUpdate, false);
 		assert.deepEqual(eff.chat, { thinkingLevel: "high" });
 		assert.deepEqual(eff.agent.models.researcher, {
 			provider: "openrouter",
 			id: "qwen/qwen3.8-flash",
-			thinkingLevel: "low", // thinking NOT overridden → factory effort
+			// thinking NOT overridden and no cheap slot → UNSET (the engine
+			// build resolves it from DEFAULT_THINKING_ORDER, not a pin).
+			thinkingLevel: undefined,
 		});
 		assert.deepEqual(eff.agent.search, { engine: "tavily" });
 		assert.deepEqual(eff.agent.tools, { research: false });
@@ -109,103 +80,145 @@ describe("resolveSettings", () => {
 		assert.deepEqual(eff.graph, { enabled: false, embedding: true, clustering: true, labeling: true });
 	});
 
-	it("partial role override: thinkingLevel alone swaps the budget, model stays pinned", () => {
-		const eff = resolveSettings(
-			{ version: 1, agent: { models: { extractor: { thinkingLevel: "medium" } } } },
-			FACTORY_PINS,
-		);
-		const extractor = FACTORY_PINS.extractor!;
+	it("partial role override: thinkingLevel alone borrows the SLOT's model (or nothing, without one)", () => {
+		const eff = resolveSettings({
+			version: 1,
+			models: { cheap: { model: { provider: "zai", id: "glm-5.3-flash" } } },
+			agent: { models: { extractor: { thinkingLevel: "medium" } } },
+		});
 		assert.deepEqual(eff.agent.models.extractor, {
-			provider: extractor.provider,
-			id: extractor.model,
+			provider: "zai",
+			id: "glm-5.3-flash",
 			thinkingLevel: "medium",
 		});
-		// sibling roles untouched
-		assert.equal(eff.agent.models.researcher.thinkingLevel, FACTORY_PINS.researcher!.effort);
+		const bare = resolveSettings({ version: 1, agent: { models: { extractor: { thinkingLevel: "medium" } } } });
+		assert.equal(bare.agent.models.extractor, undefined); // no model anywhere → chain empty
 	});
 
 	it("resolveModelSpec is field-independent per override aspect", () => {
+		const slots = { cheap: { model: { provider: "zai", id: "slot-model" }, thinkingLevel: "high" as const } };
 		assert.deepEqual(
-			resolveModelSpec("labeler", { model: { provider: "other", id: "x" } }, FACTORY_PINS),
-			{ provider: "other", id: "x", thinkingLevel: FACTORY_PINS.labeler!.effort },
+			resolveModelSpec("labeler", { model: { provider: "other", id: "x" } }, slots),
+			{ provider: "other", id: "x", thinkingLevel: "high" }, // override model + slot level
 		);
-		assert.deepEqual(resolveModelSpec("labeler", {}, FACTORY_PINS), {
-			provider: FACTORY_PINS.labeler!.provider,
-			id: FACTORY_PINS.labeler!.model,
-			thinkingLevel: FACTORY_PINS.labeler!.effort,
+		assert.deepEqual(resolveModelSpec("labeler", { thinkingLevel: "max" }, slots), {
+			provider: "zai",
+			id: "slot-model",
+			thinkingLevel: "max", // override level + slot model
 		});
+		assert.equal(resolveModelSpec("labeler", undefined, {}), undefined);
 	});
 });
 
-describe("the slot tier (model slots wave, 2026-09-20)", () => {
+describe("the slot tier (BYOK, owner 2026-09-22)", () => {
 	it("slot alone re-tiers every role of its tier (no role overrides present)", () => {
-		const eff = resolveSettings(
-			{ version: 1, models: { cheap: { model: { provider: "zai", id: "glm-5.3-flash" } } } },
-			FACTORY_PINS,
-		);
+		const eff = resolveSettings({ version: 1, models: { cheap: { model: { provider: "zai", id: "glm-5.3-flash" } } } });
 		for (const role of ["researcher", "demoBuilder", "extractor", "auditor", "labeler"] as const) {
-			assert.deepEqual(eff.agent.models[role as "researcher"], {
-				provider: "zai",
-				id: "glm-5.3-flash",
-				thinkingLevel: FACTORY_PINS[role]!.effort, // thinking not in slot → factory
-			}, role);
+			assert.deepEqual(
+				eff.agent.models[role],
+				{ provider: "zai", id: "glm-5.3-flash", thinkingLevel: undefined }, // level unset → default order
+				role,
+			);
 		}
-		// other tiers untouched
-		assert.equal(eff.agent.models.visualMaker.id, FACTORY_PINS.visualMaker!.model);
+		// other tiers untouched (empty)
+		assert.equal(eff.agent.models.visualMaker, undefined);
 	});
 
-	it("role override still beats the slot; slot beats the factory pin (the chain)", () => {
-		const eff = resolveSettings(
-			{
-				version: 1,
-				agent: { models: { researcher: { model: { provider: "groq", id: "r-override" } } } },
-				models: { cheap: { model: { provider: "zai", id: "r-slot" }, thinkingLevel: "high" } },
-			},
-			FACTORY_PINS,
-		);
-		// researcher: override model + slot thinking (field-independent)
+	it("role override still beats the slot; each field independent", () => {
+		const eff = resolveSettings({
+			version: 1,
+			agent: { models: { researcher: { model: { provider: "groq", id: "r-override" } } } },
+			models: { cheap: { model: { provider: "zai", id: "r-slot" }, thinkingLevel: "high" } },
+		});
 		assert.deepEqual(eff.agent.models.researcher, {
 			provider: "groq",
 			id: "r-override",
-			thinkingLevel: "high",
+			thinkingLevel: "high", // slot level rides the override's model
 		});
-		// labeler (same tier, no override): full slot
 		assert.deepEqual(eff.agent.models.labeler, { provider: "zai", id: "r-slot", thinkingLevel: "high" });
 	});
 
-	it("vision slot covers visualMaker AND pdfReader; strong's rep is the prober pin", () => {
-		const eff = resolveSettings(
-			{ version: 1, models: { vision: { thinkingLevel: "max" } } },
-			FACTORY_PINS,
-		);
-		assert.equal(eff.agent.models.visualMaker.thinkingLevel, "max");
-		assert.equal(eff.agent.models.visualMaker.id, FACTORY_PINS.visualMaker!.model);
-		// resolved slot views exist for every tier, set or not
-		assert.deepEqual(eff.models.strong, factorySlotRep("strong", FACTORY_PINS));
+	it("vision slot covers visualMaker AND pdfReader; level-only slots resolve as NULL", () => {
+		const eff = resolveSettings({ version: 1, models: { vision: { model: { provider: "zai", id: "v-model" }, thinkingLevel: "max" } } });
+		assert.deepEqual(eff.agent.models.visualMaker, { provider: "zai", id: "v-model", thinkingLevel: "max" });
+		assert.deepEqual(eff.models.vision, { provider: "zai", id: "v-model", thinkingLevel: "max" });
+		// a stored level WITHOUT a model is inert (kept on disk, no phantom default)
+		const inert = resolveSettings({ version: 1, models: { strong: { thinkingLevel: "medium" } } });
+		assert.equal(inert.models.strong, null);
+		assert.equal(inert.agent.models.researcher, undefined); // strong's emptiness must not leak into other tiers
 	});
 
-	it("resolveSlot: slot over factory rep, per field", () => {
-		assert.deepEqual(resolveSlot("strong", { thinkingLevel: "medium" }, FACTORY_PINS), {
-			provider: FACTORY_PINS.prober!.provider,
-			id: FACTORY_PINS.prober!.model,
+	it("resolveSlot: configured iff the model is present", () => {
+		assert.deepEqual(resolveSlot({ model: { provider: "zai", id: "m" }, thinkingLevel: "medium" }), {
+			provider: "zai",
+			id: "m",
 			thinkingLevel: "medium",
 		});
-		const rep = factorySlotRep("vision", FACTORY_PINS);
-		assert.equal(rep.id, FACTORY_PINS.visualMaker!.model);
-		const slot: ModelSlotName = "cheap";
-		assert.deepEqual(resolveSlot(slot, undefined, FACTORY_PINS), {
-			provider: FACTORY_PINS.researcher!.provider,
-			id: FACTORY_PINS.researcher!.model,
-			thinkingLevel: FACTORY_PINS.researcher!.effort,
+		assert.deepEqual(resolveSlot({ model: { provider: "zai", id: "m" } }), {
+			provider: "zai",
+			id: "m",
+			thinkingLevel: undefined, // unset → resolved from the default order at build
 		});
+		assert.equal(resolveSlot({ thinkingLevel: "medium" }), null);
+		assert.equal(resolveSlot(undefined), null);
 	});
 
-	it("absent provider coordinate anywhere rides the factory provider (legacy ids)", () => {
-		// resolveModelSpec with no slots and a factory provider of "other"
-		// (pdfReader is index 5 in the synthetic pins): a legacy override
-		// with no provider keeps the FACTORY provider, not a hardcoded one.
-		const spec = resolveModelSpec("auditor", {}, FACTORY_PINS);
-		assert.equal(spec.provider, FACTORY_PINS.auditor!.provider);
+	it("resolveRoleSpec: background roles and the conversation pair share the chain", () => {
+		const record: UserSettings = {
+			version: 1,
+			models: { strong: { model: { provider: "zai", id: "strong-model" } } },
+		};
+		// conversation pair: slot only (their override is chat-controlled)
+		assert.deepEqual(resolveRoleSpec("prober", record), {
+			provider: "zai",
+			id: "strong-model",
+			thinkingLevel: undefined, // level unset → default order at build
+		});
+		// background role override beats the slot
+		const withOverride: UserSettings = {
+			...record,
+			agent: { models: { researcher: { model: { provider: "groq", id: "r" } } } },
+		};
+		assert.deepEqual(resolveRoleSpec("researcher", withOverride), { provider: "groq", id: "r", thinkingLevel: undefined });
+		// pdfReader rides the vision slot (never a background override)
+		const visionRecord: UserSettings = {
+			version: 1,
+			models: { vision: { model: { provider: "zai", id: "v" }, thinkingLevel: "low" } },
+		};
+		assert.deepEqual(resolveRoleSpec("pdfReader", visionRecord), { provider: "zai", id: "v", thinkingLevel: "low" });
+		assert.equal(resolveRoleSpec("teacher", null), undefined);
+	});
+});
+
+describe("resolveConversationSpec (the turn gate's chain)", () => {
+	it("chat.model over the strong slot; null when both empty", () => {
+		assert.equal(resolveConversationSpec(undefined, null), null);
+		assert.deepEqual(
+			resolveConversationSpec(undefined, { provider: "zai", id: "s" }),
+			{ provider: "zai", id: "s", thinkingLevel: undefined },
+		);
+		assert.deepEqual(
+			resolveConversationSpec({ model: { provider: "groq", id: "c" } }, null),
+			{ provider: "groq", id: "c", thinkingLevel: undefined },
+		);
+	});
+
+	it("bare chat thinking level rides the strong slot's model", () => {
+		assert.deepEqual(
+			resolveConversationSpec({ thinkingLevel: "high" }, { provider: "zai", id: "s", thinkingLevel: "low" }),
+			{ provider: "zai", id: "s", thinkingLevel: "high" },
+		);
+		// chat.model present, strong unset: level may still ride the chat alone
+		assert.deepEqual(
+			resolveConversationSpec({ model: { provider: "groq", id: "c" }, thinkingLevel: "max" }, null),
+			{ provider: "groq", id: "c", thinkingLevel: "max" },
+		);
+		// nothing set anywhere: unset level, not a phantom one
+		assert.deepEqual(resolveConversationSpec({ model: { provider: "groq", id: "c" } }, null), {
+			provider: "groq",
+			id: "c",
+			thinkingLevel: undefined,
+		});
 	});
 });
 
@@ -223,10 +236,10 @@ describe("the graph channel gates (the wave's seam honoring)", () => {
 	});
 
 	it("both gates ride resolveSettings' factory defaults (all on → both open)", () => {
-		const eff = resolveSettings(null, FACTORY_PINS);
+		const eff = resolveSettings(null);
 		assert.equal(extractionEnabled(eff.graph), true);
 		assert.equal(graphContextEnabled(eff.graph), true);
-		const off = resolveSettings({ version: 1, graph: { enabled: false } }, FACTORY_PINS);
+		const off = resolveSettings({ version: 1, graph: { enabled: false } });
 		assert.equal(extractionEnabled(off.graph), false);
 		assert.equal(graphContextEnabled(off.graph), false);
 	});

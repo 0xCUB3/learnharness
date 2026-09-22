@@ -22,6 +22,7 @@ import type { ChatStore, GraphStore } from "../core/ports.ts";
 import { EXTRACTION } from "../../config.ts";
 import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { startGraphContextInjection, type GraphContextDeps } from "../agent/subagents/graph-context.ts";
+import { ModelsNotConfiguredError } from "../core/settings.ts";
 
 /**
  * The canonical state write: the client owns the message list between turns
@@ -98,6 +99,13 @@ export function triggerExtraction(
 		const covered = coverageOf(record.messages as UIMessage[], deps.graphStore.readCoverage(), chatId);
 		if (covered.uncoveredTokens < EXTRACTION.chunkTokens) return;
 		void extraction.runExtraction(chatId).catch((err) => {
+			// BYOK (owner, 2026-09-22): an unconfigured write channel SKIPS
+			// (the coverage ledger keeps the messages uncovered — the next
+			// trigger retries once slots are set); only real failures log.
+			if (err instanceof ModelsNotConfiguredError) {
+				console.info(`[chat ${chatId}] extraction skipped — ${err.envelope.error} (missing: ${err.envelope.missing.join(", ")})`);
+				return;
+			}
 			console.error(`[chat ${chatId}] extraction pipeline failed:`, err);
 		});
 	} catch (err) {

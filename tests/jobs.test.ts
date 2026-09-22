@@ -356,6 +356,9 @@ describe("dispatch (async protocol §2)", () => {
 	it("the research call resolves immediately with an ack; the turn continues and the runner steers", async () => {
 		const chat = chatStore.createChat("Test: research dispatch");
 		trackChat(chat.id);
+		// BYOK turn gate (owner, 2026-09-22): the scripted chat needs a
+		// conversation model — the per-chat pin, exactly like the setup flow.
+		chatStore.saveSettings(chat.id, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } });
 
 		const delivery = fakeDeliver();
 		const search = stubSearch();
@@ -1342,5 +1345,37 @@ describe("stale-job recovery sweep (liveness-gated)", () => {
 		await waitFor(() => fired > 0, 8000, "recovery wake fired");
 		await waitFor(() => jobStore.getJob(jobId)!.status !== "running", 8000, "orphan settled after re-delivery");
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
+	});
+});
+
+// ─── BYOK: the unresolvable-engine refusal (owner, 2026-09-22) ──────────────
+
+describe("BYOK job refusal (no factory floor)", () => {
+	it("runJob with NO resolvable engine lands the job as error — the envelope wording, no phantom run", async () => {
+		const chat = chatStore.createChat("Test: unconfigured spawn");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
+			{
+				id: "a1",
+				role: "assistant",
+				parts: [{ type: "tool-research", toolCallId: "call-nc1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." }],
+			},
+		] as never);
+
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-nc1" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		// NO test override, NO engineFor: the chain (override → slot → floor)
+		// comes up empty — the runner must refuse honestly, not fall back.
+		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
+		await runner.runJob(job.id);
+
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "error", "the job lands error, never a phantom run");
+		assert.match(done.error ?? "", /No model configured/);
+		assert.match(done.error ?? "", /missing: cheap/);
+		assert.equal(delivery.steers.length, 0, "no result steer — nothing ran");
 	});
 });

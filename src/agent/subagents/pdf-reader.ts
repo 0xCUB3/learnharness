@@ -1,7 +1,7 @@
 import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { lhTool, piToolDeclarations, type LhTool } from "../lh-tool.ts";
-import { piEngineFor, thinkingLevelFor, type PiEngine } from "../models.ts";
+import { piEngineFor, type PiEngine, type ThinkingLevel } from "../models.ts";
 import type { PdfResult, PdfToolInput } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
 import { pdfExtract, pdfInfo, pdfProbe, pdfSearch, type PdfSearchHit } from "./pdf-ops.ts";
@@ -181,7 +181,9 @@ export async function runPdfReaderAgent(
 	const tools = createPdfTools(pdfPath);
 	const toolDeclarations = piToolDeclarations(tools);
 	const engine = opts.engine ?? piEngineFor("pdfReader");
-	const reasoning = thinkingLevelFor("pdfReader");
+	// BYOK (owner, 2026-09-22): the level rides the injected engine — no
+	// factory pin to consult (engine.level is the resolved/clamped value).
+	const reasoning = engine.level;
 	const prompt = [
 		`PDF path: ${pdfPath}`,
 		`Question (what the teacher needs from this document): ${input.question || "(no question — give a structural overview)"}`,
@@ -392,11 +394,11 @@ async function streamOnce(
 	systemPrompt: string,
 	messages: Message[],
 	tools: ReturnType<typeof piToolDeclarations>,
-	reasoning: ReturnType<typeof thinkingLevelFor>,
+	reasoning: ThinkingLevel | undefined,
 	abortSignal?: AbortSignal,
 ): Promise<AssistantMessage> {
 	const stream = engine.streamFn(engine.model, { systemPrompt, messages, tools }, {
-		reasoning: reasoning === "off" ? undefined : reasoning,
+		reasoning: reasoning && reasoning !== "off" ? reasoning : undefined,
 		apiKey: process.env.OPENROUTER_API_KEY || undefined,
 		signal: abortSignal,
 	} as never);

@@ -2,22 +2,29 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { modelCatalog, validateChatSettings, validateModelsSettings, catalogDefaultsFor, catalogProviders, catalogSlots, toModelDto, rolePinsFor, catalogRolePins } from "../src/server/model-catalog.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { MODELS } from "../config.ts";
-import { piEngineFor } from "../src/agent/models.ts";
-import { BACKGROUND_MODEL_ROLES, type BackgroundModelRole } from "../src/core/settings.ts";
+import { DEFAULT_THINKING_ORDER } from "../config.ts";
+import { piEngineForSpec, piModels } from "../src/agent/models.ts";
+import { BACKGROUND_MODEL_ROLES } from "../src/core/settings.ts";
 import { resolveSettings } from "../src/core/settings-resolution.ts";
-import { MODEL_PINS } from "../src/server/stores.ts";
 
 // The model-control wave (2026-09-12): pi-ai owns the registry — these pins
 // hold our projection + validation honest against the shipped catalog, and
 // pin pi's per-model thinking truth so a pi-ai upgrade can't silently change
-// what we send.
+// what we send. BYOK wave (2026-09-22): no factory pins — unset surfaces
+// are NULL/undefined, never phantom defaults.
 
 // The picker federates only providers with a PRESENT key (model slots
 // wave, 2026-09-20): pin openrouter's env key so its full catalog
 // federates in tests regardless of the developer shell's exports.
 process.env.OPENROUTER_API_KEY ??= "test-key-openrouter-catalog";
+
+/** The catalog's glm entry — the old factory pin's model, still the
+ *  best-known thinking-truth specimen (low|high|max). */
+function glmModel() {
+	const glm = piModels().getModel("openrouter", "z-ai/glm-5.3-flash");
+	assert.ok(glm, "glm-5.3-flash in catalog");
+	return glm!;
+}
 
 describe("the model catalog projection", () => {
 	it("serves the keyed providers' catalogs with the picker's DTO shape", () => {
@@ -48,32 +55,41 @@ describe("the model catalog projection", () => {
 		for (const id of keyless) {
 			assert.ok(!models.some((m) => m.provider === id), `keyless ${id} must not federate`);
 		}
+		// BYOK: nothing configured in this environment's record → defaults NULL,
+		// slots NULL — no phantom ids anywhere in the payload
+		assert.equal(defaults, null);
+		for (const name of ["strong", "cheap", "vision"] as const) {
+			assert.equal(slots[name], null, name);
+		}
 	});
 
-	it("defaults mirror the conversation agents' config pin (strong rep = prober pin)", () => {
-		const strong = { provider: "openrouter", id: MODELS.prober.model, thinkingLevel: MODELS.prober.effort as ThinkingLevel };
+	it("defaults: the chat section over the strong slot; null when both empty (BYOK)", () => {
+		assert.equal(catalogDefaultsFor(undefined, null), null);
+		const strong = { provider: "openrouter", id: "z-ai/glm-5.3-flash", thinkingLevel: "low" as const };
 		const d = catalogDefaultsFor(undefined, strong);
-		assert.deepEqual(d, { model: { provider: "openrouter", id: MODELS.prober.model }, thinkingLevel: MODELS.prober.effort });
-		assert.equal(d.model.id, MODELS.teacher.model, "one controller: prober and teacher share the pin");
-	});
-
-	it("a picked default in the record's chat section overrides the pin (catalogDefaultsFor, settings wave)", () => {
-		const strong = { provider: "openrouter", id: MODELS.prober.model, thinkingLevel: MODELS.prober.effort as ThinkingLevel };
-		const d = catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" }, strong);
-		assert.deepEqual(d, { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" });
-		// partial: only the model chosen → thinking falls back to the pin
+		assert.deepEqual(d, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "low" });
+		assert.deepEqual(catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" }, strong), {
+			model: { provider: "openrouter", id: "qwen/qwen3.8-flash" },
+			thinkingLevel: "high",
+		});
+		// partial: only the model chosen → level falls back to the slot's
 		const partial = catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }, strong);
-		assert.equal(partial.thinkingLevel, MODELS.prober.effort);
-		assert.equal(partial.model.id, "qwen/qwen3.8-flash");
+		assert.ok(partial);
+		assert.equal(partial!.thinkingLevel, "low");
 		// graphContextTokens-only record: model untouched
 		assert.deepEqual(catalogDefaultsFor({ graphContextTokens: 512 }, strong), {
-			model: { provider: "openrouter", id: MODELS.prober.model },
-			thinkingLevel: MODELS.prober.effort,
+			model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
+			thinkingLevel: "low",
 		});
+		// chat.model with NO strong slot: the conversation runs on it alone
+		assert.deepEqual(
+			catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }, null),
+			{ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } },
+		);
 	});
 
 	it("toModelDto projects the raw catalog model verbatim", () => {
-		const raw = piEngineFor("prober").model; // the catalog's glm entry
+		const raw = glmModel();
 		const dto = toModelDto(raw);
 		assert.equal(dto.id, raw.id);
 		assert.equal(dto.name, raw.name);
@@ -84,43 +100,40 @@ describe("the model catalog projection", () => {
 });
 
 describe("the background roles' resolved pins (rolePins)", () => {
-	it("no overrides → every role pins its config MODELS spec, nested DTO shape, all six roles", () => {
-		const pins = rolePinsFor(resolveSettings(null, MODEL_PINS).agent.models);
+	it("no record → every role is NULL (BYOK: no phantom defaults)", () => {
+		const pins = rolePinsFor(resolveSettings(null).agent.models);
 		assert.deepEqual(Object.keys(pins), [...BACKGROUND_MODEL_ROLES]);
 		for (const role of BACKGROUND_MODEL_ROLES) {
-			assert.deepEqual(pins[role].model, { provider: "openrouter", id: MODELS[role].model });
-			assert.equal(pins[role].thinkingLevel, MODELS[role].effort);
+			assert.equal(pins[role], null, role);
 		}
-		// the vision pin rides along like any other
-		assert.equal(pins.visualMaker.model.id, "qwen/qwen3.8-flash");
 	});
 
-	it("a model override wins for that role only; others stay pinned", () => {
+	it("a slot re-tiers its roles; overrides win for that role only", () => {
 		const record = {
 			version: 1,
-			agent: { models: { researcher: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } } } },
+			models: { cheap: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } } },
+			agent: { models: { researcher: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "high" as const } } },
 		};
-		const pins = rolePinsFor(resolveSettings(record, MODEL_PINS).agent.models);
-		assert.equal(pins.researcher.model.id, "qwen/qwen3.8-flash");
-		assert.equal(pins.researcher.thinkingLevel, MODELS.researcher.effort, "level stays the pin unless overridden too");
-		assert.equal(pins.visualMaker.model.id, MODELS.visualMaker.model);
-		assert.equal(pins.labeler.model.id, MODELS.labeler.model);
+		const pins = rolePinsFor(resolveSettings(record).agent.models);
+		assert.deepEqual(pins.researcher, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "high" });
+		assert.deepEqual(pins.labeler, { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }); // level unset
+		assert.equal(pins.visualMaker, null, "vision tier untouched");
 	});
 
-	it("a thinkingLevel-only override keeps the model, changes the level", () => {
-		const record = { version: 1, agent: { models: { extractor: { thinkingLevel: "high" as const } } } };
-		const pins = rolePinsFor(resolveSettings(record, MODEL_PINS).agent.models);
-		assert.equal(pins.extractor.model.id, MODELS.extractor.model);
-		assert.equal(pins.extractor.thinkingLevel, "high");
+	it("catalogRolePins matches the same resolution the engine wiring uses", () => {
+		const pins = catalogRolePins();
+		for (const role of BACKGROUND_MODEL_ROLES) {
+			assert.ok(pins[role] === null || typeof pins[role]!.model.id === "string");
+		}
 	});
 });
 
 describe("the model slots surface (model slots wave, 2026-09-20)", () => {
-	it("catalogSlots reports the factory rep pins when no record exists", () => {
+	it("catalogSlots reports NULL when a tier holds no model", () => {
 		const slots = catalogSlots();
-		assert.deepEqual(slots.strong.model, { provider: "openrouter", id: MODELS.prober.model });
-		assert.deepEqual(slots.cheap.model, { provider: "openrouter", id: MODELS.researcher.model });
-		assert.deepEqual(slots.vision.model, { provider: "openrouter", id: MODELS.visualMaker.model });
+		for (const name of ["strong", "cheap", "vision"] as const) {
+			assert.equal(slots[name], null, name);
+		}
 	});
 
 	it("catalogProviders reads keys env-wins, fresh per call", () => {
@@ -153,7 +166,7 @@ describe("the models-section validation gate", () => {
 		);
 	});
 
-	it("thinkingLevel resolves against the slot's model, else the tier's resolved pin", () => {
+	it("thinkingLevel resolves against the slot's model; level-only slots check nothing", () => {
 		// level checked against the named model
 		assert.equal(
 			validateModelsSettings({ strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "max" } }).ok,
@@ -163,8 +176,9 @@ describe("the models-section validation gate", () => {
 			validateModelsSettings({ strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "minimal" } }).ok,
 			false,
 		);
-		// bare level: against the strong slot's resolved model (config pin)
-		assert.equal(validateModelsSettings({ strong: { thinkingLevel: "minimal" } }).ok, false);
+		// (a level-only slot never passes the WRITE parser — owner, 2026-09-22;
+		// the validation gate tolerates it here with nothing to check against)
+		assert.equal(validateModelsSettings({ strong: { thinkingLevel: "minimal" } }).ok, true);
 	});
 
 	it("accepts empty settings (the clear-slots write)", () => {
@@ -184,10 +198,8 @@ describe("the settings validation gate", () => {
 		}
 	});
 
-	it("resolves a bare thinking level against the config default model", () => {
-		assert.deepEqual(validateChatSettings({ thinkingLevel: "high" }), { ok: true });
-		// "minimal" is unsupported on config's glm — rejected even with no model set
-		assert.equal(validateChatSettings({ thinkingLevel: "minimal" }).ok, false);
+	it("a bare thinking level checks against the chat model, else the strong slot, else rides unchecked", () => {
+		assert.deepEqual(validateChatSettings({ thinkingLevel: "minimal" }), { ok: true }, "no model to check against → accepted (clamps at run)");
 	});
 
 	it("rejects unknown providers and models", () => {
@@ -202,7 +214,7 @@ describe("the settings validation gate", () => {
 
 describe("pi thinking truth (pinned against pi-ai upgrades)", () => {
 	it("glm-5.3-flash: low|high|max; anything else clamps to the nearest", () => {
-		const glm = piEngineFor("prober").model;
+		const glm = glmModel();
 		assert.deepEqual(getSupportedThinkingLevels(glm), ["low", "high", "max"]);
 		assert.equal(clampThinkingLevel(glm, "minimal"), "low");
 		assert.equal(clampThinkingLevel(glm, "off"), "low", "GLM cannot disable thinking (map: off → null)");
@@ -210,21 +222,36 @@ describe("pi thinking truth (pinned against pi-ai upgrades)", () => {
 		assert.equal(clampThinkingLevel(glm, "high"), "high");
 	});
 
-	it("the engine factory honors settings, falls back to config, clamps", () => {
-		// override both fields
-		const over = piEngineFor("teacher", { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" });
+	it("the engine factory clamps explicit levels; unknown models throw honestly", () => {
+		const over = piEngineForSpec({ provider: "openrouter", id: "qwen/qwen3.8-flash", thinkingLevel: "high" });
 		assert.equal(over.model.id, "qwen/qwen3.8-flash");
 		assert.equal(over.level, "high");
-		// no settings → config pin
-		const pinned = piEngineFor("prober");
-		assert.equal(pinned.model.id, MODELS.prober.model);
-		assert.equal(pinned.level, MODELS.prober.effort);
-		// settings level unsupported by the settings model → clamped honestly
-		const clamped = piEngineFor("teacher", { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "minimal" });
+		const clamped = piEngineForSpec({ provider: "openrouter", id: "z-ai/glm-5.3-flash", thinkingLevel: "minimal" });
 		assert.equal(clamped.level, "low");
-		// bare level resolves against the config default model
-		assert.equal(piEngineFor("prober", { thinkingLevel: "max" }).level, "max");
-		// unknown model → honest throw, never a silent fallback
-		assert.throws(() => piEngineFor("teacher", { model: { provider: "openrouter", id: "nope/nope" } }), /catalog has no model/);
+		assert.throws(() => piEngineForSpec({ provider: "openrouter", id: "nope/nope", thinkingLevel: "low" }), /catalog has no model/);
+	});
+
+	it("UNSET levels resolve from the baked DEFAULT_THINKING_ORDER (owner, 2026-09-22)", () => {
+		assert.deepEqual([...DEFAULT_THINKING_ORDER], ["medium", "low", "high", "minimal", "xhigh", "max"]);
+		// glm supports low|high|max → first supported in the order is "low"
+		const glm = piEngineForSpec({ provider: "openrouter", id: "z-ai/glm-5.3-flash" });
+		assert.equal(glm.level, "low");
+		// explicit levels never consult the order — pi clamps nearest
+		assert.equal(piEngineForSpec({ provider: "openrouter", id: "z-ai/glm-5.3-flash", thinkingLevel: "max" }).level, "max");
+		// a non-reasoning model reports exactly ["off"] → the order lands there
+		const flat = piModels()
+			.getProviders()
+			.flatMap((p) => piModels().getModels(p.id))
+			.find((m) => !m.reasoning);
+		if (flat) {
+			const engine = piEngineForSpec({ provider: flat.provider, id: flat.id });
+			assert.deepEqual(getSupportedThinkingLevels(flat), ["off"]);
+			assert.equal(engine.level, "off");
+		}
+	});
+
+	it("the legacy piEngineFor role entry point throws honestly (BYOK: no pins)", async () => {
+		const { piEngineFor } = await import("../src/agent/models.ts");
+		assert.throws(() => piEngineFor("prober"), /no configured model for role "prober"/);
 	});
 });

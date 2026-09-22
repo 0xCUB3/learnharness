@@ -20,7 +20,8 @@ import {
 	type VisualToolInput,
 } from "../../core/contracts.ts";
 import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
-import { MODELS, type ModelRole } from "../../../config.ts";
+import type { ModelRole } from "../../../config.ts";
+import { ROLE_SLOT, modelsNotConfigured } from "../../core/settings.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
@@ -76,7 +77,10 @@ export interface JobRunnerDeps {
 	 * old gap where per-role settings overrides never reached job engines.
 	 * Test overrides (below) still win; absent → config pins.
 	 */
-	engineFor?: (role: ModelRole) => PiEngine;
+	/** Settings-resolved engine per role — BYOK (owner, 2026-09-22): the
+	 *  chain (role override → slot → NOTHING) may end empty → undefined;
+	 *  runJob then refuses the spawn honestly instead of guessing. */
+	engineFor?: (role: ModelRole) => PiEngine | undefined;
 	/** The search seam (search port wave, 2026-09-20): resolves the LIVE
 	 *  provider fresh per job — server/search.ts composition injected by
 	 *  the wiring; null = honestly unavailable (the researcher's web_search
@@ -114,20 +118,6 @@ const KIND_ROLE: Record<Exclude<JobKind, "graph-context">, ModelRole> = {
 	pdf: "pdfReader",
 };
 
-/** The config-pin model stamp for a job kind — JobUsage.model when no
- * engine was resolved (engineFor absent AND no test override). Stamps are
- * provider-qualified ("provider:id") since the model slots wave, matching
- * the price table's uniform keys. Context-injection jobs make NO model
- * call ("" — onUsage never fires for them; the kind is deliberately
- * absent from the runners below). */
-const KIND_MODEL: Record<JobKind, string> = {
-	research: `${MODELS.researcher.provider}:${MODELS.researcher.model}`,
-	demo: `${MODELS.demoBuilder.provider}:${MODELS.demoBuilder.model}`,
-	visual: `${MODELS.visualMaker.provider}:${MODELS.visualMaker.model}`,
-	pdf: `${MODELS.pdfReader.provider}:${MODELS.pdfReader.model}`,
-	"graph-context": "",
-};
-
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	const { chatStore, jobStore, deliver } = deps;
 
@@ -135,10 +125,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	 * then writes through the job store so the poll sees progress). */
 	const usageTotals = new Map<string, JobUsage>();
 
-	function makeLoopContext(jobId: string, kind: JobKind, engine?: PiEngine): LoopContext {
-		// Provider-qualified stamp (model slots wave): the engine's actual
-		// model, else the legacy config-pin id (see KIND_MODEL).
-		const model = engine ? `${engine.model.provider}:${engine.model.id}` : KIND_MODEL[kind];
+	function makeLoopContext(jobId: string, engine: PiEngine): LoopContext {
+		// Provider-qualified stamp: the engine's actual model — the only
+		// thing that ran (BYOK: no config-pin fallback stamps exist).
+		const model = `${engine.model.provider}:${engine.model.id}`;
 		// Real-kill wiring (2026-09 abort semantics): the controller is what
 		// the abort endpoint fires (agent/subagents/aborts.ts registry); the
 		// signal rides into every model call of the loop.
@@ -171,8 +161,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	// are kind-correct by construction; transcript fallbacks are cast after).
 	/** The engine one job runs on: test override first (the old seam —
 	 *  tests swap scripted engines without touching deps), then the injected
-	 *  settings-resolved engineFor (model slots wave, 2026-09-20), else
-	 *  undefined → the sub-agent factories fall back to config pins. */
+	 *  settings-resolved engineFor. undefined = the BYOK chain came up
+	 *  empty (owner, 2026-09-22) — runJob refuses below, honestly. */
 	function pickEngine(kind: Exclude<JobKind, "graph-context">): PiEngine | undefined {
 		const testOverride: Record<string, { current?: PiEngine } | undefined> = {
 			researcher: researchModelOverride,
@@ -185,7 +175,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
 	const KIND_RUNNERS: Record<
 		Exclude<JobKind, "graph-context">,
-		(jobId: string, engine: PiEngine | undefined, input: JobToolInput | undefined, loop: LoopContext) => Promise<void>
+		(jobId: string, engine: PiEngine, input: JobToolInput | undefined, loop: LoopContext) => Promise<void>
 	> = {
 		research: (jobId, engine, input, loop) => runResearchJob(jobId, engine, input, loop),
 		demo: (jobId, engine, input, loop) => runDemoJob(jobId, engine, input, loop),
@@ -212,9 +202,23 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			jobStore.updateJob(jobId, { status: "error", error: `unknown kind ${job.kind}`, activity: "failed" });
 			return;
 		}
+		const engine = pickEngine(job.kind);
+		if (!engine) {
+			// BYOK per-need refusal (owner, 2026-09-22): this kind's tier has
+			// no model — the job record surfaces the honest error (dock +
+			// teacher read it), and no engine-less loop ever starts.
+			const tier = ROLE_SLOT[KIND_ROLE[job.kind]];
+			const envelope = modelsNotConfigured([tier]);
+			console.info(`[job ${jobId}] refused — ${JSON.stringify(envelope)}`);
+			jobStore.updateJob(jobId, {
+				status: "error",
+				error: `${envelope.error} (missing: ${tier})`,
+				activity: "failed",
+			});
+			return;
+		}
 		try {
-			const engine = pickEngine(job.kind);
-			await run(jobId, engine, input, makeLoopContext(jobId, job.kind, engine));
+			await run(jobId, engine, input, makeLoopContext(jobId, engine));
 		} finally {
 			unregisterJobAbort(jobId);
 			// The last usage write may have been mid-flight when the loop died;

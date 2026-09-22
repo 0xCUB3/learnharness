@@ -165,18 +165,24 @@ describe("SETTINGS_SECTIONS (the route's section map)", () => {
 });
 
 describe("parseModelsSettingsBody (model slots wave, 2026-09-20)", () => {
-	it("parses the three slot tiers, each field independent", () => {
+	it("parses the three slot tiers — model required, level rides (BYOK, owner 2026-09-22)", () => {
 		const r = parseModelsSettingsBody({
 			strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } },
-			cheap: { thinkingLevel: "high" },
+			cheap: { model: { provider: "zai", id: "glm-5.3-flash" }, thinkingLevel: "high" },
 			vision: { model: { provider: "zai", id: "glm-5.3-flash" }, thinkingLevel: "low" },
 		});
 		assert.ok(r.ok);
 		assert.deepEqual(r.settings, {
 			strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } },
-			cheap: { thinkingLevel: "high" },
+			cheap: { model: { provider: "zai", id: "glm-5.3-flash" }, thinkingLevel: "high" },
 			vision: { model: { provider: "zai", id: "glm-5.3-flash" }, thinkingLevel: "low" },
 		});
+		// a thinkingLevel WITHOUT a model can never run (no factory floor)
+		const levelOnly = parseModelsSettingsBody({ cheap: { thinkingLevel: "high" } });
+		assert.equal(levelOnly.ok, false);
+		if (!levelOnly.ok) {
+			assert.match(levelOnly.error, /slot "cheap" must set a model/);
+		}
 	});
 
 	it("{} is the legal clear-slots write", () => {
@@ -194,7 +200,7 @@ describe("parseModelsSettingsBody (model slots wave, 2026-09-20)", () => {
 	it("a present-but-empty slot object is rejected (absent slot = unset)", () => {
 		const bad = parseModelsSettingsBody({ strong: {} });
 		assert.equal(bad.ok, false);
-		if (!bad.ok) assert.match(bad.error, /slot "strong" must set model or thinkingLevel/);
+		if (!bad.ok) assert.match(bad.error, /slot "strong" must set a model/);
 	});
 
 	it("malformed slot shapes are 400s", () => {
