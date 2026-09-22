@@ -145,8 +145,12 @@ describe("the prober's quiz: no nodeId field at all", () => {
 
 	it("the prober's tool registry carries the nodeId-less quiz, probe_done, and the learner-filesystem set", () => {
 		const chatId = newChat("Prober: registry");
-		const tools = createProberTools({ chatId, chatStore, deliver: () => {} });
-		assert.deepEqual(Object.keys(tools).sort(), ["ask_user_question", "find", "grep", "ls", "probe_done", "quiz", "read"]);
+		const tools = createProberTools({ chatId, chatStore, deliver: () => {}, jobStore, spawn: () => {} });
+		// Fix wave (2026-09-20): the owner ruling adds research + pdf dispatch
+		// to the probe phase's registry (demo/visual stay teach-only).
+		assert.deepEqual(Object.keys(tools).sort(), [
+			"ask_user_question", "find", "grep", "ls", "pdf", "probe_done", "quiz", "read", "research",
+		]);
 		const schema = quizSchemaOf(tools);
 		assert.equal(schema.safeParse({ ...validQuiz, nodeId: "anything" }).success, true, "no session check to fail");
 	});
@@ -166,16 +170,18 @@ describe("tool toggles (core/pending.ts + factories)", () => {
 
 	it("createProberTools: absent record = full set; explicit false drops exactly that tool; probe_done survives everything", () => {
 		const chatId = newChat("Prober: toggles");
-		const ctx = { chatId, chatStore, deliver: () => {} };
-		assert.deepEqual(Object.keys(createProberTools(ctx)).sort(), ["ask_user_question", "find", "grep", "ls", "probe_done", "quiz", "read"]);
+		const ctx = { chatId, chatStore, deliver: () => {}, jobStore, spawn: () => {} };
+		assert.deepEqual(Object.keys(createProberTools(ctx)).sort(), [
+			"ask_user_question", "find", "grep", "ls", "pdf", "probe_done", "quiz", "read", "research",
+		]);
 
 		const noAsk = createProberTools(ctx, { ask_user_question: false });
-		assert.deepEqual(Object.keys(noAsk).sort(), ["find", "grep", "ls", "probe_done", "quiz", "read"]);
+		assert.deepEqual(Object.keys(noAsk).sort(), ["find", "grep", "ls", "pdf", "probe_done", "quiz", "read", "research"]);
 
 		// quiz off is honored by the generic machinery too (future toggleable),
 		// but probe_done is never droppable — it is how the phase ends.
 		const noQuiz = createProberTools(ctx, { quiz: false });
-		assert.deepEqual(Object.keys(noQuiz).sort(), ["ask_user_question", "find", "grep", "ls", "probe_done", "read"]);
+		assert.deepEqual(Object.keys(noQuiz).sort(), ["ask_user_question", "find", "grep", "ls", "pdf", "probe_done", "read", "research"]);
 		assert.ok(createProberTools(ctx, { probe_done: false }).probe_done, "probe_done always-on");
 	});
 

@@ -137,3 +137,75 @@ describe("the research registry drop (jobTools)", () => {
 		assert.ok(tools.research, "the seam is optional — default is honest availability");
 	});
 });
+
+// ─── the threaded gate (fix wave, 2026-09-20) ────────────────────────────────
+//
+// The fix: createTeacherTools/createProberTools used to DROP searchAvailable
+// when building the inner JobToolContext, so jobTools' gate always took its
+// ?? true default even when the live wiring said unavailable. These pins
+// hold the THREADED path (the registry factories, not jobTools directly).
+
+import { createProberTools, createTeacherTools } from "../src/agent/tools.ts";
+import type { ChatStore } from "../src/core/ports.ts";
+
+/** A chat-store stub — the registry factories only CLOSE OVER it at build
+ *  time (quiz/plan superRefines read it at execute time, never here). */
+const fakeChatStore = {
+	getChat: () => null,
+	saveMessages: () => {},
+} as unknown as ChatStore;
+
+const ctxBase = { chatId: "chat-gate-test", chatStore: fakeChatStore };
+
+describe("the threaded searchAvailable gate (registry factories)", () => {
+	it("createTeacherTools: unavailable drops research on the live wiring path", () => {
+		const tools = createTeacherTools({
+			...ctxBase,
+			jobStore: fakeJobStore(),
+			spawn: () => {},
+			searchAvailable: () => false,
+		});
+		assert.equal("research" in tools, false, "the threaded signal reached jobTools' gate");
+		assert.ok(tools.demo && tools.visual && tools.pdf, "the other job tools survive");
+	});
+
+	it("createTeacherTools: available keeps research (the gate reads the signal both ways)", () => {
+		const tools = createTeacherTools({
+			...ctxBase,
+			jobStore: fakeJobStore(),
+			spawn: () => {},
+			searchAvailable: () => true,
+		});
+		assert.ok(tools.research, "a keyed server exposes research through the teacher");
+	});
+
+	it("createProberTools: research + pdf are phase-omnipresent; the gate drops research only", () => {
+		const on = createProberTools({
+			...ctxBase,
+			deliver: () => {},
+			jobStore: fakeJobStore(),
+			spawn: () => {},
+			searchAvailable: () => true,
+		});
+		assert.ok(on.research && on.pdf, "the owner ruling: research + pdf in the probe phase");
+
+		const off = createProberTools({
+			...ctxBase,
+			deliver: () => {},
+			jobStore: fakeJobStore(),
+			spawn: () => {},
+			searchAvailable: () => false,
+		});
+		assert.equal("research" in off, false, "no engine = no research dispatch in the prober either");
+		assert.ok(off.pdf && off.probe_done, "pdf is keyless — it survives; probe_done always-on");
+	});
+
+	it("createProberTools: the user toggle drops research independently of the gate", () => {
+		const tools = createProberTools(
+			{ ...ctxBase, deliver: () => {}, jobStore: fakeJobStore(), spawn: () => {}, searchAvailable: () => true },
+			{ research: false },
+		);
+		assert.equal("research" in tools, false, "toggle-filtered like the teacher side");
+		assert.ok(tools.pdf, "pdf unaffected by a research toggle");
+	});
+});

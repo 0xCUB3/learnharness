@@ -10,6 +10,7 @@ import {
 	createProberTools,
 	createTeacherTools,
 	type ProbeDoneContext,
+	type ProberToolContext,
 	type TeacherToolContext,
 } from "./tools.ts";
 import { toPiTools, type LhTool } from "./lh-tool.ts";
@@ -181,7 +182,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
  * handoff wake (see tools/probe.ts) and is the transcript seam the
  * handler keys teacher construction on.
  */
-export function createProberAgent(ctx: ProbeDoneContext, opts: AgentBuildOptions = {}) {
+export function createProberAgent(ctx: ProberToolContext, opts: AgentBuildOptions = {}) {
 	return baseAgentOptions("prober", opts, toPiTools(createProberTools(ctx, opts.toolToggles)));
 }
 

@@ -8,7 +8,7 @@ import {
 import { filterEnabledTools, type EnabledTools } from "../core/pending.ts";
 import type { JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
-import { jobTools, type DemoInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
+import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
 import { readTool } from "./tools/read.ts";
@@ -67,18 +67,40 @@ export const probeQuizTool: LhTool<any, any> = {
 	schema: probeQuizInputSchema,
 };
 
-/** The prober's tool set: probe quiz (no nodeId) + ask + probe_done.
+/** The prober's registry context: the probe's own needs (probe_done —
+ *  ProbeDoneContext) PLUS the job-dispatch wiring, since the owner ruling
+ *  (2026-09-20) puts research + pdf in the probe phase's registry too. */
+export interface ProberToolContext extends ProbeDoneContext {
+	/** Creates the job record (deduped by toolCallId). */
+	jobStore: JobStore;
+	/** Fire the background runner for a freshly created job. */
+	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
+	/** Search availability — the research dispatch tool's honest-disable
+	 *  signal (same gate as the teacher's). Absent = available. */
+	searchAvailable?: () => boolean;
+}
+
+/** The prober's tool set: probe quiz (no nodeId) + ask + the learner-fs
+ *  set + probe_done + the two phase-omnipresent job dispatch tools.
  *  `enabled` is the resolved settings seam (core/pending.ts): any tool
  *  explicitly false is dropped from the registry. probe_done stays
  *  always-on regardless — it is how the phase ENDS; a prober that can
  *  never conclude is a lockout. */
 export function createProberTools(
-	ctx: ProbeDoneContext,
+	ctx: ProberToolContext,
 	enabled?: EnabledTools,
 ): Record<string, LhTool<any, any>> {
 	// probe_done is re-added AFTER the filter, always-on by construction — it
 	// is how the phase ENDS; a prober that can never conclude is a lockout.
 	const done = probeDoneTool(ctx);
+	// The job tools build over the SAME context/gates as the teacher's
+	// (one builder, one gating semantic); the prober carries a SUBSET:
+	const jobs = jobTools({
+		chatId: ctx.chatId,
+		jobStore: ctx.jobStore,
+		spawn: ctx.spawn,
+		searchAvailable: ctx.searchAvailable,
+	});
 	return {
 		...filterEnabledTools(
 			{
@@ -91,6 +113,15 @@ export function createProberTools(
 				ls: lsTool,
 				find: findTool,
 				grep: grepTool,
+				// Job dispatch in the probe phase (owner ruling, 2026-09-20):
+				// research + pdf are ALWAYS available in every phase — the
+				// prober can verify facts or read learner PDFs while assessing.
+				// demo/visual stay teach-phase-only (they need the lesson's plan
+				// context). Same gating as the teacher: toggle-filtered here,
+				// research subject to the searchAvailable gate (honestly absent
+				// when no engine is live).
+				...(jobs.research ? { research: jobs.research } : {}),
+				pdf: jobs.pdf!,
 				...done,
 			},
 			enabled,
@@ -153,7 +184,7 @@ export interface TeacherToolContext extends PlanToolContext {
 	/** Fire the background runner for a freshly created job. The tool input
 	 *  rides along — the spawn fires mid-stream, before the tool part is
 	 *  persisted to the transcript (a transcript scan would race it). */
-	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput) => void;
+	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
 	/** Search availability (search port wave, 2026-09-20): the research
 	 *  dispatch tool's honest-disable signal — no live engine = the tool
 	 *  drops from this registry (JobToolContext.searchAvailable). */
@@ -188,7 +219,11 @@ export function createTeacherTools(
 			find: findTool,
 			grep: grepTool,
 			...planTools(ctx),
-			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn }),
+			// Fix wave (2026-09-20): searchAvailable was RECEIVED here but
+			// DROPPED when building the inner JobToolContext — the drop-gate
+			// always took its ?? true default. Threaded now: the live signal
+			// reaches jobTools' research gate.
+			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
 		},
 		enabled,
 	);

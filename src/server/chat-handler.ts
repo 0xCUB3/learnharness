@@ -276,6 +276,12 @@ export async function handleChatRequest(
 						chatId,
 						chatStore: stores.chatStore,
 						deliver: (steer) => void deliverJobResult(steer),
+						// Fix wave (2026-09-20): the prober carries research + pdf
+						// dispatch (owner ruling — phase-omnipresent), so its ctx
+						// needs the same job wiring as the teacher's.
+						jobStore: stores.jobStore,
+						spawn: (job, input) => void jobRunner.runJob(job.id, input),
+						searchAvailable,
 					},
 					agentOpts,
 				);

@@ -14,7 +14,8 @@ import assert from "node:assert/strict";
 import { z } from "zod";
 import { describe, it } from "node:test";
 import { createProberAgent, createTeacherAgent } from "../src/agent/teacher-agent.ts";
-import type { ProbeDoneContext } from "../src/agent/tools.ts";
+import type { ProberToolContext } from "../src/agent/tools.ts";
+import { jobStore } from "../src/store/jobs.ts";
 import { parseAgentSettingsBody } from "../src/server/settings-body.ts";
 import { chatStore } from "../src/store/chats.ts";
 import type { AgentSettings } from "../src/core/settings.ts";
@@ -32,7 +33,7 @@ describe("AgentBuildOptions.toolToggles (the P2 bridge)", () => {
 
 	it("flows into the prober's registry; probe_done survives everything", () => {
 		const chatId = chatStore.createChat("Toggle bridge test").id;
-		const ctx: ProbeDoneContext = { chatId, chatStore, deliver: () => {} };
+		const ctx: ProberToolContext = { chatId, chatStore, deliver: () => {}, jobStore, spawn: () => {} };
 		const prober = createProberAgent(ctx, { toolToggles: { ask_user_question: false } });
 		const names = toolNames(prober);
 		assert.ok(!names.includes("ask_user_question"), "the delta dropped the tool");
