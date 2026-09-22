@@ -59,42 +59,60 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 });
 
 describe("AgentSection (thin SSR)", () => {
-	it("renders all six background-role rows, Default-triggered dropdowns", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
-		for (const role of ["researcher", "demoBuilder", "visualMaker", "extractor", "auditor", "labeler"]) {
-			assert.ok(html.includes(`data-testid="role-row-${role}"`), role);
+	it("renders the three model SLOT rows (slots-only, owner ruling 2026-09-20), Default-triggered dropdowns", () => {
+		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
+		for (const slot of ["strong", "cheap", "vision"]) {
+			assert.ok(html.includes(`data-testid="slot-row-${slot}"`), slot);
 			// The shared model-picker dropdown as the opened menu (owner,
 			// 2026-09-20), the thin trigger as the collapsed look.
-			assert.ok(html.includes(`data-testid="role-model-${role}"`), `${role} model trigger`);
-			assert.ok(html.includes(`data-testid="role-thinking-${role}"`), `${role} thinking trigger`);
+			assert.ok(html.includes(`data-testid="slot-model-${slot}"`), `${slot} model trigger`);
+			assert.ok(html.includes(`data-testid="slot-thinking-${slot}"`), `${slot} thinking trigger`);
+			// the roster hint rides every row
+			assert.ok(html.includes("Prober + Teacher") || slot !== "strong", "strong roster");
 		}
-		assert.equal((html.match(/>Default<\/span>/g) ?? []).length, 12, "six roles × two Default triggers");
+		assert.equal((html.match(/>Default<\/span>/g) ?? []).length, 6, "three slots × two Default triggers");
+		// the per-role rows are GONE (slots-only)
+		for (const role of ["researcher", "demoBuilder", "visualMaker"]) {
+			assert.ok(!html.includes(`data-testid="role-row-${role}"`), `${role} retired`);
+		}
 		assert.ok(html.includes('data-testid="group-models"'), "Models sub-group");
 		assert.ok(html.includes('data-testid="group-tools"'), "Tools sub-group");
 		assert.ok(html.includes('data-testid="group-prompts"'), "System prompts sub-group");
 	});
 
+	it("the search-engine row renders with its live reason (search wave 2026-09-20)", () => {
+		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
+		assert.ok(html.includes('data-testid="search-engine-row"'), "the row");
+		assert.ok(html.includes('data-testid="search-engine-trigger"'), "the trigger");
+		// SSR: /api/search never fired → no reason line yet, trigger reads Automatic
+		assert.ok(html.includes("Automatic"), "unset engine reads Automatic");
+		// the explicit preference shows the chosen engine in the trigger
+		const html2 = renderToStaticMarkup(
+			<AgentSection agent={{ search: { engine: "tavily" } }} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />,
+		);
+		assert.ok(html2.includes("Tavily"), "pinned engine visible in the trigger");
+	});
+
 	it("renders the owner's FINAL tool list — research, demo, visual, pdf", () => {
 		assert.deepEqual([...TOGGLE_TOOLS], ["research", "demo", "visual", "pdf"]);
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
+		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
 		for (const id of TOGGLE_TOOLS) assert.ok(html.includes(`data-testid="tool-row-${id}"`), id);
 	});
 
 	it("tools default ON (absent key = enabled)", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
+		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
 		for (const id of TOGGLE_TOOLS) {
 			assert.ok(tagOf(html, `toggle-tool-${id}`).includes('aria-checked="true"'), `${id} defaults on`);
 		}
 	});
 
-	it("an overridden role shows its model in the select, tools carry the delta", () => {
+	it("an overridden SLOT shows its model in the trigger, tools carry the delta", () => {
 		const html = renderToStaticMarkup(
 			<AgentSection
-				agent={{
-					models: { researcher: { model: { provider: "openrouter", id: "z-ai/glm-4.7-flash" } } },
-					tools: { demo: false },
-				}}
+				agent={{ tools: { demo: false } }}
+				models={{ strong: { model: { provider: "zai", id: "glm-4.7-flash" } } }}
 				onSectionChange={() => {}}
+				onModelsChange={() => {}}
 			/>,
 		);
 		// The trigger shows the stored id even with no catalog loaded (a
@@ -105,7 +123,7 @@ describe("AgentSection (thin SSR)", () => {
 	});
 
 	it("prompts show the loading state under SSR (effects never fire)", () => {
-		const html = renderToStaticMarkup(<AgentSection agent={undefined} onSectionChange={() => {}} />);
+		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
 		assert.ok(html.includes("Loading prompt segments"));
 	});
 });

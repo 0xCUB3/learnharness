@@ -39,6 +39,7 @@ import {
 import { useAppearance } from "./appearance.tsx";
 import { SettingsSection, SettingsRow, Toggle } from "./controls.tsx";
 import { AgentSection } from "./agent-section.tsx";
+import type { ModelsSettings } from "@/src/core";
 import { KeysSection } from "./keys-section.tsx";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
@@ -56,20 +57,26 @@ const SECTIONS = [
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
 
-const DialogContext = createContext<{ open: () => void }>({ open: () => {} });
+const DialogContext = createContext<{ open: (section?: string) => void }>({ open: () => {} });
 
-/** AppShell-level mount: the sidebar row and the mod+, chord call this. */
+/** AppShell-level mount: the sidebar row and the mod+, chord call this.
+ *  `open(section)` lands the dialog on a specific section (the first-run
+ *  setup flow deep-links to Keys when no provider key exists yet). */
 export function SettingsDialogProvider({
 	children,
 }: {
 	children: React.ReactNode;
 }) {
 	const [show, setShow] = useState(false);
-	const open = useCallback(() => setShow(true), []);
+	const [landOn, setLandOn] = useState<SectionId>("general");
+	const open = useCallback((section?: string) => {
+		if (section) setLandOn(section as SectionId);
+		setShow(true);
+	}, []);
 	return (
 		<DialogContext.Provider value={{ open }}>
 			{children}
-			{show && <SettingsDialog onClose={() => setShow(false)} />}
+			{show && <SettingsDialog onClose={() => setShow(false)} initialSection={landOn} />}
 		</DialogContext.Provider>
 	);
 }
@@ -78,7 +85,7 @@ export function useSettingsDialog() {
 	return useContext(DialogContext);
 }
 
-function SettingsDialog({ onClose }: { onClose: () => void }) {
+function SettingsDialog({ onClose, initialSection }: { onClose: () => void; initialSection: SectionId }) {
 	// Plain dim backdrop (no blur — nothing decorative); the click
 	// closes, the dialog body stops propagation.
 	return createPortal(
@@ -87,7 +94,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
 			data-testid="settings-backdrop"
 			onClick={onClose}
 		>
-			<SettingsDialogBody onClose={onClose} />
+			<SettingsDialogBody onClose={onClose} initialSection={initialSection} />
 		</div>,
 		document.body,
 	);
@@ -95,13 +102,19 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
 
 /** The dialog without the portal/backdrop — the SSR-testable frame
  *  (portals render nothing under renderToStaticMarkup). */
-export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
+export function SettingsDialogBody({
+	onClose,
+	initialSection = "general",
+}: {
+	onClose: () => void;
+	initialSection?: SectionId;
+}) {
 	const { onAppearanceChange } = useAppearance();
 	const [record, setRecord] = useState<UserSettings | null | undefined>(
 		undefined,
 	);
 	const [error, setError] = useState<string | null>(null);
-	const [active, setActive] = useState<SectionId>("general");
+	const [active, setActive] = useState<SectionId>(initialSection);
 
 	// Fetch once per dialog mount. 200 {settings: null} is FIRST BOOT
 	// (no record = factory everything), not a failure — the error state is
@@ -133,7 +146,7 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 	 *  schema mistake caught by the validation surface). */
 	const write = useCallback(
 		async (
-			section: "general" | "agent" | "appearance" | "graph",
+			section: "general" | "agent" | "models" | "appearance" | "graph",
 			body: object,
 		) => {
 			setError(null);
@@ -271,6 +284,10 @@ export function SettingsDialogBody({ onClose }: { onClose: () => void }) {
 								>
 									<AgentSection
 										agent={record.agent}
+										models={record.models}
+										onModelsChange={(next: ModelsSettings) =>
+											void write("models", next)
+										}
 										onSectionChange={(next: AgentSettings) =>
 											void write("agent", next)
 										}

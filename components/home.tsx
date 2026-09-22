@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
+import { SetupDialog } from "@/components/setup-dialog";
+import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
 import { useDefaultSettings } from "@/components/default-settings";
 import { DictationBar, useDictation } from "@/components/dictation";
@@ -17,9 +19,17 @@ import type { ChatSettings, TurnUsage } from "@/src/core";
  * under the header and the new-session dock, both of which float over it
  * with no gradient scrims. Sessions live in the toggleable sidebar.
  */
-export function Home({ initialSettings }: { initialSettings: ChatSettings | null }) {
+export function Home({ initialSettings, initialConfigured }: { initialSettings: ChatSettings | null; initialConfigured: boolean }) {
 	const router = useRouter();
 	const [topic, setTopic] = useState("");
+	// First-run gate (model-slots wave, owner 2026-09-20): chats cannot
+	// start until the user has picked all three slots — no defaults for
+	// 33 providers. The dock shows the CTA while unconfigured; submitting
+	// a topic opens the setup dialog WITH THE DRAFT PRESERVED (Save
+	// stores the slots and the queued message sends).
+	const [configured, setConfigured] = useState(initialConfigured);
+	const [setupOpen, setSetupOpen] = useState(false);
+	const { open: openSettings } = useSettingsDialog();
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// topic draft; the strip lives in the stats bar's middle slot.
 	const dictation = useDictation({
@@ -34,9 +44,17 @@ export function Home({ initialSettings }: { initialSettings: ChatSettings | null
 	// defers its save when chatId is empty; see components/model-picker).
 	const { settings, save: saveDraft } = useDefaultSettings(initialSettings);
 
-	const start = async () => {
+	const start = async (force = false) => {
 		const t = topic.trim();
 		if (!t || busy) return;
+		// Unconfigured: the send INTERCEPTS into the setup flow (the draft
+		// stays in the textarea; Save completes and this re-runs). `force`
+		// is the onDone path — the state this closure captured is still
+		// the pre-save `configured`, the state update hasn't landed yet.
+		if (!configured && !force) {
+			setSetupOpen(true);
+			return;
+		}
 		setBusy(true);
 		try {
 			const res = await fetch("/api/chats", {
@@ -96,6 +114,18 @@ export function Home({ initialSettings }: { initialSettings: ChatSettings | null
 			    px-4) so nothing shifts when a session starts (owner). */}
 			<div className="pointer-events-none absolute inset-x-0 bottom-0 pb-5">
 				<div className="pointer-events-auto mx-auto w-full max-w-[46rem] px-4">
+					{!configured && (
+						<div className="mb-2 flex justify-center">
+							<button
+								type="button"
+								data-testid="setup-cta"
+								onClick={() => setSetupOpen(true)}
+								className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+							>
+								Set up your models — chats start after the three picks
+							</button>
+						</div>
+					)}
 					<form
 						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
 					onSubmit={(e) => {
@@ -155,6 +185,23 @@ export function Home({ initialSettings }: { initialSettings: ChatSettings | null
 					/>
 				</div>
 			</div>
+
+			{/* First-run setup (unconfigured): the CTA's target and the send
+			    interception's landing surface. onDone replays the intercepted
+			    draft; onOpenKeys deep-links the settings dialog (stage 1). */}
+			<SetupDialog
+				open={setupOpen}
+				onClose={() => setSetupOpen(false)}
+				onDone={() => {
+					setConfigured(true);
+					setSetupOpen(false);
+					void start(true); // the queued draft sends
+				}}
+				onOpenKeys={() => {
+					setSetupOpen(false);
+					openSettings("keys");
+				}}
+			/>
 		</div>
 	);
 }

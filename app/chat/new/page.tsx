@@ -1,5 +1,6 @@
 import { NewSession } from "@/components/new-session";
-import { readDefaultSettings } from "@/src/server";
+import { readDefaultSettings, readSettingsRecord } from "@/src/server";
+import { slotsConfigured } from "@/src/core";
 
 export const dynamic = "force-dynamic";
 
@@ -16,5 +17,10 @@ export const dynamic = "force-dynamic";
  * only before the first-ever pick).
  */
 export default function NewSessionPage() {
-	return <NewSession initialSettings={readDefaultSettings()} />;
+	return (
+		<NewSession
+			initialSettings={readDefaultSettings()}
+			initialConfigured={slotsConfigured(readSettingsRecord()?.models)}
+		/>
+	);
 }

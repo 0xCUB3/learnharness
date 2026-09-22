@@ -87,6 +87,15 @@ export interface ModelsSettings {
 	vision?: ModelSlot;
 }
 
+/** First-run gate (model-slots wave, owner 2026-09-20): the app refuses
+ *  to start chats until the user has actively picked all three slots —
+ *  there ARE no defaults for 33 providers; a configured app is one whose
+ *  models section carries a model in every slot. Thinking levels stay
+ *  optional (absent = the resolved tier's budget). */
+export function slotsConfigured(models: ModelsSettings | undefined): boolean {
+	return Boolean(models?.strong?.model && models?.cheap?.model && models?.vision?.model);
+}
+
 /** Which slot a role draws from (model slots wave, 2026-09-20). Includes the
  *  conversation pair and pdfReader (not BackgroundModelRoles — the slot
  *  tier spans every role; only background roles surface per-role overrides). */

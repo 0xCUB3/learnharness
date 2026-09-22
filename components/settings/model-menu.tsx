@@ -31,6 +31,7 @@ function priceLabel(cost: ModelCatalogEntry["cost"]): string {
 export function ModelMenuList({
 	models,
 	effectiveId,
+	effectiveProvider,
 	onPick,
 	footer,
 }: {
@@ -38,6 +39,11 @@ export function ModelMenuList({
 	models: ModelCatalogEntry[] | undefined;
 	/** Currently effective id (the row gets the quiet highlight). */
 	effectiveId: string | undefined;
+	/** The effective id's provider (model-slots wave: the catalog
+	 *  federates multiple providers and ids can collide across them —
+	 *  the highlight must match BOTH coordinates or it lands on the
+	 *  wrong row). */
+	effectiveProvider?: string;
 	/** Receives the chosen entry. */
 	onPick: (entry: ModelCatalogEntry) => void;
 	/** Quiet footer note under the list (context-specific). */
@@ -111,7 +117,7 @@ export function ModelMenuList({
 							onClick={() => onPick(m)}
 							className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted ${
 								i === menuIdx ? "bg-accent/40 ring-1 ring-inset ring-border" : ""
-							}${m.id === effectiveId && i !== menuIdx ? " bg-muted/60" : ""}`}
+							}${m.id === effectiveId && m.provider === (effectiveProvider ?? m.provider) && i !== menuIdx ? " bg-muted/60" : ""}`}
 						>
 							<span className="flex items-center justify-between gap-2">
 								<span className="truncate text-card-foreground">{m.name}</span>
@@ -120,7 +126,7 @@ export function ModelMenuList({
 								</span>
 							</span>
 							<span className="flex items-center justify-between gap-2 text-muted-foreground">
-								<span className="truncate">{m.id}</span>
+								<span className="truncate">{m.provider} · {m.id}</span>
 								<span className="shrink-0 tabular-nums">{formatTokens(m.contextWindow)}</span>
 							</span>
 						</button>

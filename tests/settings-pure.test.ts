@@ -8,10 +8,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { appearanceVars, derivedPalette, resolveAppearance } from "../components/settings/appearance.tsx";
-import { composePromptSwitch, composeRoleModel, composeTool } from "../components/settings/agent-section.tsx";
+import { composePromptSwitch, composeSearchEngine, composeSlotModel, composeTool } from "../components/settings/agent-section.tsx";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
 import { classifyKeys, keyStatusLine, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
-import type { AuthKeyStatus } from "../src/core";
+import type { AgentSettings, AuthKeyStatus, ModelsSettings } from "../src/core";
+import { slotsConfigured } from "../src/core";
+import { setupStage } from "../components/setup-dialog.tsx";
 
 describe("resolveAppearance — delta over factory", () => {
 	it("absent everything = the factory view", () => {
@@ -105,21 +107,48 @@ describe("agent section compose helpers — the replace-whole PUT body", () => {
 		assert.deepEqual(after.prompts, { "system-prompt.md": true }, "prompts untouched");
 	});
 
-	it("composeRoleModel: empty+empty REMOVES the role (absent = config pin)", () => {
-		const after = composeRoleModel({ models: { researcher: { model: { provider: "openrouter", id: "x" } }, auditor: {} } }, "researcher", "", "");
-		assert.equal(after.models?.researcher, undefined, "role dropped");
-		assert.deepEqual(after.models?.auditor, {}, "sibling untouched");
+	it("composeSlotModel: empty+empty REMOVES the slot (absent = factory pin)", () => {
+		const after = composeSlotModel(
+			{ strong: { model: { provider: "openrouter", id: "x" } }, cheap: {} },
+			"strong",
+			"",
+			"",
+			"",
+		);
+		assert.equal(after.strong, undefined, "slot dropped");
+		assert.deepEqual(after.cheap, {}, "sibling untouched");
 	});
 
-	it("composeRoleModel: model alone, thinking alone, and both", () => {
-		assert.deepEqual(composeRoleModel(undefined, "labeler", "z-ai/glm-4.7-flash", "").models?.labeler, {
-			model: { provider: "openrouter", id: "z-ai/glm-4.7-flash" },
+	it("composeSlotModel: model alone, thinking alone, and both — provider rides the swap (federation)", () => {
+		assert.deepEqual(composeSlotModel(undefined, "strong", "zai", "glm-4.7-flash", "").strong, {
+			model: { provider: "zai", id: "glm-4.7-flash" },
 		});
-		assert.deepEqual(composeRoleModel(undefined, "labeler", "", "low").models?.labeler, { thinkingLevel: "low" });
-		assert.deepEqual(composeRoleModel(undefined, "labeler", "m1", "high").models?.labeler, {
-			model: { provider: "openrouter", id: "m1" },
+		assert.deepEqual(composeSlotModel(undefined, "cheap", "", "", "low").cheap, { thinkingLevel: "low" });
+		assert.deepEqual(composeSlotModel(undefined, "vision", "openai", "gpt-5.2", "high").vision, {
+			model: { provider: "openai", id: "gpt-5.2" },
 			thinkingLevel: "high",
 		});
+	});
+
+	it("composeSlotModel: per-field independence — clearing the model keeps the thinking pin", () => {
+		const prev: ModelsSettings = { strong: { model: { provider: "zai", id: "glm-4.7-flash" }, thinkingLevel: "high" } };
+		const after = composeSlotModel(prev, "strong", "", "", "high");
+		assert.deepEqual(after.strong, { model: { provider: "zai", id: "glm-4.7-flash" }, thinkingLevel: "high" }, "model carried, thinking kept");
+		// clearing thinking keeps the model
+		const after2 = composeSlotModel(prev, "strong", "zai", "glm-4.7-flash", "");
+		assert.deepEqual(after2.strong, { model: { provider: "zai", id: "glm-4.7-flash" } }, "thinking dropped, model kept");
+	});
+
+	it("composeSearchEngine: null REMOVES the pin (auto-activation's resting state)", () => {
+		const withPin: AgentSettings = { search: { engine: "tavily" } };
+		const cleared = composeSearchEngine(withPin, null);
+		assert.equal(cleared.search, undefined);
+		// no pin to begin with → carried verbatim
+		assert.deepEqual(composeSearchEngine({ tools: { demo: true } }, null).tools, { demo: true });
+	});
+
+	it("composeSearchEngine: the explicit preference writes agent.search.engine", () => {
+		assert.deepEqual(composeSearchEngine(undefined, "brave").search, { engine: "brave" });
 	});
 
 	it("composePromptSwitch: on = explicit true, off = key REMOVED (absent = off)", () => {
@@ -214,5 +243,42 @@ describe("keyStatusLine — the minimal at-a-glance state", () => {
 
 	it("absent key reads 'not set'", () => {
 		assert.equal(keyStatusLine({ id: "X", info: null, present: false, masked: null, source: "none", shadowedByEnv: false }), "not set");
+	});
+});
+
+describe("first-run gate — slotsConfigured + setupStage (model-slots wave)", () => {
+	it("slotsConfigured: all three slot models required — thinking levels are optional", () => {
+		assert.equal(slotsConfigured(undefined), false, "no record = unconfigured");
+		assert.equal(slotsConfigured({}), false, "empty models section");
+		assert.equal(
+			slotsConfigured({
+				strong: { model: { provider: "zai", id: "glm-5.3-flash" } },
+				cheap: { model: { provider: "zai", id: "glm-4.7-flash" } },
+			}),
+			false,
+			"vision missing",
+		);
+		assert.equal(
+			slotsConfigured({
+				strong: { model: { provider: "zai", id: "glm-5.3-flash" } },
+				cheap: { model: { provider: "zai", id: "glm-4.7-flash" } },
+				vision: { model: { provider: "openai", id: "gpt-5.2" } },
+			}),
+			true,
+			"all three picked",
+		);
+		// a thinking-only pin does NOT configure the slot
+		assert.equal(
+			slotsConfigured({ strong: { thinkingLevel: "low" }, cheap: { thinkingLevel: "low" }, vision: { thinkingLevel: "low" } }),
+			false,
+			"thinking pins are not models",
+		);
+	});
+
+	it("setupStage: keys before models (owner's dependency ordering)", () => {
+		assert.equal(setupStage(null), "keys", "fetch failed → the honest fallback");
+		assert.equal(setupStage([]), "keys", "no providers = keys");
+		assert.equal(setupStage([{ id: "zai", keyPresent: false }]), "keys", "provider present but keyless");
+		assert.equal(setupStage([{ id: "zai", keyPresent: false }, { id: "openai", keyPresent: true }]), "pickers", "one keyed provider widens the pickers");
 	});
 });

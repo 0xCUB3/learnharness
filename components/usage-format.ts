@@ -15,14 +15,30 @@ export function formatTokens(n: number): string {
 	return String(n);
 }
 
+/** Split a provider-qualified stamp "provider:id" (the usage contracts'
+ *  qualification, model-slots wave 2026-09-20) into its two coordinates.
+ *  No colon = no provider qualification (a bare catalog id). */
+export function splitQualified(id: string): { provider: string | null; id: string } {
+	const colon = id.indexOf(":");
+	if (colon === -1) return { provider: null, id };
+	return { provider: id.slice(0, colon), id: id.slice(colon + 1) };
+}
+
 /**
  * "z-ai/glm-5.3-flash" → "Glm 5.3 Flash" — vendor prefix dropped, dashes to
  * spaces, capitalized; a trailing all-digit segment (OpenRouter's date
  * suffix, "qwen3.8-max-0902") is dropped. Quiet-chip friendly.
+ *
+ * With `qualified` (usage stamps are "provider:id", model-slots wave):
+ * the provider rides as a quiet suffix — "Glm 5.3 Flash · openrouter" —
+ * because with federation the same model via two providers is genuinely
+ * different bookkeeping. Bare catalog ids are unchanged.
  */
-export function prettyModel(id: string): string {
-	const short = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+export function prettyModel(id: string, qualified = false): string {
+	const { provider, id: bare } = splitQualified(id);
+	const short = bare.includes("/") ? bare.slice(bare.lastIndexOf("/") + 1) : bare;
 	const parts = short.split("-");
 	const trimmed = /^\d+$/.test(parts[parts.length - 1] ?? "") ? parts.slice(0, -1) : parts;
-	return trimmed.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+	const pretty = trimmed.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+	return qualified && provider ? `${pretty} · ${provider}` : pretty;
 }

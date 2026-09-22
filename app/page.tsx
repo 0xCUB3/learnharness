@@ -1,5 +1,6 @@
 import { Home } from "@/components/home";
-import { readDefaultSettings } from "@/src/server";
+import { readDefaultSettings, readSettingsRecord } from "@/src/server";
+import { slotsConfigured } from "@/src/core";
 
 // Dynamic: the default settings record is server-rendered into the page —
 // the model + thinking + context controls show truth on the FIRST frame
@@ -8,5 +9,11 @@ import { readDefaultSettings } from "@/src/server";
 export const dynamic = "force-dynamic";
 
 export default function HomePage() {
-	return <Home initialSettings={readDefaultSettings()} />;
+	// First-run gate (model-slots wave): chats cannot start until the user
+	// has picked all three slots — the dock shows the CTA while the raw
+	// record's models section lacks any slot pin.
+	const record = readSettingsRecord();
+	return (
+		<Home initialSettings={readDefaultSettings()} initialConfigured={slotsConfigured(record?.models)} />
+	);
 }

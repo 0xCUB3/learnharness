@@ -9,6 +9,8 @@ import { GraphContextControl, effectiveContextTokens } from "@/components/graph-
 import { useDefaultSettings } from "@/components/default-settings";
 import { PhaseChip } from "@/components/phase-divider";
 import { SidebarToggle } from "@/components/sidebar";
+import { SetupDialog } from "@/components/setup-dialog";
+import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { StatsBar } from "@/components/stats-bar";
 import type { ChatSettings } from "@/src/core";
 
@@ -148,7 +150,13 @@ export function DraftShell({
 	);
 }
 
-export function NewSession({ initialSettings }: { initialSettings: ChatSettings | null }) {
+export function NewSession({
+	initialSettings,
+	initialConfigured,
+}: {
+	initialSettings: ChatSettings | null;
+	initialConfigured: boolean;
+}) {
 	const router = useRouter();
 	const [text, setText] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -160,8 +168,22 @@ export function NewSession({ initialSettings }: { initialSettings: ChatSettings 
 	// hands the choice up; it still rides the session POST then PUT-on-create.
 	const { settings, save: saveDraft } = useDefaultSettings(initialSettings);
 
-	const send = useCallback(() => {
+	// First-run gate (model-slots wave, owner 2026-09-20): the send
+	// INTERCEPTS into the setup flow while unconfigured — no defaults for
+	// 33 providers, chats cannot start. The draft stays in the textarea;
+	// Save completes and the send replays.
+	const [configured, setConfigured] = useState(initialConfigured);
+	const [setupOpen, setSetupOpen] = useState(false);
+	const { open: openSettings } = useSettingsDialog();
+
+	const send = useCallback((force = false) => {
 		if (!text.trim() || busy) return;
+		// `force` is the onDone path — the captured `configured` is still
+		// the pre-save value; the state update hasn't landed yet.
+		if (!configured && !force) {
+			setSetupOpen(true);
+			return;
+		}
 		setBusy(true);
 		void startDraftSession(text, settings, fetch)
 			.then((target) => {
@@ -169,16 +191,32 @@ export function NewSession({ initialSettings }: { initialSettings: ChatSettings 
 				else setBusy(false);
 			})
 			.catch(() => setBusy(false));
-	}, [text, busy, settings, router]);
+	}, [text, busy, settings, router, configured]);
 
 	return (
-		<DraftShell
-			busy={busy}
-			text={text}
-			onChange={setText}
-			onSend={send}
-			settings={settings}
-			onSettingsSaved={saveDraft}
-		/>
+		<>
+			<DraftShell
+				busy={busy}
+				text={text}
+				onChange={setText}
+				onSend={send}
+				settings={settings}
+				onSettingsSaved={saveDraft}
+			/>
+			{/* First-run setup: the send interception's landing surface. */}
+			<SetupDialog
+				open={setupOpen}
+				onClose={() => setSetupOpen(false)}
+				onDone={() => {
+					setConfigured(true);
+					setSetupOpen(false);
+					send(true); // the queued draft sends
+				}}
+				onOpenKeys={() => {
+					setSetupOpen(false);
+					openSettings("keys");
+				}}
+			/>
+		</>
 	);
 }

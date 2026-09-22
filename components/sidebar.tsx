@@ -491,7 +491,7 @@ function SessionsSidebar() {
 					<div className="px-3 pb-3 pt-1">
 						<button
 							type="button"
-							onClick={openSettings}
+							onClick={() => openSettings()}
 							data-testid="settings-entry"
 							className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 						>
