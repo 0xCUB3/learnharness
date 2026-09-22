@@ -13,6 +13,7 @@
 		"lint": "eslint .",
 		"typecheck": "tsc --noEmit",
 		"desktop:dev": "concurrently -k \"next dev\" \"LH_DEV_URL=http://localhost:3000 electron .\"",
+		"dev:fresh": "bash scripts/dev-fresh.sh",
 		"desktop:dist": "next build && node scripts/build-server.mjs && electron-builder --mac --arm64"
 	},
 	"dependencies": {

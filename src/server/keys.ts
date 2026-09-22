@@ -24,6 +24,19 @@
  * Unknown vars in the file are preserved verbatim and surfaced as
  * generic status rows (no catalog form to edit through — only curated
  * keys have shapes and docs; core/auth-keys.ts).
+ *
+ * THE FRESH-USER SWITCH (owner, interlude 2026-09-22): LH_IGNORE_ENV_KEYS=1
+ * makes every env key invisible APP-WIDE — the exact new-user simulation
+ * (a fresh empty data dir + the switch = zero keys, zero federated
+ * providers, setup stage 1). Under the switch real env vars are DELETED
+ * from the process (not merely ignored by this seam): pi-ai resolves
+ * provider keys from process.env NATIVELY at every request
+ * (auth/context.js's defaultProviderAuthContext reads live env), so
+ * deletion is the one mechanism that hides keys from every consumer —
+ * model engines included. Only the file store (auth.json) counts; the
+ * fill-gap still reflects file keys so a fresh user can add keys
+ * mid-session and the engines see them with no restart. Unset switch =
+ * today's behavior, byte-for-byte.
  */
 
 import {
@@ -72,6 +85,13 @@ export function providerKeyList() {
 	return [...AUTH_PROVIDER_KEYS].sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/** The fresh-user switch (owner, interlude 2026-09-22): env keys are
+ *  invisible app-wide — deleted from the process at boot, file keys only.
+ *  Read live per call (the launcher exports it before boot). */
+export function envKeysIgnored(): boolean {
+	return process.env.LH_IGNORE_ENV_KEYS === "1";
+}
+
 /**
  * The boot fill-gap — idempotent. First call snapshots which managed names
  * are real env; later calls (HMR re-import, or after a hand-edit) only fill
@@ -89,7 +109,15 @@ export function initAuthEnv(): void {
 		// semantics, exactly like the curated vars.
 		...AUTH_PROVIDER_KEYS.map((p) => p.envVar),
 	]);
-	if (record.realEnv.size === 0 && record.fillGap.size === 0) {
+	if (envKeysIgnored()) {
+		// THE FRESH-USER SWITCH: delete every managed env var (re-run on
+		// every call — a reintroduced var never resurrects). realEnv stays
+		// EMPTY (nothing counts as env); the fill-gap below then reflects
+		// auth.json keys so engines still see mid-session additions.
+		for (const name of managed) {
+			delete process.env[name];
+		}
+	} else if (record.realEnv.size === 0 && record.fillGap.size === 0) {
 		// First init in this process: what's already in the env is REAL env.
 		for (const name of managed) {
 			if (process.env[name] !== undefined) record.realEnv.add(name);
@@ -158,6 +186,10 @@ export function keyStatuses(): AuthKeyStatus[] {
  *  STT route was the one cold-boot hole: a first-ever request to it would
  *  otherwise read env before any fill-gap ran). */
 export function keyValue(id: string): string | undefined {
+	// The fresh-user switch: ONLY the file store counts (belt-and-
+	// suspenders — the boot deletion already emptied the env; this guards
+	// any env key reintroduced after boot).
+	if (envKeysIgnored()) return authStore.authVars()[id];
 	return process.env[id] ?? authStore.authVars()[id];
 }
 
