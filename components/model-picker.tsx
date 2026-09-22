@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ModelCatalogEntry, ModelCatalogResponse, ModelsSettings } from "@/src/core";
+import type { ModelCatalogEntry, ModelCatalogResponse, ModelsSettings, UserSettings } from "@/src/core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
@@ -172,7 +172,13 @@ export function ModelControl() {
 					setError(body.error ?? `settings rejected (${res.status})`);
 					return;
 				}
-				setModels(next);
+				// Server truth, never the request body (fix wave): a pick
+				// that rides an unsupported level lands CLAMPED in the record
+				// — the pill must show the stored value in this interaction.
+				const stored = (
+					(await res.json().catch(() => null)) as { settings?: UserSettings } | null
+				)?.settings?.models;
+				setModels(stored ?? next);
 				setOpen(null);
 				notifySettingsSaved("models");
 			} catch {

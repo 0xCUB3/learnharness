@@ -26,6 +26,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useRef,
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
@@ -118,6 +119,26 @@ export function SettingsDialogBody({
 	const [error, setError] = useState<string | null>(null);
 	// MenuShell open-count — drives the content column's scroll lock.
 	const [openMenus, setOpenMenus] = useState(0);
+	const contentRef = useRef<HTMLDivElement | null>(null);
+	// Scroll-lock (fix wave, owner ruling: the scrollbar MAY stay,
+	// scrolling must NOT happen, nothing may move): the content column
+	// keeps overflow-y-auto — the scrollbar and every width stay exactly
+	// as they are — and while any MenuShell is open, non-passive wheel +
+	// touchmove listeners on the column preventDefault. React attaches
+	// synthetic wheel/touch passively at the root, so this needs the
+	// native-listener ref seam.
+	useEffect(() => {
+		const el = contentRef.current;
+		if (!el || openMenus === 0) return;
+		const block = (e: Event) => e.preventDefault();
+		el.addEventListener("wheel", block, { passive: false });
+		el.addEventListener("touchmove", block, { passive: false });
+		return () => {
+			el.removeEventListener("wheel", block);
+			el.removeEventListener("touchmove", block);
+		};
+	}, [openMenus]);
+
 	useEffect(() => {
 		const onOpen = () => setOpenMenus((n) => n + 1);
 		const onClose = () => setOpenMenus((n) => Math.max(0, n - 1));
@@ -176,8 +197,17 @@ export function SettingsDialogBody({
 				setError(`${section}: ${detail.error ?? res.status}`);
 				return;
 			}
+			// Server truth, never the request body (fix wave, owner repro):
+			// the models section clamps pinned thinking levels on write
+			// (bd68486) — a swap that rides an unsupported level lands
+			// CLAMPED in the record, and the writing surface must show the
+			// stored value in this same interaction, not the optimistic one.
+			const stored = (
+				(await res.json().catch(() => null)) as { settings?: UserSettings } | null
+			)?.settings;
 			setRecord(
-				(prev) => ({ ...(prev ?? {}), [section]: body }) as UserSettings,
+				(prev) =>
+					stored ?? ({ ...(prev ?? {}), [section]: body }) as UserSettings,
 			);
 			notifySettingsSaved(section);
 			if (section === "appearance")
@@ -246,9 +276,12 @@ export function SettingsDialogBody({
 				{/* Content column — one section at a time, this scrolls — and
 				    LOCKS while any MenuShell is open (owner ruling: no
 				    scrolling with a dropdown down; MenuShell announces
-				    open/close, the count keeps overlap honest). */}
+				    open/close, the count keeps overlap honest). The lock
+				    intercepts wheel/touch instead of hiding the scrollbar —
+				    nothing may shift when the lock engages. */}
 				<div
-					className={`min-w-0 flex-1 ${openMenus > 0 ? "overflow-hidden" : "overflow-y-auto"}`}
+					ref={contentRef}
+					className="min-w-0 flex-1 overflow-y-auto"
 					data-testid="settings-content"
 				>
 					{error && (
