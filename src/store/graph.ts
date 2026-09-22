@@ -260,6 +260,49 @@ export const graphStore: GraphStore = {
 	writeEmbeddings(ledger: EmbeddingsLedger): void {
 		writeEmbeddingsLedger(ledger);
 	},
+
+	/** THE DESTRUCTIVE SEAM (wave 6 session deletion): atomic full-content
+	 *  replacement per provided ledger — write a uniquely-named temp file
+	 *  beside the ledger, then rename over it (POSIX-atomic: a crash mid-
+	 *  write leaves the original ledger and an orphan .tmp-*, never a torn
+	 *  ledger). Empty arrays write an empty file — a purged ledger reads
+	 *  as "nothing yet", same as never-emitted. */
+	rewriteLedgers(next: {
+		nodes?: GraphNode[];
+		edges?: GraphEdge[];
+		events?: LedgerEvent[];
+		mappings?: NodeMapping[];
+		coverage?: CoverageEntry[];
+		checkpoints?: SessionCheckpoint[];
+	}): void {
+		const files = {
+			nodes: LEDGER_FILES.nodes,
+			edges: LEDGER_FILES.edges,
+			events: LEDGER_FILES.events,
+			mappings: LEDGER_FILES.mappings,
+			coverage: LEDGER_FILES.coverage,
+			checkpoints: LEDGER_FILES.sessions,
+		} as const;
+		for (const [key, records] of Object.entries(next) as [keyof typeof files, unknown[]][]) {
+			const file = files[key];
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			const tmp = `${file}.tmp-${crypto.randomUUID().slice(0, 8)}`;
+			try {
+				// JSONL: one record per line, trailing newline — a reader
+				// must see exactly what appendLine would have written.
+				const body = records.map((record) => JSON.stringify(record)).join("\n") + (records.length > 0 ? "\n" : "");
+				fs.writeFileSync(tmp, body, "utf-8");
+				fs.renameSync(tmp, file);
+			} catch (err) {
+				try {
+					fs.unlinkSync(tmp);
+				} catch {
+					/* the rename either already happened or the tmp never existed */
+				}
+				throw err;
+			}
+		}
+	},
 };
 
 /** positions.json — { positions, updatedAt }. Read-modify-write, NOT

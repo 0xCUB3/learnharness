@@ -60,6 +60,11 @@ export interface ChatStore {
 	 * Like saveSettings: a rename is NOT conversation activity — updatedAt
 	 * stays put, so sidebar order never churns on a rename. */
 	renameChat(id: string, title: string): ChatRecord;
+	/** Delete the session record entirely (session-deletion wave 6, owner
+	 *  2026-09-22). False when the id is unknown. The graph-ledger purge and
+	 *  job cleanup are the caller's choreography (core/graph-deletion.ts +
+	 *  the DELETE route), not the store's. */
+	deleteChat(id: string): boolean;
 }
 
 // ─── GraphStore — the append-only evidence ledgers (data/graph) ──────────────
@@ -129,6 +134,23 @@ export interface GraphStore {
 	readEmbeddings(): EmbeddingsLedger;
 	/** Replace the whole ledger (embedding is a full-batch computation). */
 	writeEmbeddings(ledger: EmbeddingsLedger): void;
+
+	/** THE DESTRUCTIVE SEAM (session-deletion wave 6, owner 2026-09-22 —
+	 *  the first non-append operation on these ledgers): atomically
+	 *  replace the full contents of any subset of the six rewritable
+	 *  ledgers. Each provided array is written to a temp file and renamed
+	 *  over the ledger (crash-safe: a torn write never replaces the
+	 *  original); absent keys leave their ledger untouched. The pure
+	 *  computation is core/graph-deletion.ts — the store only makes the
+	 *  replacement atomic. */
+	rewriteLedgers(next: {
+		nodes?: GraphNode[];
+		edges?: GraphEdge[];
+		events?: LedgerEvent[];
+		mappings?: NodeMapping[];
+		coverage?: CoverageEntry[];
+		checkpoints?: SessionCheckpoint[];
+	}): void;
 }
 
 // ─── JobStore — background sub-agent jobs (data/jobs) ─────────────────────────
@@ -154,6 +176,11 @@ export interface JobStore {
 	listJobs(chatId: string): JobRecord[];
 	/** The job fulfilling a given tool part, if any (spawn-hook dedup). */
 	findJobByToolCallId(chatId: string, toolCallId: string): JobRecord | null;
+	/** Delete every job record for a chat — running or finished (session-
+	 *  deletion wave 6). Returns how many files were removed. The deletion
+	 *  route refuses while jobs are still running, so by the time this
+	 *  fires every record is terminal. */
+	deleteJobsForChat(chatId: string): number;
 }
 
 // ─── SettingsStore — THE user settings record (settings-storage wave, 2026-09-19) ──

@@ -634,3 +634,211 @@ describe("graph ledger store", () => {
 		assert.deepEqual(merged.provenance.map((p) => p.messageId), ["m1", "m2"]);
 	});
 });
+
+// ─── session deletion (wave 6 — the first destructive ledger operation) ─────
+
+import { deleteChatTraces, type ChatDeletionStats } from "../src/core/graph-deletion.ts";
+import { deleteChatSession } from "../src/server/chats.ts";
+import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
+import { jobStore } from "../src/store/jobs.ts";
+
+describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () => {
+	/** Two-session scenario: dA creates the shared node X + the orphan Y and
+	 *  asserts X→Y; dB links X (its own phrasings), creates Z, asserts X→Z.
+	 *  Deleting dA must: keep X (dB's link line survives, dA's create-line
+	 *  aliases stripped — the identity stays), kill Y (orphan), keep Z and
+	 *  dB's edge, kill dA's events/mappings/coverage/checkpoints. */
+	function buildTwoSessionScenario() {
+		const dA = fixtureChat("Deletion session A", [
+			user("du1", "teach me the deletion topic"),
+			assistant("da1", [
+				quizPart(
+					"d-call-1",
+					{ question: "DQ1", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
+					answer({ questionId: "d-call-1", questionText: "DQ1 text", correct: true, answeredAt: "2026-09-23T00:00:00.000Z" }),
+				),
+			]),
+		]);
+		const auditA: AuditResult = {
+			propositions: [
+				{ id: "p1", name: "Shared core", statement: "Shared core statement", aliases: ["shared feel"], messages: ["du1"], evidence: ["e"], understanding: "solid" },
+				{ id: "p2", name: "Solo fact", statement: "Solo fact statement", aliases: ["solo feel"], messages: ["du1"], evidence: ["e"] },
+			],
+			edges: [{ from: "p1", to: "p2", type: "follows", messages: ["du1"], evidence: ["e"] }],
+			attribution: { quiz: { "d-call-1": "p1" } },
+			dropped: [],
+		};
+		mergeFindings(dA.id, auditA, graphDeps, sessionSource(dA.id));
+		// Resolve through THIS session's mappings — the shared ledger holds
+		// lookalike statements from earlier tests, so statement-lookup would
+		// link dB to the wrong node.
+		const mappedId = (sourceId: string): string =>
+			graphStore.readMappings().find((m) => m.chatId === dA.id && m.sourceId === sourceId)!.graphNodeId;
+		const xId = mappedId("p1");
+		const yId = mappedId("p2");
+
+		const dB = fixtureChat("Deletion session B", [
+			user("eu1", "more on the shared core"),
+			assistant("eb1", [
+				quizPart(
+					"e-call-1",
+					{ question: "EQ1", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
+					answer({ questionId: "e-call-1", questionText: "EQ1 text", correct: false, answeredAt: "2026-09-23T00:01:00.000Z" }),
+				),
+			]),
+		]);
+		const auditB: AuditResult = {
+			propositions: [
+				{ id: "q1", name: "Shared again", statement: "Shared core, rephrased", aliases: ["B phrasing"], messages: ["eu1"], evidence: ["e"], linkTo: xId, understanding: "shaky" },
+				{ id: "q2", name: "B extra", statement: "B extra statement", aliases: ["b extra feel"], messages: ["eu1"], evidence: ["e"] },
+			],
+			edges: [{ from: "q1", to: "q2", type: "follows", messages: ["eu1"], evidence: ["e"] }],
+			attribution: { quiz: { "e-call-1": "q1" } },
+			dropped: [],
+		};
+		mergeFindings(dB.id, auditB, graphDeps, sessionSource(dB.id));
+		const zId = graphStore.readMappings().find((m) => m.chatId === dB.id && m.sourceId === "q2")!.graphNodeId;
+
+		// Coverage rows (both chats) + positions + embeddings garnish — the
+		// deletion prunes all three ledgers.
+		for (const chat of [dA, dB]) {
+			for (let i = 0; i < 2; i++) {
+				graphStore.appendCoverage({ chatId: chat.id, fp: `${chat.id}-${i}`, tokens: 10, foldedAt: "2026-09-23T00:02:00.000Z" });
+			}
+		}
+		graphStore.writePositions({ ...graphStore.readPositions(), [xId]: { x: 1, y: 1 }, [yId]: { x: 2, y: 2 }, [zId]: { x: 3, y: 3 } });
+		const emb = graphStore.readEmbeddings();
+		graphStore.writeEmbeddings({
+			...emb,
+			vectors: { ...emb.vectors, [xId]: [1, 0], [yId]: [0, 1], [zId]: [1, 1] },
+			clusters: [...emb.clusters, { members: [xId, yId, zId] }],
+			updatedAt: "2026-09-23T00:03:00.000Z",
+		});
+		return { dA, dB, xId, yId, zId };
+	}
+
+	it("delete-nodes: the shared node survives with the other session's content; the orphan dies; the creator's aliases are stripped (owner ruling 2026-09-23)", () => {
+		const { dA, dB, xId, yId, zId } = buildTwoSessionScenario();
+		const zLineBefore = JSON.stringify(graphStore.readNodes().find((n) => n.id === zId));
+
+		const stats = deleteChatTraces(graphStore, dA.id, "delete-nodes");
+		assert.deepEqual(stats, {
+			nodesRemoved: 1,
+			edgesRemoved: 1,
+			eventsRemoved: 2,
+			mappingsRemoved: 2,
+			coverageRemoved: 2,
+			checkpointsRemoved: 1,
+		} satisfies ChatDeletionStats);
+
+		const graph = getGraph(graphStore);
+		// X survives: identity (name/statement/createdAt from the create
+		// line) intact, dA's aliases + provenance gone, dB's phrasings in.
+		const x = graph.nodes.find((n) => n.id === xId)!;
+		assert.equal(x.statement, "Shared core statement", "the shared identity survives");
+		assert.equal(x.name, "Shared core");
+		assert.ok(!x.aliases.includes("shared feel"), "the deleted creator's phrasings are stripped (owner ruling)");
+		assert.ok(x.aliases.includes("B phrasing") && x.aliases.includes("Shared core, rephrased"));
+		assert.deepEqual(x.provenance, [{ chatId: dB.id, messageId: "eu1" }], "only dB's provenance remains");
+		// Y (the orphan) is gone entirely.
+		assert.equal(graph.nodes.some((n) => n.id === yId), false);
+		assert.equal(graphStore.readNodes().some((n) => n.id === yId), false);
+		// Z (dB-only) is untouched, byte-identical.
+		assert.equal(JSON.stringify(graphStore.readNodes().find((n) => n.id === zId)), zLineBefore);
+		// Edges: dA's assertion X→Y died; dB's X→Z survived.
+		const scoped = scopedGraph([dA.id, dB.id]);
+		assert.deepEqual(scoped.edges, [{ from: xId, to: zId, type: "follows", provenance: [{ chatId: dB.id, messageId: "eu1" }] }]);
+		// Events: only dB's quiz + observation remain.
+		assert.deepEqual(scoped.events.map((e) => [e.kind, e.chatId === dB.id]), [
+			["miss", true],
+			["observation", true],
+		]);
+		// Mappings: dA's audit trail died; dB's stays.
+		const mappings = graphStore.readMappings().filter((m) => [dA.id, dB.id].includes(m.chatId));
+		assert.deepEqual(mappings, [{ chatId: dB.id, sourceId: "q1", graphNodeId: xId }, { chatId: dB.id, sourceId: "q2", graphNodeId: zId }]);
+		// Positions/embeddings: the orphan pruned everywhere.
+		const positions = graphStore.readPositions();
+		assert.equal(positions[yId], undefined);
+		assert.deepEqual(positions[xId], { x: 1, y: 1 });
+		const emb = graphStore.readEmbeddings();
+		assert.equal(emb.vectors[yId], undefined);
+		assert.ok(emb.vectors[xId] && emb.vectors[zId]);
+		assert.deepEqual(emb.clusters.at(-1), { members: [xId, zId] }, "dead members pruned from the hull");
+		// The snapshot resolves X to dB only — the deleted chat left no ghost.
+		const snapshot = graphSnapshot(graphDeps);
+		assert.deepEqual(snapshot.nodeSessions[xId], [dB.id]);
+		assert.deepEqual(snapshot.nodeObservations[xId], { [dB.id]: "shaky" });
+		assert.ok(snapshot.sessions[dB.id] && !snapshot.sessions[dA.id]);
+		// Atomic rewrites left no temp files, and appends still work.
+		assert.equal(fs.readdirSync(PATHS.graph).filter((f) => f.includes(".tmp-")).length, 0);
+		const eventsBefore = graphStore.readEvents().length;
+		graphStore.appendEvent({ nodeId: null, kind: "correct", chatId: "chat_del_append_probe", at: "2026-09-23T00:04:00.000Z" });
+		assert.equal(graphStore.readEvents().length, eventsBefore + 1);
+		// Idempotent: a second run finds nothing.
+		assert.deepEqual(deleteChatTraces(graphStore, dA.id, "delete-nodes"), { ...stats, nodesRemoved: 0, edgesRemoved: 0, eventsRemoved: 0, mappingsRemoved: 0, coverageRemoved: 0, checkpointsRemoved: 0 } satisfies ChatDeletionStats);
+	});
+
+	it("preserve-graph: only the extraction bookkeeping dies — the graph ledgers are byte-identical", () => {
+		const { dA, dB, xId, yId, zId } = buildTwoSessionScenario();
+		const before = {
+			nodes: graphStore.readNodes(),
+			edges: graphStore.readEdges(),
+			events: graphStore.readEvents(),
+			mappings: graphStore.readMappings(),
+			positions: graphStore.readPositions(),
+			embeddings: graphStore.readEmbeddings(),
+		};
+		const stats = deleteChatTraces(graphStore, dA.id, "preserve-graph");
+		assert.deepEqual(stats, {
+			nodesRemoved: 0,
+			edgesRemoved: 0,
+			eventsRemoved: 0,
+			mappingsRemoved: 0,
+			coverageRemoved: 2,
+			checkpointsRemoved: 1,
+		} satisfies ChatDeletionStats);
+		assert.deepEqual(graphStore.readNodes(), before.nodes);
+		assert.deepEqual(graphStore.readEdges(), before.edges);
+		assert.deepEqual(graphStore.readEvents(), before.events);
+		assert.deepEqual(graphStore.readMappings(), before.mappings);
+		assert.deepEqual(graphStore.readPositions(), before.positions);
+		assert.deepEqual(graphStore.readEmbeddings(), before.embeddings);
+		assert.equal(graphStore.readCoverage().some((row) => row.chatId === dA.id), false);
+		assert.equal(graphStore.readCoverage().some((row) => row.chatId === dB.id), true);
+		void xId; void yId; void zId;
+	});
+
+	it("deleteChatSession: the orchestration's gates and the sync block", async () => {
+		// 404 — unknown chat.
+		assert.deepEqual(await deleteChatSession("chat_missing_delete", "delete-nodes"), { ok: false, status: 404, code: "not_found", error: "No such session" });
+
+		const { dA } = buildTwoSessionScenario();
+		// 409 — a turn in flight.
+		beginTurn(dA.id);
+		const turnedAway = await deleteChatSession(dA.id, "delete-nodes");
+		assert.deepEqual(turnedAway, { ok: false, status: 409, code: "turn_in_flight", error: "A turn is running in this session — try again when it finishes", jobIds: [] });
+		endTurn(dA.id);
+		// 409 — running background jobs.
+		const job = jobStore.createJob({ kind: "research", chatId: dA.id, toolCallId: "del-call-1" });
+		const jobsBlocked = await deleteChatSession(dA.id, "delete-nodes");
+		assert.ok(!jobsBlocked.ok && jobsBlocked.status === 409, "refused with 409");
+		if (jobsBlocked.code === "jobs_running") assert.deepEqual(jobsBlocked.jobIds, [job.id]);
+		assert.equal(jobStore.deleteJobsForChat(dA.id), 1, "test cleanup — the job file is gone");
+
+		// Success — a terminal job rides along; the chat record dies last.
+		const doneJob = jobStore.createJob({ kind: "research", chatId: dA.id, toolCallId: "del-call-2" });
+		jobStore.updateJob(doneJob.id, { status: "done", activity: "delivered" });
+		const outcome = await deleteChatSession(dA.id, "delete-nodes");
+		assert.equal(outcome.ok, true);
+		if (outcome.ok) {
+			assert.equal(outcome.mode, "delete-nodes");
+			assert.equal(outcome.stats.nodesRemoved, 1);
+			assert.equal(outcome.jobsRemoved, 1);
+			assert.ok(outcome.graphRevision > 0, "the version stamp moved");
+		}
+		assert.equal(chatStore.getChat(dA.id), null, "the chat record is gone");
+		assert.equal(jobStore.getJob(doneJob.id), null, "the chat's job records are gone");
+		// And a second call is an honest 404.
+		assert.deepEqual(await deleteChatSession(dA.id, "delete-nodes"), { ok: false, status: 404, code: "not_found", error: "No such session" });
+	});
+});

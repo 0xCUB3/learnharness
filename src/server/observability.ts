@@ -21,6 +21,7 @@
 
 import { extractionStatuses, type ExtractionPhase } from "../agent/subagents/extraction.ts";
 import { chatStore } from "../store/chats.ts";
+import { graphRevision } from "./graph.ts";
 import { listJobs } from "./jobs.ts";
 import type { JobRecord } from "../core/contracts.ts";
 
@@ -45,7 +46,13 @@ export interface ActivityExtraction {
  *  the blob disappears when the process ends. Cost math is NOT done here:
  *  raw usage rides on the records and the client folds it with the pure
  *  helpers in core/prices.ts (transport stays thin). */
-export function activityFeed(): { jobs: ActivityJob[]; extractions: ActivityExtraction[] } {
+/** The dock's whole world + the graph's version stamp (wave 6 session
+ *  deletion): the payload carries graphRevision (max mtime across the
+ *  graph data files — see server/graph.ts) so any view can detect "the
+ *  graph changed underneath me" (a merge landed, a deletion purged) and
+ *  refetch clusters/layout. Reads never move it; the DELETE response
+ *  returns the same stamp. */
+export function activityFeed(): { jobs: ActivityJob[]; extractions: ActivityExtraction[]; graphRevision: number } {
 	const chats = chatStore.listChats();
 	const jobs: ActivityJob[] = [];
 	for (const chat of chats) {
@@ -63,5 +70,9 @@ export function activityFeed(): { jobs: ActivityJob[]; extractions: ActivityExtr
 	}));
 	// oldest-first on last activity: the stable blob order (ISO strings sort chronologically)
 	jobs.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-	return { jobs, extractions: extractions.sort((a, b) => a.startedAt - b.startedAt) };
+	return {
+		jobs,
+		extractions: extractions.sort((a, b) => a.startedAt - b.startedAt),
+		graphRevision: graphRevision(),
+	};
 }

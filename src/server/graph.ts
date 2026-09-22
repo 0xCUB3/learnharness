@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import { EMBEDDINGS_FILE, LEDGER_FILES, POSITIONS_FILE } from "../../config.ts";
 import type { GraphSnapshot } from "../core/contracts.ts";
 import type { GraphCostSummary } from "../core/cost-summary.ts";
 import { graphCostSummary } from "../core/cost-summary.ts";
@@ -34,4 +36,34 @@ export function graphCosts(): GraphCostSummary {
 		.filter((s) => s.extractions?.length)
 		.map((s) => ({ filePath: s.filePath, extractions: s.extractions! }));
 	return graphCostSummary({ chats, sources, naming: stores.graphStore.readNamingRuns() });
+}
+
+/** The graph's version stamp (session-deletion wave 6): the max mtime
+ *  across every graph data file — ledgers, positions, embeddings. Moves
+ *  on ANY graph write (merge append, settle, embed, or a deletion's
+ *  atomic rewrite), never moves on reads, and needs no bookkeeping of
+ *  its own: the fs IS the counter. Consumers poll it (the activity feed
+ *  carries it; the DELETE response returns it) to know clusters/layout
+ *  must refetch — the "graph changed underneath me" signal. */
+export function graphRevision(): number {
+	let revision = 0;
+	for (const file of [
+		LEDGER_FILES.nodes,
+		LEDGER_FILES.edges,
+		LEDGER_FILES.events,
+		LEDGER_FILES.mappings,
+		LEDGER_FILES.sessions,
+		LEDGER_FILES.coverage,
+		LEDGER_FILES.clusterLabels,
+		LEDGER_FILES.namingRuns,
+		POSITIONS_FILE,
+		EMBEDDINGS_FILE,
+	]) {
+		try {
+			revision = Math.max(revision, fs.statSync(file).mtimeMs);
+		} catch {
+			/* absent — nothing has ever written it */
+		}
+	}
+	return revision;
 }

@@ -135,6 +135,16 @@ function memoryLedgers() {
 			for (const [id, v] of Object.entries(next.vectors)) embeddings.vectors.set(id, [...v]);
 			embeddings.clusters = next.clusters.map((c) => [...c.members]);
 		},
+		// The destructive seam (wave 6 session deletion) — mirrors the real
+		// store: replace the provided ledgers' full contents.
+		rewriteLedgers: (next) => {
+			if (next.nodes) nodes.splice(0, nodes.length, ...next.nodes.map((n) => ({ ...n, provenance: [...n.provenance], aliases: [...n.aliases] })));
+			if (next.edges) edges.splice(0, edges.length, ...next.edges.map((e) => ({ ...e, provenance: [...e.provenance] })));
+			if (next.events) events.splice(0, events.length, ...next.events.map((e) => ({ ...e })));
+			if (next.mappings) mappings.splice(0, mappings.length, ...next.mappings.map((m) => ({ ...m })));
+			if (next.coverage) coverage.splice(0, coverage.length, ...next.coverage.map((c) => ({ ...c })));
+			if (next.checkpoints) checkpoints.splice(0, checkpoints.length, ...next.checkpoints.map((c) => ({ ...c })));
+		},
 	} satisfies GraphStore;
 }
 
@@ -1251,5 +1261,47 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		assert.equal(reRunViews.length, 1, "one batch: the single re-opened message");
 		assert.ok(reRunViews[0]!.includes("LEARNER [s1]") && !reRunViews[0]!.includes("LEARNER [s2]"));
 		assert.equal(coverageOf(messages(), ledgers.readCoverage(), chatId).uncoveredCount, 0, "re-covered");
+	});
+});
+
+// ─── session deletion mid-run (wave 6) ─────────────────────────────────────
+
+describe("the session-deletion guard (chat deleted mid-run)", () => {
+	it("a run whose chat dies mid-extraction aborts at the merge with nothing merged, checkpointed, or billed", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+
+		// The chat record is deleted DURING the audit model call — the worst
+		// window: findings already spent, the merge next.
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			extractor: submitModel("submit_findings", FINDINGS),
+			auditor: submitModel("submit_review", { propositions: FINDINGS.propositions, edges: [], attribution: { quiz: {} }, dropped: [] }, () => chatStore.deleteChat(chatId)),
+			labeler: submitModel("submit_labels", { labels: [] }),
+		});
+		const stats = await pipeline.runExtraction(chatId);
+
+		// The abort rides the existing abort path: info, not error; zero
+		// emissions (stats present but empty — nothing merged).
+		assert.ok(stats);
+		assert.equal(stats.nodes, 0);
+		assert.equal(stats.edges, 0);
+		assert.equal(stats.events, 0);
+
+		// Nothing merged, nothing checkpointed — the deleted chat leaves no
+		// trace for a later snapshot to resurrect.
+		assert.equal(ledgers.readNodes().length, 0);
+		assert.equal(ledgers.readEdges().length, 0);
+		assert.equal(ledgers.readEvents().length, 0);
+		assert.equal(ledgers.readMappings().length, 0);
+		assert.equal(ledgers.readCoverage().length, 0);
+		assert.equal(ledgers.readCheckpoints().length, 0);
+
+		// The run is off the registry (the finally always cleans up).
+		assert.equal(extractionStatuses().some((run) => run.chatId === chatId), false);
+		// And its partial spend died with the chat — no usage row on a ghost.
+		assert.equal(chatStore.getChat(chatId), null);
 	});
 });

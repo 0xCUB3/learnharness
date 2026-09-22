@@ -129,6 +129,19 @@ function renameChat(id: string, title: string): ChatRecord {
 	return record;
 }
 
+/** Delete the session record file entirely (session-deletion wave 6,
+ *  owner 2026-09-22). False when the id is unknown — the route turns that
+ *  into a 404. The record's graph traces and jobs are the route's
+ *  choreography (core/graph-deletion.ts), not the store's. */
+function deleteChat(id: string): boolean {
+	try {
+		fs.unlinkSync(chatFile(id));
+		return true;
+	} catch {
+		return false; // never existed, already deleted, or unreadable — same answer
+	}
+}
+
 /** Persist the session plan tree (plan tools call this in execute). */
 function saveTree(id: string, tree: PlanTree): void {
 	const record = getChat(id);
@@ -147,6 +160,7 @@ export const chatStore: ChatStore = {
 	saveTree,
 	saveSettings,
 	renameChat,
+	deleteChat,
 	appendTurnUsage,
 	appendExtractionUsage,
 };

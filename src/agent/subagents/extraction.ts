@@ -725,7 +725,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	 *  Idempotent per startedAt (the store dedupes). */
 	function persistRunUsage(chatId: string, durationMs: number, stats: EmissionStats | undefined): void {
 		const run = runningExtractions.get(chatId);
-		if (!run) return;
+		if (!run) return; // not running (tests driving stages directly)
+		// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run has no
+		// usage log to append to — the record's death is the user's choice
+		// and its partial spend logs with it (appendSourceUsage below
+		// already no-ops for a vanished source; the chat path guards here).
+		if (run.kind === "chat" && !chatStore.getChat(chatId)) return;
 		const entry: ExtractionRunUsage = {
 			startedAt: run.startedAt,
 			at: new Date().toISOString(),
@@ -787,6 +792,16 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				setPhase(chatId, "auditing", "chat");
 				const auditResult = await audit(chatId, findings, view);
 				setPhase(chatId, "merging", "chat");
+				// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
+				// merge. The deletion route aborts this run first and runs its purge
+				// as one sync block; this closes the last window — a run that slipped
+				// past the wind-down finds the chat gone HERE and rides the existing
+				// abort path (info, not error): nothing merged, nothing checkpointed.
+				if (!chatStore.getChat(chatId)) {
+					const gone = new Error(`chat deleted mid-run: ${chatId}`);
+					gone.name = "AbortError";
+					throw gone;
+				}
 				// The batch's messages, snapshotted when the run computed
 				// coverage — if a message mutates mid-run (a quiz answer
 				// merges in), the stored fingerprint won't match its new
