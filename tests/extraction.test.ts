@@ -401,6 +401,64 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		);
 	});
 
+	it("engineFor fills the stages (model slots wave): the chain replaces config pins", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const verdict: AuditResult = {
+			propositions: FINDINGS.propositions,
+			edges: [], // the edge is dropped with it
+			attribution: FINDINGS.attribution,
+			dropped: [{ ref: "p1→p2", reason: "endpoint dropped" }],
+		};
+		const consulted: string[] = [];
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			// NO direct values — the stages resolve ENTIRELY through engineFor
+			// (the role override → slot → factory-pin chain, read fresh per
+			// stage call in production; here, the scripted chain).
+			engineFor: (role) => {
+				consulted.push(role);
+				if (role === "extractor") return submitModel("submit_findings", FINDINGS);
+				if (role === "auditor") return submitModel("submit_review", verdict);
+				return submitModel("submit_labels", { labels: [] });
+			},
+		});
+		const stats = await pipeline.runExtraction(chatId);
+		assert.equal(stats.nodes, 2, "the chain-fed pipeline ran end to end — both propositions merged");
+		// The stages were resolved through the chain, in pipeline order (the
+		// labeler is fire-and-forget garnish — extractor + auditor are the
+		// pinned order).
+		assert.equal(consulted[0], "extractor");
+		assert.equal(consulted[1], "auditor");
+	});
+
+	it("direct test values still WIN over engineFor (the priority pin)", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const verdict: AuditResult = {
+			propositions: FINDINGS.propositions,
+			edges: [],
+			attribution: FINDINGS.attribution,
+			dropped: [{ ref: "p1→p2", reason: "endpoint dropped" }],
+		};
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			embedder: fakeEmbedder,
+			extractor: submitModel("submit_findings", FINDINGS),
+			auditor: submitModel("submit_review", verdict),
+			labeler: submitModel("submit_labels", { labels: [] }),
+			// If the direct values did NOT win, this throw would surface.
+			engineFor: (role) => {
+				throw new Error(`engineFor should not be consulted for ${role} when a direct value is set`);
+			},
+		});
+		const stats = await pipeline.runExtraction(chatId);
+		assert.equal(stats.nodes, 2, "the direct-value seams ran, untouched by engineFor");
+	});
+
 	it("checkpoints nothing when a stage fails", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();

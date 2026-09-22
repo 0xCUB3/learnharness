@@ -556,11 +556,17 @@ export function abortExtraction(chatId: string): boolean {
 // ─── the pipeline ───────────────────────────────────────────────────────────
 
 export interface ExtractionModels {
-	/** Test seam: a scripted engine per stage (production uses the roles). */
+	/** Test seam: a scripted engine per stage — checked FIRST, ahead of the
+	 *  engineFor chain (production wires no direct values). */
 	extractor?: PiEngine;
 	auditor?: PiEngine;
 	/** Test seam for the cluster namer (post-extraction garnish). */
 	labeler?: PiEngine;
+	/** Settings-resolved engine per role (model slots wave, 2026-09-20) —
+	 *  the same slot treatment the job runner got: the role-override →
+	 *  slot → factory-pin chain, read FRESH per stage call (a settings PUT
+	 *  between stages lands). Absent → config pins, unchanged. */
+	engineFor?: (role: ModelRole) => PiEngine;
 }
 
 export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {
@@ -609,6 +615,13 @@ export function callUsage(usage: Usage): CallUsage {
 
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
 	const { chatStore, graphStore, embedder: embed } = deps;
+	// Stage-engine resolution (model slots wave, 2026-09-20): a direct test
+	// value wins; otherwise the engineFor chain (role override → slot →
+	// factory pin, resolved FRESH per stage call server-side) — the job
+	// runner's exact treatment, closing the flagged gap where extraction
+	// stayed config-pin-bound.
+	const stageEngine = (role: ModelRole, override?: PiEngine): PiEngine | undefined =>
+		override ?? deps.engineFor?.(role);
 	// THE SHARED REGISTRIES (runs() above — globalThis): every pipeline
 	// instance (route entries in dev, tests) sees the same runs, the same
 	// single-flight guard. No module-level state left in this factory.
@@ -646,7 +659,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		const t0 = performance.now();
 
 		const findings = await runExtractor(
-			deps.extractor,
+			stageEngine("extractor", deps.extractor),
 			`Transcript:\n\n${view}`,
 			signal,
 			(usage, model, step, finishReason, tools) => {
@@ -669,7 +682,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		const t0 = performance.now();
 
 		const auditResult = await runAuditor(
-			deps.auditor,
+			stageEngine("auditor", deps.auditor),
 			`Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}\n\n` +
 				`Current knowledge graph (${graph.nodes.length} nodes):\n\n${graphView(graph.nodes)}`,
 			signal,
@@ -800,7 +813,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// clusters. Fire-and-forget — naming never fails the run.
 			refreshClusterLabels({
 				graphStore,
-				engine: deps.labeler,
+				engine: stageEngine("labeler", deps.labeler),
 				signal: runningExtractions.get(chatId)?.controller.signal,
 			}).catch(() => {});
 			return stats;
@@ -844,7 +857,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		console.info(`[extraction ${input.id}] notes extractor starting (${view.split("\n").length} source lines)`);
 		const t0 = performance.now();
 		const findings = await runNotesExtractor(
-			deps.extractor,
+			stageEngine("extractor", deps.extractor),
 			view,
 			signal,
 			(usage, model, step, finishReason, tools) => {
@@ -866,7 +879,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		);
 		const t0 = performance.now();
 		const auditResult = await runNotesAuditor(
-			deps.auditor,
+			stageEngine("auditor", deps.auditor),
 			`Source:\n\n${notesView(input)}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}\n\n` +
 				`Current knowledge graph (${graph.nodes.length} nodes):\n\n${graphView(graph.nodes)}`,
 			signal,
@@ -922,7 +935,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			);
 			refreshClusterLabels({
 				graphStore,
-				engine: deps.labeler,
+				engine: stageEngine("labeler", deps.labeler),
 				signal: runningExtractions.get(id)?.controller.signal,
 			}).catch(() => {});
 			return stats;

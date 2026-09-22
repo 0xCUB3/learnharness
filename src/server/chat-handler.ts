@@ -60,6 +60,13 @@ export const extraction = createExtractionPipeline({
 	// The REAL embedder (local transformer model): post-merge embedding
 	// batch — semantic clusters are computed and persisted here.
 	embedder: embedNewNodes,
+	// Model slots wave (2026-09-20): the extraction stages resolve the FULL
+	// chain — role override → slot → factory pin — read FRESH per stage call
+	// (the flagged gap: ExtractionModels deps were engine VALUES, keeping
+	// extractor/auditor/labeler config-pin-bound while the job runner went
+	// slot-native). Direct test values still win inside the pipeline.
+	engineFor: (role) =>
+		piEngineForSpec(resolveRoleSpec(role, stores.settingsStore.readSettings(), MODEL_PINS)),
 });
 
 /** Graph context injection (vision-context-injection.md): the runner's
