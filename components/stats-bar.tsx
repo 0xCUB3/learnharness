@@ -29,24 +29,10 @@ import { ModelControl } from "@/components/model-picker";
  */
 export function StatsBar({
 	turns,
-	chatId,
-	settings,
-	onSettingsSaved,
 	leftSlot,
 	dictationSlot,
-	noDefaultModel,
 }: {
 	turns: TurnUsage[];
-	chatId: string;
-	settings?: ChatSettings;
-	onSettingsSaved: (settings: ChatSettings) => void;
-	/** Default-surfaces only (owner, 2026-09-18): there is NO baked-in
-	 *  default model — BYOK first boot shows "no model" until the user
-	 *  picks one, and that pick IS the default from then on. Chat surfaces
-	 *  keep the catalog-default fallback (the engine runs the config pin
-	 *  when a session record has no override — the control shows what will
-	 *  actually run). */
-	noDefaultModel?: boolean;
 	/** Pre-chat only: replaces the (empty) session-data summary — home and
 	 *  the /chat/new draft mount the knowledge-context slider here. */
 	leftSlot?: ReactNode;
@@ -178,13 +164,7 @@ export function StatsBar({
 			{/* The model + thinking control — one controller for the conversation
 			    agents (prober/teacher); the record's `turns` above still folds
 			    the ACTUAL models billed, regardless of what the picker says. */}
-			<ModelControl
-				chatId={chatId}
-				settings={settings}
-				onSaved={onSettingsSaved}
-				fallbackModelId={lastModel}
-				noDefaultModel={noDefaultModel}
-			/>
+			<ModelControl />
 		</div>
 	);
 }

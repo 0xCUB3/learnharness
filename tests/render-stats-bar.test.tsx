@@ -24,12 +24,10 @@ function turn(over: Partial<TurnUsage> = {}): TurnUsage {
 	};
 }
 
-const SETTINGS_STUB = (_s: ChatSettings) => {};
-
 describe("stats bar", () => {
 	it("renders — everywhere when the record has no turns yet (doctrine)", () => {
 		const html = renderToStaticMarkup(
-			<StatsBar turns={[]} chatId="chat_x" onSettingsSaved={SETTINGS_STUB} />,
+			<StatsBar turns={[]} />,
 		);
 		assert.match(html, /data-testid="stats-bar"/);
 		assert.match(html, /data-testid="stats-context">—</);
@@ -47,7 +45,7 @@ describe("stats bar", () => {
 
 	it("folds context + cost from the turns log (core/prices, no local math)", () => {
 		const html = renderToStaticMarkup(
-			<StatsBar turns={[turn(), turn()]} chatId="chat_x" onSettingsSaved={SETTINGS_STUB} />,
+			<StatsBar turns={[turn(), turn()]} />,
 		);
 		// last turn's last call: 10k in + 1k out = 11k; pi catalog limit
 		// 1_048_576 → "1M" (tables regenerated from pi-ai's catalog)
@@ -55,14 +53,15 @@ describe("stats bar", () => {
 		// pi catalog price 0.075/0.25 per 1M: each turn 10k×0.075 + 1k×0.25
 		// = $0.001 → two = $0.0020
 		assert.match(html, /data-testid="stats-cost">\$0\.0020</);
-		// model button label falls back to the last turn's actual model
-		// (the catalog + settings are what drive it once loaded)
-		assert.match(html, /data-testid="stats-model"[^>]*>\s*<span[^>]*>Glm 5\.3 Flash<\/span>/);
+		// model button label: SSR (record fetch not run yet) reads "—" —
+		// the strong slot arrives client-side via GET /api/settings; the
+		// turn log below still folds the ACTUAL models billed
+		assert.match(html, /data-testid="stats-model"[^>]*>\s*<span[^>]*>—<\/span>/);
 	});
 
 	it("shows — for cost when every turn is unpriceable, never a fake $0", () => {
 		const html = renderToStaticMarkup(
-			<StatsBar turns={[turn({ model: "nope/unknown" })]} chatId="chat_x" onSettingsSaved={SETTINGS_STUB} />,
+			<StatsBar turns={[turn({ model: "nope/unknown" })]} />,
 		);
 		assert.match(html, /data-testid="stats-cost">—</);
 		// unknown model also kills the context limit

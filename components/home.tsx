@@ -167,15 +167,11 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 					</form>
 					{/* Same as the chat view's under-composer stats bar (owner) — no
 					    session yet, so the free LEFT side carries the knowledge-context
-					    budget (session-data slot), while the RIGHT keeps the model +
-					    thinking control (deferred save). */}
+					    budget (session-data slot), while the RIGHT keeps the strong-
+					    slot control (fix wave: the pills write /api/settings/models). */}
 					<StatsBar
 						dictationSlot={<DictationBar dictation={dictation} />}
 						turns={[] as TurnUsage[]}
-						chatId=""
-						noDefaultModel
-						settings={settings}
-						onSettingsSaved={saveDraft}
 						leftSlot={
 							<GraphContextControl
 								value={effectiveContextTokens(settings)}

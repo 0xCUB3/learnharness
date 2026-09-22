@@ -388,12 +388,16 @@ export function AgentSection({
 			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body));
 	}
 
-	/** The pinned Default row — clears this control's override (absent key
-	 *  = the factory pin). Same row language as the shared menu's list rows. */
-	const defaultRow = (active: boolean, onPick: () => void) => (
+	/** The "—" row — THINKING menus only: clears the thinking pin (the
+	 *  slot keeps its model; the tier's resolved budget takes over). Model
+	 *  menus carry no such row — unpicking a model would re-arm the
+	 *  first-run gate, and a "default" model is not a thing in this app
+	 *  (owner, fix wave: no factory fallback is ever presented as a
+	 *  choice; an unpicked slot just reads "—"). */
+	const noneRow = (active: boolean, onPick: () => void) => (
 		<button
 			type="button"
-			data-testid="menu-default"
+			data-testid="menu-none"
 			onClick={onPick}
 			className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted ${
 				active ? "bg-muted/60 text-card-foreground" : "text-card-foreground"
@@ -514,10 +518,12 @@ export function AgentSection({
 					const modelId = override?.model?.id ?? "";
 					const provider = override?.model?.provider ?? "";
 					const thinking = override?.thinkingLevel ?? "";
-					// The tier's resolved pin (override → factory): the Default
-					// hint names it; the thinking list resolves from its levels.
+					// The tier's resolved pin is machinery only now (owner, fix
+					// wave): the UI never names the factory fallback — the hint
+					// carries the roster, the triggers read "—" when unpicked — but
+					// the pin still governs the thinking level LIST when no override
+					// names a model to read levels from.
 					const pin = slots?.[slot];
-					const defaultName = pin ? prettyModel(pin.model.id) : "config pin";
 					// The model whose levels govern the thinking list: the
 					// override, else the resolved pin (when it's in the federated
 					// catalog); the standard ladder as the last fallback.
@@ -532,7 +538,7 @@ export function AgentSection({
 						<SettingsRow
 							key={slot}
 							label={SLOT_META[slot].label}
-							hint={`${SLOT_META[slot].roster} · default: ${defaultName}`}
+							hint={SLOT_META[slot].roster}
 							testid={`slot-row-${slot}`}
 						>
 							{/* The anchor for the outside-click contract is the
@@ -543,7 +549,7 @@ export function AgentSection({
 							>
 								<MenuTrigger
 									value={modelId ? prettyModel(modelId) : ""}
-									emptyLabel="Default"
+									emptyLabel="—"
 									ariaLabel={`${SLOT_META[slot].label} model`}
 									testid={`slot-model-${slot}`}
 									open={thisMenuOpen === "model"}
@@ -552,7 +558,7 @@ export function AgentSection({
 								/>
 								<MenuTrigger
 									value={thinking}
-									emptyLabel="Default"
+									emptyLabel="—"
 									ariaLabel={`${SLOT_META[slot].label} thinking`}
 									testid={`slot-thinking-${slot}`}
 									open={thisMenuOpen === "thinking"}
@@ -565,17 +571,10 @@ export function AgentSection({
 										testid={`slot-model-menu-${slot}`}
 										menuClass="flex w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 									>
-										{defaultRow(
-											modelId === "",
-											() => {
-												onModelsChange(composeSlotModel(models, slot, "", "", thinking));
-												setOpenMenu(null);
-											},
-										)}
 										<ModelMenuList
 											models={slotCatalog ?? undefined}
-											effectiveId={modelId || pin?.model.id}
-											effectiveProvider={provider || pin?.model.provider}
+											effectiveId={modelId}
+											effectiveProvider={provider}
 											onPick={(entry) => {
 												onModelsChange(composeSlotModel(models, slot, entry.provider, entry.id, thinking));
 												setOpenMenu(null);
@@ -594,7 +593,7 @@ export function AgentSection({
 										testid={`slot-thinking-menu-${slot}`}
 										menuClass="flex w-44 flex-col gap-0.5 rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 									>
-										{defaultRow(
+										{noneRow(
 											thinking === "",
 											() => {
 												onModelsChange(composeSlotModel(models, slot, provider, modelId, ""));

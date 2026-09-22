@@ -1,17 +1,20 @@
 /**
- * The model catalog's server surface (model-control wave, 2026-09-12):
- * pi-ai's shipped OpenRouter catalog projected to client-safe DTOs for the
- * picker (GET /api/models), plus the validation gate for per-chat settings
- * (PUT /api/chats/[id]/settings).
+ * The model catalog's server surface (model-control wave, 2026-09-12;
+ * federated since the model-slots wave, 2026-09-20): pi-ai's catalog for
+ * every KEYED provider, projected to client-safe DTOs for the picker (GET
+ * /api/models), plus the validation gate for settings writes (PUT
+ * /api/settings/* — the per-chat settings PUT is retired from the UI;
+ * legacy records' per-chat overrides still resolve server-side).
  *
  * pi-ai owns ALL the data: the catalog (id/name/cost/context/modality/
  * thinkingLevelMap) and the per-model thinking truth
  * (getSupportedThinkingLevels / clampThinkingLevel). This module only
  * projects and validates — no second registry to drift out of sync.
  *
- * Multi-provider future: `getModels()` is called per configured provider,
- * so a second provider (pi-ai ships ~30) appears in the picker by adding
- * it to piModels() in src/agent/models.ts — nothing here changes.
+ * Federation: `getModels()` is called per keyed provider (federated, the
+ * model-slots wave), so a provider appears in the picker exactly when its
+ * key is present — piModels() in src/agent/models.ts owns the provider
+ * set; nothing here changes.
  */
 
 import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";

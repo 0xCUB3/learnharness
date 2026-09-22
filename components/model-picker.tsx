@@ -1,32 +1,25 @@
 "use client";
 
-/**
- * The model + thinking control (model-control wave, 2026-09-12) — the stats
- * bar's right side. ONE controller for the conversation agents (prober +
- * teacher are functionally one agent); background sub-agents stay
- * config-pinned. Writes go to PUT /api/chats/[id]/settings (validated
- * server-side against pi-ai's catalog) and take effect on the next turn by
- * construction — the agents are stateless per turn.
- *
- * The data is pi-ai's catalog (GET /api/models): the model menu is a fuzzy
- * search over "provider id name" (core/fuzzy.ts — pi's /model pattern), and
- * the thinking menu lists EXACTLY the chosen model's supported levels
- * (getSupportedThinkingLevels — GLM-5.3-flash shows low|high|max, never a
- * level it would silently clamp). Menus open ABOVE the buttons (the
- * composer owns everything below).
- */
-
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse } from "@/src/core";
+import type { ModelCatalogEntry, ModelCatalogResponse, ModelsSettings } from "@/src/core";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
+import { composeSlotModel } from "@/components/settings/agent-section";
 
-/** GET /api/models is fetched once per page load and shared by every
- *  picker instance (the catalog is static within a pi-ai version). */
+/** GET /api/models is cached per page load for instant menu opens, but
+ *  the federation is LIVE per call — keys saved mid-session widen the
+ *  catalog immediately server-side. ModelControl therefore re-fetches on
+ *  every model-menu open (stale-while-revalidate: the cached list shows
+ *  instantly, the fresh one swaps in while the menu is open). */
 let catalogCache: ModelCatalogResponse | undefined;
 let catalogInflight: Promise<ModelCatalogResponse> | undefined;
 
-function fetchCatalog(): Promise<ModelCatalogResponse> {
+function fetchCatalog(force = false): Promise<ModelCatalogResponse> {
+	if (force) {
+		catalogCache = undefined;
+		catalogInflight = undefined;
+	}
 	catalogInflight ??= fetch("/api/models")
 		.then((r) => {
 			if (!r.ok) throw new Error(`catalog request failed: ${r.status}`);
@@ -37,13 +30,13 @@ function fetchCatalog(): Promise<ModelCatalogResponse> {
 			return c;
 		})
 		.catch((err) => {
-			catalogInflight = undefined; // retry on next mount
+			catalogInflight = undefined; // retry on next mount/open
 			throw err;
 		});
 	return catalogInflight;
 }
 
-function useModelCatalog(): ModelCatalogResponse | undefined {
+function useModelCatalog(): { catalog: ModelCatalogResponse | undefined; refresh: () => void } {
 	const [catalog, setCatalog] = useState(catalogCache);
 	useEffect(() => {
 		if (catalogCache) return;
@@ -51,14 +44,21 @@ function useModelCatalog(): ModelCatalogResponse | undefined {
 		fetchCatalog()
 			.then((c) => alive && setCatalog(c))
 			.catch(() => {
-				/* the picker stays closed on failure; the buttons still display
-				   the effective model from props */
+				/* the picker stays closed on failure; the buttons still
+				   display the strong slot from the record fetch */
 			});
 		return () => {
 			alive = false;
 		};
 	}, []);
-	return catalog;
+	const refresh = useCallback(() => {
+		fetchCatalog(true)
+			.then(setCatalog)
+			.catch(() => {
+				/* refresh is best-effort: the cached list stays on failure */
+			});
+	}, []);
+	return { catalog, refresh };
 }
 
 const LEVEL_LABEL: Record<string, string> = {
@@ -71,43 +71,51 @@ const LEVEL_LABEL: Record<string, string> = {
 	max: "Max",
 };
 
-
-export function ModelControl({
-	chatId,
-	settings,
-	onSaved,
-	fallbackModelId,
-	noDefaultModel,
-}: {
-	chatId: string;
-	/** The record's current settings (undefined = config pin). */
-	settings?: ChatSettings;
-	/** Lifts the persisted settings into the chat view's state. */
-	onSaved: (settings: ChatSettings) => void;
-	/** The last turn's actual model (from the turns log) — the label until
-	 *  the catalog (with config's defaults) finishes loading. */
-	fallbackModelId?: string;
-	/** Default-surfaces only (owner, 2026-09-18): NO baked-in default —
-	 *  unset settings render "no model"/"—" (BYOK first boot), never the
-	 *  config pin. Chat surfaces keep the catalog-default fallback (the
-	 *  engine runs the pin, so the control shows what will run). */
-	noDefaultModel?: boolean;
-}) {
-	const catalog = useModelCatalog();
+/**
+ * THE STRONG-SLOT CONTROL (fix wave, owner ruling: "one and the same").
+ * The composer's model + thinking pills ARE the strong slot — the tier
+ * that runs prober + teacher. Reads: the raw models section (GET
+ * /api/settings) for the user's pick, plus the federated catalog for the
+ * menus. Writes: PUT /api/settings/models via composeSlotModel — the same
+ * seam the settings Agent section and the SetupDialog write, so there is
+ * exactly one strong slot in the world and every surface edits it.
+ *
+ * Unpicked reads "—" (the no-factory-fallback language: the UI never
+ * presents a default model; the engine-side pin still resolves, the UI
+ * never claims it). Legacy per-chat model overrides on old records keep
+ * resolving server-side — the UI simply no longer writes that field
+ * anywhere.
+ */
+export function ModelControl() {
+	const { catalog, refresh } = useModelCatalog();
+	const [models, setModels] = useState<ModelsSettings | undefined>();
 	const [open, setOpen] = useState<"model" | "thinking" | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 
-	const defaults = catalog?.defaults;
-	const effectiveId = noDefaultModel
-		? settings?.model?.id
-		: (settings?.model?.id ?? defaults?.model.id ?? fallbackModelId);
-	const effectiveLevel = noDefaultModel
-		? settings?.thinkingLevel
-		: (settings?.thinkingLevel ?? defaults?.thinkingLevel);
-	const entry = catalog?.models.find((m) => m.id === effectiveId);
-	const levels = entry?.supportedLevels ?? [];
+	useEffect(() => {
+		let alive = true;
+		fetch("/api/settings")
+			.then((r) => r.json() as Promise<{ settings: { models?: ModelsSettings } | null }>)
+			.then((body) => alive && setModels(body.settings?.models ?? undefined))
+			.catch(() => {
+				/* the record fetch failing leaves the control read-only
+				   ("—" triggers, closed menus) — same posture as a
+				   catalog failure */
+			});
+		return () => {
+			alive = false;
+		};
+	}, []);
 
+	const override = models?.strong;
+	const effectiveId = override?.model?.id;
+	const effectiveProvider = override?.model?.provider;
+	const effectiveLevel = override?.thinkingLevel;
+	const entry = catalog?.models.find(
+		(m) => m.id === effectiveId && m.provider === effectiveProvider,
+	);
+	const levels = entry?.supportedLevels ?? [];
 
 	// The intuitive dropdown contract (owner, stats-control round 1): any
 	// click outside the open menu — or an Esc keypress — closes it. Only the
@@ -136,18 +144,14 @@ export function ModelControl({
 		};
 	}, [open]);
 
+	// One write seam: composeSlotModel preserves the cheap/vision siblings
+	// (replace-whole-section discipline) and the per-field independence of
+	// model + thinkingLevel within the strong slot.
 	const save = useCallback(
-		async (next: ChatSettings) => {
+		async (next: ModelsSettings) => {
 			setError(null);
-			// Home view (pre-chat): defer — the selection rides along on the
-			// chat POST and is PUT after creation (onSaved is still lifted).
-			if (!chatId) {
-				onSaved(next);
-				setOpen(null);
-				return;
-			}
 			try {
-				const res = await fetch(`/api/chats/${chatId}/settings`, {
+				const res = await fetch("/api/settings/models", {
 					method: "PUT",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(next),
@@ -157,14 +161,13 @@ export function ModelControl({
 					setError(body.error ?? `settings rejected (${res.status})`);
 					return;
 				}
-				const { settings: saved } = (await res.json()) as { settings: ChatSettings };
-				onSaved(saved);
+				setModels(next);
 				setOpen(null);
 			} catch {
 				setError("Could not reach the server — try again.");
 			}
 		},
-		[chatId, onSaved],
+		[],
 	);
 
 	// Shortcut seams (keyboard wave A): ⌘K opens the model menu (the
@@ -175,63 +178,66 @@ export function ModelControl({
 		const onOpenPicker = () => {
 			setOpen("model");
 			setError(null);
+			refresh(); // mid-session key changes widen the menu (cache fix)
 		};
 		window.addEventListener("lh:kbd-open-model-picker", onOpenPicker);
 		return () => window.removeEventListener("lh:kbd-open-model-picker", onOpenPicker);
-	}, []);
+	}, [refresh]);
 
 	useEffect(() => {
 		const onCycleThinking = () => {
 			if (levels.length === 0) return;
 			const idx = effectiveLevel === undefined ? -1 : levels.indexOf(effectiveLevel);
-			void save({ ...(settings ?? {}), thinkingLevel: levels[(idx + 1) % levels.length] });
+			const next = levels[(idx + 1) % levels.length];
+			if (next === undefined) return;
+			void save(composeSlotModel(models, "strong", effectiveProvider ?? "", effectiveId ?? "", next));
 		};
 		window.addEventListener("lh:kbd-cycle-thinking", onCycleThinking);
 		return () => window.removeEventListener("lh:kbd-cycle-thinking", onCycleThinking);
-	}, [levels, effectiveLevel, save, settings]);
+	}, [levels, effectiveLevel, effectiveProvider, effectiveId, models, save]);
 
 	// Selecting a model (click and Enter share one path): keep the
 	// thinking level only when the new model supports it — otherwise
-	// drop it (config fallback clamps honestly; a carry-over would 400).
-	// Replace-whole discipline: spread the current settings — a model pick
-	// must not silently clear a sibling override (graphContextTokens).
+	// drop it (a carry-over would 400 at the server's catalog gate).
 	const pickModel = (m: ModelCatalogEntry) => {
 		const nextLevel =
-			effectiveLevel !== undefined && m.supportedLevels.includes(effectiveLevel)
-				? effectiveLevel
-				: undefined;
-		void save({ ...(settings ?? {}), model: { provider: m.provider, id: m.id }, thinkingLevel: nextLevel });
+			effectiveLevel !== undefined && m.supportedLevels.includes(effectiveLevel) ? effectiveLevel : undefined;
+		void save(composeSlotModel(models, "strong", m.provider, m.id, nextLevel ?? ""));
 	};
 
+	// Stale-while-revalidate on manual open too (⌘K covers the keyboard
+	// path above): the cached list shows instantly, the fresh federation
+	// swaps in when it lands.
+	const openMenu = (kind: "model" | "thinking") => {
+		setOpen((o) => (o === kind ? null : kind));
+		setError(null);
+		if (kind === "model") refresh();
+	};
 
 	return (
 		<div ref={containerRef} className="relative flex items-center gap-1.5" data-testid="model-control">
 			<button
 				type="button"
 				data-testid="stats-model"
-				onClick={() => {
-					setOpen((o) => (o === "model" ? null : "model"));
-					setError(null);
-				}}
+				onClick={() => openMenu("model")}
 				aria-expanded={open === "model"}
-				title="Conversation model — applies next turn"
+				title="Strong tier model (prober + teacher) — set app-wide"
 				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
 			>
 				<span className="text-card-foreground">{effectiveId ? prettyModel(effectiveId) : "—"}</span>
-					<span aria-hidden className="text-xs text-muted-foreground">▾</span>
+				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>
 			<button
 				type="button"
 				data-testid="stats-thinking"
 				onClick={() => {
-					// No model yet (noDefaultModel first boot) → nothing to set a
-					// level FOR: the click is a no-op, never an empty menu.
+					// No model picked → nothing to set a level FOR: the click
+					// is a no-op, never an empty menu.
 					if (entry === undefined) return;
-					setOpen((o) => (o === "thinking" ? null : "thinking"));
-					setError(null);
+					openMenu("thinking");
 				}}
 				aria-expanded={open === "thinking"}
-				title="Thinking level — applies next turn"
+				title="Strong tier thinking level — set app-wide"
 				className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 transition-colors hover:border-border hover:bg-muted"
 			>
 				{/* Just the level — the button reads like the model button reads
@@ -243,7 +249,8 @@ export function ModelControl({
 			</button>
 
 			{/* The shared dropdown body (extracted 2026-09-20): the agent
-			    settings' role selects use the exact same one. */}
+			    settings' slot selects and the setup dialog use the exact same
+			    one. */}
 			{open === "model" && (
 				<div
 					data-testid="model-menu"
@@ -253,8 +260,13 @@ export function ModelControl({
 					<ModelMenuList
 						models={catalog?.models}
 						effectiveId={effectiveId}
+						effectiveProvider={effectiveProvider}
 						onPick={pickModel}
-						footer="Applies to the next turn · background agents stay config-pinned"
+						footer={
+							catalog && catalog.models.length === 0
+								? "No models — add a provider key in Keys"
+								: "Strong tier — runs prober + teacher, app-wide"
+						}
 					/>
 				</div>
 			)}
@@ -267,7 +279,9 @@ export function ModelControl({
 					<ThinkingMenuList
 						levels={catalog ? levels : []}
 						effectiveLevel={effectiveLevel}
-						onPick={(level) => void save({ ...(settings ?? {}), thinkingLevel: level as ChatSettings["thinkingLevel"] })}
+						onPick={(level) =>
+							void save(composeSlotModel(models, "strong", effectiveProvider ?? "", effectiveId ?? "", level as ThinkingLevel))
+						}
 						empty={catalog ? (effectiveId ? `${prettyModel(effectiveId)} has no thinking levels.` : "Pick a model first.") : "Loading…"}
 						footer="Levels this model actually supports"
 					/>

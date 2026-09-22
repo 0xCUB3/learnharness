@@ -125,10 +125,6 @@ export function DraftShell({
 								<StatsBar
 									dictationSlot={<DictationBar dictation={dictation} />}
 									turns={[]}
-									chatId=""
-									noDefaultModel
-									settings={settings}
-									onSettingsSaved={onSettingsSaved}
 									// The session-data slot (owner, 2026-09-15): pre-chat the left
 									// side is free — the knowledge-context budget lives exactly
 									// where session data will sit once a session exists.
@@ -161,11 +157,10 @@ export function NewSession({
 	const [text, setText] = useState("");
 	const [busy, setBusy] = useState(false);
 	// THE default settings (owner, 2026-09-18): this surface and the home
-	// topic dock ARE the settings page for the default model — no baked-in
-	// default exists; the user's last choice (server-rendered in via
-	// initialSettings, shared with home through data/default-settings.json)
-	// IS the default. ModelControl with an empty chatId never PUTs — it
-	// hands the choice up; it still rides the session POST then PUT-on-create.
+	// topic dock carries only the knowledge-context budget now (fix
+	// wave): the model pills ARE the strong slot (PUT /api/settings/models,
+	// app-wide) — the per-chat model pick is retired. saveDraft still
+	// lifts the context budget so it rides the session POST.
 	const { settings, save: saveDraft } = useDefaultSettings(initialSettings);
 
 	// First-run gate (model-slots wave, owner 2026-09-20): the send

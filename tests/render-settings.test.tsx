@@ -59,7 +59,7 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 });
 
 describe("AgentSection (thin SSR)", () => {
-	it("renders the three model SLOT rows (slots-only, owner ruling 2026-09-20), Default-triggered dropdowns", () => {
+	it("renders the three model SLOT rows (slots-only, fix wave: unpicked reads —, no Default option)", () => {
 		const html = renderToStaticMarkup(<AgentSection agent={undefined} models={undefined} onSectionChange={() => {}} onModelsChange={() => {}} />);
 		for (const slot of ["strong", "cheap", "vision"]) {
 			assert.ok(html.includes(`data-testid="slot-row-${slot}"`), slot);
@@ -70,7 +70,12 @@ describe("AgentSection (thin SSR)", () => {
 			// the roster hint rides every row
 			assert.ok(html.includes("Prober + Teacher") || slot !== "strong", "strong roster");
 		}
-		assert.equal((html.match(/>Default<\/span>/g) ?? []).length, 6, "three slots × two Default triggers");
+		// Fix wave: no Default anywhere — an unpicked slot reads "—"
+		// (the owner's no-factory-fallback language), and no menu
+		// carries a Default row (menu-default testid is retired).
+		assert.equal((html.match(/>Default<\/span>/g) ?? []).length, 0, "no Default trigger");
+		assert.ok(!html.includes('data-testid="menu-default"'), "no Default row");
+		assert.equal((html.match(/>—<\/span>/g) ?? []).length, 6, "three slots × two — triggers");
 		// the per-role rows are GONE (slots-only)
 		for (const role of ["researcher", "demoBuilder", "visualMaker"]) {
 			assert.ok(!html.includes(`data-testid="role-row-${role}"`), `${role} retired`);

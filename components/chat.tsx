@@ -118,7 +118,6 @@ export function Chat({
 	initialMessages,
 	initialPrompt,
 	initiallyInFlight,
-	initialSettings,
 }: {
 	chatId: string;
 	title: string;
@@ -127,8 +126,6 @@ export function Chat({
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
 	initiallyInFlight?: boolean;
-	/** The record's per-chat model/thinking settings (the picker's seed). */
-	initialSettings?: ChatSettings;
 }) {
 	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop } =
 		useChat<TeacherUIMessage>({
@@ -445,7 +442,6 @@ export function Chat({
 	const [turns, setTurns] = useState<TurnUsage[]>([]);
 	// The per-chat model control state (model-picker writes via PUT; the
 	// record is the source of truth, lifted here so the stats bar re-renders).
-	const [settings, setSettings] = useState<ChatSettings | undefined>(initialSettings);
 	// The dock's reserved tail height (DockOverlay reports it; the spacer at
 	// the end of the transcript renders it). Lives here because the spacer is
 	// inside the scroller while the dock overlays OUTSIDE it — two parents.
@@ -963,8 +959,6 @@ export function Chat({
 				<DockOverlay
 					pending={pending}
 					chatId={chatId}
-					settings={settings}
-					onSettingsSaved={setSettings}
 					plan={<PlanMarginalia messages={messages} />}
 					onOpenPlan={() => setPlanOpen(true)}
 					requiresReveal={requiresReveal}
@@ -1054,8 +1048,6 @@ function DockOverlay({
 	composer,
 	onSubmitAnswer,
 	chatId,
-	settings,
-	onSettingsSaved,
 	onReserve,
 	plan,
 	onOpenPlan,
@@ -1073,8 +1065,6 @@ function DockOverlay({
 	onSubmitAnswer: (output: QuestionAnswerData) => void;
 	/** The model control's pass-through (the stats bar hosts it). */
 	chatId: string;
-	settings?: ChatSettings;
-	onSettingsSaved: (settings: ChatSettings) => void;
 	/** Reports the dock's settled height (block + gradient) — ChatView's
 	 *  dockReserve state feeds the transcript's spacer from it. */
 	onReserve: (h: number) => void;
@@ -1351,9 +1341,6 @@ function DockOverlay({
 					    morphing shell so it never joins a height animation. */}
 					<StatsBar
 						turns={turns}
-						chatId={chatId}
-						settings={settings}
-						onSettingsSaved={onSettingsSaved}
 						dictationSlot={dictationSlot}
 					/>
 				</div>
