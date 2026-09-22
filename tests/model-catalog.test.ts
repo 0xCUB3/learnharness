@@ -1,11 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { modelCatalog, validateChatSettings, validateModelsSettings, catalogDefaultsFor, catalogProviders, catalogSlots, toModelDto, rolePinsFor, catalogRolePins } from "../src/server/model-catalog.ts";
+import type { SettingsValidation } from "../src/server/model-catalog.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { DEFAULT_THINKING_ORDER } from "../config.ts";
 import { piEngineForSpec, piModels } from "../src/agent/models.ts";
 import { BACKGROUND_MODEL_ROLES } from "../src/core/settings.ts";
 import { resolveSettings } from "../src/core/settings-resolution.ts";
+import { readSettings } from "../src/store/settings.ts";
+import { effectiveSettings } from "../src/server/stores.ts";
 
 // The model-control wave (2026-09-12): pi-ai owns the registry — these pins
 // hold our projection + validation honest against the shipped catalog, and
@@ -24,6 +27,28 @@ function glmModel() {
 	const glm = piModels().getModel("openrouter", "z-ai/glm-5.3-flash");
 	assert.ok(glm, "glm-5.3-flash in catalog");
 	return glm!;
+}
+
+/** The record's resolved tier as seen by the validation fallbacks —
+ *  machine-aware truth (data/settings.json belongs to settings-store.test.ts
+ *  under the one-fs-owner discipline, so READ it, never pin it): on a
+ *  scratch worktree the record is empty, on the owner's machine slots are
+ *  configured; the expected verdicts below follow whichever holds. */
+/** The machine-aware expected verdict for a bare-level validation: mirrors
+ *  the fallback chain exactly — no resolved tier → rides unchecked; a tier
+ *  whose model left the catalog → rejected; else the supported-level check. */
+function expectBareLevelVerdict(verdict: SettingsValidation, tier: "strong" | "cheap" | "vision") {
+	const slot = effectiveSettings().models[tier];
+	if (!slot) {
+		assert.deepEqual(verdict, { ok: true }, "no model to check against → accepted (clamps at run)");
+		return;
+	}
+	const model = piModels().getModel(slot.provider, slot.id);
+	if (!model) {
+		assert.equal(verdict.ok, false, "a vanished model is rejected honestly");
+		return;
+	}
+	assert.equal(verdict.ok, getSupportedThinkingLevels(model).includes("minimal"));
 }
 
 describe("the model catalog projection", () => {
@@ -55,11 +80,29 @@ describe("the model catalog projection", () => {
 		for (const id of keyless) {
 			assert.ok(!models.some((m) => m.provider === id), `keyless ${id} must not federate`);
 		}
-		// BYOK: nothing configured in this environment's record → defaults NULL,
-		// slots NULL — no phantom ids anywhere in the payload
-		assert.equal(defaults, null);
+		// BYOK: the payload carries ONLY what the machine's record actually
+		// says — never a phantom id. data/settings.json belongs to
+		// settings-store.test.ts (the one-fs-owner discipline), so READ the
+		// resolved truth here instead of pinning it: on a scratch worktree
+		// the record is empty (defaults/slots NULL), on the owner's machine
+		// configured slots must surface exactly as configured.
+		const record = readSettings();
+		const chat = record?.chat;
+		const strong = effectiveSettings().models.strong;
+		if (chat?.model || strong) {
+			assert.ok(defaults, "a configured chain yields a default");
+			assert.deepEqual(defaults!.model, chat?.model ?? { provider: strong!.provider, id: strong!.id });
+		} else {
+			assert.equal(defaults, null);
+		}
 		for (const name of ["strong", "cheap", "vision"] as const) {
-			assert.equal(slots[name], null, name);
+			const stored = record?.models?.[name];
+			if (stored?.model) {
+				assert.ok(slots[name], name);
+				assert.deepEqual(slots[name]!.model, stored.model);
+			} else {
+				assert.equal(slots[name], null, name);
+			}
 		}
 	});
 
@@ -129,10 +172,18 @@ describe("the background roles' resolved pins (rolePins)", () => {
 });
 
 describe("the model slots surface (model slots wave, 2026-09-20)", () => {
-	it("catalogSlots reports NULL when a tier holds no model", () => {
+	it("catalogSlots projects the record's tiers — NULL only where a tier holds no model", () => {
+		// machine-aware (one-fs-owner: READ the record, never pin it)
+		const record = readSettings();
 		const slots = catalogSlots();
 		for (const name of ["strong", "cheap", "vision"] as const) {
-			assert.equal(slots[name], null, name);
+			const stored = record?.models?.[name];
+			if (stored?.model) {
+				assert.ok(slots[name], name);
+				assert.deepEqual(slots[name]!.model, stored.model);
+			} else {
+				assert.equal(slots[name], null, name);
+			}
 		}
 	});
 
@@ -177,8 +228,10 @@ describe("the models-section validation gate", () => {
 			false,
 		);
 		// (a level-only slot never passes the WRITE parser — owner, 2026-09-22;
-		// the validation gate tolerates it here with nothing to check against)
-		assert.equal(validateModelsSettings({ strong: { thinkingLevel: "minimal" } }).ok, true);
+		// the validation gate falls back to the tier's RESOLVED model —
+		// machine-aware: the record's strong tier decides the verdict)
+		const levelOnly = validateModelsSettings({ strong: { thinkingLevel: "minimal" } });
+		expectBareLevelVerdict(levelOnly, "strong");
 	});
 
 	it("accepts empty settings (the clear-slots write)", () => {
@@ -199,7 +252,9 @@ describe("the settings validation gate", () => {
 	});
 
 	it("a bare thinking level checks against the chat model, else the strong slot, else rides unchecked", () => {
-		assert.deepEqual(validateChatSettings({ thinkingLevel: "minimal" }), { ok: true }, "no model to check against → accepted (clamps at run)");
+		// machine-aware: with a record-carried strong slot the level checks
+		// against it; with none it rides unchecked (clamps at run).
+		expectBareLevelVerdict(validateChatSettings({ thinkingLevel: "minimal" }), "strong");
 	});
 
 	it("rejects unknown providers and models", () => {
