@@ -6,6 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
 import { composeSlotModel } from "@/components/settings/agent-section";
+import { MenuShell } from "@/components/menu-shell";
 
 /** GET /api/models is cached per page load for instant menu opens, but
  *  the federation is LIVE per call — keys saved mid-session widen the
@@ -252,9 +253,11 @@ export function ModelControl() {
 			    settings' slot selects and the setup dialog use the exact same
 			    one. */}
 			{open === "model" && (
-				<div
-					data-testid="model-menu"
-					className="absolute bottom-full right-0 z-40 mb-1.5 flex w-[22rem] flex-col rounded-xl border bg-card p-2 text-xs shadow-xl"
+				<MenuShell
+					anchorRef={containerRef}
+					testid="model-menu"
+					preferredSide="up"
+					menuClass="flex w-[22rem] flex-col rounded-xl border bg-card p-2 text-xs shadow-xl"
 				>
 					{error && <div className="mb-1.5 text-destructive">{error}</div>}
 					<ModelMenuList
@@ -268,13 +271,15 @@ export function ModelControl() {
 								: "Strong tier — runs prober + teacher, app-wide"
 						}
 					/>
-				</div>
+				</MenuShell>
 			)}
 
 			{open === "thinking" && (
-				<div
-					data-testid="thinking-menu"
-					className="absolute bottom-full right-0 z-40 mb-1.5 flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+				<MenuShell
+					anchorRef={containerRef}
+					testid="thinking-menu"
+					preferredSide="up"
+					menuClass="flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
 				>
 					<ThinkingMenuList
 						levels={catalog ? levels : []}
@@ -286,7 +291,7 @@ export function ModelControl() {
 						footer="Levels this model actually supports"
 					/>
 					{error && <div className="mt-1 text-destructive">{error}</div>}
-				</div>
+				</MenuShell>
 			)}
 		</div>
 	);

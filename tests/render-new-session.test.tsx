@@ -74,14 +74,41 @@ describe("DraftShell — the sessionless surface", () => {
 		);
 		// The chat composer, ready for the first message.
 		assert.ok(html.includes('data-testid="composer"'));
-		// The pre-chat model control (its empty-chatId defer branch lifts here).
+		// The pre-chat model control (fix wave: the strong-slot control —
+		// app-wide, no per-chat write, no empty-chatId defer).
 		assert.ok(html.includes('data-testid="stats-model"'));
+		// No CTA by default: a configured surface stays quiet.
+		assert.ok(!html.includes('data-testid="setup-cta"'));
 		// The same empty state a fresh chat shows.
 		assert.ok(html.includes("The teacher will open by probing what you already know."));
 		// The pointer-events pattern (953b22b): the wrapper stays inert…
 		assert.ok(html.includes("pointer-events-none"));
 		// …and the blob re-enables it.
 		assert.ok(/rounded-2xl[^>]*pointer-events-auto|pointer-events-auto[^>]*rounded-2xl/.test(html));
+	});
+
+	it("renders the setup CTA above the composer blob when passed (fix wave chunk B: /chat/new mirrors home)", () => {
+		const html = renderToStaticMarkup(
+			<DraftShell
+				busy={false}
+				text=""
+				onChange={() => {}}
+				onSend={() => {}}
+				settings={undefined}
+				onSettingsSaved={() => {}}
+				setupCta={
+					<button type="button" data-testid="setup-cta">
+						Set up your models — chats start after the three picks
+					</button>
+				}
+			/>,
+		);
+		// The same affordance home carries, above the draft shell's blob.
+		assert.ok(html.includes('data-testid="setup-cta"'));
+		// Above the composer: the CTA's markup precedes the blob's.
+		const cta = html.indexOf('data-testid="setup-cta"');
+		const blob = html.search(/rounded-2xl[^>]*pointer-events-auto|pointer-events-auto[^>]*rounded-2xl/);
+		assert.ok(cta !== -1 && blob !== -1 && cta < blob, "CTA above the blob");
 	});
 
 	it("renders the knowledge-context slider in the stats bar's left slot, at the decided default (absent settings = on, 1024)", () => {

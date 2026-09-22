@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { MenuShell } from "@/components/menu-shell";
 import type React from "react";
 import {
 	MODEL_SLOTS,
@@ -206,54 +206,11 @@ function MenuTrigger({
 	);
 }
 
-/** The opened dropdown, PORTALED to document.body with fixed positioning:
- *  the dialog's overflow frame must not clip it — the owner wants the
- *  menus flowing over the whole screen, outside the settings surface
- *  (2026-09-20). Right-aligned to its trigger, repositioned while the
- *  dialog content scrolls under it. */
-function AnchoredMenu({
-	anchorTestid,
-	menuClass,
-	testid,
-	children,
-}: {
-	/** The trigger to hang from — its data-testid. */
-	anchorTestid: string;
-	/** The positioned menu's classes (width, padding, frame). */
-	menuClass: string;
-	testid: string;
-	children: React.ReactNode;
-}) {
-	const [style, setStyle] = useState<{ right: number; top: number } | null>(null);
-	useEffect(() => {
-		const place = () => {
-			const anchor = document.querySelector(`[data-testid="${anchorTestid}"]`);
-			if (!anchor) return;
-			const r = anchor.getBoundingClientRect();
-			setStyle({ right: window.innerWidth - r.right, top: r.bottom + 4 });
-		};
-		place();
-		// Capture-phase: catches the dialog's inner content scroll.
-		window.addEventListener("scroll", place, true);
-		window.addEventListener("resize", place);
-		return () => {
-			window.removeEventListener("scroll", place, true);
-			window.removeEventListener("resize", place);
-		};
-	}, [anchorTestid]);
-	if (style === null) return null;
-	return createPortal(
-		<div
-			data-testid={testid}
-			data-lh-menu=""
-			style={{ position: "fixed", right: style.right, top: style.top, zIndex: 60 }}
-			className={menuClass}
-		>
-			{children}
-		</div>,
-		document.body,
-	);
-}
+/* The section's dropdowns all mount the shared MenuShell (fix wave chunk
+ * B): portaled to document.body, fixed-anchored to the open trigger by
+ * testid (the section's one-ref pattern), opening DOWN with the shell's
+ * viewport cap and auto-flip. data-lh-menu rides the shell — the
+ * outside-click contract's exemption mark. */
 
 export function AgentSection({
 	agent,
@@ -566,8 +523,9 @@ export function AgentSection({
 									widthClass="w-20"
 								/>
 								{thisMenuOpen === "model" && (
-									<AnchoredMenu
-										anchorTestid={`slot-model-${slot}`}
+									<MenuShell
+										preferredSide="down"
+											anchorTestid={`slot-model-${slot}`}
 										testid={`slot-model-menu-${slot}`}
 										menuClass="flex w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 									>
@@ -585,11 +543,12 @@ export function AgentSection({
 													: "Runs every agent of this tier"
 											}
 										/>
-									</AnchoredMenu>
+									</MenuShell>
 								)}
 								{thisMenuOpen === "thinking" && (
-									<AnchoredMenu
-										anchorTestid={`slot-thinking-${slot}`}
+									<MenuShell
+										preferredSide="down"
+											anchorTestid={`slot-thinking-${slot}`}
 										testid={`slot-thinking-menu-${slot}`}
 										menuClass="flex w-44 flex-col gap-0.5 rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 									>
@@ -608,7 +567,7 @@ export function AgentSection({
 												setOpenMenu(null);
 											}}
 										/>
-									</AnchoredMenu>
+									</MenuShell>
 								)}
 							</span>
 						</SettingsRow>
@@ -662,8 +621,9 @@ export function AgentSection({
 									disabled={!anyKey}
 								/>
 								{open && (
-									<AnchoredMenu
-										anchorTestid="search-engine-trigger"
+									<MenuShell
+										preferredSide="down"
+											anchorTestid="search-engine-trigger"
 										testid="search-engine-menu"
 										menuClass="flex w-44 flex-col gap-0.5 rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 									>
@@ -677,7 +637,7 @@ export function AgentSection({
 												setOpenMenu(null);
 											}),
 										)}
-									</AnchoredMenu>
+									</MenuShell>
 								)}
 							</span>
 						</SettingsRow>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
@@ -69,6 +69,7 @@ export function DraftShell({
 	onSend,
 	settings,
 	onSettingsSaved,
+	setupCta,
 }: {
 	busy: boolean;
 	text: string;
@@ -76,6 +77,10 @@ export function DraftShell({
 	onSend: () => void;
 	settings: ChatSettings | undefined;
 	onSettingsSaved: (s: ChatSettings) => void;
+	/** The first-run CTA (fix wave chunk B): the same "Set up your models"
+	 *  affordance home carries, rendered above the draft shell — passed by
+	 *  NewSession, which owns the configured state and the SetupDialog. */
+	setupCta?: ReactNode;
 }) {
 	const canSend = text.trim().length > 0;
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
@@ -110,6 +115,7 @@ export function DraftShell({
 						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 						<div className="bg-background pb-4">
 							<div className={DOCK}>
+								{setupCta}
 								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 									<Composer
 										busy={busy}
@@ -197,6 +203,20 @@ export function NewSession({
 				onSend={send}
 				settings={settings}
 				onSettingsSaved={saveDraft}
+				setupCta={
+					!configured && (
+						<div className="pointer-events-auto mb-2 flex justify-center">
+							<button
+								type="button"
+								data-testid="setup-cta"
+								onClick={() => setSetupOpen(true)}
+								className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+							>
+								Set up your models — chats start after the three picks
+							</button>
+						</div>
+					)
+				}
 			/>
 			{/* First-run setup: the send interception's landing surface. */}
 			<SetupDialog

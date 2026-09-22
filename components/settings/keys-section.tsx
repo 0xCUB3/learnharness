@@ -24,10 +24,10 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { AUTH_KEYS, type AuthKeyStatus } from "@/src/core";
 import { SettingsGroup } from "./controls.tsx";
 import { ProviderMenuList } from "./model-menu.tsx";
+import { MenuShell } from "@/components/menu-shell";
 
 /** One pi-ai provider with plain API-key auth (the Platform seam —
  *  derived from pi-ai's own env-key table; no drift possible). */
@@ -250,11 +250,6 @@ function AddProviderRow({
 		};
 	}, [open]);
 
-	const style = open && anchorRef.current ? (() => {
-		const r = anchorRef.current.getBoundingClientRect();
-		return { position: "fixed" as const, right: window.innerWidth - r.right, top: r.bottom + 4, zIndex: 60 };
-	})() : null;
-
 	return (
 		<div ref={anchorRef} className="relative">
 			<button
@@ -267,16 +262,15 @@ function AddProviderRow({
 				<span>+ Add provider key</span>
 				{addable.length > 0 && <span className="font-mono text-[11px]">{addable.length}</span>}
 			</button>
-			{open && style !== null && createPortal(
-				<div
-					data-testid="add-provider-menu"
-					data-lh-menu=""
-					style={style}
-					className="flex w-72 flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
+			{open && (
+				<MenuShell
+					anchorRef={anchorRef}
+					testid="add-provider-menu"
+					preferredSide="down"
+					menuClass="flex w-72 flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 				>
 					<ProviderMenuList providers={addable} onPick={onPick} />
-				</div>,
-				document.body,
+				</MenuShell>
 			)}
 		</div>
 	);

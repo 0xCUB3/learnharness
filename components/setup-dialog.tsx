@@ -29,12 +29,13 @@
  * CMU title, z-50.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type React from "react";
 import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings } from "@/src/core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
+import { MenuShell } from "@/components/menu-shell";
 
 /** The pickers' slot identity — same roster language as the Agent
  *  section's slot rows. */
@@ -80,6 +81,11 @@ export function SetupDialog({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [openSlot, setOpenSlot] = useState<ModelSlotName | null>(null);
+	/** The open slot's trigger wrapper — the shared shell's anchor (fix
+	 *  wave chunk B): one menu open at a time, so one ref suffices, and
+	 *  the menu PORTALS out of this dialog's overflow-hidden frame — it
+	 *  extends beyond the dialog exactly like the settings menus do. */
+	const triggerRef = useRef<HTMLDivElement>(null);
 
 	// Fresh /api/models per open — a key saved a moment ago (stage 1 →
 	// Keys → back) widens the pickers immediately, no restart.
@@ -204,7 +210,7 @@ export function SetupDialog({
 								<div key={slot} data-testid={`setup-slot-${slot}`} className="flex flex-col gap-1.5">
 									<span className="font-ui text-sm text-foreground">{SLOT_META[slot].label}</span>
 									<span className="text-xs text-muted-foreground/70">{SLOT_META[slot].roster}</span>
-									<div className="relative">
+									<div ref={openSlot === slot ? triggerRef : undefined} className="relative">
 										<button
 											type="button"
 											aria-label={`${SLOT_META[slot].label} model`}
@@ -219,10 +225,12 @@ export function SetupDialog({
 											</span>
 										</button>
 										{openSlot === slot && (
-											<div
-												data-testid={`setup-menu-${slot}`}
-												data-lh-menu=""
-												className="absolute top-full left-0 z-40 flex max-h-96 w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
+											<MenuShell
+												anchorRef={triggerRef}
+												testid={`setup-menu-${slot}`}
+												preferredSide="down"
+												align="left"
+												menuClass="flex w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 											>
 												<ModelMenuList
 													models={catalog}
@@ -234,7 +242,7 @@ export function SetupDialog({
 													}}
 													footer={catalog && catalog.length === 0 ? "No image-capable models — widen the provider keys" : undefined}
 												/>
-											</div>
+											</MenuShell>
 										)}
 									</div>
 								</div>
