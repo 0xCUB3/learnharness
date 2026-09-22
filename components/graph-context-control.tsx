@@ -60,8 +60,12 @@ export function GraphContextControl({
 				className="h-1 w-24 shrink-0 accent-primary"
 				data-testid="graph-context-slider"
 			/>
+			{/* Content-sized (owner, fix wave): the control hugs its value —
+			    no fixed-width readout means no dead gap when "off", and the
+			    dictation strip in the stats bar's middle always fills whatever
+			    space the slider leaves. tabular-nums keeps the digits steady. */}
 			<span
-				className="w-16 shrink-0 tabular-nums"
+				className="shrink-0 tabular-nums"
 				data-testid="graph-context-value"
 			>
 				{value === 0 ? "off" : `${value} tok`}

@@ -9,6 +9,7 @@
  * control together) and the control itself locks — the row owns the dim.
  */
 
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 /** A section block: pronounced mono heading + content. */
@@ -165,7 +166,10 @@ export function CommitInput({
 	testid,
 	type = "text",
 }: {
-	/** "" = unset (the factory default). */
+	/** "" = unset (the factory default). Mirrors the STORED record —
+	 *  after a clamped/normalized commit this flows back and the field
+	 *  snaps to the stored truth (owner repro: a negative size kept
+	 *  displaying "-5" while 12 was stored). */
 	value: string;
 	placeholder?: string;
 	onCommit: (next: string) => void;
@@ -173,21 +177,32 @@ export function CommitInput({
 	testid?: string;
 	type?: "text" | "number";
 }) {
+	// The draft exists only while editing; a blur shows the record's value
+	// again — commit-on-blur/Enter (owner ruling), the field honest about
+	// what landed.
+	const [draft, setDraft] = useState(value);
+	const [editing, setEditing] = useState(false);
 	return (
 		<input
 			type={type}
-			defaultValue={value}
+			value={editing ? draft : value}
 			placeholder={placeholder}
 			aria-label={ariaLabel}
 			data-testid={testid}
-			onBlur={(e) => {
-				const next = e.target.value.trim();
+			onChange={(e) => {
+				setEditing(true);
+				setDraft(e.target.value);
+			}}
+			onBlur={() => {
+				if (!editing) return;
+				setEditing(false);
+				const next = draft.trim();
 				if (next !== value) onCommit(next);
 			}}
 			onKeyDown={(e) => {
 				if (e.key === "Enter") e.currentTarget.blur();
 				if (e.key === "Escape") {
-					e.currentTarget.value = value;
+					setEditing(false);
 					e.currentTarget.blur();
 				}
 			}}

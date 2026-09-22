@@ -125,6 +125,7 @@ export function MenuShell({
 }) {
 	const menuRef = useRef<HTMLDivElement>(null);
 	const [placed, setPlaced] = useState<MenuPlacement | null>(null);
+	const focusedOnceRef = useRef(false);
 
 	// Announce open↔close for lockable surfaces (see MENU_OPEN_EVENT).
 	useEffect(() => {
@@ -133,6 +134,55 @@ export function MenuShell({
 			window.dispatchEvent(new CustomEvent(MENU_CLOSE_EVENT));
 		};
 	}, []);
+
+	// Focus on open (owner, fix wave): the search menus land focus IN the
+	// search; menus without one land it on the body (tabIndex -1 below) so
+	// the arrow machine has a home. Once only — re-placements (scroll/
+	// resize) must never steal focus back mid-walk. The lists' own mount
+	// focus runs during the hidden measuring pass, where focus() silently
+	// fails (visibility: hidden subtrees are not focusable) — this seam is
+	// the one that actually lands.
+	useEffect(() => {
+		if (placed === null || focusedOnceRef.current) return;
+		focusedOnceRef.current = true;
+		const el = menuRef.current;
+		if (!el) return;
+		const input = el.querySelector<HTMLElement>("input");
+		(input ?? el).focus();
+	}, [placed]);
+
+	// The standard arrow machine for menus WITHOUT a search (owner: when a
+	// dropdown is expanded, the arrow keys cycle the options and never
+	// scroll the screen): ArrowDown/Up move DOM focus among the option
+	// buttons with WRAP, Home/End hit the ends; Enter activates the
+	// focused button natively. Search menus own their arrows inside the
+	// input (their clamped-walk machine, 2026-09-17) — those events never
+	// bubble here, and the input/textarea guard is belt-and-braces.
+	const onBodyKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+		const { key } = e;
+		if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End") return;
+		const buttons = Array.from(
+			menuRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? [],
+		);
+		if (buttons.length === 0) return;
+		e.preventDefault();
+		if (key === "Home") {
+			buttons[0]?.focus();
+			return;
+		}
+		if (key === "End") {
+			buttons[buttons.length - 1]?.focus();
+			return;
+		}
+		const delta = key === "ArrowDown" ? 1 : -1;
+		const idx = buttons.findIndex((b) => b === document.activeElement);
+		// From the body (nothing focused yet): ArrowDown enters at the FIRST
+		// option, ArrowUp at the last — the native-select convention.
+		const base = idx === -1 ? (delta > 0 ? -1 : 0) : idx;
+		const next = (base + delta + buttons.length) % buttons.length;
+		buttons[next]?.focus();
+	};
 
 	const anchor = () => {
 		if (anchorRef) return anchorRef.current;
@@ -193,6 +243,8 @@ export function MenuShell({
 			ref={menuRef}
 			data-testid={testid}
 			data-lh-menu=""
+			tabIndex={-1}
+			onKeyDown={onBodyKeyDown}
 			style={{ position: "fixed", zIndex: 60, ...placed.style, maxHeight: placed.maxHeight, overflowY: "auto" }}
 			className={menuClass}
 		>

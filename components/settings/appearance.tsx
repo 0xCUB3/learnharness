@@ -95,6 +95,18 @@ export function appearanceVars(a: ReturnType<typeof resolveAppearance>): Record<
 	return vars;
 }
 
+/** Pure: the previously-applied names ABSENT from the next var set —
+ *  these get removeProperty so the factory stylesheet value returns.
+ *  (Owner repro, fix wave: resets and toggle-backs never reverted because
+ *  application only ever SET properties — the removal half was missing.)
+ *  Exported for tests. */
+export function staleVarNames(
+	prevNames: readonly string[],
+	nextVars: Record<string, string>,
+): string[] {
+	return prevNames.filter((n) => !(n in nextVars));
+}
+
 interface AppearanceContextValue {
 	/** Resolved appearance; factory until the record arrives. */
 	appearance: ReturnType<typeof resolveAppearance>;
@@ -118,11 +130,25 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
 	// The vars apply on every change — stringified as the change signal.
 	const vars = useMemo(() => appearanceVars(resolveAppearance(delta)), [delta]);
 	const key = useMemo(() => JSON.stringify(vars), [vars]);
+	// REMOVAL is half the job (owner repro, fix wave): a later write that
+	// OMITS a var (empty field = factory, serif toggle back on) must clear
+	// the previously-set inline value or the stale one wins forever —
+	// backgrounds never reset, toggles looked dead. Every name this effect
+	// has ever set is tracked; names absent from the new set are removed so
+	// the factory stylesheet value returns.
+	const appliedNamesRef = useRef<Set<string>>(new Set());
 	useEffect(() => {
 		if (appliedRef.current === key) return;
 		appliedRef.current = key;
 		const root = document.documentElement;
-		for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+		for (const name of staleVarNames([...appliedNamesRef.current], vars)) {
+			root.style.removeProperty(name);
+			appliedNamesRef.current.delete(name);
+		}
+		for (const [name, value] of Object.entries(vars)) {
+			root.style.setProperty(name, value);
+			appliedNamesRef.current.add(name);
+		}
 	}, [key, vars]);
 
 	// One fetch per app load: the record (sanitized server-side) carries the

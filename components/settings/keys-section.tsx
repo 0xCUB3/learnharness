@@ -114,6 +114,7 @@ function KeyTableRow({
 	onToggle,
 	onSave,
 	onDelete,
+	onCancel,
 	testid,
 }: {
 	label: string;
@@ -124,6 +125,9 @@ function KeyTableRow({
 	onToggle: () => void;
 	onSave: (value: string) => Promise<string | null>;
 	onDelete?: () => Promise<void>;
+	/** Folds the editor (owner, fix wave: the way OUT of a paste prompt
+	 *  must be visible — Cancel beside Save/Delete, not only Esc). */
+	onCancel: () => void;
 	testid: string;
 }) {
 	const envOwned = status.source === "env";
@@ -139,6 +143,68 @@ function KeyTableRow({
 		if (err) setError(err);
 		else setValue("");
 		setBusy(false);
+	}
+
+	// INLINE editing (owner, fix wave: "type the keys in line — more
+	// table-like"): the expanded row becomes the editor itself — label
+	// left, the paste field filling the middle, Save | Cancel (| Delete)
+	// right — instead of a second line beneath the row.
+	if (expanded && !envOwned) {
+		return (
+			<div data-testid={testid}>
+				<div className="flex items-center gap-2 rounded-sm px-1 py-1.5" data-testid={`${testid}-editor`}>
+					<span className="shrink-0 font-ui text-xs text-foreground">{label}</span>
+					<input
+						type="text"
+						value={value}
+						onChange={(e) => setValue(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") void save();
+						}}
+						placeholder="Paste key…"
+						aria-label={`${label} key`}
+						data-testid={`${testid}-input`}
+						disabled={busy}
+						autoFocus
+						className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-background px-1.5 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-muted-foreground/50"
+					/>
+					<button
+						type="button"
+						onClick={() => void save()}
+						disabled={busy || !value.trim()}
+						data-testid={`${testid}-save`}
+						className="shrink-0 text-xs text-foreground underline-offset-2 hover:underline disabled:text-muted-foreground/40 disabled:no-underline"
+					>
+						Save
+					</button>
+					<button
+						type="button"
+						onClick={onCancel}
+						disabled={busy}
+						data-testid={`${testid}-cancel`}
+						className="shrink-0 text-xs text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+					>
+						Cancel
+					</button>
+					{status.present && status.source === "file" && onDelete && (
+						<button
+							type="button"
+							onClick={() => void onDelete()}
+							disabled={busy}
+							data-testid={`${testid}-delete`}
+							className="shrink-0 text-xs text-muted-foreground/70 underline-offset-2 hover:text-red-500 hover:underline"
+						>
+							Delete
+						</button>
+					)}
+				</div>
+				{error && (
+					<p role="alert" data-testid={`${testid}-error`} className="px-1 text-xs text-red-500">
+						{error}
+					</p>
+				)}
+			</div>
+		);
 	}
 
 	return (
@@ -170,43 +236,6 @@ function KeyTableRow({
 					</span>
 				</span>
 			</button>
-			{expanded && !envOwned && (
-				<div className="mt-0.5 mb-1 flex items-center gap-2 pl-6" data-testid={`${testid}-editor`}>
-					<input
-						type="text"
-						value={value}
-						onChange={(e) => setValue(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") void save();
-						}}
-						placeholder="Paste key…"
-						aria-label={`${label} key`}
-						data-testid={`${testid}-input`}
-						disabled={busy}
-						className="h-7 w-64 rounded-sm border border-border bg-background px-1.5 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-muted-foreground/50"
-					/>
-					<button
-						type="button"
-						onClick={() => void save()}
-						disabled={busy || !value.trim()}
-						data-testid={`${testid}-save`}
-						className="text-xs text-foreground underline-offset-2 hover:underline disabled:text-muted-foreground/40 disabled:no-underline"
-					>
-						Save
-					</button>
-					{status.present && status.source === "file" && onDelete && (
-						<button
-							type="button"
-							onClick={() => void onDelete()}
-							disabled={busy}
-							data-testid={`${testid}-delete`}
-							className="text-xs text-muted-foreground/70 underline-offset-2 hover:text-red-500 hover:underline"
-						>
-							Delete
-						</button>
-					)}
-				</div>
-			)}
 			{error && (
 				<p role="alert" data-testid={`${testid}-error`} className="pl-6 text-xs text-red-500">
 					{error}
@@ -269,7 +298,15 @@ function AddProviderRow({
 					preferredSide="down"
 					menuClass="flex w-72 flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 				>
-					<ProviderMenuList providers={addable} onPick={onPick} />
+					{/* Close on pick (owner, fix wave): a chosen provider ends
+					    the dropdown — the paste row is the next step. */}
+					<ProviderMenuList
+						providers={addable}
+						onPick={(p) => {
+							setOpen(false);
+							onPick(p);
+						}}
+					/>
 				</MenuShell>
 			)}
 		</div>
@@ -367,6 +404,7 @@ export function KeysSection() {
 							if (!err) setOpenRow(null); // fold on success — rest state
 							return err;
 						}}
+						onCancel={() => setOpenRow(null)}
 						onDelete={() => deleteKey(status.id)}
 						testid={`key-${status.id.toLowerCase()}`}
 					/>
@@ -381,8 +419,8 @@ export function KeysSection() {
 					/>
 				)}
 				{adding && (
-					<div className="mt-0.5 mb-1 flex items-center gap-2 pl-6" data-testid={`key-${adding.id}-editor`}>
-						<span className="font-ui text-xs text-foreground">{adding.label}</span>
+					<div className="flex items-center gap-2 rounded-sm px-1 py-1.5" data-testid={`key-${adding.id}-editor`}>
+						<span className="shrink-0 font-ui text-xs text-foreground">{adding.label}</span>
 						<AddProviderEditor provider={adding} onSave={(v) => void saveNewProvider(adding, v)} onCancel={() => setAdding(null)} error={addError} />
 					</div>
 				)}
@@ -402,6 +440,7 @@ export function KeysSection() {
 							if (!err) setOpenRow(null);
 							return err;
 						}}
+						onCancel={() => setOpenRow(null)}
 						onDelete={() => deleteKey(status.id)}
 						testid={`key-${status.id.toLowerCase()}`}
 					/>
@@ -452,14 +491,15 @@ function AddProviderEditor({
 				placeholder="Paste key…"
 				aria-label={`${provider.label} key`}
 				data-testid={`key-${provider.id}-input`}
-				className="h-7 w-64 rounded-sm border border-border bg-background px-1.5 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-muted-foreground/50"
+				autoFocus
+				className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-background px-1.5 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-muted-foreground/50"
 			/>
 			<button
 				type="button"
 				onClick={() => value.trim() && onSave(value)}
 				disabled={!value.trim()}
 				data-testid={`key-${provider.id}-save`}
-				className="text-xs text-foreground underline-offset-2 hover:underline disabled:text-muted-foreground/40 disabled:no-underline"
+				className="shrink-0 text-xs text-foreground underline-offset-2 hover:underline disabled:text-muted-foreground/40 disabled:no-underline"
 			>
 				Save
 			</button>
@@ -467,7 +507,7 @@ function AddProviderEditor({
 				type="button"
 				onClick={onCancel}
 				data-testid={`key-${provider.id}-cancel`}
-				className="text-xs text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+				className="shrink-0 text-xs text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
 			>
 				Cancel
 			</button>

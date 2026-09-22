@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { appearanceVars, derivedPalette, resolveAppearance } from "../components/settings/appearance.tsx";
+import { appearanceVars, derivedPalette, resolveAppearance, staleVarNames } from "../components/settings/appearance.tsx";
 import {
 	composePromptSwitch,
 	composeSearchEngine,
@@ -102,6 +102,42 @@ describe("appearanceVars — the mapping the provider applies", () => {
 		const vars = appearanceVars(resolveAppearance({ sessionNameSerif: false }));
 		assert.equal(vars["--font-title"], "var(--font-prose)");
 		assert.equal(Object.keys(vars).length, 3, "prose-size, heading-weight, font-title only");
+	});
+});
+
+describe("staleVarNames — the removal half of application (owner repro: resets never reverted)", () => {
+	it("a full delta applied, then factory: every delta-only name goes stale", () => {
+		const fullDelta = appearanceVars(
+			resolveAppearance({
+				background: "#101820",
+				fontFamily: "Georgia",
+				sessionNameSerif: false,
+				mdRendering: { headingWeight: 700, boldColor: "#ff0000", italicColor: "#00ff00" },
+			}),
+		);
+		const applied = Object.keys(fullDelta);
+		const factory = appearanceVars(resolveAppearance(undefined));
+		const stale = staleVarNames(applied, factory);
+		assert.ok(stale.includes("--background"));
+		assert.ok(stale.includes("--font-prose"));
+		assert.ok(stale.includes("--font-title"), "serif toggle back ON must clear the title override");
+		assert.ok(stale.includes("--lh-ink-strong"));
+		assert.ok(stale.includes("--lh-ink-italic"));
+		assert.ok(!stale.includes("--lh-prose-size"), "always-applied tokens never go stale");
+		assert.ok(!stale.includes("--lh-heading-weight"), "always-applied tokens never go stale");
+	});
+
+	it("an empty background commit (null = factory) frees the palette vars", () => {
+		const withBg = appearanceVars(resolveAppearance({ background: "#101010" }));
+		const emptied = appearanceVars(resolveAppearance({ background: null }));
+		const stale = staleVarNames(Object.keys(withBg), emptied);
+		assert.ok(stale.includes("--background"));
+		assert.ok(stale.includes("--card"), "the derived palette follows the background out");
+		assert.equal(emptied["--background"], undefined);
+	});
+
+	it("no previous applications → nothing stale", () => {
+		assert.deepEqual(staleVarNames([], appearanceVars(resolveAppearance(undefined))), []);
 	});
 });
 
