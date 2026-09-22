@@ -9,16 +9,25 @@
  * lives at data/default-settings.json (config.DEFAULT_SETTINGS_FILE).
  *
  *   GET → 200 {settings} once saved, 200 null on first boot ("no model").
- *   PUT → 200 {settings} — the VALIDATED copy persisted verbatim. The exact
- *         per-chat contract (parseSettingsBody + the catalog gate): unknown
- *         provider/model or an unsupported thinking level is a 400 carrying
- *         the supported list, never a silent clamp.
+ *   PUT → 200 {settings} — the VALIDATED copy, level-clamped, persisted.
+ *         The exact per-chat contract (parseSettingsBody + the catalog
+ *         gate): an unknown provider/model is a 400. Thinking levels
+ *         never reject (owner, interlude 2026-09-22): a pinned level
+ *         clamps to the named model's nearest supported and the clamped
+ *         value is stored — model swaps just work.
  *
  * Per-session settings (PUT /api/chats/:id/settings) are a separate record
  * untouched by this — the default still rides along on session creation
  * exactly as before.
  */
-import { readDefaultSettings, writeDefaultSettings, parseSettingsBody, validateChatSettings } from "@/src/server";
+import {
+	clampChatLevel,
+	effectiveSettings,
+	parseSettingsBody,
+	readDefaultSettings,
+	validateChatSettings,
+	writeDefaultSettings,
+} from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +43,11 @@ export async function PUT(request: Request) {
 	if (!verdict.ok) {
 		return Response.json({ error: verdict.error, supported: verdict.supported }, { status: 400 });
 	}
-	writeDefaultSettings(parsed.settings);
-	return Response.json({ settings: parsed.settings });
+	// Clamp-on-write (owner, interlude 2026-09-22): a pinned thinking
+	// level never rejects the write — it clamps to the named model's
+	// nearest supported level (body model, else the record's strong
+	// slot) and the clamped value is stored.
+	const settings = clampChatLevel(parsed.settings, effectiveSettings().models.strong);
+	writeDefaultSettings(settings);
+	return Response.json({ settings });
 }

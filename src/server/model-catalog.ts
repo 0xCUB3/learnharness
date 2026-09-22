@@ -17,7 +17,7 @@
  * set; nothing here changes.
  */
 
-import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { piModels } from "../agent/models.ts";
 import { settingsStore } from "../store/settings.ts";
@@ -34,7 +34,7 @@ import type {
 } from "../core/contracts/models.ts";
 import type { EffectiveModelSpec, EffectiveSlot } from "../core/settings-resolution.ts";
 import { AUTH_PROVIDER_KEYS } from "../core/auth-keys.ts";
-import { BACKGROUND_MODEL_ROLES, type BackgroundModelRole, type ModelSlotName, type ModelsSettings } from "../core/settings.ts";
+import { BACKGROUND_MODEL_ROLES, MODEL_SLOTS, type BackgroundModelRole, type ModelSlotName, type ModelsSettings } from "../core/settings.ts";
 
 /** The picker's client-safe model entry (contract: core/contracts/models.ts). */
 export type ModelDto = ModelCatalogEntry;
@@ -196,38 +196,17 @@ export function validateChatSettings(settings: ChatSettings): SettingsValidation
 			return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		}
 	}
-	if (settings.thinkingLevel !== undefined) {
-		// The conversation chain's fallback is the strong slot — the model
-		// a settings-less chat would run. BYOK (owner, 2026-09-22): with no
-		// model to check against (no chat.model, no strong slot), the level
-		// rides unchecked — it clamps against whatever the chain later holds.
-		const strong = effectiveSettings().models.strong;
-		const provider = settings.model?.provider ?? strong?.provider;
-		const id = settings.model?.id ?? strong?.id;
-		if (!provider || !id) return { ok: true };
-		const model = piModels().getModel(provider, id);
-		if (!model) return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
-		const supported = getSupportedThinkingLevels(model);
-		if (!supported.includes(settings.thinkingLevel)) {
-			return {
-				ok: false,
-				error: `${id} does not support thinking level "${settings.thinkingLevel}"`,
-				supported,
-			};
-		}
-	}
+	// BYOK interlude (owner, 2026-09-22): thinking levels NEVER reject a
+	// write — a model swap with a pinned level JUST WORKS. The WRITE clamps
+	// the pin to the new model's nearest supported level (clampChatLevel
+	// below, applied by the routes) and stores the clamped result; a bare
+	// level with no model anywhere rides unchecked and clamps against
+	// whatever the chain later holds at engine build.
 	return { ok: true };
 }
-/** Validate a models-section write (PUT /api/settings/models) against the
- *  catalog — the same gate the chat section gets. A slot must NAME a real
- *  provider+model (owner, 2026-09-22: no factory floor exists, so a level
- *  alone can never run — the parser rejects it, this gate re-checks the
- *  model); a thinkingLevel must be supported by the slot's own model.
- *  keyPresent is NOT gated here (a stored pin for a provider whose key
- *  lapsed stays valid — it fails honestly at stream time, and the picker
- *  stops offering it). */
+
 export function validateModelsSettings(settings: ModelsSettings): SettingsValidation {
-	for (const name of ["strong", "cheap", "vision"] as const) {
+	for (const name of MODEL_SLOTS) {
 		const slot = settings[name];
 		if (!slot) continue;
 		const verdict = validateSlotSpec(name, slot);
@@ -247,25 +226,57 @@ function validateSlotSpec(name: ModelSlotName, slot: { model?: { provider: strin
 			return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		}
 	}
-	if (slot.thinkingLevel !== undefined) {
-		// The write-side parser requires slot.model (owner, 2026-09-22 — a
-		// level-only slot can never run), so this fallback is tolerance for
-		// future callers; with no model to check against, accept (the
-		// engine build clamps whatever the chain later holds).
-		const resolved = effectiveSettings().models[name];
-		const provider = slot.model?.provider ?? resolved?.provider;
-		const id = slot.model?.id ?? resolved?.id;
-		if (!provider || !id) return { ok: true };
-		const model = piModels().getModel(provider, id);
-		if (!model) return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
-		const supported = getSupportedThinkingLevels(model);
-		if (!supported.includes(slot.thinkingLevel)) {
-			return {
-				ok: false,
-				error: `${id} does not support thinking level "${slot.thinkingLevel}"`,
-				supported,
-			};
-		}
-	}
+	// BYOK interlude (owner, 2026-09-22): the supported-level verdict is
+	// DEAD — a slot write with a pinned level never rejects; the WRITE
+	// clamps the level to the model's nearest supported (clampModelsLevels
+	// below, applied by the route) and stores the clamped result.
 	return { ok: true };
+}
+
+// ─── clamp-on-write (owner ruling, interlude 2026-09-22) ─────────────────────
+// A model swap with a pinned thinking level must JUST WORK: the pin
+// translates to the new model's nearest supported level — pi's
+// clampThinkingLevel, the SAME translation piEngineForSpec applies at
+// runtime — and the clamped value is what lands in the record. The
+// server is the truth: the record shows the clamped level after write.
+
+/** Clamp one level against one model (identity when the model is unknown
+ *  or the level already supported — the existence gate rejects unknown
+ *  models separately, so this only ever sees real ones in practice). */
+function clampLevelFor(provider: string, id: string, level: ThinkingLevel): ThinkingLevel {
+	const model = piModels().getModel(provider, id);
+	return model ? clampThinkingLevel(model, level) : level;
+}
+
+/** The models-section write's level translation: every slot's pinned
+ *  thinkingLevel clamps against THE SLOT'S OWN model (the parser requires
+ *  a model on every slot write — owner, 2026-09-22). Pure: catalog in,
+ *  clamped section out; the route applies it after validation. */
+export function clampModelsLevels(settings: ModelsSettings): ModelsSettings {
+	const out: ModelsSettings = {};
+	for (const name of MODEL_SLOTS) {
+		const slot = settings[name];
+		if (!slot?.model) continue;
+		out[name] =
+			slot.thinkingLevel !== undefined
+				? {
+						model: slot.model,
+						thinkingLevel: clampLevelFor(slot.model.provider, slot.model.id, slot.thinkingLevel),
+					}
+				: slot;
+	}
+	return out;
+}
+
+/** The chat-section write's level translation: a pinned thinkingLevel
+ *  clamps against the body's own model, else the record's resolved strong
+ *  slot (the conversation chain's fallback — what a settings-less chat
+ *  would run). No model anywhere → rides unchecked (runtime clamps at
+ *  engine build; the turn gate refuses the model-less chat anyway). */
+export function clampChatLevel(settings: ChatSettings, strong: EffectiveSlot | null): ChatSettings {
+	if (settings.thinkingLevel === undefined) return settings;
+	const provider = settings.model?.provider ?? strong?.provider;
+	const id = settings.model?.id ?? strong?.id;
+	if (!provider || !id) return settings;
+	return { ...settings, thinkingLevel: clampLevelFor(provider, id, settings.thinkingLevel) };
 }

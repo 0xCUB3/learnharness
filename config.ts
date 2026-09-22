@@ -57,22 +57,6 @@ export type ModelRole =
 	| "auditor"
 	| "labeler";
 
-/** The DEFAULT thinking level for UNSET levels only (owner, 2026-09-22):
- *  a slot/override/chat that names a model but no thinking level resolves
- *  to the FIRST entry in this order that the model supports
- *  (getSupportedThinkingLevels); a non-reasoning model resolves "off"
- *  regardless (pi reports exactly ["off"]). EXPLICITLY set levels never
- *  consult this list — they clamp nearest via pi's native
- *  clampThinkingLevel on model switches. */
-export const DEFAULT_THINKING_ORDER = [
-	"medium",
-	"low",
-	"high",
-	"minimal",
-	"xhigh",
-	"max",
-] as const satisfies readonly ThinkingLevel[];
-
 /**
  * The extraction pipeline (vision §1 construction): the sole graph writer.
  * Triggered per chat once this many NEW quiz answers have landed since the

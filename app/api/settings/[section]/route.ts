@@ -8,10 +8,13 @@
  *   section ∈ general | chat | agent | appearance | graph (else 404).
  *   Body: the complete desired section object. Parse + validate strictly
  *   (server/settings-body.ts): a bad shape/type is a 400 carrying the
- *   supported list where one exists, never a silent clamp. The chat
- *   section additionally passes the catalog gate (validateChatSettings —
- *   unknown provider/model or unsupported thinking level = 400), same as
- *   the defaults route. The agent section additionally validates prompt
+ *   supported list where one exists. The chat and models sections
+ *   additionally pass the catalog gate (validateChatSettings /
+ *   validateModelsSettings — unknown provider/model = 400). Thinking
+ *   levels never reject a write (owner, interlude 2026-09-22): a pinned
+ *   level CLAMPS to the named model's nearest supported level and the
+ *   clamped value is stored — model swaps just work, same as the
+ *   defaults route. The agent section additionally validates prompt
  *   switches: an ON switch must reference a CURRENT source segment with an
  *   existing override file (an OFF switch may reference anything — users
  *   cleaning up orphans must not be blocked).
@@ -25,6 +28,9 @@ import type { AgentSettings, ChatSettings, ModelsSettings } from "@/src/core";
 import {
 	SETTINGS_SECTIONS,
 	allSegmentPaths,
+	clampChatLevel,
+	clampModelsLevels,
+	effectiveSettings,
 	promptOverrides,
 	readSettingsRecord,
 	validateChatSettings,
@@ -87,10 +93,24 @@ export async function PUT(request: Request, ctx: { params: Promise<{ section: st
 		}
 	}
 
+	// Clamp-on-write (owner ruling, interlude 2026-09-22): a model swap
+	// with a pinned thinking level NEVER errors — the pin clamps to the
+	// new model's nearest supported level (pi's nearest-clamp, the same
+	// translation piEngineForSpec applies at runtime) and the clamped
+	// value is what lands in the record. The chat section's bare levels
+	// clamp against the record's resolved strong slot (the chain's
+	// fallback); the models section's slots each carry their own model.
+	const sectionOut =
+		section === "chat"
+			? clampChatLevel(parsed.settings as ChatSettings, effectiveSettings().models.strong)
+			: section === "models"
+				? clampModelsLevels(parsed.settings as ModelsSettings)
+				: parsed.settings;
+
 	// Read-modify-write ONE section of the record; everything else rides
 	// along untouched (other sections, unknown keys — sanitize preserves).
 	const record = readSettingsRecord() ?? { version: 1 };
-	const next = { ...record, [section]: parsed.settings };
+	const next = { ...record, [section]: sectionOut };
 	writeSettingsRecord(next);
 	return Response.json({ settings: next });
 }

@@ -1,9 +1,22 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { modelCatalog, validateChatSettings, validateModelsSettings, catalogDefaultsFor, catalogProviders, catalogSlots, toModelDto, rolePinsFor, catalogRolePins } from "../src/server/model-catalog.ts";
+import {
+	catalogDefaultsFor,
+	catalogProviders,
+	catalogRolePins,
+	catalogSlots,
+	clampChatLevel,
+	clampModelsLevels,
+	modelCatalog,
+	rolePinsFor,
+	toModelDto,
+	validateChatSettings,
+	validateModelsSettings,
+} from "../src/server/model-catalog.ts";
+import type { EffectiveSlot } from "../src/core/settings-resolution.ts";
 import type { SettingsValidation } from "../src/server/model-catalog.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { DEFAULT_THINKING_ORDER } from "../config.ts";
+import { DEFAULT_THINKING_ORDER } from "../src/core/settings.ts";
 import { piEngineForSpec, piModels } from "../src/agent/models.ts";
 import { BACKGROUND_MODEL_ROLES } from "../src/core/settings.ts";
 import { resolveSettings } from "../src/core/settings-resolution.ts";
@@ -29,26 +42,11 @@ function glmModel() {
 	return glm!;
 }
 
-/** The record's resolved tier as seen by the validation fallbacks —
- *  machine-aware truth (data/settings.json belongs to settings-store.test.ts
- *  under the one-fs-owner discipline, so READ it, never pin it): on a
- *  scratch worktree the record is empty, on the owner's machine slots are
- *  configured; the expected verdicts below follow whichever holds. */
-/** The machine-aware expected verdict for a bare-level validation: mirrors
- *  the fallback chain exactly — no resolved tier → rides unchecked; a tier
- *  whose model left the catalog → rejected; else the supported-level check. */
-function expectBareLevelVerdict(verdict: SettingsValidation, tier: "strong" | "cheap" | "vision") {
-	const slot = effectiveSettings().models[tier];
-	if (!slot) {
-		assert.deepEqual(verdict, { ok: true }, "no model to check against → accepted (clamps at run)");
-		return;
-	}
-	const model = piModels().getModel(slot.provider, slot.id);
-	if (!model) {
-		assert.equal(verdict.ok, false, "a vanished model is rejected honestly");
-		return;
-	}
-	assert.equal(verdict.ok, getSupportedThinkingLevels(model).includes("minimal"));
+/** Another reasoning specimen with a different supported set. */
+function qwenModel() {
+	const qwen = piModels().getModel("openrouter", "qwen/qwen3.8-max-0902");
+	assert.ok(qwen, "qwen3.8-max in catalog");
+	return qwen!;
 }
 
 describe("the model catalog projection", () => {
@@ -217,21 +215,46 @@ describe("the models-section validation gate", () => {
 		);
 	});
 
-	it("thinkingLevel resolves against the slot's model; level-only slots check nothing", () => {
-		// level checked against the named model
-		assert.equal(
-			validateModelsSettings({ strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "max" } }).ok,
-			true,
+	it("thinking levels never reject a slot write (owner, interlude 2026-09-22)", () => {
+		// clamp, never reject: the model swap with a pinned level JUST
+		// WORKS — validation accepts ANY level; the WRITE clamps to the
+		// new model's nearest supported and stores the clamped result.
+		assert.deepEqual(
+			validateModelsSettings({ strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "minimal" } }),
+			{ ok: true },
 		);
-		assert.equal(
-			validateModelsSettings({ strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "minimal" } }).ok,
-			false,
+		assert.deepEqual(
+			validateModelsSettings({ strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "xhigh" } }),
+			{ ok: true },
 		);
-		// (a level-only slot never passes the WRITE parser — owner, 2026-09-22;
-		// the validation gate falls back to the tier's RESOLVED model —
-		// machine-aware: the record's strong tier decides the verdict)
-		const levelOnly = validateModelsSettings({ strong: { thinkingLevel: "minimal" } });
-		expectBareLevelVerdict(levelOnly, "strong");
+	});
+
+	it("clampModelsLevels: the slot's own model translates the pin (the owner's exact case)", () => {
+		// Claude Fable 5.1 xhigh → GLM 5.3 flash: the pin clamps to glm's
+		// nearest supported (low|high|max) and the CLAMPED value is stored.
+		const glm = { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "xhigh" as const };
+		assert.deepEqual(clampModelsLevels({ strong: glm }), {
+			strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "max" },
+		});
+		assert.deepEqual(clampModelsLevels({ strong: { ...glm, thinkingLevel: "minimal" as const } }).strong, {
+			model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
+			thinkingLevel: "low",
+		});
+		// glm cannot disable thinking: off clamps UP to low
+		assert.equal(
+			clampModelsLevels({ strong: { ...glm, thinkingLevel: "off" as const } }).strong?.thinkingLevel,
+			"low",
+		);
+		// a supported level passes through untouched
+		assert.deepEqual(clampModelsLevels({ strong: { ...glm, thinkingLevel: "high" as const } }).strong, {
+			model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
+			thinkingLevel: "high",
+		});
+		// a slot with no level rides as-is (client populates on fresh
+		// picks per DEFAULT_THINKING_ORDER — the server never invents one)
+		assert.deepEqual(clampModelsLevels({ strong: { model: glm.model } }), {
+			strong: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } },
+		});
 	});
 
 	it("accepts empty settings (the clear-slots write)", () => {
@@ -240,21 +263,29 @@ describe("the models-section validation gate", () => {
 });
 
 describe("the settings validation gate", () => {
-	it("accepts a supported level and rejects an unsupported one with the list", () => {
-		const ok = validateChatSettings({ model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "max" });
-		assert.deepEqual(ok, { ok: true });
-		const bad = validateChatSettings({ model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "minimal" });
-		assert.equal(bad.ok, false);
-		if (!bad.ok) {
-			assert.match(bad.error, /does not support thinking level/);
-			assert.deepEqual(bad.supported, ["low", "high", "max"]);
-		}
+	it("thinking levels never reject a chat write (owner, interlude 2026-09-22)", () => {
+		assert.deepEqual(
+			validateChatSettings({ model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "minimal" }),
+			{ ok: true },
+		);
+		assert.deepEqual(validateChatSettings({ thinkingLevel: "xhigh" }), { ok: true });
 	});
 
-	it("a bare thinking level checks against the chat model, else the strong slot, else rides unchecked", () => {
-		// machine-aware: with a record-carried strong slot the level checks
-		// against it; with none it rides unchecked (clamps at run).
-		expectBareLevelVerdict(validateChatSettings({ thinkingLevel: "minimal" }), "strong");
+	it("clampChatLevel: the body's model, else the strong slot, translates the pin", () => {
+		const glm = { provider: "openrouter", id: "z-ai/glm-5.3-flash" };
+		const strong: EffectiveSlot = { provider: "openrouter", id: "z-ai/glm-5.3-flash" };
+		// the body's own model wins
+		assert.deepEqual(
+			clampChatLevel({ model: { provider: "openrouter", id: "qwen/qwen3.8-max-0902" }, thinkingLevel: "xhigh" as const }, strong),
+			{ model: { provider: "openrouter", id: "qwen/qwen3.8-max-0902" }, thinkingLevel: clampThinkingLevel(qwenModel(), "xhigh") },
+		);
+		// no body model → the record's strong slot is the fallback
+		assert.equal(clampChatLevel({ thinkingLevel: "xhigh" as const }, strong).thinkingLevel, "max");
+		// no model anywhere → rides unchecked (runtime clamps; the turn
+		// gate refuses the model-less chat anyway)
+		assert.deepEqual(clampChatLevel({ thinkingLevel: "minimal" as const }, null), { thinkingLevel: "minimal" });
+		// no pinned level → untouched
+		assert.deepEqual(clampChatLevel({ model: { ...glm } }, strong), { model: { ...glm } });
 	});
 
 	it("rejects unknown providers and models", () => {

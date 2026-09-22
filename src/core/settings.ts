@@ -69,6 +69,29 @@ export interface RoleModelOverride {
 export const MODEL_SLOTS = ["strong", "cheap", "vision"] as const;
 export type ModelSlotName = (typeof MODEL_SLOTS)[number];
 
+/** The DEFAULT thinking level for UNSET levels only (owner, 2026-09-22):
+ *  a slot/override/chat that names a model but no thinking level resolves
+ *  to the FIRST entry in this order that the model supports
+ *  (getSupportedThinkingLevels); a non-reasoning model resolves "off"
+ *  regardless (pi reports exactly ["off"]). EXPLICITLY set levels never
+ *  consult this list — they clamp nearest via pi's native
+ *  clampThinkingLevel on model switches.
+ *
+ *  Client surface (interlude, 2026-09-22): this constant lives in the CORE
+ *  BARREL — the UI imports it to auto-populate a thinking level on a FRESH
+ *  model pick (one source of truth, AUTH_KEYS precedent; per-model
+ *  supportedLevels already reach the client via the catalog). The ordering
+ *  has NO other client role: legacy unset records keep the runtime
+ *  defaultThinkingLevel fallback at engine build. */
+export const DEFAULT_THINKING_ORDER = [
+	"medium",
+	"low",
+	"high",
+	"minimal",
+	"xhigh",
+	"max",
+] as const satisfies readonly ThinkingLevel[];
+
 /** The machine-readable NOT-CONFIGURED refusal envelope (owner, 2026-09-22):
  *  every per-need gate — the turn gate in chat-handler, a job spawn, a
  *  notes import — refuses with this exact shape. HTTP callers get 503 +

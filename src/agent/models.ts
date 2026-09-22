@@ -9,7 +9,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { DEFAULT_THINKING_ORDER, type ModelRole } from "../../config.ts";
+import { type ModelRole } from "../../config.ts";
+import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
 
 /**
  * The one engine factory every agent's model comes from (the pi-ai swap,

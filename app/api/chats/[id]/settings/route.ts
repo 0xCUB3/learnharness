@@ -1,13 +1,20 @@
-import { getChat, validateChatSettings, parseSettingsBody, stores } from "@/src/server";
+import {
+	clampChatLevel,
+	effectiveSettings,
+	getChat,
+	parseSettingsBody,
+	stores,
+	validateChatSettings,
+} from "@/src/server";
 import type { ChatSettings } from "@/src/core";
 
 /**
  * The per-chat model control (model-control wave): replace-whole settings —
- * the picker sends the complete desired object ({} clears all overrides and
- * returns the chat to config.ts's pin). Validation is the catalog gate
- * (src/server/model-catalog.ts): unknown provider/model or an unsupported
- * thinking level is a 400 carrying the supported list, never a silent clamp
- * — the user must see what the model actually accepts. Effective next turn
+ * the picker sends the complete desired object ({} clears all overrides).
+ * Validation is the catalog gate (src/server/model-catalog.ts): unknown
+ * provider/model is a 400. Thinking levels never reject (owner,
+ * interlude 2026-09-22): a pinned level clamps to the named model's
+ * nearest supported and the clamped value is stored. Effective next turn
  * by construction (agents are stateless per turn).
  *
  * The body parsing itself is shared with the draft route
@@ -26,8 +33,12 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 		return Response.json({ error: verdict.error, supported: verdict.supported }, { status: 400 });
 	}
 
-	// Replace-whole persists the validated object verbatim — no merges, so a
-	// stale client can never resurrect a cleared override.
-	stores.chatStore.saveSettings(id, parsed.settings);
-	return Response.json({ settings: parsed.settings satisfies ChatSettings });
+	// Replace-whole persists the validated, level-clamped object — no
+	// merges, so a stale client can never resurrect a cleared override.
+	// Clamp-on-write (owner, interlude 2026-09-22): a pinned thinking
+	// level never rejects — it clamps to the named model's nearest
+	// supported (body model, else the record's strong slot).
+	const settings = clampChatLevel(parsed.settings, effectiveSettings().models.strong);
+	stores.chatStore.saveSettings(id, settings);
+	return Response.json({ settings });
 }
