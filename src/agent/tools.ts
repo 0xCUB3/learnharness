@@ -154,6 +154,10 @@ export interface TeacherToolContext extends PlanToolContext {
 	 *  rides along — the spawn fires mid-stream, before the tool part is
 	 *  persisted to the transcript (a transcript scan would race it). */
 	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput) => void;
+	/** Search availability (search port wave, 2026-09-20): the research
+	 *  dispatch tool's honest-disable signal — no live engine = the tool
+	 *  drops from this registry (JobToolContext.searchAvailable). */
+	searchAvailable?: () => boolean;
 }
 
 /**

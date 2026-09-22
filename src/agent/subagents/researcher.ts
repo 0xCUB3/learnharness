@@ -1,6 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
-import { webTools } from "../tools/web.ts";
+import { createWebTools } from "../tools/web.ts";
+import type { SearchProvider } from "../../core/search.ts";
 import { toPiTools } from "../lh-tool.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
@@ -62,6 +63,12 @@ What couldn't be answered. Suggested next steps.`;
 
 export interface ResearcherRunOptions {
 	engine?: PiEngine;
+	/** The search seam (search port wave, 2026-09-20): resolves the LIVE
+	 *  provider per call, null = honestly unavailable (the web_search tool
+	 *  reports that in its output — no crash, no silent fallback). Absent
+	 *  seam reads as unavailable: the server wiring always injects one; the
+	 *  dispatch-level drop (jobTools) keeps doomed jobs from even starting. */
+	search?: () => SearchProvider | null;
 	abortSignal?: AbortSignal;
 	onUsage?: (usage: Usage) => void;
 	onToolStart?: (toolName: string, args: unknown) => void;
@@ -69,10 +76,11 @@ export interface ResearcherRunOptions {
 
 /**
  * Run the researcher to completion: isolated context, web tools only, final
- * text = the brief. The engine is injectable so tests run the loop scripted.
+ * text = the brief. The engine and search seam are injectable so tests run
+ * the loop scripted.
  */
 export async function runResearcherAgent(prompt: string, opts: ResearcherRunOptions = {}): Promise<string> {
-	const { text } = await runSubagent(toPiTools(webTools) as AgentTool<any, any>[], {
+	const { text } = await runSubagent(toPiTools(createWebTools(opts.search ?? (() => null))) as AgentTool<any, any>[], {
 		role: "researcher",
 		prompt,
 		engine: opts.engine,

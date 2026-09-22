@@ -11,6 +11,7 @@ import { claimSteers, deliverJobResult, setContextRespawn, setJobRespawn, setTur
 import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { createPiTurnResponse } from "./pi/ui-stream.ts";
 import { effectiveSettings, MODEL_PINS, stores } from "./stores.ts";
+import { searchAvailable, searchProvider } from "./search.ts";
 import { extractionEnabled, graphContextEnabled, resolveRoleSpec } from "../core/settings-resolution.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { persistTurn, triggerExtraction, triggerGraphContext, withMessageIds } from "./turn-service.ts";
@@ -45,6 +46,11 @@ const jobRunner = createJobRunner({
 	// per-role overrides reached rolePins but never the engines.
 	engineFor: (role) =>
 		piEngineForSpec(resolveRoleSpec(role, stores.settingsStore.readSettings(), MODEL_PINS)),
+	// Search port wave (2026-09-20): the researcher's web_search runs on the
+	// injected port — resolved FRESH per job (key rotations land immediately).
+	// null = honestly unavailable; the dispatch-level drop (below) uses the
+	// same signal so keyless servers never see the research tool at all.
+	searchProvider,
 });
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports
@@ -252,6 +258,9 @@ export async function handleChatRequest(
 						chatStore: stores.chatStore,
 						jobStore: stores.jobStore,
 						spawn: (job, input) => void jobRunner.runJob(job.id, input),
+						// The registry drop's signal (2026-09-20): no live engine
+						// = no research tool in the teacher's registry.
+						searchAvailable,
 					},
 					agentOpts,
 				)

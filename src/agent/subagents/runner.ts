@@ -1,5 +1,6 @@
 import { isToolUIPart, type UIMessage } from "ai";
 import type { PiEngine } from "../models.ts";
+import type { SearchProvider } from "../../core/search.ts";
 import {
 	accumulateJobUsage,
 	buildSubagentSteer,
@@ -76,6 +77,13 @@ export interface JobRunnerDeps {
 	 * Test overrides (below) still win; absent → config pins.
 	 */
 	engineFor?: (role: ModelRole) => PiEngine;
+	/** The search seam (search port wave, 2026-09-20): resolves the LIVE
+	 *  provider fresh per job — server/search.ts composition injected by
+	 *  the wiring; null = honestly unavailable (the researcher's web_search
+	 *  reports it). Absent seam (tests) reads the same. The dispatch-level
+	 *  drop (jobTools' searchAvailable) uses the same signal — jobs already
+	 *  in flight when a key disappears still fail honestly, never crash. */
+	searchProvider?: () => SearchProvider | null;
 }
 
 export interface JobRunner {
@@ -308,6 +316,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			jobStore.updateJob(jobId, { activity: "researching" });
 			const brief = await runResearcherAgent(prompt, {
 				engine: model,
+				search: deps.searchProvider,
 				abortSignal: loop.abortSignal,
 				// Money channel: each agent step is one model call — fold its
 				// usage into the record as it completes (progress write).

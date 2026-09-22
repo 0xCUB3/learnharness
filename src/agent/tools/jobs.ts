@@ -22,6 +22,12 @@ export interface JobToolContext {
 	 *  input rides along because the spawn happens MID-STREAM, before
 	 *  onFinish persists the tool part — a transcript scan would race it. */
 	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
+	/** Search availability (search port wave, 2026-09-20): the honest
+	 *  disable signal for the research dispatch tool — no live engine
+	 *  means NO research tool in the registry (owner decision: registry-
+	 *  level drop, no doomed dispatch, no silent fallback). Absent =
+	 *  available (tests + any seam without search wiring). */
+	searchAvailable?: () => boolean;
 }
 
 export const researchInputSchema = z.object({
@@ -121,14 +127,22 @@ const PDF_DESCRIPTION =
  * Per-request job tool registry: each tool closes over the composition root's
  * context (chatId + jobStore + the spawn seam), so concurrent chats never
  * share state. chat-handler wires it each turn; tests wire their own.
+ *
+ * The research tool drops from the registry when ctx.searchAvailable reports
+ * no live engine (2026-09-20) — the teacher never sees it, so a keyless
+ * server can't dispatch doomed research jobs. Jobs ALREADY in flight when
+ * a key disappears still run to their honest failure (runner backstop).
  */
 export function jobTools(ctx: JobToolContext): Record<string, LhTool<any, any>> {
+	const searchOn = ctx.searchAvailable?.() ?? true;
 	return {
-		research: lhTool({
-			name: "research",
-			description: RESEARCH_DESCRIPTION,
-			schema: researchInputSchema,
-			execute: async (input, { toolCallId }) => dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input),
+		...(searchOn && {
+			research: lhTool({
+				name: "research",
+				description: RESEARCH_DESCRIPTION,
+				schema: researchInputSchema,
+				execute: async (input, { toolCallId }) => dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input),
+			}),
 		}),
 		demo: lhTool({
 			name: "demo",

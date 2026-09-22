@@ -59,6 +59,7 @@ import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { createJobRunner, pdfModelOverride, researchModelOverride } from "../src/agent/subagents/runner.ts";
 import type { PiEngine } from "../src/agent/models.ts";
+import type { SearchProvider } from "../src/core/search.ts";
 import { PATHS } from "../config.ts";
 
 const JOBS_DIR = path.join(PATHS.data, "jobs");
@@ -357,7 +358,8 @@ describe("dispatch (async protocol §2)", () => {
 		trackChat(chat.id);
 
 		const delivery = fakeDeliver();
-		const testRunner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
+		const search = stubSearch();
+		const testRunner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver, searchProvider: () => search });
 		const engine = researchCallingTeacher();
 		const tools = createTeacherTools({
 			chatId: chat.id,
@@ -368,42 +370,41 @@ describe("dispatch (async protocol §2)", () => {
 		const agent = (outgoing: UIMessage[]): TeachingAgent =>
 			createTeacherAgent(undefined, { engine, tools, messages: recordToPiMessages(outgoing) });
 
-		const restoreFetch = stubFetch();
 		researchModelOverride.current = researcherModel();
-		try {
-			const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me graph rendering" }] };
-			const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me graph rendering" }] };
+		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
 
-			// The teacher's SAME turn carried on past the tool call.
-			assert.ok(body.includes("Back with the brief."), "the turn continued after the dispatch");
+		// The teacher's SAME turn carried on past the tool call.
+		assert.ok(body.includes("Back with the brief."), "the turn continued after the dispatch");
 
-			const saved = chatStore.getChat(chat.id)!;
-			const part = saved.messages[1]!.parts.find((p) => p.type === "tool-research");
-			assert.ok(part && part.type === "tool-research", "research tool part persisted");
-			assert.equal(part.state, "output-available", "the part resolved at dispatch time (not held pending)");
-			assert.equal(typeof (part as { output?: unknown }).output, "string", "the output is the ack, not the result");
-			assert.match(String((part as { output?: unknown }).output), /fire-and-forget/);
+		const saved = chatStore.getChat(chat.id)!;
+		const part = saved.messages[1]!.parts.find((p) => p.type === "tool-research");
+		assert.ok(part && part.type === "tool-research", "research tool part persisted");
+		assert.equal(part.state, "output-available", "the part resolved at dispatch time (not held pending)");
+		assert.equal(typeof (part as { output?: unknown }).output, "string", "the output is the ack, not the result");
+		assert.match(String((part as { output?: unknown }).output), /fire-and-forget/);
 
-			// The job record exists and the background runner completed it.
-			const job = jobStore.findJobByToolCallId(chat.id, "call-r1");
-			assert.ok(job, "dispatch created a job record");
-			trackJob(job!.id);
-			await waitFor(() => jobStore.getJob(job!.id)!.status !== "running", 8000, "research job completion");
+		// The job record exists and the background runner completed it.
+		const job = jobStore.findJobByToolCallId(chat.id, "call-r1");
+		assert.ok(job, "dispatch created a job record");
+		trackJob(job!.id);
+		await waitFor(() => jobStore.getJob(job!.id)!.status !== "running", 8000, "research job completion");
 
-			const done = jobStore.getJob(job!.id)!;
-			assert.equal(done.status, "done");
-			assert.equal(done.activity, "delivered");
+		const done = jobStore.getJob(job!.id)!;
+		assert.equal(done.status, "done");
+		assert.equal(done.activity, "delivered");
 
-			// The steer carries the brief + artifact for the (UI) renderer.
-			assert.equal(delivery.steers.length, 1, "exactly one steer — one job, one result");
-			const steer = delivery.steers[0]!;
-			assert.equal(steer.metadata.subagentResult.jobId, job!.id);
-			const text = steer.parts[0];
-			assert.ok(text.type === "text" && text.text.includes("sigma.js v3 is current"), "steer text carries the brief");
-		} finally {
-			restoreFetch();
-			researchModelOverride.current = undefined;
-		}
+		// The steer carries the brief + artifact for the (UI) renderer.
+		assert.equal(delivery.steers.length, 1, "exactly one steer — one job, one result");
+		const steer = delivery.steers[0]!;
+		assert.equal(steer.metadata.subagentResult.jobId, job!.id);
+		const text = steer.parts[0];
+		assert.ok(text.type === "text" && text.text.includes("sigma.js v3 is current"), "steer text carries the brief");
+
+		// Search threading (2026-09-20): the researcher's web_search ran on
+		// the INJECTED port — the stub saw the scripted query, no network.
+		assert.deepEqual(search.queries, ["sigma.js latest version (5)"]);
+		researchModelOverride.current = undefined;
 	});
 });
 
@@ -429,75 +430,65 @@ function researcherModel(): PiEngine {
 	]);
 }
 
-function stubFetch() {
-	const original = globalThis.fetch;
-	globalThis.fetch = (async (input: RequestInfo | URL) => {
-		const url = String(input);
-		if (url.startsWith("https://www.googleapis.com/")) {
-			return new Response(
-				JSON.stringify({
-					items: [{ title: "sigma.js", link: "https://www.sigmajs.org/", snippet: "v3 released" }],
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		}
-		return new Response("unexpected fetch: " + url, { status: 500 });
-	}) as typeof fetch;
-	return () => {
-		globalThis.fetch = original;
+/** A recording stub provider (search port wave, 2026-09-20): the runner's
+ *  injected search seam — no network, queries captured for assertions. */
+function stubSearch(): SearchProvider & { queries: string[] } {
+	const queries: string[] = [];
+	return {
+		id: "tavily",
+		async search(query: string, count: number) {
+			queries.push(`${query} (${count})`);
+			return [{ title: "sigma.js", url: "https://www.sigmajs.org/", snippet: "v3 released" }];
+		},
+		queries,
 	};
 }
 
 describe("research runner (async protocol §3)", () => {
 	it("runJob completes the job: result + sources on the job, brief on the steer, activity recorded", async () => {
-		const restoreFetch = stubFetch();
+		const chat = chatStore.createChat("Test: runner completion");
+		trackChat(chat.id);
+
+		// A dispatched research part in the stored chat (the input is also
+		// what the runner falls back to on a crash-recovery re-spawn).
+		chatStore.saveMessages(chat.id, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "which sigma version?" }] },
+			{
+				id: "a1",
+				role: "assistant",
+				parts: [
+					{ type: "text", text: "Checking." },
+					{ type: "tool-research", toolCallId: "call-run1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." },
+				],
+			},
+		] as never);
+
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-run1" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const search = stubSearch();
+		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver, searchProvider: () => search });
+		researchModelOverride.current = researcherModel();
 		try {
-			const chat = chatStore.createChat("Test: runner completion");
-			trackChat(chat.id);
-
-			// A dispatched research part in the stored chat (the input is also
-			// what the runner falls back to on a crash-recovery re-spawn).
-			chatStore.saveMessages(chat.id, [
-				{ id: "u1", role: "user", parts: [{ type: "text", text: "which sigma version?" }] },
-				{
-					id: "a1",
-					role: "assistant",
-					parts: [
-						{ type: "text", text: "Checking." },
-						{ type: "tool-research", toolCallId: "call-run1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." },
-					],
-				},
-			] as never);
-
-			const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-run1" });
-			trackJob(job.id);
-
-			const delivery = fakeDeliver();
-			const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
-			researchModelOverride.current = researcherModel();
-			try {
-				await runner.runJob(job.id);
-			} finally {
-				researchModelOverride.current = undefined;
-			}
-
-			// The job is done, with the activity line from the tool call.
-			const done = jobStore.getJob(job.id)!;
-			assert.equal(done.status, "done");
-			assert.equal(done.activity, "delivered", "the fake deliver flips the status like the pipeline");
-			const result = done.result as ResearchResult;
-			assert.equal(result.brief, BRIEF);
-			assert.ok(result.sources.length > 0, "sources parsed from the brief");
-			assert.equal(result.sources[0]!.url, "https://www.sigmajs.org/docs");
-
-			// The activity trail survives on... the last recorded activity is
-			// the deliver flip, but the search line was recorded during the run:
-			// the job store keeps only the latest; the search fired before it.
-			// (We ran the search; the runner recorded it — check the store's
-			// history via the final state only.)
+			await runner.runJob(job.id);
 		} finally {
-			restoreFetch();
+			researchModelOverride.current = undefined;
 		}
+
+		// The job is done, with the activity line from the tool call.
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "done");
+		assert.equal(done.activity, "delivered", "the fake deliver flips the status like the pipeline");
+		const result = done.result as ResearchResult;
+		assert.equal(result.brief, BRIEF);
+		assert.ok(result.sources.length > 0, "sources parsed from the brief");
+		assert.equal(result.sources[0]!.url, "https://www.sigmajs.org/docs");
+
+				// The activity trail: the last recorded activity is the deliver
+		// flip; the search line fired before it. The search itself ran on
+		// the INJECTED port — the stub saw the query (no network):
+		assert.deepEqual(search.queries, ["sigma.js latest version (5)"]);
 	});
 
 	it("a failing runner still steers (the teacher learns the outcome) and the job lands error", async () => {
@@ -542,37 +533,37 @@ describe("research runner (async protocol §3)", () => {
 	});
 
 	it("runJob resolves the input from the transcript when dispatch-time input is absent (crash recovery)", async () => {
-		const restoreFetch = stubFetch();
+		const chat = chatStore.createChat("Test: transcript input fallback");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "go" }] },
+			{
+				id: "a1",
+				role: "assistant",
+				parts: [{ type: "tool-research", toolCallId: "call-fb1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." }],
+			},
+		] as never);
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-fb1" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			searchProvider: () => stubSearch(),
+		});
+		researchModelOverride.current = researcherModel();
 		try {
-			const chat = chatStore.createChat("Test: transcript input fallback");
-			trackChat(chat.id);
-			chatStore.saveMessages(chat.id, [
-				{ id: "u1", role: "user", parts: [{ type: "text", text: "go" }] },
-				{
-					id: "a1",
-					role: "assistant",
-					parts: [{ type: "tool-research", toolCallId: "call-fb1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." }],
-				},
-			] as never);
-			const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-fb1" });
-			trackJob(job.id);
-
-			const delivery = fakeDeliver();
-			const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
-			researchModelOverride.current = researcherModel();
-			try {
-				// no input passed — as a recovery re-spawn would call it
-				await runner.runJob(job.id);
-			} finally {
-				researchModelOverride.current = undefined;
-			}
-
-			const done = jobStore.getJob(job.id)!;
-			assert.equal(done.status, "done", "the researcher ran from the transcript-resolved input");
-			assert.equal((done.result as ResearchResult).brief, BRIEF);
+			// no input passed — as a recovery re-spawn would call it
+			await runner.runJob(job.id);
 		} finally {
-			restoreFetch();
+			researchModelOverride.current = undefined;
 		}
+
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "done", "the researcher ran from the transcript-resolved input");
+		assert.equal((done.result as ResearchResult).brief, BRIEF);
 	});
 });
 
@@ -1203,33 +1194,28 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 	});
 
 	it("the usage folded so far survives the kill (money channel outlives the abort)", async () => {
-		const restoreFetch = stubFetch();
+		const { jobId } = newChatWithResearchJob("abort keeps usage", "call-abort2");
+		setTurnRunner(async () => 200);
+		researchModelOverride.current = oneStepThenHangModel();
+		const runner = createJobRunner({ chatStore, jobStore, deliver: async () => {}, searchProvider: () => stubSearch() });
 		try {
-			const { jobId } = newChatWithResearchJob("abort keeps usage", "call-abort2");
-			setTurnRunner(async () => 200);
-			researchModelOverride.current = oneStepThenHangModel();
-			const runner = createJobRunner({ chatStore, jobStore, deliver: async () => {} });
-			try {
-				const settled = runner.runJob(jobId, RESEARCH_INPUT);
-				await waitFor(() => (jobStore.getJob(jobId)!.usage?.steps ?? 0) === 1, 8000, "first step folded");
-				abortJob(jobId);
-				await settled;
-				const job = jobStore.getJob(jobId)!;
-				assert.equal(job.status, "error");
-			assert.equal(job.error, "Aborted by learner");
-				assert.equal(job.usage!.steps, 1, "usage-so-far persisted by the runner's finally");
-				// model slots wave: the stamp is the ENGINE's actual model,
-				// provider-qualified — the scripted faux engine here.
-				assert.equal(job.usage!.model, "faux:faux-1");
-				// faux estimates tokens from the prompt/response text — the
-				// pinned fact is that the ONE completed step's spend survived.
-				assert.ok(job.usage!.inputTokens! > 0, "input tokens billed");
-				assert.ok(job.usage!.outputTokens! > 0, "output tokens billed");
-			} finally {
-				researchModelOverride.current = undefined;
-			}
+			const settled = runner.runJob(jobId, RESEARCH_INPUT);
+			await waitFor(() => (jobStore.getJob(jobId)!.usage?.steps ?? 0) === 1, 8000, "first step folded");
+			abortJob(jobId);
+			await settled;
+			const job = jobStore.getJob(jobId)!;
+			assert.equal(job.status, "error");
+		assert.equal(job.error, "Aborted by learner");
+			assert.equal(job.usage!.steps, 1, "usage-so-far persisted by the runner's finally");
+			// model slots wave: the stamp is the ENGINE's actual model,
+			// provider-qualified — the scripted faux engine here.
+			assert.equal(job.usage!.model, "faux:faux-1");
+			// faux estimates tokens from the prompt/response text — the
+			// pinned fact is that the ONE completed step's spend survived.
+			assert.ok(job.usage!.inputTokens! > 0, "input tokens billed");
+			assert.ok(job.usage!.outputTokens! > 0, "output tokens billed");
 		} finally {
-			restoreFetch();
+			researchModelOverride.current = undefined;
 		}
 	});
 
