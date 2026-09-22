@@ -7,6 +7,7 @@ import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
 import { composeSlotModel } from "@/components/settings/agent-section";
 import { MenuShell } from "@/components/menu-shell";
+import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-signal";
 
 /** GET /api/models is cached per page load for instant menu opens, but
  *  the federation is LIVE per call — keys saved mid-session widen the
@@ -94,20 +95,27 @@ export function ModelControl() {
 	const [error, setError] = useState<string | null>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 
-	useEffect(() => {
-		let alive = true;
+	// The record read — BOTH mount and the cross-surface signal land
+	// here (fix wave: another surface's models write re-reads into the
+	// pill live; own writes also notify, and the refetch is idempotent).
+	const readRecord = useCallback(() => {
 		fetch("/api/settings")
 			.then((r) => r.json() as Promise<{ settings: { models?: ModelsSettings } | null }>)
-			.then((body) => alive && setModels(body.settings?.models ?? undefined))
+			.then((body) => setModels(body.settings?.models ?? undefined))
 			.catch(() => {
 				/* the record fetch failing leaves the control read-only
 				   ("—" triggers, closed menus) — same posture as a
 				   catalog failure */
 			});
-		return () => {
-			alive = false;
-		};
 	}, []);
+
+	useEffect(() => {
+		readRecord();
+	}, [readRecord]);
+
+	useSettingsSaved((section) => {
+		if (section === "models") readRecord();
+	});
 
 	const override = models?.strong;
 	const effectiveId = override?.model?.id;
@@ -119,13 +127,19 @@ export function ModelControl() {
 	const levels = entry?.supportedLevels ?? [];
 
 	// The intuitive dropdown contract (owner, stats-control round 1): any
-	// click outside the open menu — or an Esc keypress — closes it. Only the
-	// menu's own surface keeps it open (the toggle buttons live inside the
-	// same container and handle their own toggling in onClick).
+	// click outside the open menu — or an Esc keypress — closes it. The
+	// menu's own surface keeps it open: the toggle buttons live inside the
+	// container, and the menu BODY lives in a portal on document.body
+	// (MenuShell) — never a container descendant, so its rows are carved
+	// out via [data-lh-menu] (the settings sections' discipline; without
+	// it a row's pointerdown counts as outside and eats the pick —
+	// live-caught in the fix wave, broken since the MenuShell migration).
 	useEffect(() => {
 		if (open === null) return;
 		const onPointerDown = (e: PointerEvent) => {
-			if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+			const t = e.target as Element;
+			if (t instanceof Element && t.closest("[data-lh-menu]")) return;
+			if (containerRef.current && !containerRef.current.contains(t)) {
 				setOpen(null);
 			}
 		};
@@ -164,6 +178,7 @@ export function ModelControl() {
 				}
 				setModels(next);
 				setOpen(null);
+				notifySettingsSaved("models");
 			} catch {
 				setError("Could not reach the server — try again.");
 			}

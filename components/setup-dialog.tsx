@@ -36,6 +36,7 @@ import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings } from 
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
 import { MenuShell } from "@/components/menu-shell";
+import { notifySettingsSaved } from "@/components/settings-signal";
 
 /** The pickers' slot identity — same roster language as the Agent
  *  section's slot rows. */
@@ -177,6 +178,7 @@ export function SetupDialog({
 			setError(res ? `Save failed: ${(await res.json().catch(() => ({}))).error ?? res.status}` : "Save failed — network");
 			return;
 		}
+		notifySettingsSaved("models");
 		onDone(models);
 	}
 

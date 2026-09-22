@@ -37,6 +37,8 @@ import { SidebarToggle } from "@/components/sidebar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TeacherUIMessage, TurnUsage } from "@/src/core";
 import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
 import { findPendingToolCall, phaseAt3, phaseTimeline, streamingToolActivity } from "@/src/core";
+import { slotsConfigured, type ModelsSettings } from "@/src/core";
+import { useSettingsSaved } from "@/components/settings-signal";
 
 /** One width for everything: transcript, cards, and the bottom blob share this column. */
 /**
@@ -300,6 +302,16 @@ export function Chat({
 	// refusal interception share one SetupDialog mount. `configured` is
 	// seeded server-side (slotsConfigured on the record) and flips on Save.
 	const [configured, setConfigured] = useState(initialConfigured);
+	// Cross-surface freshness (fix wave): another surface's models write —
+	// setup save, composer pick, a settings write — re-reads the record so
+	// the setup CTA appears/disappears live (it used to lag until reload).
+	useSettingsSaved((section) => {
+		if (section !== "models") return;
+		fetch("/api/settings")
+			.then((r) => r.json() as Promise<{ settings?: { models?: ModelsSettings } | null } | null>)
+			.then((body) => setConfigured(slotsConfigured(body?.settings?.models)))
+			.catch(() => {});
+	});
 	const [setupOpen, setSetupOpen] = useState(false);
 	const { open: openSettings } = useSettingsDialog();
 	/** The last explicitly-sent draft (composer send, verdict note): the

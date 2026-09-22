@@ -41,8 +41,9 @@
  * section's PUT; text writes through the segment route.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MenuShell } from "@/components/menu-shell";
+import { useSettingsSaved } from "@/components/settings-signal";
 import type React from "react";
 import {
 	MODEL_SLOTS,
@@ -253,8 +254,10 @@ export function AgentSection({
 
 	// The catalog (federated: keyed providers only), the resolved slots,
 	// the prompt segments, and the search engines' key presence — one
-	// fetch each per section mount.
-	useEffect(() => {
+	// fetch each per section mount. The models read ALSO re-runs on the
+	// cross-surface signal (fix wave: another surface's write re-reads
+	// into the slot rows live).
+	const readModels = useCallback(() => {
 		fetch("/api/models")
 			.then((r) => r.json())
 			.then((body: ModelsBody) => {
@@ -262,6 +265,14 @@ export function AgentSection({
 				setSlots(body.slots);
 			})
 			.catch(() => setCatalog(null));
+	}, []);
+
+	useSettingsSaved((section) => {
+		if (section === "models") readModels();
+	});
+
+	useEffect(() => {
+		readModels();
 		fetch("/api/settings/prompts")
 			.then((r) => r.json())
 			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body))
@@ -346,27 +357,7 @@ export function AgentSection({
 			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body));
 	}
 
-	/** The "—" row — THINKING menus only: clears the thinking pin (the
-	 *  slot keeps its model; the tier's resolved budget takes over). Model
-	 *  menus carry no such row — unpicking a model would re-arm the
-	 *  first-run gate, and a "default" model is not a thing in this app
-	 *  (owner, fix wave: no factory fallback is ever presented as a
-	 *  choice; an unpicked slot just reads "—"). */
-	const noneRow = (active: boolean, onPick: () => void) => (
-		<button
-			type="button"
-			data-testid="menu-none"
-			onClick={onPick}
-			className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted ${
-				active ? "bg-muted/60 text-card-foreground" : "text-card-foreground"
-			}`}
-		>
-			<span>Default</span>
-			{active && <span aria-hidden>✓</span>}
-		</button>
-	);
-
-	/** The search-engine menu row — label + the quiet live-key mark. */
+		/** The search-engine menu row — label + the quiet live-key mark. */
 	const engineOption = (
 		id: (typeof SEARCH_ENGINES)[number] | "auto",
 		label: string,
@@ -553,13 +544,6 @@ export function AgentSection({
 										testid={`slot-thinking-menu-${slot}`}
 										menuClass="flex w-44 flex-col gap-0.5 rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
 									>
-										{noneRow(
-											thinking === "",
-											() => {
-												onModelsChange(composeSlotModel(models, slot, provider, modelId, ""));
-												setOpenMenu(null);
-											},
-										)}
 										<ThinkingMenuList
 											levels={levels.map(String)}
 											effectiveLevel={thinking || undefined}

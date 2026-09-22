@@ -40,6 +40,8 @@ import { useAppearance } from "./appearance.tsx";
 import { SettingsSection, SettingsRow, Toggle } from "./controls.tsx";
 import { AgentSection } from "./agent-section.tsx";
 import type { ModelsSettings } from "@/src/core";
+import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/menu-shell";
+import { notifySettingsSaved } from "@/components/settings-signal";
 import { KeysSection } from "./keys-section.tsx";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
@@ -114,6 +116,18 @@ export function SettingsDialogBody({
 		undefined,
 	);
 	const [error, setError] = useState<string | null>(null);
+	// MenuShell open-count — drives the content column's scroll lock.
+	const [openMenus, setOpenMenus] = useState(0);
+	useEffect(() => {
+		const onOpen = () => setOpenMenus((n) => n + 1);
+		const onClose = () => setOpenMenus((n) => Math.max(0, n - 1));
+		window.addEventListener(MENU_OPEN_EVENT, onOpen);
+		window.addEventListener(MENU_CLOSE_EVENT, onClose);
+		return () => {
+			window.removeEventListener(MENU_OPEN_EVENT, onOpen);
+			window.removeEventListener(MENU_CLOSE_EVENT, onClose);
+		};
+	}, []);
 	const [active, setActive] = useState<SectionId>(initialSection);
 
 	// Fetch once per dialog mount. 200 {settings: null} is FIRST BOOT
@@ -165,6 +179,7 @@ export function SettingsDialogBody({
 			setRecord(
 				(prev) => ({ ...(prev ?? {}), [section]: body }) as UserSettings,
 			);
+			notifySettingsSaved(section);
 			if (section === "appearance")
 				onAppearanceChange(body as AppearanceSettings);
 		},
@@ -228,9 +243,12 @@ export function SettingsDialogBody({
 					))}
 				</nav>
 
-				{/* Content column — one section at a time, this scrolls. */}
+				{/* Content column — one section at a time, this scrolls — and
+				    LOCKS while any MenuShell is open (owner ruling: no
+				    scrolling with a dropdown down; MenuShell announces
+				    open/close, the count keeps overlap honest). */}
 				<div
-					className="min-w-0 flex-1 overflow-y-auto"
+					className={`min-w-0 flex-1 ${openMenus > 0 ? "overflow-hidden" : "overflow-y-auto"}`}
 					data-testid="settings-content"
 				>
 					{error && (
