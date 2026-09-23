@@ -116,10 +116,10 @@ export function AppearanceSection({
 					}}
 				/>
 			</SettingsRow>
-			<SettingsRow label="Bold color" hint="Empty = #c96b4a" testid="row-bold-color">
+			<SettingsRow label="Bold color" hint="Empty = #ee928c" testid="row-bold-color">
 				<CommitInput
 					value={md?.boldColor ?? ""}
-					placeholder="#c96b4a"
+					placeholder="#ee928c"
 					ariaLabel="bold color"
 					testid="input-bold-color"
 					onCommit={(v) => onSectionChange({ ...appearance, mdRendering: { ...md, boldColor: v === "" ? null : v } })}

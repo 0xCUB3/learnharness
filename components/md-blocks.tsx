@@ -341,7 +341,7 @@ export function MathDisplay(props: ComponentProps<"span"> & ExtraProps) {
 /** Bold as the REAL element (appearance fix, 2026-09-23): streamdown's
  *  default `strong` renders `<span class="font-semibold" data-streamdown=
  *  "strong">` — and `.lh-prose :where(strong, b)` matches strong/b
- *  ELEMENTS, so neither the factory ink (#c96b4a) nor a settings
+ *  ELEMENTS, so neither the factory ink (#ee928c) nor a settings
  *  boldColor ever landed on bold text (italic worked: streamdown leaves
  *  `em` native). Rendering the semantic element restores screen-reader
  *  emphasis AND lets the designed token rule apply unmodified — color

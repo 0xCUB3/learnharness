@@ -207,7 +207,7 @@ describe("AppearanceSection (thin SSR)", () => {
 		const html = renderToStaticMarkup(<AppearanceSection appearance={undefined} onSectionChange={() => {}} />);
 		assert.ok(html.includes(`placeholder="#141414"`));
 		assert.ok(html.includes(`placeholder="Source Sans 3"`));
-		assert.ok(html.includes(`placeholder="#c96b4a"`));
+		assert.ok(html.includes(`placeholder="#ee928c"`));
 		assert.ok(html.includes("16px"));
 	});
 

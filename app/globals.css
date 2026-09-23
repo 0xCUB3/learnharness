@@ -39,7 +39,7 @@
 	--input: #434343;
 	--ring: #8d8d8d;
 	/* Emphasis coloring in teaching prose — ready for the settings UI. */
-	--lh-ink-strong: #c96b4a;
+	--lh-ink-strong: #ee928c;
 	--lh-ink-italic: #6fa9d6;
 	/* THE READING SIZE = the ladder's 16px rung (--text-lg). Can't be
 	   var()-linked: @theme inline inlines literals into utilities without
@@ -73,7 +73,7 @@
 	--border: #434343;
 	--input: #434343;
 	--ring: #8d8d8d;
-	--lh-ink-strong: #c96b4a;
+	--lh-ink-strong: #ee928c;
 	--lh-ink-italic: #6fa9d6;
 	/* THE READING SIZE = the ladder's 16px rung (--text-lg). Can't be
 	   var()-linked: @theme inline inlines literals into utilities without

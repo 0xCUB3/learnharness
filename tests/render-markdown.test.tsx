@@ -219,7 +219,7 @@ describe("render — bold is the real <strong> (the dead Bold-color fix)", () =>
 	// data-streamdown="strong"> — and the app's ink token rule
 	// (.lh-prose :where(strong, b), globals.css) matches strong/b
 	// ELEMENTS, so bold never took the --lh-ink-strong color (neither the
-	// factory #c96b4a nor a settings boldColor). The mdComponents override
+	// factory #ee928c nor a settings boldColor). The mdComponents override
 	// renders the semantic element.
 	it("bold renders a real <strong> element inside .lh-prose", () => {
 		const html = render("plain **bold** plain");
