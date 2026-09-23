@@ -37,7 +37,7 @@ describe("isValidSegmentPath (the mirror-layout discipline)", () => {
 		assert.equal(isValidSegmentPath("prober/10-probe-doctrine.md"), true);
 		// the shared/ fragments dir (sources v1): composed by BOTH agents,
 		// overridable like any other segment
-		assert.equal(isValidSegmentPath("shared/05-learner-files.md"), true);
+		assert.equal(isValidSegmentPath("shared/10-personality.md"), true);
 		for (const bad of [
 			"", // empty
 			"README.md", // no agent dir
@@ -104,14 +104,17 @@ describe("the source-derived segment list", () => {
 			prober.map((s) => s.path),
 			[
 				"system-prompt.md",
-				"shared/05-learner-files.md",
+				"shared/10-personality.md",
+				"shared/20-question-tools.md",
+				"shared/30-learner-files.md",
+				"shared/40-formatting.md",
 				"prober/10-probe-doctrine.md",
 				"prober/20-teaching-in-brief.md",
 				"prober/30-probe-done.md",
 			],
 		);
 		assert.equal(teacher.some((s) => s.path === "teacher/10-planning.md"), true);
-		assert.equal(teacher.some((s) => s.path === "teacher/50-probing-in-brief.md"), true);
+		assert.equal(teacher.some((s) => s.path === "teacher/60-probing-in-brief.md"), true);
 		assert.equal(
 			teacher.every(
 				(s) => s.path === "system-prompt.md" || s.path.startsWith("teacher/") || s.path.startsWith("shared/"),
@@ -119,8 +122,16 @@ describe("the source-derived segment list", () => {
 			true,
 		);
 		// the shared fragments compose for BOTH agents, same path key.
-		assert.equal(teacher.some((s) => s.path === "shared/05-learner-files.md" && s.shared), true);
-		assert.equal(prober.some((s) => s.path === "shared/05-learner-files.md" && s.shared), true);
+		assert.equal(teacher.some((s) => s.path === "shared/30-learner-files.md" && s.shared), true);
+		assert.equal(prober.some((s) => s.path === "shared/30-learner-files.md" && s.shared), true);
+		// The voice block (owner, interlude 2026-09-23): its OWN shared chunk,
+		// composed into both agents — individually overridable so the learner can tune it.
+		for (const seg of [teacher, prober]) {
+			assert.equal(seg.some((s) => s.path === "shared/10-personality.md" && s.shared), true);
+		}
+		// Tool MECHANICS are shared; question METHODOLOGY is phase-owned.
+		assert.equal(prober.some((s) => s.path.startsWith("teacher/")), false);
+		assert.equal(teacher.some((s) => s.path.startsWith("prober/")), false);
 		// README and other non-numeric files never load.
 		assert.equal(allSegmentPaths().some((p) => p.includes("README")), false);
 	});
@@ -201,9 +212,9 @@ describe("composeInstructions: override honoring + the byte-identical source pat
 	});
 
 	it("shared/ fragments are overridable — one edit swaps the doctrine in BOTH agents", () => {
-		promptOverrides.writeOverride("shared/05-learner-files.md", "MY SHARED FILES DOCTRINE");
+		promptOverrides.writeOverride("shared/30-learner-files.md", "MY SHARED FILES DOCTRINE");
 		try {
-			const switches = { "shared/05-learner-files.md": true };
+			const switches = { "shared/30-learner-files.md": true };
 			for (const kind of ["teacher", "prober"] as const) {
 				const composed = composeInstructions(kind, switches);
 				assert.ok(composed.includes("MY SHARED FILES DOCTRINE"), `${kind} composes the override`);
@@ -212,7 +223,7 @@ describe("composeInstructions: override honoring + the byte-identical source pat
 			// switches-less: both keep the source fragment (the cached path)
 			assert.ok(composeInstructions("teacher").includes("## Learner files"));
 		} finally {
-			promptOverrides.deleteOverride("shared/05-learner-files.md");
+			promptOverrides.deleteOverride("shared/30-learner-files.md");
 		}
 	});
 
