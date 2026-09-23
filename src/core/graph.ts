@@ -399,11 +399,10 @@ const QUIZ_EVENT_KINDS: ReadonlySet<string> = new Set(["correct", "miss", "dont-
 /**
  * The latest quiz outcome per node — a raw EVENT FACT, not a node state
  * (the transitional node-state classes were removed 2026-09-08: nothing
- * colors nodes by quiz results anymore). Used by the teacher's
- * graph-as-context selection (graph-context.ts) to find diagnostic
- * hotspots; the home renderer does not consume it. Nodes with no quiz
- * events have no entry. (The graph-as-context consumer is shelved —
- * docs/probe-teach-split.md §5 — but the event fact stays.)
+ * colors nodes by quiz results anymore). Its last consumer, the
+ * graph-as-context selection, died in wave 7 (the injection is gone —
+ * the prober reads its map through tools now); the event fact stays as
+ * raw ledger truth. Nodes with no quiz events have no entry.
  */
 export function latestQuizOutcomes(nodes: GraphNode[], events: LedgerEvent[]): Map<string, LedgerEventKind> {
 	const latest = new Map<string, { at: string; kind: LedgerEventKind; index: number }>();

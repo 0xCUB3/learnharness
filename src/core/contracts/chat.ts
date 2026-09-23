@@ -58,27 +58,8 @@ export interface ChatSettings {
 	/** pi thinking level — must be in the chosen model's supported list
 	 *  (getSupportedThinkingLevels; enforced by the settings route). */
 	thinkingLevel?: ThinkingLevel;
-	/** Graph context injection (vision-context-injection.md): the session's
-	 *  token budget for the prior-knowledge block — the top semantically
-	 *  closest propositions from the knowledge graph, injected once, at
-	 *  session start, as a steer. Absent = the default (on); 0 = off. The
-	 *  settings route enforces the range; the trigger (turn-service →
-	 *  subagents/graph-context.ts) is one-shot, so a mid-session change
-	 *  affects only sessions that haven't injected yet. */
-	graphContextTokens?: number;
 }
 
-/** The injection budget's decided knobs (2026-09-14; scale revised
- *  2026-09-15, owner): default 1024 (a meaningful, modest slice of prior
- *  knowledge), hard max 16384, 0 = off. The UI is a DISCRETE slider over
- *  these stops — powers of four from 64 (the fine-grained low end was
- *  theater: a 128-token budget is ~2 propositions, nobody wants that
- *  dial); the server still accepts any integer in range (a stale client
- *  can't brick settings), the stops only govern what the slider sends. */
-export const GRAPH_CONTEXT_TOKENS_DEFAULT = 1024;
-export const GRAPH_CONTEXT_TOKENS_MAX = 16384;
-/** The slider's positions, left to right: off, then powers of four. */
-export const GRAPH_CONTEXT_TOKENS_STOPS = [0, 64, 256, 1024, 4096, 16384] as const;
 
 // ─── Background-extraction usage (the money channel, extraction side) ────────
 
@@ -202,53 +183,6 @@ export const HANDOFF_TEXT =
 	"The probe is concluded — the learner assessment is recorded. " +
 	"Author the session's plan map now (call plan_init) and present it, then begin teaching.";
 
-// ─── Graph context injection (vision-context-injection.md, 2026-09-14) ────────
-
-/** One selected prior-knowledge proposition: similarity-ranked, annotated
- *  with the learner's CURRENT understanding level — the fold is MOST
- *  RECENT extraction instance (levels are per-instance, tied to moments in
- *  time; the latest evidence is the best estimate of current understanding).
- *  null = the node has no observation event at all. */
-export interface GraphContextProposition {
-	id: string;
-	statement: string;
-	level: UnderstandingLevel | null;
-}
-
-/** The data-graph-context part payload: what the UI renders (the counts)
- *  AND the audit trail (the full block content — the transcript shows
- *  exactly what was injected, and when). The model-facing text is derived
- *  from this by graphContextText below — the adapter flattens the marker
- *  part to it (the custom-message scheme: no authored human speech). */
-export interface GraphContextData {
-	chatId: string;
-	/** The session's budget at injection time (for the card's readout). */
-	budget: number;
-	/** Estimated tokens of the injected block — chars/4 heuristic. */
-	tokens: number;
-	/** The selected propositions, similarity-descending. */
-	propositions: GraphContextProposition[];
-}
-
-/** The model-facing block text — single-sourced (the adapter, the tests,
- *  and reality can't drift). The level word travels with each line: the
- *  closing gloss tells the agent what to do with each. */
-export function graphContextText(data: GraphContextData): string {
-	const n = data.propositions.length;
-	if (n === 0) return "";
-	const lines = data.propositions.map(
-		(p) => `- ${p.level ? `[${p.level}] ` : ""}${p.statement}`,
-	);
-	return [
-		`Prior-knowledge context — what this learner already knows (from their knowledge graph, ` +
-			`${n} proposition${n === 1 ? "" : "s"}, ~${data.tokens} tokens):`,
-		"",
-		...lines,
-		"",
-		"Treat this as reliable prior knowledge: build on what is solid, firm up what is shaky, " +
-			"and teach around anything resisted. Do not re-teach solid ground.",
-	].join("\n");
-}
 
 export interface PlanBlockData {
 	/** Only "full" survives (the 2026-09-11 pivot): the plan renders IN

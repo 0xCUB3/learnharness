@@ -86,35 +86,4 @@ describe("record-adapter: system message flattening", () => {
 		assert.equal(out.length, 0, "no model face at all — skipped");
 	});
 
-	it("the graph-context steer flattens to the canonical prior-knowledge block", () => {
-		const out = recordToPiMessages([
-			userParts([
-				{
-					type: "data-graph-context",
-					id: "ctx1",
-					data: {
-						chatId: "chat_1",
-						budget: 1024,
-						tokens: 64,
-						propositions: [
-							{ id: "n1", statement: "Water boils at 100°C.", level: "solid" },
-							{ id: "n2", statement: "Evaporation cools things.", level: null },
-						],
-					},
-				},
-			]),
-		]);
-		assert.equal(out.length, 1, "one user message — the marker part is the model face");
-		const got = texts(out);
-		assert.equal(got.length, 1);
-		assert.match(got[0]!, /Prior-knowledge context/);
-		assert.match(got[0]!, /\[solid\] Water boils at 100°C\./);
-	});
-
-	it("a malformed graph-context part has no model face — the message is skipped wholesale", () => {
-		const out = recordToPiMessages([
-			userParts([{ type: "data-graph-context", id: "ctx2", data: { chatId: "chat_1" } }]),
-		]);
-		assert.equal(out.length, 0, "parse-don't-cast: no validated data, no face");
-	});
 });

@@ -117,10 +117,10 @@ describe("the model catalog projection", () => {
 		const partial = catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }, strong);
 		assert.ok(partial);
 		assert.equal(partial!.thinkingLevel, "low");
-		// graphContextTokens-only record: model untouched
-		assert.deepEqual(catalogDefaultsFor({ graphContextTokens: 512 }, strong), {
+		// thinkingLevel-only record: model untouched
+		assert.deepEqual(catalogDefaultsFor({ thinkingLevel: "minimal" }, strong), {
 			model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
-			thinkingLevel: "low",
+			thinkingLevel: "minimal",
 		});
 		// chat.model with NO strong slot: the conversation runs on it alone
 		assert.deepEqual(

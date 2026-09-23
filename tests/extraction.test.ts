@@ -43,7 +43,6 @@ import type { GraphStore } from "../src/core/ports.ts";
 import { abortExtraction, createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
 import { ModelsNotConfiguredError } from "../src/core/settings.ts";
 import { batchTag, coverageOf, coverageSlots } from "../src/core/coverage.ts";
-import { semanticClusters } from "../src/core/semantic-clusters.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
@@ -839,9 +838,11 @@ const NOTES_VERDICT = {
 	dropped: [],
 } as const;
 
-/** Test seam for the embedder: fakes the post-merge embedding batch —
- *  one identical unit vector per node → semanticClusters merges them all
- *  into ONE topic — then persists the partition like the real embedder. */
+/** Test seam for the embedder: semantic clustering died with wave 7
+ *  (birth-session clusters + session-name labels), so the production
+ *  embedder is a no-op stub pending Platform's ledger-port removal —
+ *  this fake mirrors it: one identical vector per node persisted to the
+ *  (still-live) embeddings ledger port, no clusters computed. */
 const fakeEmbedder = async (store: GraphStore) => {
 	const seen = new Set<string>();
 	const ids: string[] = [];
@@ -850,12 +851,11 @@ const fakeEmbedder = async (store: GraphStore) => {
 		seen.add(n.id);
 		ids.push(n.id);
 	}
-	const vectors = Object.fromEntries(ids.map((id) => [id, [1, 0, 0]]));
 	store.writeEmbeddings({
 		model: "test/embedder",
 		dim: 3,
-		vectors,
-		clusters: semanticClusters(vectors),
+		vectors: Object.fromEntries(ids.map((id) => [id, [1, 0, 0]])),
+		clusters: [],
 		updatedAt: "2026-09-13T00:00:00.000Z",
 	});
 };

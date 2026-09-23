@@ -24,7 +24,6 @@ import { Composer } from "@/components/composer";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
-import { GraphContextMarker } from "@/components/graph-context-marker";
 import { useActivity } from "@/components/activity-dock";
 import { mergeAdopted, type ChatSettings, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
@@ -453,10 +452,10 @@ export function Chat({
 			setTimeout(() => {
 				if (adoptionWindowOpenRef.current) {
 					void adoptAppendOnly();
-					// Turn-start nudge re-fire (accuracy wave): the graph-context
-					// job starts at send — the initial refresh above can race the
-					// server's job-record write; the window's ticks retry it so the
-					// dock always catches the job within the window (≤2s).
+					// Turn-start nudge re-fire (accuracy wave): extraction and
+					// sub-agent jobs start at send — the initial refresh above can
+					// race the server's job-record write; the window's ticks retry
+					// it so the dock always catches the job within the window (≤2s).
 					refreshActivity();
 				}
 			}, ms),
@@ -945,14 +944,7 @@ export function Chat({
 									// PROTOCOL" §4). Key fallback: legacy transcripts (pre id-hygiene)
 									// can still hold empty ids — the index keeps keys unique for them.
 									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} />
-								) : m.role === "user" && m.parts.some((p) => p.type === "data-graph-context") ? (
-								// The prior-knowledge injection's delivery (vision-context-injection.md):
-								// a quiet, CLICKABLE line (owner observability ask, 2026-09-15) —
-								// the popover shows which propositions were delivered, in delivery
-								// order; the block itself was for the model (adapter flattening),
-								// the part data is the audit trail this reads from.
-								<GraphContextMarker key={m.id || `m-${mi}`} message={m} />
-							) : m.role === "user" && m.parts.some((p) => p.type === "data-probe-handoff") ? (
+								) : m.role === "user" && m.parts.some((p) => p.type === "data-probe-handoff") ? (
 								// The probe→teach handoff wake (custom-message scheme): quiet
 								// system line, never a user bubble — the wake is scaffolding,
 								// the "Planning" divider marks the seam, and the model-facing

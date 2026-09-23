@@ -130,11 +130,10 @@ export interface GraphStore {
 
 	/** The embeddings ledger (config.EMBEDDINGS_FILE) — INERT DATA since
 	 *  wave 7 (owner ruling 2026-09-23: the provider embedder is dead;
-	 *  clustering is birth-session, labels are session names). Kept ONLY
-	 *  because the graph-context injection (agent band, Teacher's pass
-	 *  removes it) still reads it for vector-space staleness — the seam
-	 *  dies with it in the follow-up interlude. graph-deletion keeps
-	 *  pruning dead vectors meanwhile (harmless housekeeping). */
+	 *  clustering is birth-session, labels are session names; the
+	 *  graph-context injection is gone with it). The whole seam dies in
+	 *  the follow-up interlude; graph-deletion's vector pruning is
+	 *  harmless housekeeping meanwhile. */
 	readEmbeddings(): EmbeddingsLedger;
 	/** Replace the whole ledger (graph-deletion's vector pruning only). */
 	writeEmbeddings(ledger: EmbeddingsLedger): void;

@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIcon, BookOpenIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
+import { ActivityIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
 import { CONTEXT_LIMITS, isModelsRefusal, jobCost } from "@/src/core";
@@ -236,7 +236,6 @@ const KIND_ICON: Record<JobKind, typeof SearchIcon> = {
 	demo: PlayIcon,
 	visual: PenToolIcon,
 	pdf: FileTextIcon, // sources v0 — type-forced entry (JobKind grew "pdf")
-	"graph-context": BookOpenIcon,
 };
 
 /** Abort states per blob id: pending (fired) / failed (backend absent). */
@@ -353,9 +352,7 @@ function ActivityBlobRow({
 						? "Figure maker"
 						: blob.jobKind === "pdf"
 							? "PDF reader"
-							: blob.jobKind === "graph-context"
-								? "Graph context"
-								: "Sub-agent";
+							: "Sub-agent";
 	return (
 		<div
 			data-testid={`activity-blob-${blob.process}`}

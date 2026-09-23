@@ -482,12 +482,12 @@ function runNotesAuditor(
 // ─── the pipeline status registry ─────────────────────────────────────────────
 
 /** The pipeline phases, in order — what the home status endpoint shows.
- *  `embedding` is its own phase (accuracy wave, 2026-09-19): the post-batch
- *  tail — embed every uncovered proposition, re-cluster, settle the layout
- *  — used to hide inside `merging`, so a run that had already merged every
- *  batch sat on "merging" for the whole embedding tail (model load +
- *  cold-start backfill on first runs = minutes). The phases must tell the
- *  truth about what the loop is actually waiting on. */
+ *  `embedding` was its own phase (accuracy wave, 2026-09-19): the post-batch
+ *  embed-re-cluster tail used to hide inside `merging`. Wave 7 stubbed the
+ *  tail to a no-op — the phase survives only until Platform's
+ *  ledger-port interlude deletes the seam wholesale; it transitions
+ *  instantly today. The phases must tell the truth about what the loop is
+ *  actually waiting on. */
 export type ExtractionPhase = "extracting" | "auditing" | "merging" | "embedding";
 
 /** One in-flight pipeline run. Module-level: one process, one registry.
@@ -575,16 +575,12 @@ export interface ExtractionModels {
 }
 
 export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {
-	/** The post-merge embedding batch (semantic clusters run on it).
-	 *  INJECTED by the composition root (the agent layer never imports
-	 *  the server layer — architecture law): production passes the
-	 *  provider-embedder batch (server/embeddings.ts embedNewNodes — BYOK
-	 *  wave 6; null model = it skips itself with an info log), tests fake
-	 *  it. Failure inside it is non-fatal by contract, and since 02bd1b0
-	 *  it fails BY RESULT — landed vectors + partial usage ride the
-	 *  return value instead of a throw. When the result carries a
-	 *  `usage` stage (the EmbedBatchResult contract), it is recorded
-	 *  into the run's money-channel capture. */
+	/** The post-merge embedding batch — WAVE 7 STUB: the provider
+	 *  embedder and semantic clustering are dead (birth-session clusters
+	 *  + session-name labels), so production injects a no-op that
+	 *  reports skipped; tests fake writes to the (still-live) ledger
+	 *  port. The whole seam dies with Platform's ledger-port interlude
+	 *  — kept one round so that removal is a pure deletion. */
 	embedder: (graphStore: GraphStore) => Promise<unknown>;
 }
 
@@ -863,11 +859,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// The embedding tail gets its own phase — the honest label for what
 			// the run is waiting on here (see ExtractionPhase above).
 			setPhase(chatId, "embedding", "chat");
-			// Semantic embeddings (DECIDED 2026-09-13): topics come from
-			// MEANING, so embed the new propositions BEFORE the settle and
-			// the namer look at clusters. Failure is non-fatal — the landed
-			// vectors persist (pay-once, 02bd1b0) and clustering runs with
-			// them; the next merge's retry embeds only what remains.
+			// The embedding tail (wave 7 stub — see ExtractionPipelineDeps):
+			// the seam stays until Platform's ledger-port interlude; the
+			// failure contract is unchanged (non-fatal, by-result).
 			await captureEmbedUsage(chatId, await embed(graphStore).catch(recordEmbedFailure(chatId)));
 			// Option A: the layout ledger evolves with the merge (sync — the
 			// next snapshot fetch must already reflect the new nodes).

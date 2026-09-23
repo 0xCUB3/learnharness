@@ -6,7 +6,6 @@ import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
-import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
 import { useDefaultSettings } from "@/components/default-settings";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { SidebarToggle } from "@/components/sidebar";
@@ -172,12 +171,6 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 					<StatsBar
 						dictationSlot={<DictationBar dictation={dictation} />}
 						turns={[] as TurnUsage[]}
-						leftSlot={
-							<GraphContextControl
-								value={effectiveContextTokens(settings)}
-								onChange={(tokens) => saveDraft({ ...settings, graphContextTokens: tokens })}
-							/>
-						}
 					/>
 				</div>
 			</div>

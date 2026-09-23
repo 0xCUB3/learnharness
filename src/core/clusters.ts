@@ -1,9 +1,8 @@
 /**
- * CLUSTER LABEL MATCHING (vision §1). DETECTION moved to semantic topic
- * clustering over embeddings (core/semantic-clusters.ts, DECIDED
- * 2026-09-13) — Louvain over the edge structure is retired: it only ever
- * found the reasoning chains (the graph is disconnected by nature), and
- * edge-orphans could never join anything. What REMAINS here is the
+ * CLUSTER LABEL MATCHING (vision §1). DETECTION is birth-session
+ * clustering since wave 7 (core/session-clusters.ts; the semantic
+ * embedder and its Louvain predecessor are both dead). What REMAINS here
+ * is the
  * cluster contract + core-survival label matching, which is
  * detection-agnostic: it consumes the same { members } shape semantic
  * clustering emits.

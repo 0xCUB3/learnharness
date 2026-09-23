@@ -1,8 +1,7 @@
 import type { UIMessage } from "ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
-import { graphContextOfMessage } from "../../core/graph-context.ts";
-import { graphContextText, HANDOFF_TEXT, verdictText } from "../../core/contracts/chat.ts";
+import { HANDOFF_TEXT, verdictText } from "../../core/contracts/chat.ts";
 
 /**
  * The record → pi-ai transcript adapter (docs/pi-engine-swap.md §4). The
@@ -62,13 +61,6 @@ function systemTextOf(message: { parts: ReadonlyArray<{ type: string; data?: unk
 			return verdictText((part.data as { accepted?: unknown } | undefined)?.accepted === true);
 		}
 		if (part.type === "data-probe-handoff") return HANDOFF_TEXT;
-		// Graph context injection: the block text derives from the part's
-		// validated data (parse-don't-cast — a malformed part has no model
-		// face, and the message then never reaches the provider).
-		if (part.type === "data-graph-context") {
-			const data = graphContextOfMessage({ parts: message.parts });
-			return data ? graphContextText(data) : null;
-		}
 	}
 	return null;
 }

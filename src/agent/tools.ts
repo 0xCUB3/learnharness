@@ -11,10 +11,12 @@ import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
+import { proberGraphTools } from "./tools/graph.ts";
 import { readTool } from "./tools/read.ts";
 import { lsTool } from "./tools/ls.ts";
 import { findTool } from "./tools/find.ts";
 import { grepTool } from "./tools/grep.ts";
+import type { GraphStore } from "../core/ports.ts";
 
 export { jobTools };
 export type { ProbeDoneContext } from "./tools/probe.ts";
@@ -78,14 +80,20 @@ export interface ProberToolContext extends ProbeDoneContext {
 	/** Search availability — the research dispatch tool's honest-disable
 	 *  signal (same gate as the teacher's). Absent = available. */
 	searchAvailable?: () => boolean;
+	/** The prober's graph-map reader (wave 7): present = the two map tools
+	 *  (list_sessions / list_propositions) are registered. The composition
+	 *  root passes it only when graphToolsEnabled(effective) — the graph
+	 *  master switch AND the agent.graphTools toggle (settings-resolution).
+	 *  Absent = the gate is closed, no map tools (tests drive this seam). */
+	graphStore?: GraphStore;
 }
 
 /** The prober's tool set: probe quiz (no nodeId) + ask + the learner-fs
- *  set + probe_done + the two phase-omnipresent job dispatch tools.
- *  `enabled` is the resolved settings seam (core/pending.ts): any tool
- *  explicitly false is dropped from the registry. probe_done stays
- *  always-on regardless — it is how the phase ENDS; a prober that can
- *  never conclude is a lockout. */
+ *  set + probe_done + the two phase-omnipresent job dispatch tools +
+ *  (wave 7, gated) the graph-map reader. `enabled` is the resolved
+ *  settings seam (core/pending.ts): any tool explicitly false is dropped
+ *  from the registry. probe_done stays always-on regardless — it is how
+ *  the phase ENDS; a prober that can never conclude is a lockout. */
 export function createProberTools(
 	ctx: ProberToolContext,
 	enabled?: EnabledTools,
@@ -122,6 +130,11 @@ export function createProberTools(
 				// when no engine is live).
 				...(jobs.research ? { research: jobs.research } : {}),
 				pdf: jobs.pdf!,
+				// The map reader (wave 7): present only when the settings gate
+				// opened — same registration-time drop as the search gate.
+				...(ctx.graphStore
+					? proberGraphTools({ chatStore: ctx.chatStore, graphStore: ctx.graphStore })
+					: {}),
 				...done,
 			},
 			enabled,

@@ -12,6 +12,7 @@ import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import {
 	extractionEnabled,
+	graphToolsEnabled,
 	resolveConversationSpec,
 	resolveRoleSpec,
 } from "../core/settings-resolution.ts";
@@ -274,6 +275,10 @@ export async function handleChatRequest(
 						jobStore: stores.jobStore,
 						spawn: (job, input) => void jobRunner.runJob(job.id, input),
 						searchAvailable,
+						// The map reader (wave 7): the prober reads the learner's
+						// knowledge graph through tools when the gate opens —
+						// graph master switch AND the agent.graphTools toggle.
+						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
 					},
 					agentOpts,
 				);

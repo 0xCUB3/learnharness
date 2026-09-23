@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
 import { DictationBar, useDictation } from "@/components/dictation";
-import { GraphContextControl, effectiveContextTokens } from "@/components/graph-context-control";
 import { useDefaultSettings } from "@/components/default-settings";
 import { PhaseChip } from "@/components/phase-divider";
 import { SidebarToggle } from "@/components/sidebar";
@@ -131,17 +130,6 @@ export function DraftShell({
 								<StatsBar
 									dictationSlot={<DictationBar dictation={dictation} />}
 									turns={[]}
-									// The session-data slot (owner, 2026-09-15): pre-chat the left
-									// side is free — the knowledge-context budget lives exactly
-									// where session data will sit once a session exists.
-									leftSlot={
-										<GraphContextControl
-											value={effectiveContextTokens(settings)}
-											onChange={(tokens) =>
-												onSettingsSaved({ ...settings, graphContextTokens: tokens })
-											}
-										/>
-									}
 								/>
 							</div>
 						</div>

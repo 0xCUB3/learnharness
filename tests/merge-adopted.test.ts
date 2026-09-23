@@ -13,7 +13,10 @@ function userText(id: string, text: string): TeacherUIMessage {
 	return { id, role: "user", parts: [{ type: "text", text }] };
 }
 function steer(id: string): TeacherUIMessage {
-	return { id, role: "user", parts: [{ type: "data-graph-context", data: { chatId: "c", budget: 1024, tokens: 1, propositions: [] } }] };
+	// Wave 7 killed the graph-context injection; its marker part is gone.
+	// The steer-shaped user message here exercises mergeAdopted's
+	// non-text user parts path with the handoff marker instead.
+	return { id, role: "user", parts: [{ type: "data-probe-handoff", data: { chatId: "c" } }] };
 }
 function assistant(id: string): TeacherUIMessage {
 	return { id, role: "assistant", parts: [{ type: "text", text: "reply" }] };

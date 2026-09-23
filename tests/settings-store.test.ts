@@ -20,7 +20,6 @@ import type { ChatSettings } from "../src/core";
 const CHAT_FIXTURE: ChatSettings = {
 	model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
 	thinkingLevel: "low",
-	graphContextTokens: 1024,
 };
 
 // Snapshot any pre-existing files; restore in after() so the worktree's

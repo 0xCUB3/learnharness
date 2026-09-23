@@ -55,4 +55,3 @@ export * from "./auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./keyboard.ts";
 export * from "./coverage.ts";
-export * from "./graph-context.ts";

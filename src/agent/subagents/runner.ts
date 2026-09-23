@@ -107,7 +107,7 @@ interface LoopContext {
 
 /** The kind→role table (model slots wave, 2026-09-20): which ModelRole's
  * engine each sub-agent kind runs — the engineFor injection key. */
-const KIND_ROLE: Record<Exclude<JobKind, "graph-context">, ModelRole> = {
+const KIND_ROLE: Record<JobKind, ModelRole> = {
 	research: "researcher",
 	demo: "demoBuilder",
 	visual: "visualMaker",
@@ -148,18 +148,14 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		return jobStore.getJob(jobId)?.status === "running";
 	}
 
-	/** The kind→runner map: one sub-agent loop per SUB-AGENT kind.
-	 *  graph-context is deliberately absent: injection jobs are not
-	 *  sub-agent loops (no model, graph deps instead) — their spawn and
-	 *  crash-respawn seam is subagents/graph-context.ts, and runJob refuses
-	 *  them below rather than guessing wrong. */
-	// Each kind's runner narrows the union input itself (dispatch-time inputs
-	// are kind-correct by construction; transcript fallbacks are cast after).
+	/** The kind→runner map: one sub-agent loop per kind. Each kind's
+	 *  runner narrows the union input itself (dispatch-time inputs are
+	 *  kind-correct by construction; transcript fallbacks are cast after). */
 	/** The engine one job runs on: test override first (the old seam —
 	 *  tests swap scripted engines without touching deps), then the injected
 	 *  settings-resolved engineFor. undefined = the BYOK chain came up
 	 *  empty (owner, 2026-09-22) — runJob refuses below, honestly. */
-	function pickEngine(kind: Exclude<JobKind, "graph-context">): PiEngine | undefined {
+	function pickEngine(kind: JobKind): PiEngine | undefined {
 		const testOverride: Record<string, { current?: PiEngine } | undefined> = {
 			researcher: researchModelOverride,
 			demoBuilder: demoModelOverride,
@@ -170,7 +166,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 	}
 
 	const KIND_RUNNERS: Record<
-		Exclude<JobKind, "graph-context">,
+		JobKind,
 		(jobId: string, engine: PiEngine, input: JobToolInput | undefined, loop: LoopContext) => Promise<void>
 	> = {
 		research: (jobId, engine, input, loop) => runResearchJob(jobId, engine, input, loop),
@@ -186,12 +182,6 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			return;
 		}
 		if (job.status !== "running") return; // already finished / re-run after crash recovery
-		if (job.kind === "graph-context") {
-			// Not a sub-agent: the injection's own respawn seam
-			// (setContextRespawn → runGraphContextJob) owns these records.
-			console.error(`[job ${jobId}] graph-context job reached the sub-agent runner — wrong seam`);
-			return;
-		}
 		const run = KIND_RUNNERS[job.kind];
 		if (!run) {
 			console.error(`[job ${jobId}] unknown kind: ${job.kind}`);

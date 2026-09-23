@@ -111,51 +111,6 @@ describe("DraftShell — the sessionless surface", () => {
 		assert.ok(cta !== -1 && blob !== -1 && cta < blob, "CTA above the blob");
 	});
 
-	it("renders the knowledge-context slider in the stats bar's left slot, at the decided default (absent settings = on, 1024)", () => {
-		const html = renderToStaticMarkup(
-			<DraftShell
-				busy={false}
-				text=""
-				onChange={() => {}}
-				onSend={() => {}}
-				settings={undefined}
-				onSettingsSaved={() => {}}
-			/>,
-		);
-		assert.ok(html.includes('data-testid="graph-context-control"'));
-		// INSIDE the stats row (the session-data slot), not a strip above the
-		// composer: the control renders after the stats bar opens.
-		assert.ok(
-			html.indexOf('data-testid="stats-bar"') < html.indexOf('data-testid="graph-context-control"'),
-			"the slider is the stats bar's left slot",
-		);
-		// The DISCRETE slider (owner, 2026-09-15): 6 positions (off + powers of
-		// four from 64), not a continuous 0-4096 dial.
-		assert.ok(html.includes('min="0"') && html.includes('max="5"') && html.includes('step="1"'));
-		assert.ok(html.includes('value="3"'), "default 1024 = stop index 3");
-		// The readout: "tok" abbreviated, but the FULL number (owner, 2026-09-15:
-		// no k-rounding — 1024 reads as 1024).
-		assert.ok(html.includes("1024 tok"), "the readout shows the default budget, not 0 — default is ON");
-		assert.ok(html.includes("Graph context"), "the control is labeled");
-		// Absent settings render the default — never 'off'.
-		assert.ok(!html.includes(">off<"));
-	});
-
-	it("an explicit 0 renders as off — the learner turned the graph off for this session", () => {
-		const html = renderToStaticMarkup(
-			<DraftShell
-				busy={false}
-				text=""
-				onChange={() => {}}
-				onSend={() => {}}
-				settings={{ graphContextTokens: 0 }}
-				onSettingsSaved={() => {}}
-			/>,
-		);
-		assert.ok(html.includes('data-testid="graph-context-value"'));
-		assert.ok(html.includes(">off<"));
-	});
-
 	it("no chat id anywhere — nothing in the markup references a session", () => {
 		const html = renderToStaticMarkup(
 			<DraftShell

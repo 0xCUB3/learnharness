@@ -10,7 +10,6 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { GRAPH_CONTEXT_TOKENS_MAX } from "../src/core";
 import { parseSettingsBody } from "../src/server/settings-body.ts";
 
 describe("parseSettingsBody (shared by both settings routes)", () => {
@@ -24,13 +23,11 @@ describe("parseSettingsBody (shared by both settings routes)", () => {
 		const r = parseSettingsBody({
 			model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
 			thinkingLevel: "high",
-			graphContextTokens: 256,
 		});
 		assert.ok(r.ok);
 		assert.deepEqual(r.settings, {
 			model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
 			thinkingLevel: "high",
-			graphContextTokens: 256,
 		});
 	});
 
@@ -54,12 +51,4 @@ describe("parseSettingsBody (shared by both settings routes)", () => {
 		assert.equal(parseSettingsBody({ thinkingLevel: 7 }).ok, false);
 	});
 
-	it("rejects out-of-range or non-integer graphContextTokens — never clamps", () => {
-		for (const bad of [-1, GRAPH_CONTEXT_TOKENS_MAX + 1, 64.5, "256"]) {
-			const r = parseSettingsBody({ graphContextTokens: bad });
-			assert.equal(r.ok, false, String(bad));
-		}
-		const ok = parseSettingsBody({ graphContextTokens: GRAPH_CONTEXT_TOKENS_MAX });
-		assert.equal(ok.ok, true);
-	});
 });

@@ -12,7 +12,7 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { GRAPH_CONTEXT_TOKENS_MAX, isHexColor, type ChatSettings } from "../core";
+import { isHexColor, type ChatSettings } from "../core";
 import type {
 	AgentSettings,
 	AppearanceSettings,
@@ -37,7 +37,6 @@ export function parseSettingsBody(body: unknown): SettingsBodyResult<ChatSetting
 	const raw = body as {
 		model?: { provider?: unknown; id?: unknown };
 		thinkingLevel?: unknown;
-		graphContextTokens?: unknown;
 	};
 	const settings: ChatSettings = {};
 	if (raw.model !== undefined) {
@@ -57,23 +56,10 @@ export function parseSettingsBody(body: unknown): SettingsBodyResult<ChatSetting
 		}
 		settings.thinkingLevel = raw.thinkingLevel as ThinkingLevel;
 	}
-	// Graph context injection budget (vision-context-injection.md): integer
-	// tokens, 0 (off) to GRAPH_CONTEXT_TOKENS_MAX, no silent clamping — the
-	// slider is the only writer, and it only ever sends multiples of the step.
-	if (raw.graphContextTokens !== undefined) {
-		if (
-			typeof raw.graphContextTokens !== "number" ||
-			!Number.isInteger(raw.graphContextTokens) ||
-			raw.graphContextTokens < 0 ||
-			raw.graphContextTokens > GRAPH_CONTEXT_TOKENS_MAX
-		) {
-			return {
-				ok: false,
-				error: `graphContextTokens must be an integer between 0 and ${GRAPH_CONTEXT_TOKENS_MAX}`,
-			};
-		}
-		settings.graphContextTokens = raw.graphContextTokens;
-	}
+	// Wave 7 killed the graph-context injection (owner: zero configuration
+	// beyond chat models — the prober reads its map through tools now); its
+	// budget dial is gone with it. A stale client sending the old key has
+	// it silently dropped here (forward-compatible, like any unknown key).
 	return { ok: true, settings };
 }
 
