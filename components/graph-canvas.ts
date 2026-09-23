@@ -124,6 +124,10 @@ export interface CanvasData {
 export interface RendererCallbacks {
 	/** A node was clicked (screen position included for card anchoring). */
 	onSelect: (nodeId: string, screenPos: Pt) => void;
+	/** Right-click: the picked node (canvas-relative screen position) or
+	 *  null when the pointer hit empty stage — the caller opens/closes
+	 *  its context menu accordingly. (node interlude, wave 7) */
+	onContext: (nodeId: string | null, screenPos: Pt) => void;
 	/** The empty stage was clicked. */
 	onStageClick: () => void;
 	/** Any camera move (pan/zoom) — the caller dismisses anchored UI and
@@ -635,6 +639,10 @@ export class GraphCanvasRenderer {
 		canvas.addEventListener("pointerdown", this.onPointerDown);
 		canvas.addEventListener("pointerup", this.onPointerUp);
 		canvas.addEventListener("pointerleave", this.onPointerLeave);
+		// Right-click → the caller's context menu (node interlude). Always
+		// preventDefault: the native menu on a full-bleed custom canvas is
+		// never useful; the caller decides what (if anything) opens.
+		canvas.addEventListener("contextmenu", this.onContextMenu);
 
 		// The persisted camera: replace the default with wherever the user
 		// left the graph. Applied through the zoom behavior so d3's internal
@@ -809,6 +817,7 @@ export class GraphCanvasRenderer {
 		this.canvas.removeEventListener("pointerdown", this.onPointerDown);
 		this.canvas.removeEventListener("pointerup", this.onPointerUp);
 		this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
+		this.canvas.removeEventListener("contextmenu", this.onContextMenu);
 		this.canvas.style.cursor = "";
 	}
 
@@ -924,6 +933,15 @@ export class GraphCanvasRenderer {
 		const node = this.pickAt(pos.x, pos.y);
 		if (node) this.callbacks.onSelect(node.id, pos);
 		else this.callbacks.onStageClick();
+	};
+
+	/** Right-click: pick the node under the pointer, hand the position to
+	 *  the caller (empty stage = null — the caller closes any open menu). */
+	private onContextMenu = (e: MouseEvent) => {
+		e.preventDefault();
+		const pos = this.eventPos(e);
+		const node = this.pickAt(pos.x, pos.y);
+		this.callbacks.onContext(node?.id ?? null, pos);
 	};
 
 	private onPointerLeave = () => {

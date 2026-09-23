@@ -69,6 +69,8 @@ import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts
 import { GraphCoverageControl } from "./graph-coverage.tsx";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useActivity } from "@/components/activity-dock";
+import { MenuShell } from "@/components/menu-shell.tsx";
+import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
 import {
 	ARROW_LENGTH_LADDER,
 	CHARGE_RANGE,
@@ -945,6 +947,36 @@ export function GraphView() {
 		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
 	}, []);
 
+	// The node context menu (node interlude): right-click a node → Delete.
+	// The anchor is a zero-size div positioned at the pointer inside the
+	// canvas container — MenuShell's placement machine measures it like
+	// any element. Camera moves close the menu (it would float stale);
+	// the dismissal contract is the sidebar's (wave 6).
+	const [ctxNode, setCtxNode] = useState<{ id: string; name: string; x: number; y: number } | null>(null);
+	const ctxAnchorRef = useRef<HTMLDivElement | null>(null);
+	const [deletingNode, setDeletingNode] = useState<{ id: string; name: string } | null>(null);
+	useEffect(() => {
+		if (ctxNode === null) return;
+		const onPointerDown = (e: PointerEvent) => {
+			const target = e.target as Node;
+			if (target instanceof Element && target.closest("[data-lh-menu]")) return;
+			if (ctxAnchorRef.current?.contains(target)) return;
+			setCtxNode(null);
+		};
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				e.stopPropagation();
+				setCtxNode(null);
+			}
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", onPointerDown);
+			document.removeEventListener("keydown", onKeyDown);
+		};
+	}, [ctxNode]);
+
 	// Layout (Option A): the positions ledger (written by the server's
 	// incremental settle after every merge) IS the layout — the renderer
 	// receives it as frozen data. The local one-shot forceAtlas2 pass runs
@@ -1036,10 +1068,26 @@ export function GraphView() {
 					});
 				},
 				onStageClick: () => setSelected(null),
+				// Right-click → the node context menu (node interlude). Null
+				// (empty stage) closes a stale menu; a pick opens one anchored
+				// at the pointer. The name comes from the snapshot — what the
+				// canvas shows is what the menu and dialog speak.
+				onContext: (nodeId, pos) => {
+					if (nodeId === null) {
+						setCtxNode(null);
+						return;
+					}
+					const node = snapshotRef.current?.nodes.find((n) => n.id === nodeId);
+					if (!node) return;
+					setCtxNode({ id: node.id, name: node.name, x: pos.x, y: pos.y });
+				},
 				// Any camera move detaches the card from its node — close
-				// it, and (debounced) remember where the camera stands.
+				// it, and (debounced) remember where the camera stands. The
+				// context menu closes with it: a menu floating over a moved
+				// graph is anchored to nothing.
 				onCameraMove: (t) => {
 					setSelected(null);
+					setCtxNode(null);
 					persistCamera(t);
 				},
 				// Live physics settled: persist the new rest state. Fire-and-
@@ -1168,12 +1216,67 @@ export function GraphView() {
 					</div>
 				</div>
 			) : (
-				<div ref={containerRef} className="h-full w-full">
+				<div ref={containerRef} className="relative h-full w-full">
 					{/* THE single canvas: every layer (hulls, edges, nodes, both
 					    label systems, hover) draws into it, once per frame. */}
 					<canvas ref={canvasRef} className="block h-full w-full touch-none" />
+					{/* The context menu's anchor: a zero-size point at the
+					    right-click position (canvas-relative == container-relative,
+					    the canvas fills this div). */}
+					{ctxNode !== null && (
+						<div
+							ref={ctxAnchorRef}
+							style={{ position: "absolute", left: ctxNode.x, top: ctxNode.y, width: 0, height: 0 }}
+						/>
+					)}
 				</div>
 			)}
+
+			{/* The node context menu (node interlude): Delete is its one action
+			    (the same MenuShell discipline as the sidebar's session menu —
+			    placement, focus, arrow cycling; the dismissal effect above owns
+			    the contract). */}
+			{ctxNode !== null && (
+				<MenuShell
+					anchorRef={ctxAnchorRef}
+					testid="node-context-menu"
+					preferredSide="down"
+					menuClass="flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+				>
+					<button
+						type="button"
+						data-testid="ctx-node-delete"
+						onClick={() => {
+							setDeletingNode({ id: ctxNode.id, name: ctxNode.name });
+							setCtxNode(null);
+						}}
+						className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
+					>
+						Delete…
+					</button>
+				</MenuShell>
+			)}
+
+			{/* The full-death confirm dialog (node interlude) — portaled to
+			    body by the component itself, lives here for state locality. */}
+			<DeleteNodeDialog
+				node={deletingNode}
+				joins={{
+					sessions: snapshot?.sessions ?? {},
+					fileSources: snapshot?.fileSources ?? {},
+				}}
+				onClose={() => setDeletingNode(null)}
+				onDeleted={(nodeId, graphRevision) => {
+					// Close the dialog; close the detail card if it pointed here
+					// (the refetch would close it anyway, but the same frame
+					// should not show a card for a node the user just killed).
+					setDeletingNode(null);
+					if (selected?.node.id === nodeId) setSelected(null);
+					// The wave-6 chain: every listener refetches on this. Clusters
+					// shrink / unrender below the minimum on the server's read.
+					window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }));
+				}}
+			/>
 
 			{/* Legend + filters: search box and per-state toggle rows. */}
 			{/* Top-right controls — separate floating containers (owner,
