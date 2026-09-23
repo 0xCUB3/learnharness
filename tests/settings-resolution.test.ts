@@ -11,7 +11,6 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	extractionEnabled,
-	graphContextEnabled,
 	graphToolsEnabled,
 	resolveConversationSpec,
 	resolveModelSpec,
@@ -43,7 +42,7 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.proseFontSize, 16);
 		assert.equal(eff.appearance.sessionNameSerif, true);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 900);
-		assert.deepEqual(eff.graph, { enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null }); // BYOK wave 6: no factory embedding model
+		assert.deepEqual(eff.graph, { enabled: true }); // wave 7 collapse: the master switch ONLY
 	});
 
 	it("explicit record values win over every factory default", () => {
@@ -76,9 +75,8 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.mode, "light");
 		assert.equal(eff.appearance.proseFontSize, 20);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 600);
-		// graph: enabled=false explicit; absent rungs stay factory-on (stored
-		// but inert — the ladder grays them out in the UI).
-		assert.deepEqual(eff.graph, { enabled: false, embedding: true, clustering: true, labeling: true, embeddingModel: null }); // wave 6: unset embeddingModel resolves to the null floor
+		// wave 7 collapse: the section IS the master switch.
+		assert.deepEqual(eff.graph, { enabled: false });
 	});
 
 	it("partial role override: thinkingLevel alone borrows the SLOT's model (or nothing, without one)", () => {
@@ -224,29 +222,20 @@ describe("resolveConversationSpec (the turn gate's chain)", () => {
 });
 
 describe("the graph channel gates (the wave's seam honoring)", () => {
-	it("WRITE channel (extraction): dies with the master switch only", () => {
-		assert.equal(extractionEnabled({ enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null }), true);
-		assert.equal(extractionEnabled({ enabled: true, embedding: false, clustering: false, labeling: false, embeddingModel: null }), true);
-		assert.equal(extractionEnabled({ enabled: false, embedding: true, clustering: true, labeling: true, embeddingModel: null }), false);
+	it("WRITE channel (extraction): dies with the master switch — the ONLY graph setting since wave 7", () => {
+		assert.equal(extractionEnabled({ enabled: true }), true);
+		assert.equal(extractionEnabled({ enabled: false }), false);
 	});
 
-	it("READ channel (graph-context): needs master AND the embedding rung", () => {
-		assert.equal(graphContextEnabled({ enabled: true, embedding: true, clustering: false, labeling: false, embeddingModel: null }), true);
-		assert.equal(graphContextEnabled({ enabled: true, embedding: false, clustering: true, labeling: true, embeddingModel: null }), false);
-		assert.equal(graphContextEnabled({ enabled: false, embedding: true, clustering: true, labeling: true, embeddingModel: null }), false);
-	});
-
-	it("both gates ride resolveSettings' factory defaults (all on → both open)", () => {
+	it("the write gate rides resolveSettings' factory defaults (all on → open)", () => {
 		const eff = resolveSettings(null);
 		assert.equal(extractionEnabled(eff.graph), true);
-		assert.equal(graphContextEnabled(eff.graph), true);
 		const off = resolveSettings({ version: 1, graph: { enabled: false } });
 		assert.equal(extractionEnabled(off.graph), false);
-		assert.equal(graphContextEnabled(off.graph), false);
 	});
 
 	it("PROBER GRAPH TOOLS gate (wave 7, owner ruling 2026-09-23): the agent toggle AND the graph master switch compose", () => {
-		const graph = { enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null };
+		const graph = { enabled: true };
 		assert.equal(graphToolsEnabled({ graph, agent: { graphTools: {} } }), true, "absent subsection = ON");
 		assert.equal(graphToolsEnabled({ graph, agent: { graphTools: { enabled: true } } }), true);
 		assert.equal(graphToolsEnabled({ graph, agent: { graphTools: { enabled: false } } }), false);

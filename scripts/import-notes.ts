@@ -15,7 +15,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createExtractionPipeline } from "../src/agent/subagents/extraction.ts";
-import { embedNewNodes } from "../src/server/embeddings.ts";
 import { clusterNamingSettled } from "../src/agent/subagents/cluster-namer.ts";
 import { getGraph } from "../src/core/graph.ts";
 import { stores } from "../src/server/stores.ts";
@@ -29,7 +28,7 @@ async function main() {
 		.sort();
 	console.log(`[import-notes] ${files.length} note files from ${dir} (concurrency ${limit})`);
 
-	const pipeline = createExtractionPipeline({ ...stores, embedder: embedNewNodes });
+	const pipeline = createExtractionPipeline({ ...stores, embedder: async () => ({ embedded: 0, total: 0, skipped: "embeddings removed (wave 7)" }) });
 	const queue = [...files];
 	const totals = { nodes: 0, edges: 0, events: 0, failed: 0 };
 	const workers = Array.from({ length: Math.min(limit, files.length) }, async () => {

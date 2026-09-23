@@ -4,23 +4,20 @@ import { createProberAgent, createTeacherAgent, type AgentBuildOptions, type Tea
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
-import { runGraphContextJob, type GraphContextDeps } from "../agent/subagents/graph-context.ts";
-import { embedNewNodes, embeddingPort } from "./embeddings.ts";
 import type { ModelRole } from "../../config.ts";
-import { claimSteers, deliverJobResult, setContextRespawn, setJobRespawn, setTurnRunner } from "./jobs.ts";
+import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { createPiTurnResponse } from "./pi/ui-stream.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import {
 	extractionEnabled,
-	graphContextEnabled,
 	resolveConversationSpec,
 	resolveRoleSpec,
 } from "../core/settings-resolution.ts";
 import { modelsNotConfigured } from "../core/settings.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
-import { persistTurn, triggerExtraction, triggerGraphContext, withMessageIds } from "./turn-service.ts";
+import { persistTurn, triggerExtraction, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
 
 /**
@@ -63,9 +60,11 @@ const jobRunner = createJobRunner({
  *  (/api/graph/import) hit the same single-flight registry. */
 export const extraction = createExtractionPipeline({
 	...stores,
-	// The provider-embedder batch (BYOK wave 6): post-merge embedding —
-	// resolves the model fresh per call; null model = info-skip inside.
-	embedder: embedNewNodes,
+	// Wave 7 (owner ruling 2026-09-23): embeddings are DEAD — the pipeline's
+	// embed seam becomes a no-op until Teacher's pass removes the phase
+	// outright. Nothing embedded, nothing spent, the ledger untouched
+	// (its data is inert anyway: nothing reads it but the dying injection).
+	embedder: async () => ({ embedded: 0, total: 0, skipped: "embeddings removed (wave 7)" }),
 	// BYOK (owner, 2026-09-22): the extraction stages resolve the chain —
 	// role override → slot → NOTHING — read FRESH per stage call; an empty
 	// chain flows through as undefined and the pipeline refuses the run
@@ -74,30 +73,6 @@ export const extraction = createExtractionPipeline({
 		resolveEngine(role),
 });
 
-/** Graph context injection (vision-context-injection.md): the runner's
- *  deps — same storage ports, the provider-embedder RESOLVER as the query
- *  seam (BYOK wave 6: fresh setting + key reads per run, so vector-space
- *  parity with the ledger is checked against the CURRENT model; a key or
- *  settings PUT between dispatch and spawn lands), and the wake pipeline
- *  as the delivery seam. */
-export const graphContext: GraphContextDeps = {
-	chatStore: stores.chatStore,
-	jobStore: stores.jobStore,
-	graphStore: stores.graphStore,
-	embedder: () => {
-		const resolved = embeddingPort();
-		if (!resolved.ok) return null;
-		const port = resolved.port;
-		return {
-			model: port.model,
-			embedQuery: async (text: string) => {
-				const result = await port.embed([text], "query");
-				return { vector: result.vectors[0]!, promptTokens: result.promptTokens };
-			},
-		};
-	},
-	deliver: deliverJobResult,
-};
 
 // Wake-pipeline wiring (contracts.ts "THE ASYNC PROTOCOL" §4): the pipeline
 // fires its server-side teacher turns through THIS composition root, and
@@ -125,7 +100,6 @@ function resolveEngine(role: ModelRole): PiEngine | undefined {
 }
 
 setJobRespawn((jobId) => void jobRunner.runJob(jobId));
-setContextRespawn((jobId) => void runGraphContextJob(graphContext, jobId));
 
 /** The message-shape gate the SDK's UIMessageValidator owned: a malformed
  *  body must fail BEFORE the stream exists — the path where no onFinish will
@@ -219,27 +193,7 @@ export async function handleChatRequest(
 		console.error(`[chat ${chatId}] write-ahead persist failed:`, err);
 	}
 
-	// THE GRAPH READ CHANNEL (vision-context-injection.md): one shot per
-	// chat, at session start — fired HERE, at turn start, not in onFinish:
-	// the injection's only input is the first typed message (the topic),
-	// which the write-ahead persist above just made durable, so it runs
-	// CONCURRENT with the prober's turn (embedding + cosine scan, no model
-	// call) and the dock shows the job the moment the session starts. Its
-	// steer then waits in the wake queue through the turn (waitForIdle) —
-	// exactly the same hold as a sub-agent result finishing mid-turn. All
-	// gates (exactly-one-text-message topic, budget, one-shot) live in the
-	// runner module; for every session past its start this is a no-op.
-	// Extraction stays in onFinish by contrast: it depends on quiz
-	// answers accumulated DURING the turn.
-	// GRAPH GATES (settings-storage wave, 2026-09-19): the read channel
-	// needs BOTH the master switch and the embedding rung (injection is a
-	// vector query); with graph off there is no context job at all.
-	// BYOK (wave 6): an unconfigured embedding model means no vectors to
-	// query — the dispatch skips honestly (the runner's own resolution is
-	// the belt-and-suspenders for respawn races).
-	if (graphContextEnabled(effective.graph) && effective.graph.embeddingModel !== null) {
-		triggerGraphContext(graphContext, chatId);
-	}
+
 
 	// MONEY CHANNEL (wave 4): one collector per request, fed by the agent's
 	// message_end events. Every model call's usage lands in the chat record's

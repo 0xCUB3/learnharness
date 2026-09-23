@@ -21,7 +21,6 @@ import { coverageOf } from "../core/coverage.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
 import { EXTRACTION } from "../../config.ts";
 import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
-import { startGraphContextInjection, type GraphContextDeps } from "../agent/subagents/graph-context.ts";
 import { ModelsNotConfiguredError } from "../core/settings.ts";
 
 /**
@@ -113,21 +112,3 @@ export function triggerExtraction(
 	}
 }
 
-/**
- * The graph READ channel (vision-context-injection.md): one shot per chat,
- * at session start — the first typed message is the session's topic; the
- * semantically closest propositions are selected under the session's token
- * budget and steered in through the wake pipeline. Fire-and-forget like
- * triggerExtraction; the one-shot gates (topic, budget, prior injection)
- * live in the runner module, not here — this seam only decides WHEN to ask.
- * Skipped under tests, same doctrine: the runner is tested directly with a
- * scripted embedder.
- */
-export function triggerGraphContext(deps: GraphContextDeps, chatId: string): void {
-	if (process.env.NODE_ENV === "test") return;
-	try {
-		startGraphContextInjection(deps, chatId);
-	} catch (err) {
-		console.error(`[chat ${chatId}] graph-context trigger failed:`, err);
-	}
-}

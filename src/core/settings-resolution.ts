@@ -201,13 +201,10 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 			},
 		},
 		graph: {
+			// Wave 7 collapse (owner ruling 2026-09-23): the master switch ONLY —
+			// the embedding/clustering/labeling rungs and the BYOK embeddingModel
+			// are gone (stale record keys are simply never read here).
 			enabled: graph.enabled ?? FACTORY_SETTINGS.graph.enabled,
-			embedding: graph.embedding ?? FACTORY_SETTINGS.graph.embedding,
-			clustering: graph.clustering ?? FACTORY_SETTINGS.graph.clustering,
-			labeling: graph.labeling ?? FACTORY_SETTINGS.graph.labeling,
-			// BYOK (wave 6): null is the factory floor and a VALID resolved
-			// value — ?? only fills the absent case, null passes through.
-			embeddingModel: graph.embeddingModel ?? FACTORY_SETTINGS.graph.embeddingModel,
 		},
 	};
 }
@@ -216,21 +213,11 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 
 /**
  * The WRITE channel gate (extraction + its auditor): dies with the master
- * switch. Used by the chat-handler's post-turn trigger; deeper pipeline
- * consumers (embedder, clustering, labeling — later waves) gate on the
- * deeper rungs the same way.
+ * switch. Used by the chat-handler's post-turn trigger. (Wave 7: the master
+ * switch is the ONLY graph setting left — the section collapsed.)
  */
 export function extractionEnabled(graph: Required<GraphSettings>): boolean {
 	return graph.enabled;
-}
-
-/**
- * The READ channel gate (graph-context injection): needs the master switch
- * AND the embedding rung — injection is a vector query, so a graph without
- * embeddings has nothing to inject.
- */
-export function graphContextEnabled(graph: Required<GraphSettings>): boolean {
-	return graph.enabled && graph.embedding;
 }
 
 /**
@@ -246,3 +233,5 @@ export function graphToolsEnabled(effective: {
 }): boolean {
 	return effective.graph.enabled && (effective.agent.graphTools.enabled ?? true);
 }
+
+

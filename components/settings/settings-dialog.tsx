@@ -150,10 +150,11 @@ export function SettingsDialogBody({
 		};
 	}, []);
 	const [active, setActive] = useState<SectionId>(initialSection);
-	// A deep-link fired while the dialog is ALREADY open (wave 6: the
-	// embedding picker's "Add a provider key first…" lands on Keys from
-	// inside the dialog) changes initialSection under our feet — follow it,
-	// or the link silently does nothing.
+	// A deep-link fired while the dialog is ALREADY open (first exercised by
+	// the wave-6 embedding picker's "Add a provider key first…" link — the
+	// picker itself died with wave 7, the mechanism is general) changes
+	// initialSection under our feet — follow it, or the link silently does
+	// nothing.
 	useEffect(() => {
 		setActive(initialSection);
 	}, [initialSection]);

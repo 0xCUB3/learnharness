@@ -14,10 +14,6 @@ const nextConfig: NextConfig = {
 	outputFileTracingExcludes: {
 		"*": [
 			"data/**/*",
-			// Wave 6 (2026-09-23): the local transformers embeddings died — any
-			// @huggingface copy (or its ~300MB model cache, if one ever
-			// reappears) must never sweep into the standalone bundle again.
-			"node_modules/@huggingface/**/*",
 		],
 	},
 	// Empirically verified gaps (2026-09-17 standalone smoke): the tracer

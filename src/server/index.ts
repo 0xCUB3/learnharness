@@ -6,7 +6,6 @@
 
 export * from "./chat-handler.ts";
 export * from "./chats.ts";
-export * from "./embeddings.ts";
 export * from "./graph.ts";
 export * from "./commit-positions.ts";
 export * from "./jobs.ts";

@@ -289,41 +289,22 @@ export function parseAppearanceSettingsBody(body: unknown): SettingsBodyResult<A
 	return { ok: true, settings };
 }
 
-/** graph: the four-rung ladder { enabled?, embedding?, clustering?, labeling? }
- *  + embeddingModel? — the BYOK provider embedding model (wave 6,
- *  2026-09-23): null or a "provider:id" slug of a shipped provider.
- *  Catalog validity is network-dependent — the parser checks SHAPE only
- *  (the federated /api/models/embeddings gives the picker real options). */
+/** graph: the collapsed section { enabled? } (wave 7, owner ruling
+ *  2026-09-23): the master switch ONLY — the embedding/clustering/labeling
+ *  rungs and the BYOK embeddingModel died with the provider embedder
+ *  (clustering is the free birth-session partition, labels are session
+ *  names). Old-shape keys in a body are ignored, not rejected. */
 export function parseGraphSettingsBody(body: unknown): SettingsBodyResult<GraphSettings> {
 	const raw = asRecord(body);
 	if (!raw) return { ok: false, error: "Invalid JSON body" };
+	// Wave 7 collapse (owner ruling 2026-09-23): the section is the master
+	// switch ONLY. PUT is replace-whole — a body like {enabled: true} IS the
+	// whole section now; the dead rungs' keys in old records are unread
+	// (the sanitizer drops them; see sanitizeGraph).
 	const settings: GraphSettings = {};
-	for (const key of ["enabled", "embedding", "clustering", "labeling"] as const) {
-		if (raw[key] !== undefined) {
-			if (typeof raw[key] !== "boolean") {
-				return { ok: false, error: `${key} must be a boolean` };
-			}
-			settings[key] = raw[key];
-		}
-	}
-	if (raw.embeddingModel !== undefined) {
-		if (raw.embeddingModel !== null) {
-			// NOTE: the id may itself contain colons (OpenRouter suffixes like
-			// "liquid/lfm-2.5-embedding-350m:free") — the provider is the part
-			// before the FIRST colon, so the id half just forbids whitespace.
-			if (
-				typeof raw.embeddingModel !== "string" ||
-				!/^(openrouter|openai|google):\S+$/.test(raw.embeddingModel)
-			) {
-				return {
-					ok: false,
-					error: 'embeddingModel must be null or a "openrouter|openai|google:model-id" slug',
-				};
-			}
-			settings.embeddingModel = raw.embeddingModel;
-		} else {
-			settings.embeddingModel = null;
-		}
+	if (raw.enabled !== undefined) {
+		if (typeof raw.enabled !== "boolean") return { ok: false, error: "enabled must be a boolean" };
+		settings.enabled = raw.enabled;
 	}
 	return { ok: true, settings };
 }

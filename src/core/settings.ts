@@ -249,23 +249,14 @@ export interface AppearanceSettings {
  *  meaningful when its parent is on (the UI grays dependents out; stored
  *  values persist but resolve inert). All default true. */
 export interface GraphSettings {
-	/** MASTER: off = no extraction, no auditor, no embedding, no
-	 *  graph-context injection, no clustering. Data stays stored. */
+	/** MASTER (and, since wave 7, ONLY): off = no extraction, no auditor.
+	 *  The wave-7 collapse (owner ruling 2026-09-23) deleted the three
+	 *  subordinate rungs — embedding/clustering/labeling — and the BYOK
+	 *  embeddingModel: clustering is the free birth-session partition
+	 *  derived on read (core/session-clusters.ts), labels ARE session
+	 *  names, and the prober graph tools read the ledgers directly — there
+	 *  is nothing left to configure. Data stays stored either way. */
 	enabled?: boolean;
-	/** Vector embedding + graph-context injection (consumes vectors even
-	 *  without clustering — hence its own rung). */
-	embedding?: boolean;
-	/** Cluster computation + settle (needs embedding). */
-	clustering?: boolean;
-	/** The LLM cluster-namer (needs clustering). */
-	labeling?: boolean;
-	/** BYOK embeddings (wave 6, 2026-09-23): the provider embedding model
-	 *  as a "provider:id" slug (openrouter:…, openai:…, google:…). null =
-	 *  no model — embedding/clustering/injection skip honestly (info log,
-	 *  graph stays textual); no factory floor exists. Keys live in the auth
-	 *  store, resolved fresh per call. A model CHANGE re-embeds everything
-	 *  (the ledger's staleness semantics). */
-	embeddingModel?: string | null;
 }
 
 /** THE record. Every section optional (delta); unknown top-level keys are
@@ -318,7 +309,7 @@ export const FACTORY_SETTINGS: FactorySettings = {
 		sessionNameSerif: true,
 		mdRendering: { headingWeight: 900, boldColor: null, italicColor: null },
 	},
-	graph: { enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null },
+	graph: { enabled: true },
 };
 
 // ─── Sanitizer ─────────────────────────────────────────────────────────────
@@ -467,23 +458,15 @@ function sanitizeAppearance(raw: Record<string, unknown>): AppearanceSettings {
 }
 
 function sanitizeGraph(raw: Record<string, unknown>): GraphSettings {
+	// Wave 7 collapse (owner ruling 2026-09-23): the section is the master
+	// switch ONLY. The dead rungs' keys (embedding/clustering/labeling/
+	// embeddingModel) in existing records are simply UNREAD and DROPPED by
+	// this reconstruction — the migration story: the next graph-section
+	// write (PUT is replace-whole) persists the collapsed shape, and no
+	// active code ever looks at the stale fields.
 	const out: GraphSettings = {};
 	const enabled = boolOrDrop(raw.enabled);
 	if (enabled !== undefined) out.enabled = enabled;
-	const embedding = boolOrDrop(raw.embedding);
-	if (embedding !== undefined) out.embedding = embedding;
-	const clustering = boolOrDrop(raw.clustering);
-	if (clustering !== undefined) out.clustering = clustering;
-	const labeling = boolOrDrop(raw.labeling);
-	if (labeling !== undefined) out.labeling = labeling;
-	// BYOK embeddings (wave 6): null or a provider-qualified slug; anything
-	// else (bad type, bad shape) DROPS to absent — an invalid write never
-	// becomes a live model (the PUT parser 400s it first; this is the
-	// read-side belt-and-suspenders for hand-edited files).
-	if (raw.embeddingModel === null) out.embeddingModel = null;
-	else if (typeof raw.embeddingModel === "string" && /^\S+:\S+$/.test(raw.embeddingModel)) {
-		out.embeddingModel = raw.embeddingModel;
-	}
 	return out;
 }
 
