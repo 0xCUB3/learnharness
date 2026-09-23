@@ -338,8 +338,26 @@ export function MathDisplay(props: ComponentProps<"span"> & ExtraProps) {
 
 // ─── The stable override set (module identity: Streamdown is memoized) ────────
 
+/** Bold as the REAL element (appearance fix, 2026-09-23): streamdown's
+ *  default `strong` renders `<span class="font-semibold" data-streamdown=
+ *  "strong">` — and `.lh-prose :where(strong, b)` matches strong/b
+ *  ELEMENTS, so neither the factory ink (#c96b4a) nor a settings
+ *  boldColor ever landed on bold text (italic worked: streamdown leaves
+ *  `em` native). Rendering the semantic element restores screen-reader
+ *  emphasis AND lets the designed token rule apply unmodified — color
+ *  --lh-ink-strong, weight 700 (beating the old 600 utility). */
+export function MarkdownStrong(props: ComponentProps<"strong"> & ExtraProps) {
+	const { children, className, node, ...rest } = props;
+	return (
+		<strong data-streamdown="strong" className={className} {...rest}>
+			{children}
+		</strong>
+	);
+}
+
 export const mdComponents = {
 	code: MarkdownCode,
 	table: MarkdownTable,
 	span: MathDisplay,
+	strong: MarkdownStrong,
 };
