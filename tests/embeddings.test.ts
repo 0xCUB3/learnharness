@@ -109,6 +109,79 @@ function scriptedPort(model = "openai:test-embed", dim = 2, tokensPerCall = 120)
 
 const okPort = (port: EmbeddingPort): EmbeddingResolution => ({ ok: true, port });
 
+// ─── usage-on-error + pay-once (owner ruling 2026-09-23, interlude) ──────────
+
+describe("embedNewNodes partial-failure accounting (Teacher review follow-up)", () => {
+	it("a mid-run batch failure: landed vectors persist, usage survives, failed carries the error, next run resumes", async () => {
+		// 40 nodes → batch 1 (32) lands, batch 2 (8) throws.
+		const many: GraphNode[] = Array.from({ length: 40 }, (_, i) => node(`n${i}`, `statement ${i}`));
+		const ledger: EmbeddingsLedger = { model: "m", dim: 2, vectors: {}, clusters: [], updatedAt: "" };
+		let writes = 0;
+		let call = 0;
+		const failing: EmbeddingPort = {
+			model: "m",
+			async embed(texts) {
+				call++;
+				if (call === 2) throw new Error("provider exploded mid-run");
+				return {
+					vectors: texts.map((_, i) => (i === 0 ? [1, 0] : [0, 1])),
+					model: "m",
+					dim: 2,
+					promptTokens: 100,
+				};
+			},
+		};
+		const store = {
+			readNodes: () => many,
+			readEmbeddings: () => ledger,
+			writeEmbeddings: (next: EmbeddingsLedger) => {
+				writes++;
+				Object.assign(ledger, next);
+			},
+		};
+		const result = await embedNewNodes(store, () => okPort(failing));
+		// Usage-on-error: batch 1 billed — the money channel keeps it.
+		assert.equal(result.failed, "provider exploded mid-run");
+		assert.equal(result.embedded, 32, "only the landed batch counts as embedded");
+		assert.equal(result.usage?.steps.length, 1);
+		assert.equal(result.usage?.steps[0]?.inputTokens, 100);
+		// Pay-once: the landed vectors are persisted — a retry embeds only the rest.
+		assert.equal(writes, 1);
+		assert.equal(Object.keys(ledger.vectors).length, 32);
+		assert.equal(ledger.model, "m");
+		const resume = await embedNewNodes(store, () => okPort(scriptedPort("m", 2).port));
+		assert.equal(resume.embedded, 8, "the retry resumes — it re-embeds only the 8 remaining");
+		assert.equal(resume.failed, undefined);
+		assert.equal(Object.keys(ledger.vectors).length, 40);
+		assert.equal(resume.usage?.steps[0]?.inputTokens, 120, "scripted port tokens — the retry billed once");
+	});
+
+	it("a FIRST-batch failure: nothing written, nothing billed, the old ledger stays intact", async () => {
+		const g = fakeGraphStore({ vectors: { n1: [1, 0] } });
+		const alwaysFails: EmbeddingPort = {
+			model: "m",
+			embed: async () => {
+				throw new Error("total outage");
+			},
+		};
+		const result = await embedNewNodes(g.store, () => okPort(alwaysFails));
+		assert.equal(result.failed, "total outage");
+		assert.equal(result.embedded, 0);
+		assert.equal(result.usage, undefined, "no call landed — nothing to bill");
+		assert.equal(g.writes.length, 0, "the ledger is untouched (its own model/dim still true)");
+		assert.ok(g.ledger.vectors.n1, "the old vector survives a zero-landed failure");
+	});
+
+	it("success still carries no `failed` key and counts every todo node", async () => {
+		const g = fakeGraphStore();
+		const scripted = scriptedPort(g.ledger.model, 2);
+		const result = await embedNewNodes(g.store, () => okPort(scripted.port));
+		assert.equal(result.failed, undefined);
+		assert.equal(result.embedded, 2);
+		assert.equal(result.skipped, undefined);
+	});
+});
+
 // ─── the money channel's embedding overlay ─────────────────────────────────
 
 describe("the embedding price overlay (hand-maintained, outside the sync block)", () => {

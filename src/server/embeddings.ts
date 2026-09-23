@@ -269,13 +269,21 @@ export function embeddingPort(): EmbeddingResolution {
 // ─── The post-merge batch (the extraction pipeline's embedding tail) ────────
 
 /** What the embedding tail reports back: counts for logs, the skip reason
- *  when nothing ran (owner ruling: null model = info skip, not error), and
- *  the money-channel stage when it billed (one CallUsage step per API call,
- *  outputTokens: 0 — priced via EMBEDDING_PRICES). */
+ *  when nothing ran (owner ruling: null model = info skip, not error), the
+ *  failure message when it died partway (owner ruling 2026-09-23:
+ *  usage-on-error — a multi-batch embed that fails mid-run still reports
+ *  the spend of the batches that landed, so the money channel never
+ *  loses a billed call), and the money-channel stage when it billed (one
+ *  CallUsage step per API call, outputTokens: 0 — priced via
+ *  EMBEDDING_PRICES). */
 export interface EmbedBatchResult {
 	embedded: number;
 	total: number;
 	skipped?: string;
+	/** Set when an embed batch failed after others may have landed. The
+	 *  landed vectors are already persisted (pay-once, owner ruling A
+	 *  2026-09-23) — the next run embeds only what remains. */
+	failed?: string;
 	usage?: ExtractionStageUsage;
 }
 
@@ -288,6 +296,11 @@ export interface EmbedBatchResult {
  * exist, then re-clusters ONCE per batch (consumers read the persisted
  * partition). Non-fatal by contract: the caller treats failure as
  * "clustering runs without the new nodes until the next merge retries".
+ * Usage-on-error + pay-once (owner ruling 2026-09-23): an embed batch
+ * that throws never propagates — the batches that already landed are
+ * persisted (each text is paid for exactly once; a retry continues with
+ * the remaining nodes), their spend still reaches the money channel via
+ * usage, and `failed` carries the error for logs and callers.
  */
 export async function embedNewNodes(
 	graphStore: {
@@ -320,14 +333,26 @@ export async function embedNewNodes(
 		if (!vectors[node.id]) todo.push(node);
 	}
 
+	let landed = 0;
+	let failed: string | undefined;
 	for (let i = 0; i < todo.length; i += EMBED_BATCH) {
 		const batch = todo.slice(i, i + EMBED_BATCH);
-		const result = await port.embed(
-			batch.map((n) => n.statement),
-			"document",
-		);
+		let result: EmbeddingResult;
+		try {
+			result = await port.embed(
+				batch.map((n) => n.statement),
+				"document",
+			);
+		} catch (err) {
+			// Usage-on-error + pay-once (owner ruling 2026-09-23): stop
+			// here, keep the batches that landed, report the failure — the
+			// throw never escapes this function.
+			failed = err instanceof Error ? err.message : String(err);
+			break;
+		}
 		for (let j = 0; j < batch.length; j++) {
 			vectors[batch[j]!.id] = result.vectors[j]!;
+			landed++;
 		}
 		if (result.vectors[0]) dim = result.vectors[0].length;
 		if (result.promptTokens !== undefined) {
@@ -335,6 +360,11 @@ export async function embedNewNodes(
 			// defined to price the input at all.
 			steps.push(embeddingStep(result.promptTokens));
 		}
+	}
+	if (failed !== undefined) {
+		console.error(
+				`[embeddings] embedding failed after ${landed}/${todo.length} nodes (non-fatal; landed vectors persist, the next run embeds only what remains): ${failed}`,
+		);
 	}
 
 	// Prune ghosts: vectors for node ids that no longer exist.
@@ -351,7 +381,10 @@ export async function embedNewNodes(
 	// consumers (snapshot, settle, namer) read the persisted partition.
 	const clusters = semanticClusters(vectors, { similarityThreshold: SEMANTIC_SIM_THRESHOLD });
 
-	const wrote = todo.length > 0 || pruned > 0 || stale || ledger.clusters.length !== clusters.length;
+	const wrote =
+		failed !== undefined
+			? landed > 0
+			: todo.length > 0 || pruned > 0 || stale || ledger.clusters.length !== clusters.length;
 	if (wrote) {
 		graphStore.writeEmbeddings({
 			model: port.model,
@@ -361,11 +394,13 @@ export async function embedNewNodes(
 			updatedAt: new Date().toISOString(),
 		});
 	}
-	return {
-		embedded: todo.length,
+	const result: EmbedBatchResult = {
+		embedded: landed,
 		total: Object.keys(vectors).length,
 		usage: steps.length > 0 ? { model: port.model, steps } : undefined,
 	};
+	if (failed !== undefined) result.failed = failed;
+	return result;
 }
 // ─── The federated embedding catalog (wave 6, owner ruling 2026-09-23) ──────
 
