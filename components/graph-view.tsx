@@ -919,6 +919,32 @@ export function GraphView() {
 		return () => window.removeEventListener("lh:graph-revision", onRevision);
 	}, [refreshCosts]);
 
+	/* Live rename labels (wave 7 interlude): a session rename anywhere
+	   (sidebar inline row, chat header) announces itself as lh:chat-renamed
+	   {id, title} — and the birth-session partition means that title IS
+	   the cluster label. Patch the snapshot in place: the sessions map
+	   (the detail card's provenance line) and the one matching cluster.
+	   No refetch — the server derives the same join on its next read, this
+	   just keeps the two views from disagreeing until then. Unlabeled
+	   clusters keep their hull-only silence (a null label is a GONE
+	   record — a rename can't reach one, and the guard holds the line). */
+	useEffect(() => {
+		const onRenamed = (e: Event) => {
+			const { id, title } = (e as CustomEvent<{ id?: string; title?: string }>).detail ?? {};
+			if (typeof id !== "string" || typeof title !== "string" || id === "" || title === "") return;
+			setSnapshot((snap) => {
+				if (snap == null) return snap;
+				const sessions = { ...snap.sessions, [id]: title };
+				const clusters = snap.clusters.map((c) =>
+					c.id === id && c.label != null ? { ...c, label: title } : c,
+				);
+				return { ...snap, sessions, clusters };
+			});
+		};
+		window.addEventListener("lh:chat-renamed", onRenamed);
+		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
+	}, []);
+
 	// Layout (Option A): the positions ledger (written by the server's
 	// incremental settle after every merge) IS the layout — the renderer
 	// receives it as frozen data. The local one-shot forceAtlas2 pass runs
