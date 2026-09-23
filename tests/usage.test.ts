@@ -92,6 +92,79 @@ test("contextWindow: last call's footprint against the model's limit", () => {
 	assert.equal(contextWindow({ turns: [] }), null);
 });
 
+test("contextWindow NUMERATOR: cache tokens count (owner audit, 2026-09-23)", () => {
+	// The audit's live case: a cache-heavy session read 40k on the meter
+	// while the real footprint was ~190k — provider `input` EXCLUDES the
+	// cached portion, so input+output alone is wildly low. The fold is
+	// pi's totalTokens semantics: all four fields.
+	const cw = contextWindow({
+		turns: [
+			{
+				id: "t1",
+				messageId: "m1",
+				at: "x",
+				model: "openrouter:z-ai/glm-5.3-flash",
+				steps: [call({ inputTokens: 40_000, outputTokens: 1_000, cacheReadTokens: 145_000, cacheWriteTokens: 4_000 })],
+			},
+		],
+	});
+	assert.ok(cw);
+	assert.equal(cw.usedTokens, 40_000 + 1_000 + 145_000 + 4_000, "input + output + cacheRead + cacheWrite");
+	// Cache fields absent (non-caching providers): the fold is unchanged.
+	const plain = contextWindow({
+		turns: [{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] }],
+	});
+	assert.ok(plain);
+	assert.equal(plain.usedTokens, 10_000);
+});
+
+test("contextWindow DENOMINATOR: the live-limits index wins; CONTEXT_LIMITS is the fallback", () => {
+	const turns = [
+		{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 10_000, outputTokens: 1_000 })] },
+	];
+	// The live catalog (GET /api/models) wins even when it disagrees with
+	// the generated table.
+	const live = new Map([["openrouter:z-ai/glm-5.3-flash", 65_536]]);
+	const cw = contextWindow({ turns }, live);
+	assert.ok(cw);
+	assert.equal(cw.limit, 65_536, "the live index beats the static table");
+	// No live entry: the generated table serves the uncatalogued model.
+	assert.equal(contextWindow({ turns })!.limit, 1_048_576);
+	const emptyLive = new Map<string, number>();
+	assert.equal(contextWindow({ turns }, emptyLive)!.limit, 1_048_576, "an empty live index falls back too");
+	// Unknown to both: null (no meter, never a guessed limit).
+	assert.equal(contextWindow({ turns: [{ ...turns[0]!, model: "unknown/model" }] }), null);
+	assert.equal(contextWindow({ turns: [{ ...turns[0]!, model: "unknown/model" }] }, live), null);
+});
+
+test("contextWindow ride-along: a zeroed/aborted last step falls back to the previous step", () => {
+	// An aborted last call reports zeroed usage — that is not the session
+	// footprint. The honest reading is the previous step's usage.
+	const cw = contextWindow({
+		turns: [
+			{
+				id: "t1",
+				messageId: "m1",
+				at: "x",
+				model: "openrouter:z-ai/glm-5.3-flash",
+				steps: [
+					call({ inputTokens: 80_000, outputTokens: 5_000 }),
+					call({ inputTokens: 0, outputTokens: 0 }), // aborted — zeroed
+				],
+			},
+		],
+	});
+	assert.ok(cw);
+	assert.equal(cw.usedTokens, 85_000, "the previous step's footprint, not a bogus tiny meter");
+	// ALL steps zeroed (a first-call abort): no reading at all — null.
+	assert.equal(
+		contextWindow({
+			turns: [{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 0, outputTokens: 0 })] }],
+		}),
+		null,
+	);
+});
+
 test("jobCost: null without usage, computed with it", () => {
 	assert.equal(jobCost({}), null);
 	const job: Pick<JobRecord, "usage"> = {

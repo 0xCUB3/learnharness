@@ -2812,25 +2812,58 @@ export function sessionCost(record: Pick<ChatRecord, "turns">): { cost: number; 
 	return { cost, unpriced };
 }
 
-/** The session's context-window footprint: the LAST model call's input+output
- *  tokens against the model's limit (the next turn re-sends the whole
- *  conversation — the last call's input IS the running transcript size).
- *  Null when the record has no usage yet or the model's limit is unknown. */
+/** The session's context-window footprint: the LAST model call's
+ *  token footprint against the model's limit (the next turn re-sends
+ *  the whole conversation — the last call's input IS the running
+ *  transcript size). Null when the record has no usage yet or the
+ *  model's limit is unknown.
+ *
+ *  NUMERATOR (owner audit, 2026-09-23): cache tokens count. Provider
+ *  `input` EXCLUDES cacheRead/cacheWrite, so folding input+output alone
+ *  reads wildly low on cache-heavy sessions — include all four
+ *  (= pi's own totalTokens semantics; the fields are persisted in every
+ *  CallUsage).
+ *
+ *  DENOMINATOR: the LIVE catalog wins — `limits`, when given, is the
+ *  client/server-held index of provider:id → contextWindow straight from
+ *  pi's catalog (GET /api/models serves it per model); CONTEXT_LIMITS is
+ *  a generated snapshot kept ONLY as the fallback for models the live
+ *  catalog doesn't carry.
+ *
+ *  Zeroed-step fallback: an aborted/failed last call reports zeroed
+ *  usage — that is NOT the session footprint; fall back to the previous
+ *  step's usage (the honest last-known footprint, never a bogus tiny
+ *  meter). */
 export function contextWindow(
 	record: Pick<ChatRecord, "turns">,
+	limits?: ReadonlyMap<string, number>,
 ): { model: string; usedTokens: number; limit: number } | null {
 	const turns = record.turns ?? [];
 	const last = turns[turns.length - 1];
 	if (!last) return null;
-	const limit = CONTEXT_LIMITS[last.model];
+	const limit = limits?.get(last.model) ?? CONTEXT_LIMITS[last.model];
 	if (limit === undefined) return null;
-	const lastStep = last.steps[last.steps.length - 1];
-	if (!lastStep || lastStep.inputTokens === undefined) return null;
-	return {
-		model: last.model,
-		usedTokens: (lastStep.inputTokens ?? 0) + (lastStep.outputTokens ?? 0),
-		limit,
-	};
+	// The last step with a real (non-zero) footprint — zeroed usage (an
+	// abort artifact) is not a reading; fall back to the previous step.
+	for (let i = last.steps.length - 1; i >= 0; i--) {
+		const step = last.steps[i]!;
+		const footprint = stepFootprint(step);
+		if (footprint === 0) continue; // zeroed artifact — no reading
+		return { model: last.model, usedTokens: footprint, limit };
+	}
+	return null;
+}
+
+/** One call's full context footprint: input + output + both cache
+ *  directions (pi's totalTokens semantics — provider `input` excludes
+ *  the cached portion). */
+function stepFootprint(step: CallUsage): number {
+	return (
+		(step.inputTokens ?? 0) +
+		(step.outputTokens ?? 0) +
+		(step.cacheReadTokens ?? 0) +
+		(step.cacheWriteTokens ?? 0)
+	);
 }
 
 /** A job's inferred cost — null until the runner's capture lands / for
