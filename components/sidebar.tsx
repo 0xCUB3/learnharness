@@ -3,6 +3,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { MenuShell } from "@/components/menu-shell";
+import { DeleteSessionDialog } from "@/components/delete-session-dialog";
+import type { ChatDeleteMode } from "@/src/core";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { LhMark } from "@/components/lh-mark";
@@ -227,6 +230,7 @@ export function SessionRow({
 	active,
 	onOpen,
 	kbdSelected = false,
+	onContextMenu,
 }: {
 	chat: ChatListItem;
 	active: boolean;
@@ -234,12 +238,15 @@ export function SessionRow({
 	/** Keyboard-cycle highlight (shortcut wave A: Alt+↑/↓ + Alt+Enter) —
 	 *  visually distinct from the active session, which stays filled. */
 	kbdSelected?: boolean;
+	/** Right-click opens the context menu (wave 6: Rename / Delete). */
+	onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
 	return (
 		<button
 			type="button"
 			onClick={onOpen}
-			data-testid={kbdSelected ? "session-row-kbd" : undefined}
+			onContextMenu={onContextMenu}
+			data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
 			className={cn(
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
 				active && "bg-accent",
@@ -257,6 +264,50 @@ export function SessionRow({
 				<span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>
 			</span>
 		</button>
+	);
+}
+
+/** The inline-rename row (wave 6): same geometry as SessionRow, but the
+ *  title line becomes a text input — select-all on entry (the click means
+ *  "replace", the header rename's rule), Enter/blur commits, Esc discards.
+ *  The meta line stays so the row never changes height mid-edit. */
+export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; onCommit: (next: string) => void; onCancel: () => void }) {
+	const [draft, setDraft] = useState(chat.title);
+	const inputRef = useRef<HTMLInputElement | null>(null);
+	useEffect(() => {
+		const el = inputRef.current;
+		if (el) {
+			el.focus();
+			el.select();
+		}
+	}, []);
+	return (
+		<div
+			data-testid="session-rename-row"
+			className="relative mb-0.5 flex w-full items-center gap-2 rounded-lg bg-accent px-3 py-2"
+		>
+			<span aria-hidden className="w-3.5 shrink-0" />
+			<span className="flex min-w-0 flex-1 flex-col">
+				<input
+					ref={inputRef}
+					value={draft}
+					spellCheck={false}
+					onChange={(e) => setDraft(e.target.value)}
+					onBlur={() => onCommit(draft)}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") e.currentTarget.blur();
+						if (e.key === "Escape") {
+							e.stopPropagation(); // discard, not also the sidebar/chat chains
+							onCancel();
+						}
+					}}
+					aria-label="Rename session"
+					data-testid="session-rename-input"
+					className="lh-input w-full min-w-0 truncate rounded-sm border border-border bg-background px-1.5 font-prose text-(length:--lh-prose-size) text-foreground outline-none"
+				/>
+				<span className="block truncate text-xs text-muted-foreground">{sessionMeta(chat)}</span>
+			</span>
+		</div>
 	);
 }
 
@@ -317,6 +368,86 @@ function SessionsSidebar() {
 	const [kbdIndex, setKbdIndex] = useState<number | null>(null);
 	const searchRef = useRef<HTMLInputElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
+
+	/* ── Wave 6 chunk A: context menu + inline rename + deletion ──
+	   Right-click a session row → MenuShell with exactly two actions
+	   (owner ruling): Rename (inline, below) and Delete (the two-option
+	   dialog). The anchor is the row that was right-clicked — assigned
+	   into a ref before the state flip so the shell measures it on its
+	   first (hidden) pass. */
+	const [ctxChatId, setCtxChatId] = useState<string | null>(null);
+	const ctxAnchorRef = useRef<HTMLElement | null>(null);
+	const [renamingId, setRenamingId] = useState<string | null>(null);
+	const [deleting, setDeleting] = useState<ChatListItem | null>(null);
+
+	const openContext = (e: React.MouseEvent<HTMLButtonElement>, chat: ChatListItem) => {
+		e.preventDefault(); // suppress the native menu
+		ctxAnchorRef.current = e.currentTarget;
+		setCtxChatId(chat.id);
+	};
+
+	// The menu contract (agent-section's): any pointerdown outside the menu
+	// or its row closes it; Esc is CLAIMED so it never also aborts a turn
+	// or folds the sidebar. Right-clicking another row re-anchors: its
+	// pointerdown closes this menu, its contextmenu opens the next.
+	useEffect(() => {
+		if (ctxChatId === null) return;
+		const onPointerDown = (e: PointerEvent) => {
+			const target = e.target as Node;
+			if (target instanceof Element && target.closest("[data-lh-menu]")) return;
+			if (ctxAnchorRef.current?.contains(target)) return;
+			setCtxChatId(null);
+		};
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				e.stopPropagation();
+				setCtxChatId(null);
+			}
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", onPointerDown);
+			document.removeEventListener("keydown", onKeyDown);
+		};
+	}, [ctxChatId]);
+
+	// Inline rename (owner ruling, wave 6): the row swaps to a text input;
+	// commit rides the SAME plumbing as the header rename — PUT the title,
+	// then lh:chat-renamed patches every listener (this sidebar's own
+	// listener patches the snapshot instantly; an open chat header hears
+	// it too). Esc discards; empty commit discards (the header's rules).
+	const commitRename = useCallback(async (id: string, next: string) => {
+		setRenamingId(null);
+		const t = next.trim();
+		if (t === "") return;
+		try {
+			const res = await fetch(`/api/chats/${id}`, {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ title: t }),
+			});
+			if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+			window.dispatchEvent(new CustomEvent("lh:chat-renamed", { detail: { id, title: t } }));
+		} catch (err) {
+			console.error("rename failed:", err); // keep the old title
+		}
+	}, []);
+
+	// Delete success: patch the list instantly (the poll is the backstop),
+	// navigate home if the open session died (the chat view unmounts —
+	// drafts die with it, no orphan bubbles), and announce the graph
+	// revision so the graph view refetches (deletion is the one writer
+	// the status poll can't see — no run ever transitions some→none).
+	const onDeleted = useCallback(
+		(id: string, _mode: ChatDeleteMode, graphRevision: number) => {
+			setDeleting(null);
+			setChats((prev) => (prev ? prev.filter((c) => c.id !== id) : prev));
+			if (pathname === `/chat/${id}`) router.push("/");
+			window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { revision: graphRevision } }));
+		},
+		[pathname, router],
+	);
 
 	useEffect(() => {
 		const onFocusSearch = () => {
@@ -463,18 +594,28 @@ function SessionsSidebar() {
 							{query.trim() ? "No sessions match." : "No sessions yet."}
 						</div>
 					) : (
-						shown.map((c, i) => (
-							<SessionRow
-								key={c.id}
-								chat={c}
-								active={pathname === `/chat/${c.id}`}
-								kbdSelected={i === kbdIndex}
-								onOpen={() => {
-									setKbdIndex(null);
-									router.push(`/chat/${c.id}`);
-								}}
-							/>
-						))
+						shown.map((c, i) =>
+							renamingId === c.id ? (
+								<RenameRow
+									key={c.id}
+									chat={c}
+									onCommit={(next) => void commitRename(c.id, next)}
+									onCancel={() => setRenamingId(null)}
+								/>
+							) : (
+								<SessionRow
+									key={c.id}
+									chat={c}
+									active={pathname === `/chat/${c.id}`}
+									kbdSelected={i === kbdIndex}
+									onOpen={() => {
+										setKbdIndex(null);
+										router.push(`/chat/${c.id}`);
+									}}
+									onContextMenu={(e) => openContext(e, c)}
+								/>
+							),
+						)
 					)}
 				</div>
 
@@ -500,6 +641,50 @@ function SessionsSidebar() {
 						</button>
 					</div>
 				</div>
+
+				{/* The context menu (wave 6): exactly two actions (owner
+				    ruling — no more). MenuShell owns placement/focus/arrow
+				    cycling; the dismissal effect above owns the contract. */}
+				{ctxChatId !== null && (
+					<MenuShell
+						anchorRef={ctxAnchorRef}
+						testid="session-context-menu"
+						preferredSide="down"
+						menuClass="flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+					>
+						<button
+							type="button"
+							data-testid="ctx-rename"
+							onClick={() => {
+								setRenamingId(ctxChatId);
+								setCtxChatId(null);
+							}}
+							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
+						>
+							Rename
+						</button>
+						<button
+							type="button"
+							data-testid="ctx-delete"
+							onClick={() => {
+								const target = chats?.find((c) => c.id === ctxChatId);
+								if (target) setDeleting(target);
+								setCtxChatId(null);
+							}}
+							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
+						>
+							Delete…
+						</button>
+					</MenuShell>
+				)}
+
+				{/* The two-option delete dialog (wave 6) — portaled to body
+				    by the component itself, lives here for state locality. */}
+				<DeleteSessionDialog
+					chat={deleting}
+					onClose={() => setDeleting(null)}
+					onDeleted={onDeleted}
+				/>
 			</aside>
 	);
 }

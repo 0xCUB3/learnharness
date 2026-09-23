@@ -40,6 +40,11 @@ export * from "./fuzzy.ts";
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved
 // view. Browser-safe — the Wave-4 panel imports these directly.
 export * from "./settings.ts";
+// graph-deletion.ts (wave 6): the whole module is PURE but storage-port
+// driven — the deletion RUNS server-side only. The shell needs exactly one
+// thing from it: the ChatDeleteMode union (the delete dialog's two-option
+// design + the DELETE query param), hence this type-only re-export.
+export type { ChatDeleteMode, ChatDeletionStats } from "./graph-deletion.ts";
 export * from "./settings-resolution.ts";
 export * from "./search.ts"; // search port (search wave, 2026-09-20)
 // auth-keys.ts (auth-keys wave, 2026-09-19): the curated key catalog +

@@ -904,6 +904,21 @@ export function GraphView() {
 		costsHadRunning.current = pipelineRuns.length > 0;
 	}, [pipelineRuns, refreshCosts]);
 
+	/* Deletion refresh (wave 6 chunk A): the DELETE /api/chats/:id response
+	   carries the new graphRevision, and the sidebar (which owns the delete
+	   flow) announces it as lh:graph-revision. The status poll above can't
+	   see a deletion — no pipeline run ever transitions some→none for it —
+	   so this event is the one seam. Refetch the snapshot and the costs on
+	   every announcement: deletions are rare, a redundant fetch is free. */
+	useEffect(() => {
+		const onRevision = () => {
+			setRefreshTick((t) => t + 1);
+			refreshCosts();
+		};
+		window.addEventListener("lh:graph-revision", onRevision);
+		return () => window.removeEventListener("lh:graph-revision", onRevision);
+	}, [refreshCosts]);
+
 	// Layout (Option A): the positions ledger (written by the server's
 	// incremental settle after every merge) IS the layout — the renderer
 	// receives it as frozen data. The local one-shot forceAtlas2 pass runs

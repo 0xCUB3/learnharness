@@ -240,6 +240,19 @@ export function Chat({
 		return () => window.removeEventListener("lh:kbd-rename-session", onRename);
 	}, [titleText]);
 
+	// The OTHER rename surface (wave 6: the sidebar's inline rename): its
+	// commit dispatches the same lh:chat-renamed event this header's rename
+	// does — if it renamed THIS chat, patch the header title in place (the
+	// event is the single source of truth; the header is one more listener).
+	useEffect(() => {
+		const onRenamed = (e: Event) => {
+			const { id, title } = (e as CustomEvent<{ id: string; title: string }>).detail;
+			if (id === chatId) setTitleText((prev) => (title !== prev ? title : prev));
+		};
+		window.addEventListener("lh:chat-renamed", onRenamed);
+		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
+	}, [chatId]);
+
 	// The Esc chain's last link: abort the turn. Honest scope (the composer's
 	// Stop has the same rule): only a LOCAL stream has a client request to
 	// stop — a server-side wake turn aborts nothing (the stop would be a
