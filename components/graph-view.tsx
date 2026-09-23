@@ -1241,7 +1241,7 @@ export function GraphView() {
 					anchorRef={ctxAnchorRef}
 					testid="node-context-menu"
 					preferredSide="down"
-					menuClass="flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+					menuClass="flex w-fit flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
 				>
 					<button
 						type="button"
@@ -1252,7 +1252,7 @@ export function GraphView() {
 						}}
 						className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
 					>
-						Delete…
+						Delete
 					</button>
 				</MenuShell>
 			)}

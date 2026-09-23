@@ -40,6 +40,14 @@ describe("RenameRow — the inline rename surface", () => {
 		assert.ok(html.includes(`value="${chat.title}"`));
 		// the meta line rides along (row never changes height mid-edit)
 		assert.ok(html.includes("session-rename-row"));
+		// (owner, polish round) NOTHING MOVES: no status spacer, no input
+		// border/padding — the draft text sits at the idle row's title x,
+		// and the input is the ONLY shift-proof editing cue (underline).
+		assert.ok(!html.includes("w-3.5 shrink-0"), "no always-on spacer (idle rows have none)");
+		const input = html.split('data-testid="session-rename-input"')[1]?.split("/>")[0] ?? "";
+		assert.ok(input.includes("px-0"), "input carries no left padding");
+		assert.ok(input.includes("border-b"), "the underline is the editing cue");
+		assert.ok(!input.includes("bg-background"), "no filled field box — text stays put");
 	});
 });
 

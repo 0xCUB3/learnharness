@@ -73,7 +73,11 @@ describe("DeleteNodeDialog (thin SSR)", () => {
 	it("the body at loading: the frame + the pre-flight read pending (effects never fire in SSR — the wrapper's own state)", () => {
 		const html = bodyAt("loading");
 		assert.match(html, /data-testid="delete-node-dialog"/);
-		assert.match(html, /Delete.*Kepler.*three laws.*\?/); // the title names the node
+		// (owner, polish round) the serif title is just "Delete node?" in
+		// destructive red; the NAME rides below in JetBrains Mono code.
+		assert.match(html, /Delete node\?/);
+		assert.match(html, /text-destructive/); // the red title
+		assert.match(html, /data-testid="node-name-code"[^>]*>Kepler&#x27;s three laws</); // the name in mono
 		assert.match(html, /data-testid="node-impact-loading"/);
 	});
 
@@ -94,6 +98,8 @@ describe("DeleteNodeDialog (thin SSR)", () => {
 		assert.match(html, /chat_ghost/);
 		assert.match(html, /cannot be undone/);
 		assert.match(html, /data-testid="node-delete-confirm"/);
+		// the Delete button carries the destructive red (owner, polish round)
+		assert.match(html, /border-destructive\/50[^>]*text-destructive/);
 	});
 
 	it("the body at failure: the 409 renders the activity-dock line with a Try-again", () => {

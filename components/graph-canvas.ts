@@ -868,6 +868,11 @@ export class GraphCanvasRenderer {
 	};
 
 	private onPointerDown = (e: PointerEvent) => {
+		// Primary button only (owner, polish round): a right-press must not
+		// pin the node — right-click belongs to the context menu alone, and
+		// the right-pointerup must never read as a click (the detail card
+		// used to open under the menu).
+		if (e.button !== 0) return;
 		const pos = this.eventPos(e);
 		const node = this.pickAt(pos.x, pos.y);
 		if (node && this.sim) {
@@ -898,6 +903,7 @@ export class GraphCanvasRenderer {
 	};
 
 	private onPointerUp = (e: PointerEvent) => {
+		if (e.button !== 0) return; // right-click is context-menu territory
 		// Node press ending: click (no slop) → select; drag → release-and-relax.
 		if (this.dragId) {
 			const id = this.dragId;

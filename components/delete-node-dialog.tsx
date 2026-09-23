@@ -79,7 +79,19 @@ export function DeleteNodeBody({
 			onClick={(e) => e.stopPropagation()}
 			className="w-[32rem] max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-5 shadow-xl"
 		>
-			<h2 className="font-title text-2xl tracking-tight">Delete “{node.name}”?</h2>
+			<h2 className="font-title text-2xl tracking-tight text-destructive">Delete node?</h2>
+			{/* The node name below the title in JetBrains Mono inline-code
+			    (owner, polish round): topic names are short technical
+			    handles — mono suits them; the serif title keeps the
+			    family voice ("Delete node?", like "Delete "session"?"). */}
+			<div className="mt-1.5">
+				<code
+					data-testid="node-name-code"
+					className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground"
+				>
+					{node.name}
+				</code>
+			</div>
 			{impact === "loading" && (
 				<p className="mt-2 text-sm text-muted-foreground" data-testid="node-impact-loading">
 					Reading what this would remove…
@@ -158,7 +170,10 @@ export function DeleteNodeBody({
 							data-testid="node-delete-confirm"
 							onClick={onRun}
 							disabled={busy}
-							className="rounded-sm border border-border/60 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-40"
+							// Destructive red (owner, polish round) — the
+							// app's established destructive pair (chat's
+							// refusal banner): border + text, fill on hover.
+							className="rounded-sm border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-40"
 						>
 							{busy ? "Deleting…" : "Delete"}
 						</button>

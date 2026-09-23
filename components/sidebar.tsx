@@ -284,10 +284,16 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 	return (
 		<div
 			data-testid="session-rename-row"
-			className="relative mb-0.5 flex w-full items-center gap-2 rounded-lg bg-accent px-3 py-2"
+			className="relative mb-0.5 flex w-full items-center rounded-lg bg-accent px-3 py-2"
 		>
-			<span aria-hidden className="w-3.5 shrink-0" />
-			<span className="flex min-w-0 flex-1 flex-col">
+			{/* NOTHING MOVES (owner, polish round): an idle row renders no
+			    status spacer (SessionStatus is null when not busy), so the
+			    title starts at the row's own px-3 — 12px in. The old rename
+			    row always carried a 14px spacer + gap + the input's border
+			    and padding, landing the text ~41px in (and the meta with
+			    it). The input here is borderless and padding-free at the
+			    exact title x; the underline is the only editing cue. */}
+			<span className="flex min-w-0 w-full flex-col">
 				<input
 					ref={inputRef}
 					value={draft}
@@ -303,7 +309,7 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 					}}
 					aria-label="Rename session"
 					data-testid="session-rename-input"
-					className="lh-input w-full min-w-0 truncate rounded-sm border border-border bg-background px-1.5 font-prose text-(length:--lh-prose-size) text-foreground outline-none"
+					className="lh-input w-full min-w-0 truncate border-0 border-b border-border bg-transparent px-0 text-foreground outline-none"
 				/>
 				<span className="block truncate text-xs text-muted-foreground">{sessionMeta(chat)}</span>
 			</span>
