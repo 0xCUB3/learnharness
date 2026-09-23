@@ -621,6 +621,12 @@ import { deleteChatTraces, type ChatDeletionStats } from "../src/core/graph-dele
 import { deleteChatSession } from "../src/server/chats.ts";
 import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { jobStore } from "../src/store/jobs.ts";
+import {
+	deleteNodeTraces,
+	nodeDeletionImpact,
+	type NodeDeletionStats,
+} from "../src/core/graph-deletion.ts";
+import { deleteGraphNode, graphRevision } from "../src/server/graph.ts";
 
 describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () => {
 	/** Two-session scenario: dA creates the shared node X + the orphan Y and
@@ -807,5 +813,179 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 		assert.equal(jobStore.getJob(doneJob.id), null, "the chat's job records are gone");
 		// And a second call is an honest 404.
 		assert.deepEqual(await deleteChatSession(dA.id, "delete-nodes"), { ok: false, status: 404, code: "not_found", error: "No such session" });
+	});
+});
+
+// ─── single-node deletion (node interlude, full death) ───────────────────────
+
+describe("single-node deletion (deleteNodeTraces + deleteGraphNode, node interlude)", () => {
+	/** The full-death scenario: node X is born in a notes file (the
+	 *  production orphan shape — EMPTY provenance, the mapping line is the
+	 *  anchor), re-encountered by a chat (link line: alias + provenance),
+	 *  asserted in an edge, and evaluated by two sessions. */
+	function buildNodeScenario() {
+		// Clean slate per test: each test in this describe builds its own
+		// scenario from empty ledgers (the suite's isolation covers the
+		// whole file; this covers describe-internal stacking).
+		graphStore.rewriteLedgers({ nodes: [], edges: [], events: [], mappings: [] });
+		graphStore.writePositions({});
+		graphStore.appendNode({
+			id: "n_dead",
+			name: "Doomed",
+			statement: "Doomed statement",
+			aliases: [],
+			createdAt: "2026-09-23T00:00:00.000Z",
+			provenance: [],
+		});
+		// The chat's re-encounter: a link line (alias + its own provenance).
+		graphStore.appendNode({
+			id: "n_dead",
+			name: "Doomed",
+			statement: "Doomed statement",
+			aliases: ["doomed, rephrased"],
+			createdAt: "2026-09-23T00:00:00.000Z",
+			provenance: [{ chatId: "chat_node_a", messageId: "m1" }],
+		});
+		// A neighbor + two edges: only the one touching X dies.
+		graphStore.appendNode({
+			id: "n_keep",
+			name: "Keeper",
+			statement: "Keeper statement",
+			aliases: [],
+			createdAt: "2026-09-23T00:00:00.000Z",
+			provenance: [{ chatId: "chat_node_a", messageId: "m2" }],
+		});
+		graphStore.appendEdge({ from: "n_dead", to: "n_keep", type: "follows", provenance: [{ chatId: "chat_node_a", messageId: "m1" }] });
+		graphStore.appendEdge({ from: "n_keep", to: "n_dead", type: "supports", provenance: [{ chatId: "chat_node_b", messageId: "m3" }] });
+		graphStore.appendEdge({ from: "n_keep", to: "n_other", type: "follows", provenance: [{ chatId: "chat_node_b", messageId: "m3" }] });
+		// Events: two sessions' evidence on X, one on the neighbor.
+		graphStore.appendEvent({ nodeId: "n_dead", kind: "correct", chatId: "chat_node_a", at: "2026-09-23T00:01:00.000Z", ref: "q1" });
+		graphStore.appendEvent({ nodeId: "n_dead", kind: "observation", chatId: "chat_node_b", at: "2026-09-23T00:02:00.000Z", note: "shaky", ref: "obs:p1" });
+		graphStore.appendEvent({ nodeId: "n_keep", kind: "miss", chatId: "chat_node_a", at: "2026-09-23T00:03:00.000Z", ref: "q2" });
+		// Mappings: the notes anchor + the chat's audit trail.
+		graphStore.appendMapping({ chatId: "src_nodefile", sourceId: "p1", graphNodeId: "n_dead" });
+		graphStore.appendMapping({ chatId: "chat_node_a", sourceId: "p1", graphNodeId: "n_dead" });
+		graphStore.appendMapping({ chatId: "chat_node_a", sourceId: "p2", graphNodeId: "n_keep" });
+		// Resting positions for both.
+		graphStore.writePositions({ n_dead: { x: 1, y: 1 }, n_keep: { x: 2, y: 2 } });
+	}
+
+	it("nodeDeletionImpact: the confirm dialog's pre-flight facts", () => {
+		buildNodeScenario();
+		assert.deepEqual(nodeDeletionImpact(graphStore, "n_dead"), {
+			edges: 2,
+			quizEvents: 1,
+			observations: 1,
+			// The file anchor, the re-encounter, and the second session's
+			// observation — every referencing session, deduped and sorted.
+			sessions: ["chat_node_a", "chat_node_b", "src_nodefile"],
+		});
+		// Unknown node: null (the route's 404).
+		assert.equal(nodeDeletionImpact(graphStore, "n_missing"), null);
+	});
+
+	it("deleteNodeTraces: FULL DEATH — the node, its edges, its evidence, its anchors, its position", () => {
+		buildNodeScenario();
+		const keepLineBefore = JSON.stringify(graphStore.readNodes().find((n) => n.id === "n_keep"));
+		const stats = deleteNodeTraces(graphStore, "n_dead");
+		assert.deepEqual(stats, { edgesRemoved: 2, eventsRemoved: 2, mappingsRemoved: 2 } satisfies NodeDeletionStats);
+
+		// The node's EVERY line is gone; the neighbor is byte-identical
+		// (full death is node-scoped — other nodes' sessions keep their
+		// aliases and provenance).
+		assert.equal(graphStore.readNodes().some((n) => n.id === "n_dead"), false);
+		assert.equal(
+			JSON.stringify(graphStore.readNodes().find((n) => n.id === "n_keep")),
+			keepLineBefore,
+			"the untouched node is byte-identical",
+		);
+		// Only the edge to nowhere rode along; the foreign edge X→Z stays.
+		assert.deepEqual(
+			graphStore.readEdges().map((e) => [e.from, e.to]),
+			[["n_keep", "n_other"]],
+		);
+		// The evidence died with the thing it was about; the neighbor's stays.
+		assert.deepEqual(
+			graphStore.readEvents().map((e) => [e.nodeId, e.kind]),
+			[["n_keep", "miss"]],
+		);
+		// The audit trail: X's mappings gone, the neighbor's stay.
+		assert.deepEqual(graphStore.readMappings().map((m) => m.graphNodeId), ["n_keep"]);
+		// The resting position died with the node.
+		const positions = graphStore.readPositions();
+		assert.equal(positions["n_dead"], undefined);
+		assert.deepEqual(positions["n_keep"], { x: 2, y: 2 });
+		// Atomic rewrites left no temp files.
+		assert.equal(fs.readdirSync(PATHS.graph).filter((f) => f.includes(".tmp-")).length, 0);
+		// Idempotent: a second run finds no node — null.
+		assert.equal(deleteNodeTraces(graphStore, "n_dead"), null);
+	});
+
+	it("deleteNodeTraces: a node nothing references still dies, and only its file moves", () => {
+		graphStore.appendNode({
+			id: "n_solo",
+			name: "Solo",
+			statement: "Solo statement",
+			aliases: [],
+			createdAt: "2026-09-23T00:00:00.000Z",
+			provenance: [{ chatId: "chat_node_solo", messageId: "m1" }],
+		});
+		const stats = deleteNodeTraces(graphStore, "n_solo");
+		assert.deepEqual(stats, { edgesRemoved: 0, eventsRemoved: 0, mappingsRemoved: 0 } satisfies NodeDeletionStats);
+		assert.equal(graphStore.readNodes().some((n) => n.id === "n_solo"), false);
+	});
+
+	it("deleteGraphNode: the orchestration — extraction gate, 404, success", () => {
+		// 404 — unknown node.
+		assert.deepEqual(deleteGraphNode("n_missing_node"), {
+			ok: false,
+			status: 404,
+			code: "not_found",
+			error: "No such node",
+		});
+
+		// 409 — ANY registered extraction run: a mid-flight run could
+		// re-reference the dying node; the run is never aborted (its spend
+		// belongs to another session), the caller retries. The registry is
+		// the pipeline's globalThis store — a fake entry is the honest way
+		// to pin the gate without staging a real run.
+		const g = globalThis as { __lhExtractionRuns?: unknown };
+		const realRuns = g.__lhExtractionRuns;
+		g.__lhExtractionRuns = {
+			running: new Map([
+				["chat_busy", { chatId: "chat_busy", kind: "chat", phase: "extracting", startedAt: 1, usage: {}, controller: new AbortController() }],
+			]),
+			inFlight: new Set(),
+			lastStartedAt: 0,
+		};
+		try {
+			assert.deepEqual(deleteGraphNode("n_gate_probe"), {
+				ok: false,
+				status: 409,
+				code: "extraction_running",
+				error: "An extraction is running — try again when it finishes",
+			});
+		} finally {
+			g.__lhExtractionRuns = realRuns;
+		}
+
+		// Success — the node dies, the version stamp moves.
+		graphStore.appendNode({
+			id: "n_orch",
+			name: "Orchestrated",
+			statement: "Orchestrated statement",
+			aliases: [],
+			createdAt: "2026-09-23T00:00:00.000Z",
+			provenance: [{ chatId: "chat_node_c", messageId: "m1" }],
+		});
+		const revisionBefore = graphRevision();
+		const outcome = deleteGraphNode("n_orch");
+		assert.ok(outcome.ok);
+		assert.deepEqual(outcome.stats, { edgesRemoved: 0, eventsRemoved: 0, mappingsRemoved: 0 });
+		assert.ok(outcome.graphRevision > 0);
+		assert.ok(outcome.graphRevision >= revisionBefore, "the version stamp moved");
+		assert.equal(graphStore.readNodes().some((n) => n.id === "n_orch"), false);
+		// And a second call is an honest 404.
+		assert.deepEqual(deleteGraphNode("n_orch"), { ok: false, status: 404, code: "not_found", error: "No such node" });
 	});
 });

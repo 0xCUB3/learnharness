@@ -251,3 +251,123 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 
 	return stats;
 }
+// ─── single-node deletion (node interlude, owner-locked full-death) ───────────
+
+/**
+ * FULL DEATH for one node, by id (owner ruling 2026-09-23): the user
+ * pointing at the node IS the intent — references from other sessions do
+ * NOT preserve it. The remedy for undeletable nodes (preserve-graph
+ * orphans from session deletion; notes-import nodes with no chat behind
+ * them), and the deliberate inverse of the chat cascade above: that one
+ * deletes a SESSION and lets nodes survive on foreign references; this
+ * one deletes a NODE and takes its every trace —
+ *
+ *   - every line of the node (create + link lines)
+ *   - every EDGE touching it (from or to), whatever session asserted it
+ *   - every EVENT naming it (quiz outcomes + observations), from every
+ *     session — the evidence history dies with the thing it was about
+ *   - every mapping line that anchored it (the audit trail; for a
+ *     notes-born node the file IS the anchor — its mapping line is the
+ *     only one)
+ *   - its resting position
+ *
+ * The blast radius is exactly the rows naming the node id: other nodes'
+ * provenance, aliases, and sessions are untouched (full death is
+ * NODE-scoped, not session-scoped), and the source records of notes
+ * imports stay (the import's bookkeeping; deleting one proposition is not
+ * deleting the file). Derived data needs no pruning: the birth partition
+ * derives on read (the cluster shrinks below MIN_CLUSTER_SIZE and stops
+ * rendering — fine), and no other consumer indexes nodes by id across
+ * ledgers.
+ *
+ * Synchronous, one rewriteLedgers call, no awaits (the same atomicity
+ * argument as the chat cascade); idempotent in the wave-6 sense — a
+ * second run finds no lines and changes nothing.
+ */
+export interface NodeDeletionStats {
+	/** Edge assertion LINES removed (every edge touching the node). */
+	edgesRemoved: number;
+	/** Events removed (quiz outcomes + observations naming the node). */
+	eventsRemoved: number;
+	/** Mapping lines removed (the node's audit trail). */
+	mappingsRemoved: number;
+}
+
+/** The confirm dialog's pre-flight facts (the GET on the same node id):
+ * what full death would take with it. sessions is the deduped set of
+ * chats/notes sources that reference the node — provenance points,
+ * mapping lines, and events all count. */
+export interface NodeDeletionImpact {
+	edges: number;
+	quizEvents: number;
+	observations: number;
+	sessions: string[];
+}
+
+/** A node exists iff a ledger line carries its id. */
+function nodeLinesOf(graphStore: GraphStore, nodeId: string): GraphNode[] {
+	return graphStore.readNodes().filter((line) => line.id === nodeId);
+}
+
+/** The impact facts for one node, or null when no such node exists. */
+export function nodeDeletionImpact(graphStore: GraphStore, nodeId: string): NodeDeletionImpact | null {
+	if (nodeLinesOf(graphStore, nodeId).length === 0) return null;
+	const edges = graphStore.readEdges().filter((line) => line.from === nodeId || line.to === nodeId);
+	const events = graphStore.readEvents().filter((event) => event.nodeId === nodeId);
+	const sessions = new Set<string>();
+	for (const line of nodeLinesOf(graphStore, nodeId)) {
+		for (const pt of line.provenance) sessions.add(pt.chatId);
+	}
+	for (const mapping of graphStore.readMappings()) {
+		if (mapping.graphNodeId === nodeId) sessions.add(mapping.chatId);
+	}
+	for (const event of events) sessions.add(event.chatId);
+	return {
+		edges: edges.length,
+		quizEvents: events.filter((event) => event.kind !== "observation").length,
+		observations: events.filter((event) => event.kind === "observation").length,
+		sessions: [...sessions].sort(),
+	};
+}
+
+/**
+ * Full-death one node. Returns null when no such node exists (the
+ * orchestration maps that to 404); rewrites only the ledgers that
+ * changed (unchanged files keep their mtimes — the version stamp moves
+ * only when something really did).
+ */
+export function deleteNodeTraces(graphStore: GraphStore, nodeId: string): NodeDeletionStats | null {
+	const nodeLines = nodeLinesOf(graphStore, nodeId);
+	if (nodeLines.length === 0) return null;
+
+	const edgeLines = graphStore.readEdges();
+	const events = graphStore.readEvents();
+	const mappings = graphStore.readMappings();
+
+	const outEdges = edgeLines.filter((line) => line.from !== nodeId && line.to !== nodeId);
+	const outEvents = events.filter((event) => event.nodeId !== nodeId);
+	const outMappings = mappings.filter((m) => m.graphNodeId !== nodeId);
+
+	// Only the touched ledgers: the node's own lines always die (its file
+	// must move), everything else rewrites only when rows actually drop.
+	const outNodes = graphStore.readNodes().filter((line) => line.id !== nodeId);
+	graphStore.rewriteLedgers({
+		nodes: outNodes,
+		...(outEdges.length !== edgeLines.length ? { edges: outEdges } : {}),
+		...(outEvents.length !== events.length ? { events: outEvents } : {}),
+		...(outMappings.length !== mappings.length ? { mappings: outMappings } : {}),
+	});
+
+	// The resting position dies with the node.
+	const positions = graphStore.readPositions();
+	if (positions[nodeId] !== undefined) {
+		const { [nodeId]: _dead, ...rest } = positions;
+		graphStore.writePositions(rest);
+	}
+
+	return {
+		edgesRemoved: edgeLines.length - outEdges.length,
+		eventsRemoved: events.length - outEvents.length,
+		mappingsRemoved: mappings.length - outMappings.length,
+	};
+}

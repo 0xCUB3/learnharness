@@ -4,6 +4,13 @@ import type { GraphSnapshot } from "../core/contracts.ts";
 import type { GraphCostSummary } from "../core/cost-summary.ts";
 import { graphCostSummary } from "../core/cost-summary.ts";
 import { graphSnapshot } from "../core/graph.ts";
+import {
+	deleteNodeTraces,
+	nodeDeletionImpact,
+	type NodeDeletionImpact,
+	type NodeDeletionStats,
+} from "../core/graph-deletion.ts";
+import { extractionStatuses } from "../agent/subagents/extraction.ts";
 import { stores } from "./stores.ts";
 
 /**
@@ -64,4 +71,60 @@ export function graphRevision(): number {
 		}
 	}
 	return revision;
+}
+
+// ─── single-node deletion (node interlude, owner-locked full-death) ──────────
+
+/** What deleteGraphNode did — the route maps it straight to HTTP. */
+export type NodeDeleteOutcome =
+	| { ok: false; status: 404; code: "not_found"; error: string }
+	| { ok: false; status: 409; code: "extraction_running"; error: string }
+	| { ok: true; stats: NodeDeletionStats; graphRevision: number };
+
+/**
+ * Delete one node by id — FULL DEATH (core/graph-deletion.ts for the
+ * ledger semantics). The guard family is deliberately NOT the chat
+ * one, and the reasoning is worth writing down:
+ *
+ *   - No turn/jobs gates. Turns and background jobs never write the
+ *     graph ledgers; a turn's follow-up extraction registers as a run,
+ *     and every code path here is synchronous — nothing can register
+ *     or merge between the gate and the ledger rewrite (the event loop
+ *     never yields inside this function).
+ *   - THE EXTRACTION GATE — 409 while ANY pipeline run is registered,
+ *     anywhere. A mid-flight run holds findings extracted from
+ *     transcripts that predate the deletion; its merges could re-add
+ *     aliases, provenance, or events to the dying node (the
+ *     re-reference risk the dispatch flags). Unlike chat deletion we
+ *     do NOT abort the run: it belongs to some session, and killing
+ *     that session's spend is outside this deletion's blast radius —
+ *     the UI retries once the dock drains. A run that starts AFTER
+ *     the deletion is legitimate re-learning: it reads post-deletion
+ *     ledgers, mints a fresh node for a re-taught topic, and
+ *     mergeFindings ignores linkTo ids that no longer exist (the
+ *     existingIds guard) — no dangling edges, no resurrection.
+ */
+export function deleteGraphNode(nodeId: string): NodeDeleteOutcome {
+	if (extractionStatuses().length > 0) {
+		return {
+			ok: false,
+			status: 409,
+			code: "extraction_running",
+			error: "An extraction is running — try again when it finishes",
+		};
+	}
+	// THE SYNC BLOCK — no awaits below (the doc above): the gate and the
+	// rewrite are one atomic stretch of the event loop.
+	const stats = deleteNodeTraces(stores.graphStore, nodeId);
+	if (stats === null) {
+		return { ok: false, status: 404, code: "not_found", error: "No such node" };
+	}
+	return { ok: true, stats, graphRevision: graphRevision() };
+}
+
+/** The confirm dialog's pre-flight read (GET /api/graph/nodes/[id]):
+ * what full death would take with it. 404-shaped null when the node
+ * does not exist — the UI shows the dialog only for nodes it can see. */
+export function graphNodeImpact(nodeId: string): NodeDeletionImpact | null {
+	return nodeDeletionImpact(stores.graphStore, nodeId);
 }
