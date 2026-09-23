@@ -10,13 +10,14 @@
  */
 
 import assert from "node:assert/strict";
-import { describe, it as test } from "node:test";
+import { describe, it, it as test } from "node:test";
 import {
 	arrowGeometry,
 	boxBlurRound,
 	fitTransform,
 	labelAlpha,
 	pickNearest,
+	wrapRegionLabel,
 	zoomRatioOf,
 	LABELS_FADE_RATIO,
 } from "../components/graph-canvas.ts";
@@ -262,3 +263,54 @@ describe("sanitizePhysicsTuning (physics controls)", () => {
 	});
 });
 
+
+
+describe("wrapRegionLabel (wave 7: session names / file paths)", () => {
+	// A fake measure: chars are 5px wide, spaces 4px — enough to drive
+	// wrap decisions deterministically.
+	const measure = (s: string) => s.length * 5;
+	const W = 20; // 4 chars per line
+
+	it("fits → single line, untouched", () => {
+		assert.deepEqual(wrapRegionLabel("Plato", 100, 3, measure), ["Plato"]);
+	});
+
+	it("wraps words, no cap hit", () => {
+		// W=20 at 5px/char = 3 chars a line: every word lands alone, four
+		// lines, cap 4 never reached, no ellipsis.
+		assert.deepEqual(wrapRegionLabel("aaa bbb ccc ddd", W, 4, measure), [
+			"aaa",
+			"bbb",
+			"ccc",
+			"ddd",
+		]);
+	});
+
+	it("caps at maxLines with an ellipsis on the last line", () => {
+		const lines = wrapRegionLabel("aaaa bbbb cccc dddd eeee", W, 2, measure);
+		assert.equal(lines.length, 2);
+		assert.ok(lines[1]!.endsWith("…"), "last line ellipsized");
+		for (const line of lines) assert.ok(measure(line) <= W || line.length <= 2, "each line fits");
+	});
+
+	it("char-splits an unbroken path longer than the width (the notes case)", () => {
+		const path = "/users/amos/notes/physics/lecture-notes.md";
+		const lines = wrapRegionLabel(path, W, 3, measure);
+		assert.equal(lines.length, 3);
+		// every kept line fits the width; the last carries the ellipsis
+		assert.ok(lines[2]!.endsWith("…"), "long path capped with ellipsis");
+		assert.ok(measure(lines[0]!) <= W, "first chunk fits");
+		assert.ok(measure(lines[1]!) <= W, "second chunk fits");
+	});
+
+	it("a remainder that FITS the width rides as a plain last line (no false ellipsis)", () => {
+		// W=25 at 5px/char = 5 chars a line: "aa bb" fits exactly, the
+		// tail "cc dd" fits too — two plain lines, cap never binds.
+		assert.deepEqual(wrapRegionLabel("aa bb cc dd", 25, 3, measure), ["aa bb", "cc dd"]);
+	});
+
+	it("the ellipsis itself never exceeds the width", () => {
+		const lines = wrapRegionLabel("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", W, 2, measure);
+		assert.ok(measure(lines[1]!) <= W, "ellipsized tail fits");
+	});
+});

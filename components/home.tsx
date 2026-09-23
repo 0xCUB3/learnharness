@@ -165,9 +165,9 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 						</button>
 					</form>
 					{/* Same as the chat view's under-composer stats bar (owner) — no
-					    session yet, so the free LEFT side carries the knowledge-context
-					    budget (session-data slot), while the RIGHT keeps the strong-
-					    slot control (fix wave: the pills write /api/settings/models). */}
+					    session yet, so the LEFT side renders nothing (wave 7 sweep)
+					    while the RIGHT keeps the strong-slot control (fix wave: the
+					    pills write /api/settings/models). */}
 					<StatsBar
 						dictationSlot={<DictationBar dictation={dictation} />}
 						turns={[] as TurnUsage[]}

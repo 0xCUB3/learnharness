@@ -38,9 +38,9 @@ import { Loader2Icon, MicIcon } from "lucide-react";
  *     only the meter. Live output may return as a toggleable setting at
  *     the settings milestone; deferred is the only behavior for now.
  *   - ADAPTIVE meter: the strip's cell count derives from its measured
- *     width (4px pitch, 8–48 cells, ResizeObserver) so narrow rows (draft/
- *     home, where the knowledge-context slider eats the middle) show
- *     fewer bars instead of overflowing under their neighbors.
+ *     width (4px pitch, 8–48 cells, ResizeObserver) so narrow rows (the
+ *     draft view's tighter column) show fewer bars instead of
+ *     overflowing under their neighbors.
  *
  * Owner round 1 (2026-09-17, first live mic test):
  *   - ONE primary transcription input at all times: the pending
@@ -412,8 +412,8 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 	const [levels, setLevels] = useState<number[]>(() => new Array(METER_CELLS).fill(0));
 	const recording = phase === "recording" || phase === "stopping";
 	/** Adaptive cell count (owner round 2): derived from the meter's
-	 *  measured width — narrow rows (draft/home beside the knowledge-context
-	 *  slider) show fewer bars instead of overflowing under neighbors. */
+	 *  measured width — narrow rows show fewer bars instead of
+	 *  overflowing under neighbors. */
 	const [cellCount, setCellCount] = useState(METER_CELLS);
 	const meterRef = useRef<HTMLDivElement | null>(null);
 

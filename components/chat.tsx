@@ -402,8 +402,8 @@ export function Chat({
 	}, [chatId, setMessages, sendMessage, status]);
 
 	// ── Append-only record adoption (owner ground rules, 2026-09-15) ──
-	// Content delivered into the record server-side — the knowledge-context
-	// block, sub-agent artifacts, abort notes — must become visible the
+	// Content delivered into the record server-side — sub-agent
+	// artifacts, abort notes — must become visible the
 	// moment it persists, mid-turn included: it sits between messages, and
 	// nothing about a running turn should hide it. The full snapshot sync
 	// mid-stream is forbidden (it breaks the SDK's in-place continuation
@@ -431,8 +431,8 @@ export function Chat({
 	// self-terminating window of three record fetches (400ms/1s/2s) catches
 	// the insert and shows the marker during the turn, then stops. No
 	// standing poll — the window exists only for these seconds. The same
-	// instant nudges the activity feed: the knowledge-context job starts at
-	// send (server-side), and the dock must say so immediately.
+	// instant nudges the activity feed: extraction and sub-agent jobs
+	// start at send (server-side), and the dock must say so immediately.
 	const { refresh: refreshActivity } = useActivity();
 	const turnStartStatusRef = useRef(status);
 	// The window must survive the submitted→streaming flip (the stream starts

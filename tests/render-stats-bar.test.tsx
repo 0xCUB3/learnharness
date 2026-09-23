@@ -25,13 +25,16 @@ function turn(over: Partial<TurnUsage> = {}): TurnUsage {
 }
 
 describe("stats bar", () => {
-	it("renders — everywhere when the record has no turns yet (doctrine)", () => {
+	it("renders NOTHING on the left when there are no turns yet (owner, wave 7 sweep)", () => {
 		const html = renderToStaticMarkup(
 			<StatsBar turns={[]} />,
 		);
 		assert.match(html, /data-testid="stats-bar"/);
-		assert.match(html, /data-testid="stats-context">—</);
-		assert.match(html, /data-testid="stats-cost">—</);
+		// pre-chat: no summary button, no "—" theater (the knowledge-context
+		// slider died with the injection — the left side is simply empty)
+		assert.ok(!html.includes('data-testid="stats-summary"'), "no summary button pre-chat");
+		assert.ok(!html.includes('data-testid="stats-context"'), "no context figure pre-chat");
+		assert.ok(!html.includes('data-testid="stats-cost"'), "no cost figure pre-chat");
 		// no turns, no settings, catalog not loaded → both control labels
 		// "—" (the thinking button shows just the level, like the model
 		// button shows just the model name — no prefix, no dot separator)

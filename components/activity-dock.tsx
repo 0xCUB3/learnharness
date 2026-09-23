@@ -131,9 +131,9 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 
 /** The activity feed seam for the rest of the shell: the dock's data +
  *  its refresh nudge. The chat page nudges on turn start (owner ground
- *  rules, 2026-09-15): a background process that starts at send — the
- *  knowledge-context injection — must be visible in the dock the moment
- *  it begins, without the dock polling faster while idle. */
+ *  rules, 2026-09-15): background processes that start at send —
+ *  extraction and sub-agent jobs — must be visible in the dock the
+ *  moment they begin, without the dock polling faster while idle. */
 export function useActivity(): { feed: ActivityFeed; refresh: () => void } {
 	return useContext(ActivityContext);
 }

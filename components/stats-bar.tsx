@@ -11,11 +11,10 @@ import { ModelControl } from "@/components/model-picker";
  * LEFT-aligned: context window + session cost; RIGHT-aligned: model +
  * thinking level. Clicking the left side opens the per-turn detail popover.
  *
- *  Pre-chat views (home, /chat/new) pass `leftSlot`: with no session there
- *  IS no session data (the summary would just read "—"), so that left side
- *  is free real estate — the knowledge-context budget slider lives there
- *  (vision-context-injection.md), vertically centered beside the model +
- *  thinking pills by the row's own geometry.
+ *  Pre-chat views (home, /chat/new) render NO left side at all (owner,
+ *  wave 7 sweep: the knowledge-context budget slider that used to live
+ *  there died with the injection; a "— · —" summary over an empty
+ *  popover is pure noise) — the dictation strip's middle simply widens.
  *
  * All folds come from core/prices.ts (sessionCost, contextWindow, turnCost)
  * — no cost math lives here. Absent data renders "—", never zero (the
@@ -29,13 +28,9 @@ import { ModelControl } from "@/components/model-picker";
  */
 export function StatsBar({
 	turns,
-	leftSlot,
 	dictationSlot,
 }: {
 	turns: TurnUsage[];
-	/** Pre-chat only: replaces the (empty) session-data summary — home and
-	 *  the /chat/new draft mount the knowledge-context slider here. */
-	leftSlot?: ReactNode;
 	/** The dictation strip (STT wave, 2026-09-17): the row's middle is dead
 	 *  space between the session data and the model control — the mic
 	 *  button lives there, and while recording the meter unfurls to fill
@@ -84,9 +79,9 @@ export function StatsBar({
 			    outside-close ref anchors HERE too (owner, round 3): on the whole
 			    bar it wrapped the model control, so clicking model/thinking never
 			    counted as outside — the asymmetry the owner observed. */}
-			{/* The left side: the session-data summary, or — pre-chat — the
-			    caller's slot (the knowledge-context slider) in its place. */}
-			{leftSlot ?? (
+			{/* The left side: the session-data summary — only once a session
+			    exists (turns). Pre-chat renders nothing (see the header). */}
+			{turns.length > 0 && (
 			<div ref={barRef} className="relative">
 				<button
 					type="button"

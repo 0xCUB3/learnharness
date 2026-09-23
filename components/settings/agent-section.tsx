@@ -49,6 +49,7 @@ import type React from "react";
 import {
 	MODEL_SLOTS,
 	type AgentSettings,
+	type GraphSettings,
 	type ModelCatalogEntry,
 	type ModelSlotName,
 	type ModelsSettings,
@@ -97,6 +98,14 @@ interface ModelsBody {
  *  Pure — exported for tests. */
 export function composeTool(agent: AgentSettings | undefined, id: string, on: boolean): AgentSettings {
 	return { ...agent, tools: { ...agent?.tools, [id]: on } };
+}
+
+/** Compose the prober graph-tools toggle (wave 7): its own key in the
+ *  agent section — never in the tool-toggles map (owner ruling). Absent =
+ *  ON (the toggle discipline); the write is explicit either way, so an
+ *  explicit-off record stays visible as stored. Pure — exported for tests. */
+export function composeGraphTools(agent: AgentSettings | undefined, on: boolean): AgentSettings {
+	return { ...agent, graphTools: { enabled: on } };
 }
 
 /** The research tool runs on the search port — the teacher registry DROPS
@@ -218,12 +227,17 @@ function MenuTrigger({
 export function AgentSection({
 	agent,
 	models,
+	graph,
 	onSectionChange,
 	onModelsChange,
 }: {
 	agent: AgentSettings | undefined;
 	/** The `models` section (slot pins — engine-level, PUT /api/settings/models). */
 	models: ModelsSettings | undefined;
+	/** The `graph` section — READ ONLY here: the graphTools row composes its
+	 *  master switch (graph.enabled off dims + disables the row; the
+	 *  effective gate is server-side, per-turn fresh). */
+	graph: GraphSettings | undefined;
 	/** Writes the composed WHOLE agent section (replace-PUT discipline). */
 	onSectionChange: (next: AgentSettings) => void;
 	/** Writes the composed models section (slots — replace-PUT discipline). */
@@ -571,6 +585,31 @@ export function AgentSection({
 			</SettingsGroup>
 
 			<SettingsGroup label="Tools" testid="group-tools">
+				{/* The prober's graph tools (wave 7, owner ruling 2026-09-23):
+				    FIRST row of the group — its subject is the map, its
+				    mechanism is agent capability, so it lives in Tools but
+				    NOT in the tool-toggles list. Its own agent-section key
+				    (agent.graphTools), the search-row hint discipline: a
+				    smaller line under it explaining what it is — this
+				    connects prior sessions' knowledge into new ones. */}
+				{(() => {
+					const graphOn = graph?.enabled ?? true;
+					return (
+						<SettingsRow
+							label="Graph tools"
+							hint={graphOn ? "Connects prior sessions' knowledge into new ones — the prober reads the knowledge map" : "Graph is disabled"}
+							testid="graph-tools-row"
+							dimmed={!graphOn}
+						>
+							<Toggle
+								checked={agent?.graphTools?.enabled ?? true}
+								disabled={!graphOn}
+								label="graph tools"
+								onChange={(on) => onSectionChange(composeGraphTools(agent, on))}
+							/>
+						</SettingsRow>
+					);
+				})()}
 				{TOGGLE_TOOLS.map((id) => {
 					// Research needs a live search engine; the row + toggle gray
 					// on the same signal the registry drops the tool on (see

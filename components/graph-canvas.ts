@@ -138,6 +138,82 @@ export interface RendererCallbacks {
 
 const LABEL_SIZE = 12; // the reference label size the wrap-width ratio is taken against
 const LABEL_WEIGHT = "500";
+
+/** Region (cluster) labels — wave 7's session names made the labels
+ *  LONG: imported-file paths and renamed chat titles. They wrap at a
+ *  screen-fixed width (the labels are viewer-relative — this px value
+ *  is exact on screen at any zoom), capped at a line count with an
+ *  ellipsis on the last line (owner, 2026-09-23: wrap, cap 2–3 lines,
+ *  ellipsize — a bounded footprint that keeps most of the path
+ *  visible). */
+const REGION_LABEL_MAX_WIDTH = 220; // screen px
+const REGION_LABEL_MAX_LINES = 3;
+const REGION_LABEL_LINE_HEIGHT = 1.3;
+
+/** Wrap one region label: word-wise first (session names), then
+ *  char-wise for words alone wider than the max (long file paths — the
+ *  node-label discipline), capped at maxLines. Overflow folds into the
+ *  last line, ellipsized to fit. measure is the canvas measureText (or a
+ *  fake in tests) — pure otherwise. */
+export function wrapRegionLabel(
+	text: string,
+	maxWidth: number,
+	maxLines: number,
+	measure: (s: string) => number,
+): string[] {
+	if (maxLines < 1) return [text];
+	if (measure(text) <= maxWidth) return [text];
+	const lines: string[] = [];
+	const pending: string[] = text.split(/\s+/).filter(Boolean);
+	// Fill up to maxLines-1 lines; the remainder becomes the last line.
+	while (pending.length > 0 && lines.length < maxLines - 1) {
+		let line = "";
+		while (pending.length > 0) {
+			let word = pending[0]!;
+			const candidate = line ? `${line} ${word}` : word;
+			if (measure(candidate) <= maxWidth) {
+				line = candidate;
+				pending.shift();
+				continue;
+			}
+			if (!line) {
+				// The word alone overflows: char-split it, the remainder stays
+				// pending for the next line (paths have no spaces to help).
+				let chunk = "";
+				while (word.length > 0 && measure(chunk + word[0]) <= maxWidth) {
+					chunk += word[0];
+					word = word.slice(1);
+				}
+				if (chunk) {
+					lines.push(chunk);
+					pending[0] = word;
+				} else {
+					// Degenerate: one char exceeds the width — keep it whole so
+					// the label can never vanish entirely.
+					lines.push(word);
+					pending.shift();
+				}
+				line = "";
+			}
+			break;
+		}
+		if (line) lines.push(line);
+		if (!line && lines.length > 0 && pending.length > 0) continue;
+		if (!line && lines.length === 0) break;
+	}
+	// The remainder rides as the last line: plain if it fits, ellipsized
+	// down to the width if not.
+	let rest = pending.join(" ");
+	if (!rest) return lines;
+	if (measure(rest) <= maxWidth) {
+		lines.push(rest);
+		return lines;
+	}
+	let tail = rest;
+	while (tail.length > 1 && measure(`${tail}…`) > maxWidth) tail = tail.slice(0, -1);
+	lines.push(`${tail}…`);
+	return lines;
+}
 const LABEL_MAX_WIDTH = 170; // wrap width at the reference label size, world units
 const LABEL_GAP = 2.9; // world units between node edge and first label line (the 2px-at-fit reference ÷ 0.69)
 const LABEL_LINE_HEIGHT = 1.3;
@@ -510,7 +586,7 @@ export class GraphCanvasRenderer {
 	/** World rect the bitmap covers (drawImage target coords). */
 	private regionRect: { minX: number; minY: number; w: number; h: number } | null = null;
 	/** Region labels: cluster centroid + hue, computed at splat build. */
-	private regionMeta: { label: string | null; cx: number; cy: number; hue: number }[] = [];
+	private regionMeta: { label: string | null; lines: string[] | null; cx: number; cy: number; hue: number }[] = [];
 	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
 	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
 	/** Gravity center for the live sim (graph bbox centroid at setData). */
@@ -1200,9 +1276,28 @@ export class GraphCanvasRenderer {
 					cx: sumX / members,
 					cy: sumY / members,
 					hue: clusterHue(cluster.id),
+					lines: null,
 				});
 			}
 		});
+
+		// Wrap the region labels ONCE per geometry build, at their
+		// SCREEN-fixed size (viewer-relative labels — this px size is what
+		// lands on screen at any zoom, so the wrap never goes stale mid-
+		// camera-move). Session names are short; file paths are not (wave
+		// 7) — the cap + ellipsis keeps the footprint bounded.
+		const settings = this.settings;
+		if (settings) {
+			const ctx = this.ctx;
+			const prevFont = ctx.font;
+			ctx.font = `${LABEL_WEIGHT} ${settings.clusterLabelSize}px ${data.fontFamily}`;
+			for (const rm of this.regionMeta) {
+				rm.lines = rm.label
+					? wrapRegionLabel(rm.label, REGION_LABEL_MAX_WIDTH, REGION_LABEL_MAX_LINES, (s) => ctx.measureText(s).width)
+					: null;
+			}
+			ctx.font = prevFont;
+		}
 
 		// THE off switch (user 2026-09-15): compute is skipped, not just
 		// paint hidden — no splat, no blur, no readback, no bitmap, no
@@ -1474,16 +1569,25 @@ export class GraphCanvasRenderer {
 		// Viewer-relative by design (UI, not graph content): drawn at the
 		// world centroid with a font of clusterLabelSize / k — a constant
 		// size on screen at any zoom (user-tunable since 2026-09-16).
+		// Wave 7: labels are session names / file paths — pre-wrapped at
+		// the geometry build (cap + ellipsis), drawn centered on the
+		// centroid line by line.
 		if (settings.clusterLabels && regionAlpha > 0.01) {
 			ctx.save();
 			ctx.globalAlpha = regionAlpha;
 			ctx.font = `${LABEL_WEIGHT} ${settings.clusterLabelSize / k}px ${data.fontFamily}`;
 			ctx.textAlign = "center";
 			ctx.textBaseline = "middle";
+			// Screen px ÷ k = world units — the lines stay evenly spaced
+			// at a constant on-screen pitch at any zoom.
+			const lineH = (settings.clusterLabelSize * REGION_LABEL_LINE_HEIGHT) / k;
 			for (const rm of this.regionMeta) {
-				if (!rm.label) continue;
+				if (!rm.lines) continue;
 				ctx.fillStyle = `hsla(${rm.hue}, 55%, 78%, 0.85)`;
-				ctx.fillText(rm.label, rm.cx, rm.cy);
+				const firstOffset = (-(rm.lines.length - 1) / 2) * lineH;
+				for (let i = 0; i < rm.lines.length; i++) {
+					ctx.fillText(rm.lines[i]!, rm.cx, rm.cy + firstOffset + i * lineH);
+				}
 			}
 			ctx.restore();
 		}
