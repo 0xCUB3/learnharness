@@ -216,6 +216,21 @@ describe("runGraphContextJob — failure modes are honest errors, never phantom 
 		assert.match(got.error ?? "", /stale/);
 	});
 
+	it("BYOK: a null embedder (unset model or vanished key) fails honestly, never a phantom query", async () => {
+		const { id: chatId } = newTopicChat("injection unconfigured");
+		const job = jobStore.createJob({ kind: "graph-context", chatId, toolCallId: `ctx_${chatId}` });
+		trackJob(job.id);
+		// Wave 6: the resolver collapses BOTH unset-model and missing-key
+		// into null — the error must name the two honestly, never a false
+		// "graph.embeddingModel is null" for a key race.
+		const d = { ...deps(fakeGraphStore({ vectors: { n1: unit(0) } }), fakeEmbedder().embedder, async () => {}), embedder: () => null };
+		await runGraphContextJob(d, job.id);
+		const got = jobStore.getJob(job.id)!;
+		assert.equal(got.status, "error");
+		assert.match(got.error ?? "", /no embedding model available/);
+		assert.match(got.error ?? "", /unset, or its provider key is missing/);
+	});
+
 	it("nothing fitting the budget errors rather than delivering an empty block", async () => {
 		// Budget below the framing overhead: nothing can fit, ever.
 		const { id: chatId } = newTopicChat("injection empty selection", { graphContextTokens: 10 });

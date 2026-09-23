@@ -145,9 +145,11 @@ export async function runGraphContextJob(deps: GraphContextDeps, jobId: string):
 	// BYOK (wave 6): fresh resolution per run; null = honestly off (the
 	// dispatch gate already skips unconfigured sessions — this only fires
 	// on a config change racing a respawn, and the error says exactly why).
+	// The resolver returns null for BOTH an unset model and a set model
+	// whose key vanished, so the message names both, never a false "null".
 	const embedder = deps.embedder();
 	if (!embedder || embedder.model === null) {
-		return fail("no embedding model configured — injection skipped (graph.embeddingModel is null)");
+		return fail("no embedding model available — injection skipped (graph.embeddingModel unset, or its provider key is missing)");
 	}
 	const topic = topicOf(chat.messages);
 	if (topic === null) return fail("no injectable topic (session past its start)");
