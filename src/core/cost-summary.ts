@@ -55,10 +55,12 @@ export interface GraphCostSummary {
 	totalDollars: number;
 	/** Runs where EVERY stage was unpriced (totalDollars excludes them). */
 	unpricedRuns: number;
-	/** The three billable pipeline stages (merger/embedder are free). */
+	/** The billable pipeline stages (wave 6: the embedder became one —
+	 *  provider embeddings cost money; merger is the only free stage). */
 	stages: {
 		extraction: StageCost;
 		audit: StageCost;
+		embedding: StageCost;
 		naming: StageCost;
 	};
 	/** Newest first, capped at `recentCap` (default 10). */
@@ -113,6 +115,7 @@ function mergeTokens(into: CallUsage, steps: readonly CallUsage[]): void {
 export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	const extraction = emptyStage();
 	const audit = emptyStage();
+	const embedding = emptyStage();
 	const naming = emptyStage();
 	const runs: RecentRun[] = [];
 
@@ -131,10 +134,25 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 		if (audDollars === null) audit.unpricedRuns++;
 		else audit.dollars += audDollars;
 
-		// Run-level: null only when BOTH stages are unpriced.
-		const priced = extDollars ?? 0;
-		const runDollars = extDollars === null && audDollars === null ? null : priced + (audDollars ?? 0);
-		const allSteps = [...stages.extractor.steps, ...stages.auditor.steps];
+		// Wave 6: the embedding tail — present only when an embedding model
+		// ran (absent stage = the run embedded nothing, never "free").
+		let embDollars: number | null = null;
+		let embSteps: CallUsage[] = [];
+		if (stages.embedding) {
+			embedding.runs++;
+			embSteps = stages.embedding.steps;
+			mergeTokens(embedding.tokens, embSteps);
+			embDollars = stageDollars(stages.embedding.model, embSteps);
+			if (embDollars === null) embedding.unpricedRuns++;
+			else embedding.dollars += embDollars;
+		}
+
+		// Run-level: null only when EVERY stage is unpriced.
+		const allStages: Array<number | null> = [extDollars, audDollars, embDollars];
+		const runDollars = allStages.every((d) => d === null)
+			? null
+			: allStages.reduce<number>((a, d) => a + (d ?? 0), 0);
+		const allSteps = [...stages.extractor.steps, ...stages.auditor.steps, ...embSteps];
 		runs.push({
 			startedAt: run.startedAt,
 			at: run.at,
@@ -177,9 +195,9 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	// A run is "unpriced" when it billed nothing countable at all.
 	const unpricedRuns = runs.filter((r) => r.dollars === null).length;
 	return {
-		totalDollars: extraction.dollars + audit.dollars + naming.dollars,
+		totalDollars: extraction.dollars + audit.dollars + embedding.dollars + naming.dollars,
 		unpricedRuns,
-		stages: { extraction, audit, naming },
+		stages: { extraction, audit, embedding, naming },
 		runs: capped,
 	};
 }

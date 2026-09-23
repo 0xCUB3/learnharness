@@ -205,11 +205,13 @@ function svgViewport(svg: string, opts: RenderSvgOptions): { width: number; heig
  *  are an arbitrary SPLIT of one zlib stream, so merging them is the more
  *  standard shape, byte-identical stream, zero re-encoding.
  *
- *  Pure Node on purpose (no sharp): the process already loads transformers'
- *  nested sharp + libvips, and importing the root sharp (Next's optional
- *  dependency) put a SECOND libvips into the process — macOS's ObjC runtime
- *  warns (duplicate GNotificationCenterDelegate, "mysterious crashes").
- *  One native image lib per process; app code carries none. */
+ *  Pure Node on purpose (no sharp): historically the process already carried
+ *  a native image lib via @huggingface/transformers' nested sharp + libvips,
+ *  and importing the root sharp (Next's optional dependency) put a SECOND
+ *  libvips into the process — macOS's ObjC runtime warns (duplicate
+ *  GNotificationCenterDelegate, "mysterious crashes"). The transformers
+ *  embedder died with wave 6 (2026-09-23) but the rule lives on: one native
+ *  image lib per process; app code carries none. */
 export function providerSafePng(png: Buffer): Buffer {
 	const SIG_LEN = 8;
 	if (png.length < SIG_LEN + 12 || png.subarray(0, SIG_LEN).toString("hex") !== "89504e470d0a1a0a") return png;

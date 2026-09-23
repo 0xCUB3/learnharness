@@ -26,11 +26,6 @@ export const PATHS = {
 	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
 	chats: path.join(DATA_ROOT, "chats"),
 	graph: path.join(DATA_ROOT, "graph"),
-	/** transformers.js model cache (server-side embeddings, ~300MB).
-	 * null in dev = keep the package default (the model is already
-	 * downloaded there); under LH_DATA_DIR the packaged app must never
-	 * try to cache inside its own bundle. */
-	modelCache: process.env.LH_DATA_DIR ? path.join(DATA_ROOT, "models") : null,
 } as const;
 
 // ─── Models ────────────────────────────────────────────────────────────────

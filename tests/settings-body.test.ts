@@ -156,6 +156,30 @@ describe("parseGraphSettingsBody", () => {
 		const r = parseGraphSettingsBody({ enabled: false, clustering: true, labeling: true });
 		assert.ok(r.ok);
 	});
+
+	it("embeddingModel (wave 6): null or a shipped-provider slug; anything else is a 400", () => {
+		const nulled = parseGraphSettingsBody({ embeddingModel: null });
+		assert.ok(nulled.ok);
+		assert.deepEqual(nulled.settings, { embeddingModel: null });
+		for (const slug of [
+			"openai:text-embedding-3-small",
+			"openrouter:openai/text-embedding-3-large",
+			"google:gemini-embedding-001",
+			// OpenRouter ids may carry a :free-style suffix — the provider is
+			// the part before the FIRST colon (live catalog fact, 2026-09-23).
+			"openrouter:liquid/lfm-2.5-embedding-350m:free",
+		]) {
+			const r = parseGraphSettingsBody({ embeddingModel: slug });
+			assert.ok(r.ok, slug);
+			assert.deepEqual(r.settings, { embeddingModel: slug });
+		}
+		// Bad shapes never become a live model.
+		assert.equal(parseGraphSettingsBody({ embeddingModel: "text-embedding-3-small" }).ok, false, "no provider prefix");
+		assert.equal(parseGraphSettingsBody({ embeddingModel: "bedrock:whatever" }).ok, false, "unshipped provider");
+		assert.equal(parseGraphSettingsBody({ embeddingModel: "openai:" }).ok, false, "empty id");
+		assert.equal(parseGraphSettingsBody({ embeddingModel: 42 }).ok, false, "non-string");
+		assert.equal(parseGraphSettingsBody({ embeddingModel: "openai:has spaces" }).ok, false, "whitespace id");
+	});
 });
 
 describe("SETTINGS_SECTIONS (the route's section map)", () => {

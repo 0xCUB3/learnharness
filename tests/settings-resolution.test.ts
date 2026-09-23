@@ -42,7 +42,7 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.proseFontSize, 16);
 		assert.equal(eff.appearance.sessionNameSerif, true);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 900);
-		assert.deepEqual(eff.graph, { enabled: true, embedding: true, clustering: true, labeling: true });
+		assert.deepEqual(eff.graph, { enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null }); // BYOK wave 6: no factory embedding model
 	});
 
 	it("explicit record values win over every factory default", () => {
@@ -77,7 +77,7 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.mdRendering.headingWeight, 600);
 		// graph: enabled=false explicit; absent rungs stay factory-on (stored
 		// but inert — the ladder grays them out in the UI).
-		assert.deepEqual(eff.graph, { enabled: false, embedding: true, clustering: true, labeling: true });
+		assert.deepEqual(eff.graph, { enabled: false, embedding: true, clustering: true, labeling: true, embeddingModel: null }); // wave 6: unset embeddingModel resolves to the null floor
 	});
 
 	it("partial role override: thinkingLevel alone borrows the SLOT's model (or nothing, without one)", () => {
@@ -224,15 +224,15 @@ describe("resolveConversationSpec (the turn gate's chain)", () => {
 
 describe("the graph channel gates (the wave's seam honoring)", () => {
 	it("WRITE channel (extraction): dies with the master switch only", () => {
-		assert.equal(extractionEnabled({ enabled: true, embedding: true, clustering: true, labeling: true }), true);
-		assert.equal(extractionEnabled({ enabled: true, embedding: false, clustering: false, labeling: false }), true);
-		assert.equal(extractionEnabled({ enabled: false, embedding: true, clustering: true, labeling: true }), false);
+		assert.equal(extractionEnabled({ enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null }), true);
+		assert.equal(extractionEnabled({ enabled: true, embedding: false, clustering: false, labeling: false, embeddingModel: null }), true);
+		assert.equal(extractionEnabled({ enabled: false, embedding: true, clustering: true, labeling: true, embeddingModel: null }), false);
 	});
 
 	it("READ channel (graph-context): needs master AND the embedding rung", () => {
-		assert.equal(graphContextEnabled({ enabled: true, embedding: true, clustering: false, labeling: false }), true);
-		assert.equal(graphContextEnabled({ enabled: true, embedding: false, clustering: true, labeling: true }), false);
-		assert.equal(graphContextEnabled({ enabled: false, embedding: true, clustering: true, labeling: true }), false);
+		assert.equal(graphContextEnabled({ enabled: true, embedding: true, clustering: false, labeling: false, embeddingModel: null }), true);
+		assert.equal(graphContextEnabled({ enabled: true, embedding: false, clustering: true, labeling: true, embeddingModel: null }), false);
+		assert.equal(graphContextEnabled({ enabled: false, embedding: true, clustering: true, labeling: true, embeddingModel: null }), false);
 	});
 
 	it("both gates ride resolveSettings' factory defaults (all on → both open)", () => {

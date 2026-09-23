@@ -5,7 +5,7 @@ import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { runGraphContextJob, type GraphContextDeps } from "../agent/subagents/graph-context.ts";
-import { EMBEDDING_DIM, EMBEDDING_MODEL, embedNewNodes, embedQuery } from "./embeddings.ts";
+import { embedNewNodes, embeddingPort } from "./embeddings.ts";
 import type { ModelRole } from "../../config.ts";
 import { claimSteers, deliverJobResult, setContextRespawn, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
@@ -63,8 +63,8 @@ const jobRunner = createJobRunner({
  *  (/api/graph/import) hit the same single-flight registry. */
 export const extraction = createExtractionPipeline({
 	...stores,
-	// The REAL embedder (local transformer model): post-merge embedding
-	// batch — semantic clusters are computed and persisted here.
+	// The provider-embedder batch (BYOK wave 6): post-merge embedding —
+	// resolves the model fresh per call; null model = info-skip inside.
 	embedder: embedNewNodes,
 	// BYOK (owner, 2026-09-22): the extraction stages resolve the chain —
 	// role override → slot → NOTHING — read FRESH per stage call; an empty
@@ -75,14 +75,27 @@ export const extraction = createExtractionPipeline({
 });
 
 /** Graph context injection (vision-context-injection.md): the runner's
- *  deps — same storage ports, the REAL embedder as the query seam (same
- *  warm singleton as extraction, so vector-space parity holds by
- *  construction), and the wake pipeline as the delivery seam. */
+ *  deps — same storage ports, the provider-embedder RESOLVER as the query
+ *  seam (BYOK wave 6: fresh setting + key reads per run, so vector-space
+ *  parity with the ledger is checked against the CURRENT model; a key or
+ *  settings PUT between dispatch and spawn lands), and the wake pipeline
+ *  as the delivery seam. */
 export const graphContext: GraphContextDeps = {
 	chatStore: stores.chatStore,
 	jobStore: stores.jobStore,
 	graphStore: stores.graphStore,
-	embedder: { model: EMBEDDING_MODEL, dim: EMBEDDING_DIM, embedQuery },
+	embedder: () => {
+		const resolved = embeddingPort();
+		if (!resolved.ok) return null;
+		const port = resolved.port;
+		return {
+			model: port.model,
+			embedQuery: async (text: string) => {
+				const result = await port.embed([text], "query");
+				return { vector: result.vectors[0]!, promptTokens: result.promptTokens };
+			},
+		};
+	},
 	deliver: deliverJobResult,
 };
 
@@ -221,7 +234,10 @@ export async function handleChatRequest(
 	// GRAPH GATES (settings-storage wave, 2026-09-19): the read channel
 	// needs BOTH the master switch and the embedding rung (injection is a
 	// vector query); with graph off there is no context job at all.
-	if (graphContextEnabled(effective.graph)) {
+	// BYOK (wave 6): an unconfigured embedding model means no vectors to
+	// query — the dispatch skips honestly (the runner's own resolution is
+	// the belt-and-suspenders for respawn races).
+	if (graphContextEnabled(effective.graph) && effective.graph.embeddingModel !== null) {
 		triggerGraphContext(graphContext, chatId);
 	}
 

@@ -20,7 +20,6 @@
 		"@ai-sdk/react": "^4.0.79",
 		"@earendil-works/pi-agent-core": "^0.85.1",
 		"@earendil-works/pi-ai": "^0.85.1",
-		"@huggingface/transformers": "^4.2.0",
 		"@mozilla/readability": "^0.6.0",
 		"@radix-ui/react-use-controllable-state": "^1.2.6",
 		"@rive-app/react-webgl2": "^4.32.1",

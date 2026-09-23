@@ -139,9 +139,9 @@ export function AppearanceSection({
 }
 
 const LADDER: readonly {
-	key: keyof GraphSettings;
+	key: "enabled" | "embedding" | "clustering" | "labeling";
 	label: string;
-	needs: keyof GraphSettings | null;
+	needs: "enabled" | "embedding" | "clustering" | "labeling" | null;
 }[] = [
 	{ key: "enabled", label: "Graph", needs: null },
 	{ key: "embedding", label: "Embedding", needs: "enabled" },

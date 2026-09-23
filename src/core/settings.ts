@@ -251,6 +251,13 @@ export interface GraphSettings {
 	clustering?: boolean;
 	/** The LLM cluster-namer (needs clustering). */
 	labeling?: boolean;
+	/** BYOK embeddings (wave 6, 2026-09-23): the provider embedding model
+	 *  as a "provider:id" slug (openrouter:…, openai:…, google:…). null =
+	 *  no model — embedding/clustering/injection skip honestly (info log,
+	 *  graph stays textual); no factory floor exists. Keys live in the auth
+	 *  store, resolved fresh per call. A model CHANGE re-embeds everything
+	 *  (the ledger's staleness semantics). */
+	embeddingModel?: string | null;
 }
 
 /** THE record. Every section optional (delta); unknown top-level keys are
@@ -303,7 +310,7 @@ export const FACTORY_SETTINGS: FactorySettings = {
 		sessionNameSerif: true,
 		mdRendering: { headingWeight: 900, boldColor: null, italicColor: null },
 	},
-	graph: { enabled: true, embedding: true, clustering: true, labeling: true },
+	graph: { enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null },
 };
 
 // ─── Sanitizer ─────────────────────────────────────────────────────────────
@@ -453,6 +460,14 @@ function sanitizeGraph(raw: Record<string, unknown>): GraphSettings {
 	if (clustering !== undefined) out.clustering = clustering;
 	const labeling = boolOrDrop(raw.labeling);
 	if (labeling !== undefined) out.labeling = labeling;
+	// BYOK embeddings (wave 6): null or a provider-qualified slug; anything
+	// else (bad type, bad shape) DROPS to absent — an invalid write never
+	// becomes a live model (the PUT parser 400s it first; this is the
+	// read-side belt-and-suspenders for hand-edited files).
+	if (raw.embeddingModel === null) out.embeddingModel = null;
+	else if (typeof raw.embeddingModel === "string" && /^\S+:\S+$/.test(raw.embeddingModel)) {
+		out.embeddingModel = raw.embeddingModel;
+	}
 	return out;
 }
 

@@ -12,7 +12,13 @@ const nextConfig: NextConfig = {
 	// INTO the standalone bundle. A shipped desktop app would carry the
 	// developer's session data inside it.
 	outputFileTracingExcludes: {
-		"*": ["data/**/*"],
+		"*": [
+			"data/**/*",
+			// Wave 6 (2026-09-23): the local transformers embeddings died — any
+			// @huggingface copy (or its ~300MB model cache, if one ever
+			// reappears) must never sweep into the standalone bundle again.
+			"node_modules/@huggingface/**/*",
+		],
 	},
 	// Empirically verified gaps (2026-09-17 standalone smoke): the tracer
 	// misses JSON loaded via `import ... with { type: "json" }` attributes —
@@ -31,21 +37,14 @@ const nextConfig: NextConfig = {
 			"node_modules/pdfjs-dist/standard_fonts/**/*",
 			"node_modules/@earendil-works/pi-ai/dist/providers/data/**/*",
 			"node_modules/@earendil-works/pi-agent-core/dist/**/*.json",
-			// onnxruntime-node: the .node binding was traced, but its
-			// sibling dylib (libonnxruntime.*.dylib, dlopen'd via @rpath)
-			// was not — dlopen fails at module load.
-			"node_modules/onnxruntime-node/bin/**/*",
 		],
 	},
 	// Framework-free core lives in src/ (plain TS, imported by routes and CLI alike).
 	// The pi engine must stay external: its providers are runtime-loaded Node
 	// code (undici streams, catalog data) that breaks when bundled into routes.
-	// transformers.js (embeddings) is runtime-loaded ONNX — same reason as
-	// the pi engine: bundling onnxruntime-node breaks route builds.
 	serverExternalPackages: [
 		"@earendil-works/pi-ai",
 		"@earendil-works/pi-agent-core",
-		"@huggingface/transformers",
 		"pdfjs-dist", // sources v0: bundling breaks its node fake-worker path
 	],
 };

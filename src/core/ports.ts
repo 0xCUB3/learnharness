@@ -243,3 +243,49 @@ export interface AuthStore {
 	/** Remove one VAR if present (absent = no-op, still a silent success). */
 	deleteAuthVar(name: string): void;
 }
+
+// ─── EmbeddingPort — BYOK provider embeddings (wave 6, 2026-09-23) ───────────
+
+/**
+ * The provider-embedding seam (the local transformers embedder died with
+ * this wave): vectors come from the user's keyed provider — OpenRouter,
+ * OpenAI, or Google — named by graph.embeddingModel ("provider:id", null =
+ * honestly off: embedding/clustering/injection skip with an info log).
+ *
+ * Owner decisions (2026-09-23) baked in:
+ *  - The adapters are resolved FRESH per call from the setting + the auth
+ *    store (key rotations land immediately — the search port's treatment).
+ *  - Vectors are stored as the provider returns them (default dims, no
+ *    truncation, no normalization); the ledger is self-describing on
+ *    model + dim, and any model change voids it (full re-embed).
+ *  - Usage (prompt tokens) flows back to the money channel: adapters
+ *    report it, the caller records it as a CallUsage step.
+ *
+ * Pure types only (browser-safe): the adapters are server-side
+ * (src/server/embeddings.ts) and arrive as injected dependencies.
+ */
+
+/** Which side of retrieval the text is — providers bill identically but
+ *  quality-optimize differently (OpenRouter's input_type, Gemini's
+ *  taskType); every input in one call shares the task. */
+export type EmbeddingTask = "document" | "query";
+
+/** One embedding batch's result: vectors in input order, the model's
+ *  identity + dim (the ledger stamps), and the provider-reported prompt
+ *  token count (undefined = provider didn't report; cost stays honest
+ *  "—" via the existing unpriced path). */
+export interface EmbeddingResult {
+	vectors: number[][];
+	/** The full "provider:id" slug — ledger/cost keys use it verbatim. */
+	model: string;
+	dim: number;
+	promptTokens?: number;
+}
+
+/** A live provider embedding adapter. `embed` throws on failure (adapters
+ *  map HTTP errors to clear Error messages); callers treat failure as
+ *  non-fatal per the extraction contract. */
+export interface EmbeddingPort {
+	model: string;
+	embed(texts: readonly string[], task: EmbeddingTask): Promise<EmbeddingResult>;
+}

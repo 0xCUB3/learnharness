@@ -277,7 +277,11 @@ export function parseAppearanceSettingsBody(body: unknown): SettingsBodyResult<A
 	return { ok: true, settings };
 }
 
-/** graph: the four-rung ladder { enabled?, embedding?, clustering?, labeling? }. */
+/** graph: the four-rung ladder { enabled?, embedding?, clustering?, labeling? }
+ *  + embeddingModel? — the BYOK provider embedding model (wave 6,
+ *  2026-09-23): null or a "provider:id" slug of a shipped provider.
+ *  Catalog validity is network-dependent — the parser checks SHAPE only
+ *  (the federated /api/models/embeddings gives the picker real options). */
 export function parseGraphSettingsBody(body: unknown): SettingsBodyResult<GraphSettings> {
 	const raw = asRecord(body);
 	if (!raw) return { ok: false, error: "Invalid JSON body" };
@@ -288,6 +292,25 @@ export function parseGraphSettingsBody(body: unknown): SettingsBodyResult<GraphS
 				return { ok: false, error: `${key} must be a boolean` };
 			}
 			settings[key] = raw[key];
+		}
+	}
+	if (raw.embeddingModel !== undefined) {
+		if (raw.embeddingModel !== null) {
+			// NOTE: the id may itself contain colons (OpenRouter suffixes like
+			// "liquid/lfm-2.5-embedding-350m:free") — the provider is the part
+			// before the FIRST colon, so the id half just forbids whitespace.
+			if (
+				typeof raw.embeddingModel !== "string" ||
+				!/^(openrouter|openai|google):\S+$/.test(raw.embeddingModel)
+			) {
+				return {
+					ok: false,
+					error: 'embeddingModel must be null or a "openrouter|openai|google:model-id" slug',
+				};
+			}
+			settings.embeddingModel = raw.embeddingModel;
+		} else {
+			settings.embeddingModel = null;
 		}
 	}
 	return { ok: true, settings };

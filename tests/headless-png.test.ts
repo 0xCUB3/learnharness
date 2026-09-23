@@ -11,9 +11,12 @@ import { providerSafePng } from "../src/agent/subagents/headless.ts";
  * passed. providerSafePng merges the split back into the canonical ONE-IDAT
  * form (PNG spec: the IDAT chunks are an arbitrary split of ONE zlib stream —
  * the merged form carries the byte-identical stream). Pure Node on purpose:
- * the process already loads transformers' nested sharp/libvips; a second copy
- * (root sharp) triggered macOS's duplicate-libvips ObjC warning. These tests
- * pin the property with no native deps at all.
+ * historically the process already carried a native image lib via
+ * @huggingface/transformers' nested sharp/libvips, and a second copy (root
+ * sharp) triggered macOS's duplicate-libvips ObjC warning — the transformers
+ * embedder died with wave 6 (2026-09-23) but the no-native-deps rule lives
+ * on: app code carries no image library. These tests pin the property with
+ * no native deps at all.
  */
 
 // ── a tiny PNG toolchain (spec-level, no image library) ─────────────────────

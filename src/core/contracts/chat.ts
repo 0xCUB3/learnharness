@@ -108,6 +108,10 @@ export interface ExtractionRunUsage {
 	stages: {
 		extractor: ExtractionStageUsage;
 		auditor: ExtractionStageUsage;
+		/** Wave 6 (2026-09-23): the provider-embedding tail — present only
+		 *  when an embedding model is configured and the run embedded
+		 *  (local embeddings were free, so this post-dates them). */
+		embedding?: ExtractionStageUsage;
 	};
 }
 

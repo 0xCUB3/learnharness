@@ -12,9 +12,10 @@
  * quiz/ask calls, so delivery lands mid-probing, before plan_init — where
  * prior knowledge matters most.
  *
- * No model call, no usage: the job's only cost is one embedding pass over
- * the warm singleton (tens–~200ms) plus a brute-force cosine scan. It still
- * carries a JobRecord (kind "graph-context") so the dock shows it, and it
+ * No teacher-model call: the job's only model spend is ONE embedding
+ * query (the local embedder was free, provider ones are not — wave 6
+ * records its prompt tokens on the job record). It still carries a
+ * JobRecord (kind "graph-context") so the dock shows it, and it
  * registers its AbortController so the dock's END kills it — but an abort
  * steers NOTHING: nothing was ever promised in the lesson (the injection is
  * server-initiated scaffolding, unlike a teacher-dispatched sub-agent).
@@ -27,6 +28,7 @@
  */
 
 import {
+	accumulateJobUsage,
 	buildGraphContextSteer,
 	steerDelivered,
 	type JobRecord,
@@ -41,20 +43,25 @@ import type { UIMessage } from "ai";
 import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import type { ChatStore, GraphStore, JobStore } from "../../core/ports.ts";
 
-/** The embedder as the runner needs it: the model/dim the ledger must
- *  match (parity: one vector space) + the query seam. Injected so tests
- *  run without the transformer model. */
+/** The embedder as the runner needs it (BYOK wave 6): the model slug the
+ *  ledger must match (parity: one vector space) + the query seam.
+ *  Resolved FRESH per run by the composition root (deps.embedder) so a
+ *  settings PUT or a key save between dispatch and spawn lands; null
+ *  model = no embedding configured — the run skips honestly. The query
+ *  carries its prompt-token count so the job records its spend (the
+ *  local embedder was free; provider ones are not). */
 export interface GraphContextEmbedder {
-	model: string;
-	dim: number;
-	embedQuery: (text: string) => Promise<number[]>;
+	model: string | null;
+	embedQuery: (text: string) => Promise<{ vector: number[]; promptTokens?: number }>;
 }
 
 export interface GraphContextDeps {
 	chatStore: Pick<ChatStore, "getChat">;
 	jobStore: Pick<JobStore, "createJob" | "getJob" | "updateJob" | "findJobByToolCallId">;
 	graphStore: Pick<GraphStore, "readNodes" | "readEvents" | "readEmbeddings">;
-	embedder: GraphContextEmbedder;
+	/** The embedder RESOLVER (wave 6): called once at run start — fresh
+	 *  setting + key reads each run. null = no embedding model configured. */
+	embedder: () => GraphContextEmbedder | null;
 	/** The wake seam — jobs.ts deliverJobResult (resolves on delivery). */
 	deliver: (steer: SteerMessage) => Promise<void>;
 }
@@ -126,7 +133,7 @@ export function startGraphContextInjection(deps: GraphContextDeps, chatId: strin
  *  crash-recovery respawn seam: a job record orphaned "running" by a
  *  process crash re-runs from here (the record is the only input needed). */
 export async function runGraphContextJob(deps: GraphContextDeps, jobId: string): Promise<void> {
-	const { chatStore, jobStore, graphStore, embedder, deliver } = deps;
+	const { chatStore, jobStore, graphStore, deliver } = deps;
 	const job = jobStore.getJob(jobId);
 	if (!job || job.status !== "running") return;
 
@@ -135,6 +142,13 @@ export async function runGraphContextJob(deps: GraphContextDeps, jobId: string):
 	};
 	const chat = chatStore.getChat(job.chatId);
 	if (!chat) return fail(`chat not found: ${job.chatId}`);
+	// BYOK (wave 6): fresh resolution per run; null = honestly off (the
+	// dispatch gate already skips unconfigured sessions — this only fires
+	// on a config change racing a respawn, and the error says exactly why).
+	const embedder = deps.embedder();
+	if (!embedder || embedder.model === null) {
+		return fail("no embedding model configured — injection skipped (graph.embeddingModel is null)");
+	}
 	const topic = topicOf(chat.messages);
 	if (topic === null) return fail("no injectable topic (session past its start)");
 	const budget = effectiveContextBudget(chat.settings);
@@ -146,19 +160,39 @@ export async function runGraphContextJob(deps: GraphContextDeps, jobId: string):
 	try {
 		jobStore.updateJob(jobId, { activity: "embedding topic" });
 		const ledger = graphStore.readEmbeddings();
-		if (ledger.model !== embedder.model || ledger.dim !== embedder.dim) {
-			return fail("embeddings ledger is stale (model/dim mismatch) — injection skipped");
+		// Staleness is the MODEL identity (wave 6): a given model serves one
+		// dim by default, so model parity is space parity; the dim is checked
+		// defensively against the served vector below.
+		if (ledger.model !== embedder.model) {
+			return fail("embeddings ledger is stale (model mismatch) — injection skipped");
 		}
 		if (Object.keys(ledger.vectors).length === 0) {
 			return fail("the knowledge graph has no embeddings yet — nothing to inject");
 		}
 		const query = await embedder.embedQuery(topic);
 		if (controller.signal.aborted) return;
+		// The defensive dim half of the old parity check: a provider-side dim
+		// change (rare) must fail the query, never silently mismatch.
+		if (query.vector.length !== ledger.dim) {
+			return fail(
+				`embedding dim mismatch: query is ${query.vector.length}, ledger holds ${ledger.dim}`,
+			);
+		}
+		// Money channel (wave 6): the one embedding call's prompt tokens fold
+		// into the job record — priced via the EMBEDDING_PRICES overlay.
+		if (query.promptTokens !== undefined) {
+			jobStore.updateJob(jobId, {
+				usage: accumulateJobUsage(job.usage, embedder.model, {
+					inputTokens: query.promptTokens,
+					outputTokens: 0,
+				}),
+			});
+		}
 
 		jobStore.updateJob(jobId, { activity: "selecting propositions" });
 		const data = selectGraphContext({
 			chatId: job.chatId,
-			query,
+			query: query.vector,
 			vectors: ledger.vectors,
 			nodes: graphStore.readNodes(),
 			events: graphStore.readEvents(),

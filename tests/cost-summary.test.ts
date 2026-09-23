@@ -96,6 +96,39 @@ describe("graphCostSummary (the cost pill's fold)", () => {
 		assert.equal(s.unpricedRuns, 1); // run-level: only the both-stages run
 	});
 
+	test("the embedding stage (wave 6): folds when present, absent when the run embedded nothing", () => {
+		const EMBED_MODEL = "openai:text-embedding-3-small";
+		const embStep = callCost(step(5000, 0), EMBED_MODEL)!;
+		assert.ok(embStep > 0, "the overlay prices the known embedding models");
+		const withEmbed = extractionRun(100, PRICED, PRICED);
+		withEmbed.stages.embedding = { model: EMBED_MODEL, steps: [step(5000, 0)] };
+		const s = graphCostSummary({
+			chats: [{ title: "a", extractions: [withEmbed] }, { title: "b", extractions: [extractionRun(200, PRICED, PRICED)] }],
+			sources: [],
+			naming: [],
+		});
+		assert.equal(s.stages.embedding.runs, 1, "only the run that embedded");
+		assert.equal(s.stages.embedding.dollars, embStep);
+		assert.equal(s.stages.embedding.tokens.inputTokens, 5000);
+		assert.equal(s.stages.extraction.runs, 2, "the two-stage era still folds");
+		assert.equal(s.stages.extraction.runs, 2);
+		// Run-level: the embedding dollars ride the run's total.
+		const extStep = callCost(step(1000, 200), PRICED)!;
+		const audStep = callCost(step(2000, 100), PRICED)!;
+		assert.equal(s.runs.find((r) => r.startedAt === 100)!.dollars, extStep + audStep + embStep);
+		assert.equal(s.runs.find((r) => r.startedAt === 200)!.dollars, extStep + audStep);
+		assert.equal(s.totalDollars, (extStep + audStep) * 2 + embStep);
+	});
+
+	test("an UNPRICED embedding model stays honest: counted, never a silent zero; a priced sibling saves the run total", () => {
+		const unpricedEmbed = extractionRun(100, PRICED, "unknown-model");
+		unpricedEmbed.stages.embedding = { model: "some/new-embed", steps: [step(900, 0)] };
+		const s = graphCostSummary({ chats: [{ title: "x", extractions: [unpricedEmbed] }], sources: [], naming: [] });
+		assert.equal(s.stages.embedding.unpricedRuns, 1);
+		assert.equal(s.stages.embedding.dollars, 0);
+		assert.notEqual(s.runs[0]!.dollars, null, "the priced extractor saves the run total");
+	});
+
 	test("recent runs cap: newest survive", () => {
 		const extractions = [1, 2, 3, 4].map((n) => extractionRun(n * 100, PRICED, PRICED));
 		const s = graphCostSummary({

@@ -15,7 +15,7 @@ import { after, describe, it } from "node:test";
 import { deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
 import { abortJob } from "../src/server/jobs.ts";
 import { persistTurn } from "../src/server/turn-service.ts";
-import { startGraphContextInjection, runGraphContextJob, type GraphContextDeps } from "../src/agent/subagents/graph-context.ts";
+import { startGraphContextInjection, runGraphContextJob, type GraphContextDeps, type GraphContextEmbedder } from "../src/agent/subagents/graph-context.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { PATHS } from "../config.ts";
@@ -104,17 +104,18 @@ function newTopicChat(label: string, settings?: Record<string, unknown>): { id: 
 	return { id: chat.id };
 }
 
-/** The scripted embedder: deterministic query vectors, recorded topics. */
+/** The scripted embedder: deterministic query vectors, recorded topics.
+ *  Wave 6 shape: the query carries its (absent) prompt-token count; the
+ *  resolver seam wraps the static fake (fresh resolution per run). */
 function fakeEmbedder(vec: number[] = unit(0)) {
 	const topics: string[] = [];
 	return {
 		topics,
 		embedder: {
 			model: "test-embed",
-			dim: 8,
 			embedQuery: async (text: string) => {
 				topics.push(text);
-				return vec;
+				return { vector: vec, promptTokens: undefined };
 			},
 		},
 	};
@@ -122,10 +123,10 @@ function fakeEmbedder(vec: number[] = unit(0)) {
 
 function deps(
 	graph: Pick<GraphContextDeps["graphStore"], "readNodes" | "readEvents" | "readEmbeddings">,
-	embedder: GraphContextDeps["embedder"],
+	embedder: GraphContextEmbedder,
 	deliver: (steer: SteerMessage) => Promise<void>,
 ): GraphContextDeps {
-	return { chatStore, jobStore, graphStore: graph, embedder, deliver };
+	return { chatStore, jobStore, graphStore: graph, embedder: () => embedder, deliver };
 }
 
 describe("startGraphContextInjection — the one-shot gates", () => {
@@ -205,7 +206,9 @@ describe("runGraphContextJob — failure modes are honest errors, never phantom 
 		trackChat(chat.id);
 		const job = jobStore.createJob({ kind: "graph-context", chatId, toolCallId: `ctx_${chatId}` });
 		trackJob(job.id);
-		// Ledger stamped with a DIFFERENT model than the embedder.
+		// Ledger stamped with a DIFFERENT model than the embedder (wave 6:
+		// staleness is the model identity — dim is checked against the
+		// served vector below).
 		const d = deps(fakeGraphStore({ vectors: { n1: unit(0) }, model: "other-model" }), fakeEmbedder().embedder, async () => {});
 		await runGraphContextJob(d, job.id);
 		const got = jobStore.getJob(job.id)!;
@@ -280,8 +283,7 @@ describe("the injection + the wake pipeline (end to end, fake turn runner)", () 
 		});
 		const embedder = {
 			model: "test-embed",
-			dim: 8,
-			embedQuery: () => hanging.then(() => unit(0)),
+			embedQuery: () => hanging.then(() => ({ vector: unit(0), promptTokens: undefined })),
 		};
 		const fired: number[] = [];
 		setTurnRunner(async () => {

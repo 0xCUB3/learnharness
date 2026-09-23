@@ -201,6 +201,9 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 			embedding: graph.embedding ?? FACTORY_SETTINGS.graph.embedding,
 			clustering: graph.clustering ?? FACTORY_SETTINGS.graph.clustering,
 			labeling: graph.labeling ?? FACTORY_SETTINGS.graph.labeling,
+			// BYOK (wave 6): null is the factory floor and a VALID resolved
+			// value — ?? only fills the absent case, null passes through.
+			embeddingModel: graph.embeddingModel ?? FACTORY_SETTINGS.graph.embeddingModel,
 		},
 	};
 }
