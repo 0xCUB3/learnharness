@@ -304,11 +304,21 @@ function readPositionMap(): Record<string, Position> {
 
 function writePositionMap(positions: Record<string, Position>): void {
 	fs.mkdirSync(path.dirname(POSITIONS_FILE), { recursive: true });
-	fs.writeFileSync(
-		POSITIONS_FILE,
-		JSON.stringify({ positions, updatedAt: new Date().toISOString() }, null, "\t"),
-		"utf-8",
-	);
+	// Tmp + rename — the same crash-safety rewriteLedgers uses two blocks
+	// up (a9339b3 UI flag): a torn write must never replace the ledger
+	// with a half-written file the reader parses as empty.
+	const tmp = `${POSITIONS_FILE}.tmp-${crypto.randomUUID().slice(0, 8)}`;
+	try {
+		fs.writeFileSync(tmp, JSON.stringify({ positions, updatedAt: new Date().toISOString() }, null, "\t"), "utf-8");
+		fs.renameSync(tmp, POSITIONS_FILE);
+	} catch (err) {
+		try {
+			fs.unlinkSync(tmp);
+		} catch {
+			/* the rename either already happened or the tmp never existed */
+		}
+		throw err;
+	}
 }
 
 const isPosition = (v: unknown): v is Position =>
