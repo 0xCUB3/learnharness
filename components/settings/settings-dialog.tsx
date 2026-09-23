@@ -150,6 +150,13 @@ export function SettingsDialogBody({
 		};
 	}, []);
 	const [active, setActive] = useState<SectionId>(initialSection);
+	// A deep-link fired while the dialog is ALREADY open (wave 6: the
+	// embedding picker's "Add a provider key first…" lands on Keys from
+	// inside the dialog) changes initialSection under our feet — follow it,
+	// or the link silently does nothing.
+	useEffect(() => {
+		setActive(initialSection);
+	}, [initialSection]);
 
 	// Fetch once per dialog mount. 200 {settings: null} is FIRST BOOT
 	// (no record = factory everything), not a failure — the error state is

@@ -279,6 +279,7 @@ function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 		["Extraction", costs.stages.extraction],
 		["Audit", costs.stages.audit],
 		["Cluster naming", costs.stages.naming],
+		["Embeddings", costs.stages.embedding],
 	];
 	return (
 		<div className="w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">

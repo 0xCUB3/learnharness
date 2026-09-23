@@ -1,11 +1,14 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import { BookOpenIcon } from "lucide-react";
 import {
 	GRAPH_CONTEXT_TOKENS_DEFAULT,
 	GRAPH_CONTEXT_TOKENS_STOPS,
 	type ChatSettings,
 } from "@/src/core";
+import { useSettingsSaved } from "@/components/settings-signal";
+import { useSettingsDialog } from "./settings/settings-dialog.tsx";
 
 /**
  * The knowledge-context budget control (vision-context-injection.md) — the
@@ -36,6 +39,50 @@ export function GraphContextControl({
 	onChange: (tokens: number) => void;
 	testId?: string;
 }) {
+	// Wave 6: context injection rides the embedding model — with none
+	// configured (graph.embeddingModel null) the control is inert, so it
+	// grays out and its hint deep-links to the Graph section's picker.
+	// Loading renders the normal control (the searchStatus precedent:
+	// never gray on null/unknown). Every settings save re-reads.
+	const { open: openSettingsSection } = useSettingsDialog();
+	const [modelUnset, setModelUnset] = useState(false);
+	const [known, setKnown] = useState(false);
+	const readModel = useCallback(async () => {
+		try {
+			const resp = await fetch("/api/settings");
+			if (!resp.ok) return;
+			const body = (await resp.json()) as { settings?: { graph?: { embeddingModel?: string | null } } };
+			setModelUnset(!body.settings?.graph?.embeddingModel);
+			setKnown(true);
+		} catch {
+			// leave the last known state
+		}
+	}, []);
+	useEffect(() => {
+		void readModel();
+	}, [readModel]);
+	useSettingsSaved(() => {
+		void readModel();
+	});
+
+	if (known && modelUnset) {
+		return (
+			<div
+				data-testid={`${testId}-needs-model`}
+				className="flex items-center gap-2 text-xs text-muted-foreground opacity-40"
+			>
+				<BookOpenIcon className="size-3 shrink-0" />
+				<button
+					type="button"
+					onClick={() => openSettingsSection("graph")}
+					className="underline underline-offset-2 transition-colors hover:text-foreground"
+				>
+					Graph context needs an embedding model
+				</button>
+			</div>
+		);
+	}
+
 	// Snap for display only: a legacy non-stop value shows its nearest stop
 	// and the next drag lands on a real one.
 	const stop = nearestStop(value);

@@ -16,6 +16,7 @@ import { TOGGLE_TOOLS, AgentSection } from "../components/settings/agent-section
 import { AppearanceSection, GraphSection } from "../components/settings/appearance-section.tsx";
 import { KeysSection } from "../components/settings/keys-section.tsx";
 import { KeyboardSection } from "../components/settings/keyboard-section.tsx";
+import type { GraphSettings } from "../src/core/index.ts";
 import { SettingsDialogBody, SettingsDialogProvider } from "../components/settings/settings-dialog.tsx";
 import { KEYBOARD_ACTIONS } from "../src/core/index.ts";
 
@@ -134,8 +135,13 @@ describe("AgentSection (thin SSR)", () => {
 });
 
 describe("GraphSection — the dependency ladder", () => {
-	it("defaults: all four rungs on, none disabled", () => {
-		const html = renderToStaticMarkup(<GraphSection graph={undefined} onSectionChange={() => {}} />);
+	// Wave 6: without an embedding model the three dependent rungs are
+	// inert (dimmed, disabled, hinted) — pinned in embedding-settings.
+	// These ladder pins isolate the CHAIN logic with a model configured.
+	const MODEL: GraphSettings = { enabled: true, embeddingModel: "openai:text-embedding-3-small" };
+
+	it("defaults with a model set: all four rungs on, none disabled", () => {
+		const html = renderToStaticMarkup(<GraphSection graph={MODEL} onSectionChange={() => {}} />);
 		for (const key of ["enabled", "embedding", "clustering", "labeling"]) {
 			assert.ok(html.includes(`data-testid="graph-row-${key}"`), key);
 			assert.ok(!tagOf(html, `toggle-graph-${key}`).includes("disabled"), `${key} touchable`);
@@ -144,7 +150,7 @@ describe("GraphSection — the dependency ladder", () => {
 
 	it("master off grays EVERY dependent (stored values persist, resolve inert)", () => {
 		const html = renderToStaticMarkup(
-			<GraphSection graph={{ enabled: false, embedding: true, clustering: true, labeling: true }} onSectionChange={() => {}} />,
+			<GraphSection graph={{ ...MODEL, enabled: false, embedding: true, clustering: true, labeling: true }} onSectionChange={() => {}} />,
 		);
 		for (const key of ["embedding", "clustering", "labeling"]) {
 			assert.ok(tagOf(html, `toggle-graph-${key}`).includes("disabled"), `${key} disabled`);
@@ -154,7 +160,7 @@ describe("GraphSection — the dependency ladder", () => {
 
 	it("a mid-ladder break grays only what's below it", () => {
 		const html = renderToStaticMarkup(
-			<GraphSection graph={{ enabled: true, embedding: true, clustering: false }} onSectionChange={() => {}} />,
+			<GraphSection graph={{ ...MODEL, embedding: true, clustering: false }} onSectionChange={() => {}} />,
 		);
 		assert.ok(!tagOf(html, "toggle-graph-embedding").includes("disabled"), "embedding touchable");
 		assert.ok(!tagOf(html, "toggle-graph-clustering").includes("disabled"), "clustering touchable");

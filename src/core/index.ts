@@ -42,8 +42,9 @@ export * from "./fuzzy.ts";
 export * from "./settings.ts";
 // graph-deletion.ts (wave 6): the whole module is PURE but storage-port
 // driven — the deletion RUNS server-side only. The shell needs exactly one
-// thing from it: the ChatDeleteMode union (the delete dialog's two-option
-// design + the DELETE query param), hence this type-only re-export.
+// two type-only things from it: the ChatDeleteMode union (the delete
+// dialog's two-option design + the DELETE query param) and the stats
+// shape its success line describes, hence this type-only re-export.
 export type { ChatDeleteMode, ChatDeletionStats } from "./graph-deletion.ts";
 export * from "./settings-resolution.ts";
 export * from "./search.ts"; // search port (search wave, 2026-09-20)
