@@ -35,7 +35,7 @@ function main() {
 	const edges = graphStore.readEdges();
 	// The cluster source (wave 7): the birth-session partition, derived on
 	// read — same as the real settle (core/layout-settle.ts).
-	const birthClusters = birthSessionPartition(nodes);
+	const birthClusters = birthSessionPartition(nodes, graphStore.readMappings());
 
 	// Batches: each imported file, in real import order (sources.json
 	// importedAt). A node belongs to the file whose mapping first claims it

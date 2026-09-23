@@ -157,7 +157,7 @@ describe("the background roles' resolved pins (rolePins)", () => {
 		};
 		const pins = rolePinsFor(resolveSettings(record).agent.models);
 		assert.deepEqual(pins.researcher, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "high" });
-		assert.deepEqual(pins.labeler, { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }); // level unset
+		assert.deepEqual(pins.auditor, { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }); // level unset
 		assert.equal(pins.visualMaker, null, "vision tier untouched");
 	});
 

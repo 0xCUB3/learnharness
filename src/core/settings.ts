@@ -45,7 +45,6 @@ export const BACKGROUND_MODEL_ROLES = [
 	"visualMaker",
 	"extractor",
 	"auditor",
-	"labeler",
 ] as const;
 
 export type BackgroundModelRole = (typeof BACKGROUND_MODEL_ROLES)[number];
@@ -64,7 +63,7 @@ export interface RoleModelOverride {
 /** The capability tiers a user can pin models into (owner-settled mapping):
  *  strong = prober + teacher (also the per-session default-teacher
  *  starting point); cheap = researcher, demo-builder, extractor, auditor,
- *  labeler; vision = visual-maker + pdf-reader. Resolution per role:
+; vision = visual-maker + pdf-reader. Resolution per role:
  *  ROLE OVERRIDE → slot → factory pin. */
 export const MODEL_SLOTS = ["strong", "cheap", "vision"] as const;
 export type ModelSlotName = (typeof MODEL_SLOTS)[number];
@@ -174,7 +173,6 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	demoBuilder: "cheap",
 	extractor: "cheap",
 	auditor: "cheap",
-	labeler: "cheap",
 	visualMaker: "vision",
 	pdfReader: "vision",
 };

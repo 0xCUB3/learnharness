@@ -57,8 +57,6 @@ function fakeStores(
 		readSources: () => [],
 		readPositions: () => ({}),
 		writePositions: () => {},
-		readEmbeddings: () => ({ model: "dead", dim: 0, vectors: {}, clusters: [], updatedAt: "" }),
-		writeEmbeddings: () => {},
 		readClusterLabels: () => [],
 		appendClusterLabel: () => {},
 		appendNamingRun: () => {},

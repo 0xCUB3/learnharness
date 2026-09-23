@@ -87,7 +87,7 @@ export function rolePinsFor(
 	return pins;
 }
 
-/** The six background roles' RESOLVED pins: the user's agent-models
+/** The background roles' RESOLVED pins: the user's agent-models
  *  override → tier slot → nothing — the same resolution the agent wiring
  *  uses (src/server/stores.ts effectiveSettings), so the caption can
  *  never drift from what actually runs. */

@@ -23,7 +23,7 @@ import type { QuestionAnswerData } from "../src/core/question-core.ts";
 import { getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
-import { LEDGER_FILES, PATHS, SOURCES_FILE, EMBEDDINGS_FILE } from "../config.ts";
+import { LEDGER_FILES, PATHS, SOURCES_FILE } from "../config.ts";
 
 /** The wired fs adapters, exactly what src/server/stores.ts passes in production. */
 const graphDeps = { chatStore, graphStore } as const satisfies GraphDeps;
@@ -38,9 +38,7 @@ function sessionSource(chatId: string): { messages: UIMessage[]; foldedAt: strin
 
 // ─── ledger isolation (backup-and-clear of data/graph/*.jsonl) ──────────────
 
-// EMBEDDINGS_FILE too: the semantic-cluster source (read by graphSnapshot)
-// — isolated like the rest so this suite never touches the real vectors.
-const LEDGER_PATHS = [...Object.values(LEDGER_FILES), SOURCES_FILE, EMBEDDINGS_FILE];
+const LEDGER_PATHS = [...Object.values(LEDGER_FILES), SOURCES_FILE];
 const backups: Array<{ file: string; bak: string }> = [];
 const createdChats: string[] = [];
 
@@ -681,21 +679,14 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 		mergeFindings(dB.id, auditB, graphDeps, sessionSource(dB.id));
 		const zId = graphStore.readMappings().find((m) => m.chatId === dB.id && m.sourceId === "q2")!.graphNodeId;
 
-		// Coverage rows (both chats) + positions + embeddings garnish — the
-		// deletion prunes all three ledgers.
+		// Coverage rows (both chats) + positions garnish — the deletion
+		// prunes both ledgers.
 		for (const chat of [dA, dB]) {
 			for (let i = 0; i < 2; i++) {
 				graphStore.appendCoverage({ chatId: chat.id, fp: `${chat.id}-${i}`, tokens: 10, foldedAt: "2026-09-23T00:02:00.000Z" });
 			}
 		}
 		graphStore.writePositions({ ...graphStore.readPositions(), [xId]: { x: 1, y: 1 }, [yId]: { x: 2, y: 2 }, [zId]: { x: 3, y: 3 } });
-		const emb = graphStore.readEmbeddings();
-		graphStore.writeEmbeddings({
-			...emb,
-			vectors: { ...emb.vectors, [xId]: [1, 0], [yId]: [0, 1], [zId]: [1, 1] },
-			clusters: [...emb.clusters, { members: [xId, yId, zId] }],
-			updatedAt: "2026-09-23T00:03:00.000Z",
-		});
 		return { dA, dB, xId, yId, zId };
 	}
 
@@ -738,14 +729,10 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 		// Mappings: dA's audit trail died; dB's stays.
 		const mappings = graphStore.readMappings().filter((m) => [dA.id, dB.id].includes(m.chatId));
 		assert.deepEqual(mappings, [{ chatId: dB.id, sourceId: "q1", graphNodeId: xId }, { chatId: dB.id, sourceId: "q2", graphNodeId: zId }]);
-		// Positions/embeddings: the orphan pruned everywhere.
+		// Positions: the orphan pruned.
 		const positions = graphStore.readPositions();
 		assert.equal(positions[yId], undefined);
 		assert.deepEqual(positions[xId], { x: 1, y: 1 });
-		const emb = graphStore.readEmbeddings();
-		assert.equal(emb.vectors[yId], undefined);
-		assert.ok(emb.vectors[xId] && emb.vectors[zId]);
-		assert.deepEqual(emb.clusters.at(-1), { members: [xId, zId] }, "dead members pruned from the hull");
 		// The snapshot resolves X to dB only — the deleted chat left no ghost.
 		const snapshot = graphSnapshot(graphDeps);
 		assert.deepEqual(snapshot.nodeSessions[xId], [dB.id]);
@@ -768,7 +755,6 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 			events: graphStore.readEvents(),
 			mappings: graphStore.readMappings(),
 			positions: graphStore.readPositions(),
-			embeddings: graphStore.readEmbeddings(),
 		};
 		const stats = deleteChatTraces(graphStore, dA.id, "preserve-graph");
 		assert.deepEqual(stats, {
@@ -784,7 +770,6 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 		assert.deepEqual(graphStore.readEvents(), before.events);
 		assert.deepEqual(graphStore.readMappings(), before.mappings);
 		assert.deepEqual(graphStore.readPositions(), before.positions);
-		assert.deepEqual(graphStore.readEmbeddings(), before.embeddings);
 		assert.equal(graphStore.readCoverage().some((row) => row.chatId === dA.id), false);
 		assert.equal(graphStore.readCoverage().some((row) => row.chatId === dB.id), true);
 		void xId; void yId; void zId;

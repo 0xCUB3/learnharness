@@ -1,7 +1,6 @@
-import type { GraphEdge, GraphNode } from "./contracts.ts";
+import type { GraphEdge, GraphNode, NodeMapping, Position } from "./contracts.ts";
 import { incrementalLayout } from "./layout.ts";
 import { birthSessionPartition } from "./session-clusters.ts";
-import type { Position } from "./contracts.ts";
 
 /**
  * The merge-time settle: recompute the resting layout from the CURRENT
@@ -20,6 +19,7 @@ import type { Position } from "./contracts.ts";
 export function settleGraphLayout(graphStore: {
 	readNodes(): GraphNode[];
 	readEdges(): GraphEdge[];
+	readMappings(): NodeMapping[];
 	readPositions(): Record<string, Position>;
 	writePositions(positions: Record<string, Position>): void;
 }): void {
@@ -39,7 +39,7 @@ export function settleGraphLayout(graphStore: {
 	// core/session-clusters.ts, wave 7) — one cluster concept everywhere.
 	// The unique list is the deduped set the partition needs (lines may
 	// repeat an id — first defines).
-	const communities = birthSessionPartition(unique);
+	const communities = birthSessionPartition(unique, graphStore.readMappings());
 	const next = incrementalLayout(unique, edges, previous, { clusters: communities });
 	graphStore.writePositions(Object.fromEntries(next));
 }

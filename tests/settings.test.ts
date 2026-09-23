@@ -145,7 +145,7 @@ describe("sanitizeUserSettings", () => {
 				models: {
 					teacher: { thinkingLevel: "low" }, // NOT a background role — drops
 					researcher: { model: { provider: "openrouter", id: "x/y" } },
-					labeler: { model: { provider: 3, id: "x/y" }, thinkingLevel: "high" }, // bad model, keeps thinking
+					extractor: { model: { provider: 3, id: "x/y" }, thinkingLevel: "high" }, // bad model, keeps thinking
 					auditor: { thinkingLevel: "banana" }, // invalid level → empty override drops
 				},
 			},
@@ -154,7 +154,7 @@ describe("sanitizeUserSettings", () => {
 		const models = out.agent?.models ?? {};
 		assert.equal("teacher" in models, false);
 		assert.deepEqual(models.researcher, { model: { provider: "openrouter", id: "x/y" } });
-		assert.deepEqual(models.labeler, { thinkingLevel: "high" });
+		assert.deepEqual(models.extractor, { thinkingLevel: "high" });
 		assert.equal("auditor" in models, false);
 	});
 
@@ -186,14 +186,13 @@ describe("sanitizeUserSettings", () => {
 		assert.deepEqual(out.agent?.tools, { quiz: false, demo: true });
 	});
 
-	it("BACKGROUND_MODEL_ROLES matches the six background roles (config sync pinned in server tests)", () => {
+	it("BACKGROUND_MODEL_ROLES matches the five background roles (the labeler died with the wave-7 namer kill)", () => {
 		assert.deepEqual([...BACKGROUND_MODEL_ROLES], [
 			"researcher",
 			"demoBuilder",
 			"visualMaker",
 			"extractor",
 			"auditor",
-			"labeler",
 		]);
 	});
 });

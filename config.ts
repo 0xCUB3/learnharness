@@ -49,8 +49,7 @@ export type ModelRole =
 	| "visualMaker"
 	| "pdfReader"
 	| "extractor"
-	| "auditor"
-	| "labeler";
+	| "auditor";
 
 /**
  * The extraction pipeline (vision §1 construction): the sole graph writer.
@@ -85,8 +84,6 @@ export const LEDGER_FILES = {
 	 *  the checkpoint's replacement for chat extractions — notes keep
 	 *  sessions.jsonl, whole-file as they are). */
 	coverage: path.join(PATHS.graph, "coverage.jsonl"),
-	/** LLM-named community records (contracts/graph.ts ClusterLabeling). */
-	clusterLabels: path.join(PATHS.graph, "cluster-labels.jsonl"),
 	/** Cluster-naming run usage (contracts/graph.ts NamingRunUsage) — the
 	 *  money channel's third stage; graph-global, so its own ledger. */
 	namingRuns: path.join(PATHS.graph, "naming-runs.jsonl"),
@@ -102,12 +99,6 @@ export const SOURCES_FILE = path.join(PATHS.graph, "sources.json");
  *  {x,y} resting positions from the incremental settle (core/layout.ts).
  *  Carries an updatedAt stamp for future live-physics conflict handling. */
 export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
-
-/** The embedding ledger: one L2-normalized vector per node id, all from
- * ONE model (swapping models re-embeds everything — vectors from
- * different models live in incompatible spaces). Read-modify-write
- * JSON like positions/sources. */
-export const EMBEDDINGS_FILE = path.join(PATHS.graph, "embeddings.json");
 
 /**
  * Graph render settings (the settings-panel controls): one small JSON blob,

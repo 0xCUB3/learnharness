@@ -27,9 +27,7 @@ import type {
 	SessionCheckpoint,
 	TurnUsage,
 	NotesSource,
-	ClusterLabeling,
 	NamingRunUsage,
-	EmbeddingsLedger,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
 
@@ -102,11 +100,6 @@ export interface GraphStore {
 	appendCoverage(entry: CoverageEntry): void;
 	readCoverage(): CoverageEntry[];
 
-	/** Append one cluster labeling — idempotent by id (the id hashes the
-	 *  sorted core, so identical member sets dedupe). */
-	appendClusterLabel(labeling: ClusterLabeling): void;
-	readClusterLabels(): ClusterLabeling[];
-
 	/** Append one cluster-naming run's usage (graph-global money channel) —
 	 *  idempotent per startedAt. */
 	appendNamingUsage(entry: NamingRunUsage): void;
@@ -127,16 +120,6 @@ export interface GraphStore {
 	readPositions(): Record<string, Position>;
 	/** Replace the whole ledger (the settle is a full-graph computation). */
 	writePositions(positions: Record<string, Position>): void;
-
-	/** The embeddings ledger (config.EMBEDDINGS_FILE) — INERT DATA since
-	 *  wave 7 (owner ruling 2026-09-23: the provider embedder is dead;
-	 *  clustering is birth-session, labels are session names; the
-	 *  graph-context injection is gone with it). The whole seam dies in
-	 *  the follow-up interlude; graph-deletion's vector pruning is
-	 *  harmless housekeeping meanwhile. */
-	readEmbeddings(): EmbeddingsLedger;
-	/** Replace the whole ledger (graph-deletion's vector pruning only). */
-	writeEmbeddings(ledger: EmbeddingsLedger): void;
 
 	/** THE DESTRUCTIVE SEAM (session-deletion wave 6, owner 2026-09-22 —
 	 *  the first non-append operation on these ledgers): atomically

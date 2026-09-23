@@ -61,11 +61,6 @@ const jobRunner = createJobRunner({
  *  (/api/graph/import) hit the same single-flight registry. */
 export const extraction = createExtractionPipeline({
 	...stores,
-	// Wave 7 (owner ruling 2026-09-23): embeddings are DEAD — the pipeline's
-	// embed seam becomes a no-op until Teacher's pass removes the phase
-	// outright. Nothing embedded, nothing spent, the ledger untouched
-	// (its data is inert anyway: nothing reads it but the dying injection).
-	embedder: async () => ({ embedded: 0, total: 0, skipped: "embeddings removed (wave 7)" }),
 	// BYOK (owner, 2026-09-22): the extraction stages resolve the chain —
 	// role override → slot → NOTHING — read FRESH per stage call; an empty
 	// chain flows through as undefined and the pipeline refuses the run

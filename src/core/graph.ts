@@ -38,7 +38,7 @@
  * adapters in.
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { isToolUIPart, type UIMessage } from "ai";
 import type { CoverageEntry } from "./contracts/graph.ts";
 import type {
@@ -54,7 +54,7 @@ import type {
 	UnderstandingLevel,
 } from "./contracts.ts";
 import { MIN_CLUSTER_SIZE } from "./clusters.ts";
-import { birthSessionPartition } from "./session-clusters.ts";
+import { birthMappingIndex, birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
@@ -333,16 +333,6 @@ function quizEvent(
 
 // ─── derivation (reads only — everything below is recomputable) ─────────────
 
-/** The content identity of a community: "clu_" + sha256 of the sorted
- *  member ids (12 hex). Deterministic — the same member set always mints
- *  the same id — so re-naming races and idempotent re-runs dedupe at the
- *  store seam (appendClusterLabel). Lives here (server-only core), not in
- *  clusters.ts, because clusters.ts is barrel-exported and must stay
- *  browser-safe (no node:crypto). */
-export function clusterContentId(members: readonly string[]): string {
-	return "clu_" + createHash("sha256").update([...members].sort().join("\n")).digest("hex").slice(0, 12);
-}
-
 export interface DerivedGraph {
 	nodes: GraphNode[];
 	edges: GraphEdge[];
@@ -392,34 +382,6 @@ export function getGraph(graphStore: GraphStore): DerivedGraph {
 		}
 	}
 	return { nodes: [...byId.values()], edges: merged, events: graphStore.readEvents() };
-}
-
-const QUIZ_EVENT_KINDS: ReadonlySet<string> = new Set(["correct", "miss", "dont-know"]);
-
-/**
- * The latest quiz outcome per node — a raw EVENT FACT, not a node state
- * (the transitional node-state classes were removed 2026-09-08: nothing
- * colors nodes by quiz results anymore). Its last consumer, the
- * graph-as-context selection, died in wave 7 (the injection is gone —
- * the prober reads its map through tools now); the event fact stays as
- * raw ledger truth. Nodes with no quiz events have no entry.
- */
-export function latestQuizOutcomes(nodes: GraphNode[], events: LedgerEvent[]): Map<string, LedgerEventKind> {
-	const latest = new Map<string, { at: string; kind: LedgerEventKind; index: number }>();
-	events.forEach((event, index) => {
-		if (event.nodeId === null) return;
-		if (!QUIZ_EVENT_KINDS.has(event.kind)) return;
-		const current = latest.get(event.nodeId);
-		if (!current || event.at > current.at || (event.at === current.at && index > current.index)) {
-			latest.set(event.nodeId, { at: event.at, kind: event.kind, index });
-		}
-	});
-	const out = new Map<string, LedgerEventKind>();
-	for (const node of nodes) {
-		const last = latest.get(node.id);
-		if (last) out.set(node.id, last.kind);
-	}
-	return out;
 }
 
 // ─── the /api/graph payload ──────────────────────────────────────────────────
@@ -505,7 +467,7 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 	// presentation rule (a region needs >= 3 propositions for a hull). A
 	// birth session whose record is gone (deleted chat) keeps its members
 	// but renders unlabeled — honest, never guessed.
-	const communities = birthSessionPartition(nodes);
+	const communities = birthSessionPartition(nodes, deps.graphStore.readMappings());
 	const clusters: Cluster[] = communities
 		.filter((community) => community.members.length >= MIN_CLUSTER_SIZE)
 		.map((community) => ({
@@ -562,7 +524,9 @@ export interface GraphSessionEntry {
  *  first (undatable records sink, in stable id order). */
 export function graphSessionIndex(deps: GraphDeps): GraphSessionEntry[] {
 	const counts = new Map<string, number>();
-	for (const cluster of birthSessionPartition(getGraph(deps.graphStore).nodes)) {
+	const born = getGraph(deps.graphStore);
+	const mappingFallback = birthMappingIndex(deps.graphStore.readMappings());
+	for (const cluster of birthSessionPartition(born.nodes, deps.graphStore.readMappings())) {
 		counts.set(cluster.id, cluster.members.length);
 	}
 	const chats = new Map(deps.chatStore.listChats().map((chat) => [chat.id, chat]));
@@ -619,9 +583,8 @@ export interface GraphSessionProposition {
  *  ledger order (the same tie rule the snapshot's nodeObservations
  *  uses). Members sorted by node id — deterministic. */
 export function graphSessionPropositions(deps: GraphDeps, sessionId: string): GraphSessionProposition[] {
-	const born = getGraph(deps.graphStore).nodes.filter(
-		(node) => node.provenance[0] !== undefined && node.provenance[0]!.chatId === sessionId,
-	);
+	const mappingFallback = birthMappingIndex(deps.graphStore.readMappings());
+	const born = getGraph(deps.graphStore).nodes.filter((node) => birthSessionOf(node, mappingFallback) === sessionId);
 	const latest = new Map<string, { at: string; note: string; index: number }>();
 	deps.graphStore.readEvents().forEach((event, index) => {
 		if (event.kind !== "observation" || event.nodeId === null || event.chatId !== sessionId) return;

@@ -97,22 +97,22 @@ describe("resolveSettings", () => {
 	it("resolveModelSpec is field-independent per override aspect", () => {
 		const slots = { cheap: { model: { provider: "zai", id: "slot-model" }, thinkingLevel: "high" as const } };
 		assert.deepEqual(
-			resolveModelSpec("labeler", { model: { provider: "other", id: "x" } }, slots),
+			resolveModelSpec("auditor", { model: { provider: "other", id: "x" } }, slots),
 			{ provider: "other", id: "x", thinkingLevel: "high" }, // override model + slot level
 		);
-		assert.deepEqual(resolveModelSpec("labeler", { thinkingLevel: "max" }, slots), {
+		assert.deepEqual(resolveModelSpec("auditor", { thinkingLevel: "max" }, slots), {
 			provider: "zai",
 			id: "slot-model",
 			thinkingLevel: "max", // override level + slot model
 		});
-		assert.equal(resolveModelSpec("labeler", undefined, {}), undefined);
+		assert.equal(resolveModelSpec("auditor", undefined, {}), undefined);
 	});
 });
 
 describe("the slot tier (BYOK, owner 2026-09-22)", () => {
 	it("slot alone re-tiers every role of its tier (no role overrides present)", () => {
 		const eff = resolveSettings({ version: 1, models: { cheap: { model: { provider: "zai", id: "glm-5.3-flash" } } } });
-		for (const role of ["researcher", "demoBuilder", "extractor", "auditor", "labeler"] as const) {
+		for (const role of ["researcher", "demoBuilder", "extractor", "auditor"] as const) {
 			assert.deepEqual(
 				eff.agent.models[role],
 				{ provider: "zai", id: "glm-5.3-flash", thinkingLevel: undefined }, // level unset → default order
@@ -134,7 +134,7 @@ describe("the slot tier (BYOK, owner 2026-09-22)", () => {
 			id: "r-override",
 			thinkingLevel: "high", // slot level rides the override's model
 		});
-		assert.deepEqual(eff.agent.models.labeler, { provider: "zai", id: "r-slot", thinkingLevel: "high" });
+		assert.deepEqual(eff.agent.models.auditor, { provider: "zai", id: "r-slot", thinkingLevel: "high" });
 	});
 
 	it("vision slot covers visualMaker AND pdfReader; level-only slots resolve as NULL", () => {

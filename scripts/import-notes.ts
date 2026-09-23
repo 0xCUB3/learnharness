@@ -27,7 +27,7 @@ async function main() {
 		.sort();
 	console.log(`[import-notes] ${files.length} note files from ${dir} (concurrency ${limit})`);
 
-	const pipeline = createExtractionPipeline({ ...stores, embedder: async () => ({ embedded: 0, total: 0, skipped: "embeddings removed (wave 7)" }) });
+	const pipeline = createExtractionPipeline(stores);
 	const queue = [...files];
 	const totals = { nodes: 0, edges: 0, events: 0, failed: 0 };
 	const workers = Array.from({ length: Math.min(limit, files.length) }, async () => {

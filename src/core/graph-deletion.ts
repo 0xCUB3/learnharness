@@ -249,29 +249,5 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 		graphStore.writePositions(prunedPositions);
 	}
 
-	// 6. Embeddings: prune dead vectors and dead cluster members — a dead
-	//    member in a hull list would break rendering (its position is
-	//    gone). Clusters emptied by pruning drop out; sub-minimum ones
-	//    vanish at the read-side filter. The model/dim headers stay.
-	const embeddings = graphStore.readEmbeddings();
-	const prunedVectors = Object.fromEntries(
-		Object.entries(embeddings.vectors).filter(([id]) => live.has(id) || !knownNodeIds.has(id)),
-	);
-	const prunedClusters = embeddings.clusters
-		.map((cluster) => ({ members: cluster.members.filter((id) => live.has(id) || !knownNodeIds.has(id)) }))
-		.filter((cluster) => cluster.members.length > 0);
-	if (
-		Object.keys(prunedVectors).length !== Object.keys(embeddings.vectors).length ||
-		prunedClusters.length !== embeddings.clusters.length ||
-		prunedClusters.some((c, i) => c.members.length !== embeddings.clusters[i]!.members.length)
-	) {
-		graphStore.writeEmbeddings({
-			...embeddings,
-			vectors: prunedVectors,
-			clusters: prunedClusters,
-			updatedAt: new Date().toISOString(),
-		});
-	}
-
 	return stats;
 }

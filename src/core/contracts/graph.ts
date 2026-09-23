@@ -93,7 +93,8 @@ export interface NamingRunUsage {
 	/** ISO — wall-clock time of the run. */
 	at: string;
 	durationMs: number;
-	/** The labeler role's model id. */
+	/** The naming run's labeler role model id (the role died in wave 7;
+	 * the field stays as the historical record's shape). */
 	model: string;
 	/** Every billed call (usually ONE — the namer is single-submit). */
 	steps: CallUsage[];
@@ -323,43 +324,6 @@ export interface AuditResult {
 }
 
 /** The GET /api/graph payload — everything the home view's PURE renderer needs. */
-/** cluster-labels.jsonl line — one LLM-named community (vision §1,
- * DECIDED 2026-09-13). Append-only history: records are immutable, never
- * edited or deleted; dead labelings remain as history. IDENTITY is the
- * sorted member set ("core"), hashed into the id, so re-naming the same
- * community dedupes and a labeling survives graph edits as long as at
- * least half its core survives in some single community (core-survival;
- * under half → the community is renamed, splits can keep only one
- * successor). */
-/** The embedding ledger shape (config.EMBEDDINGS_FILE): vectors for
- *  EVERY embedded node, all produced by one model at one dimensionality. */
-export interface EmbeddingsLedger {
-	/** The embedding model id (e.g. the HF repo) — mismatch = stale
-	 *  vectors, the writer re-embeds everything. */
-	model: string;
-	/** Vector dimensionality (MRL-truncated on write). */
-	dim: number;
-	/** nodeId → L2-normalized vector (cosine similarity = dot product). */
-	vectors: Record<string, number[]>;
-	/** The topic partition over those vectors, computed by the SAME
-	 *  embedder run (the user-decided trigger: recluster at the end of
-	 *  every embedding batch, never per read — the agglomerative pass is
-	 *  ~1.5s at current scale). Consumers (snapshot, settle, namer) read
-	 *  this instead of recomputing. Empty when nothing is embedded. */
-	clusters: Array<{ members: string[] }>;
-	/** ISO timestamp of the last write. */
-	updatedAt: string;
-}
-
-export interface ClusterLabeling {
-	/** "clu_" + content hash of the sorted core. */
-	id: string;
-	/** The short domain label (1–4 words), e.g. "Differential forms". */
-	label: string;
-	/** The member node ids the label was minted for, sorted — the survival core. */
-	core: string[];
-	createdAt: string;
-}
 
 /** One rendered cluster in the snapshot payload (vision §1). Members are
  * node ids; the renderer draws the hull from member positions at draw

@@ -39,17 +39,17 @@ describe("parseAgentSettingsBody", () => {
 		const r = parseAgentSettingsBody({
 			models: {
 				researcher: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } },
-				labeler: { thinkingLevel: "high" },
+				auditor: { thinkingLevel: "high" },
 			},
 		});
 		assert.ok(r.ok);
 		assert.deepEqual(r.settings.models, {
 			researcher: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } },
-			labeler: { thinkingLevel: "high" },
+			auditor: { thinkingLevel: "high" },
 		});
 		const bad = parseAgentSettingsBody({ models: { teacher: {} } });
 		assert.equal(bad.ok, false);
-		if (!bad.ok) assert.match(bad.error, /unknown role "teacher" \(supported: researcher, demoBuilder, visualMaker, extractor, auditor, labeler\)/);
+		if (!bad.ok) assert.match(bad.error, /unknown role "teacher" \(supported: researcher, demoBuilder, visualMaker, extractor, auditor\)/);
 		const malformed = parseAgentSettingsBody({ models: { researcher: { model: { provider: 1, id: "x" } } } });
 		assert.equal(malformed.ok, false);
 	});

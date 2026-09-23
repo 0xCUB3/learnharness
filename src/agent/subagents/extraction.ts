@@ -482,13 +482,11 @@ function runNotesAuditor(
 // ─── the pipeline status registry ─────────────────────────────────────────────
 
 /** The pipeline phases, in order — what the home status endpoint shows.
- *  `embedding` was its own phase (accuracy wave, 2026-09-19): the post-batch
- *  embed-re-cluster tail used to hide inside `merging`. Wave 7 stubbed the
- *  tail to a no-op — the phase survives only until Platform's
- *  ledger-port interlude deletes the seam wholesale; it transitions
- *  instantly today. The phases must tell the truth about what the loop is
- *  actually waiting on. */
-export type ExtractionPhase = "extracting" | "auditing" | "merging" | "embedding";
+ *  The post-batch embedding tail was its own phase (accuracy wave,
+ *  2026-09-19) until wave 7 killed the embedder seam wholesale (this
+ *  interlude) — birth-session clusters need no post-merge pass. The
+ *  phases tell the truth about what the loop is actually waiting on. */
+export type ExtractionPhase = "extracting" | "auditing" | "merging";
 
 /** One in-flight pipeline run. Module-level: one process, one registry.
  *  Exported for the status payload's consumer typing (the dock). */
@@ -504,13 +502,10 @@ export interface RunningExtraction {
 	phase: ExtractionPhase;
 	startedAt: number;
 	/** Live per-stage usage, accumulated as steps bill (the dock's cost /
-	 *  context-window blobs read this through /api/graph/status). Wave 6:
-	 *  the provider-embedding tail became a billable stage — recorded from
-	 *  the embedder's reported usage when present. */
+	 *  context-window blobs read this through /api/graph/status). */
 	usage: {
 		extractor?: ExtractionStageUsage;
 		auditor?: ExtractionStageUsage;
-		embedding?: ExtractionStageUsage;
 	};
 	/** True-cancellation handle (the dock's abort button): one controller per
 	 *  run, shared across phases; abort() cancels the in-flight model call. */
@@ -574,15 +569,7 @@ export interface ExtractionModels {
 	engineFor?: (role: ModelRole) => PiEngine | undefined;
 }
 
-export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {
-	/** The post-merge embedding batch — WAVE 7 STUB: the provider
-	 *  embedder and semantic clustering are dead (birth-session clusters
-	 *  + session-name labels), so production injects a no-op that
-	 *  reports skipped; tests fake writes to the (still-live) ledger
-	 *  port. The whole seam dies with Platform's ledger-port interlude
-	 *  — kept one round so that removal is a pure deletion. */
-	embedder: (graphStore: GraphStore) => Promise<unknown>;
-}
+export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {}
 
 export interface NotesImportInput {
 	/** The source's file path — its identity (deterministic src id) AND its
@@ -620,7 +607,7 @@ export function callUsage(usage: Usage): CallUsage {
 }
 
 export function createExtractionPipeline(deps: ExtractionPipelineDeps): ExtractionPipeline {
-	const { chatStore, graphStore, embedder: embed } = deps;
+	const { chatStore, graphStore } = deps;
 	// Stage-engine resolution: a direct test value wins; otherwise the
 	// engineFor chain (role override → slot → nothing, resolved FRESH per
 	// stage call server-side) — the job runner's exact treatment. undefined
@@ -667,35 +654,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		run.usage[stage] ??= { model, steps: [] };
 		run.usage[stage]!.steps.push(usage);
 	}
-
-	/** The embedding tail's failure log (non-fatal by contract). Wave-6
-	 *  follow-up (02bd1b0): the production embedder no longer THROWS on
-	 *  embed failures (usage-on-error — landed vectors + partial usage ride
-	 *  the result), so this catch is belt-and-suspenders for injected
-	 *  embedders that still throw. */
-	function recordEmbedFailure(chatId: string): (err: unknown) => undefined {
-		return (err) => {
-			console.error(`[extraction ${chatId}] embedding failed (non-fatal):`, err);
-			return undefined;
-		};
-	}
-
-	/** Wave 6: fold the provider-embedding tail's reported usage into the
-	 *  run's capture — one ExtractionStageUsage per run (the embedder
-	 *  already aggregated its API calls into steps). Skipped embeds
-	 *  (unconfigured) carry no usage; FAILED embeds still carry the landed
-	 *  batches' steps (usage-on-error, 02bd1b0) — a mid-run failure leaves
-	 *  a three-stage run's partial embedding spend on the ledger. A run
-	 *  that embedded nothing stays two-stage, like the whole
-	 *  local-embedder era. */
-	function captureEmbedUsage(chatId: string, result: unknown): void {
-		const stage = (result as { usage?: ExtractionStageUsage } | undefined)?.usage;
-		if (!stage) return;
-		const run = runningExtractions.get(chatId);
-		if (!run) return;
-		run.usage.embedding = stage;
-	}
-
 
 	async function extract(chatId: string, view: string): Promise<SessionFindings> {
 		const signal = runningExtractions.get(chatId)?.controller.signal;
@@ -771,7 +729,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			stages: {
 				extractor: run.usage.extractor ?? { model: "unknown", steps: [] },
 				auditor: run.usage.auditor ?? { model: "unknown", steps: [] },
-				...(run.usage.embedding ? { embedding: run.usage.embedding } : {}),
 			},
 		};
 		if (run.kind === "notes") graphStore.appendSourceUsage(chatId, entry);
@@ -856,13 +813,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				);
 			}
 			const stats = total;
-			// The embedding tail gets its own phase — the honest label for what
-			// the run is waiting on here (see ExtractionPhase above).
-			setPhase(chatId, "embedding", "chat");
-			// The embedding tail (wave 7 stub — see ExtractionPipelineDeps):
-			// the seam stays until Platform's ledger-port interlude; the
-			// failure contract is unchanged (non-fatal, by-result).
-			await captureEmbedUsage(chatId, await embed(graphStore).catch(recordEmbedFailure(chatId)));
 			// Option A: the layout ledger evolves with the merge (sync — the
 			// next snapshot fetch must already reflect the new nodes).
 			settleGraphLayout(graphStore);
@@ -977,12 +927,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// (messages: null) — nothing to attribute, nothing to build.
 			const auditResult: AuditResult = { ...notesResult, attribution: { quiz: {} } };
 			const stats = mergeFindings(id, auditResult, { chatStore, graphStore }, { messages: null, foldedAt: input.importedAt });
-			// Same post-merge chain as the chat path: embeddings first
-			// (topics from meaning), then the settle, then the namer —
-			// under their own phase, exactly like the chat path.
-			setPhase(id, "embedding", "notes", input.filePath);
-			await captureEmbedUsage(id, await embed(graphStore).catch(recordEmbedFailure(id)));
-			// Option A: same post-merge settle as the chat path.
+			// Same post-merge settle as the chat path.
 			settleGraphLayout(graphStore);
 			persistRunUsage(id, Math.round(performance.now() - t0), stats);
 			console.info(

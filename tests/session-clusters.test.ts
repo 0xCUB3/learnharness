@@ -39,6 +39,7 @@ function fakeStores(
 		events?: LedgerEvent[];
 		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt">>;
 		sources?: Array<Pick<NotesSource, "id" | "filePath" | "importedAt">>;
+		mappings?: Array<{ chatId: string; sourceId: string; graphNodeId: string }>;
 	} = {},
 ): GraphDeps {
 	const edges: GraphEdge[] = [];
@@ -46,18 +47,13 @@ function fakeStores(
 		readNodes: () => nodes,
 		readEdges: () => edges,
 		readEvents: () => over.events ?? [],
-		readMappings: () => [],
+		readMappings: () => over.mappings ?? [],
 		readCheckpoints: () => [],
 		readCoverage: () => [],
 		readSources: () =>
 			(over.sources ?? []).map((s) => ({ ...s, extractions: [] }) as unknown as NotesSource),
 		readPositions: () => ({}),
 		writePositions: () => {},
-		readEmbeddings: () => ({ model: "dead", dim: 0, vectors: {}, clusters: [], updatedAt: "" }),
-		writeEmbeddings: () => {},
-		readClusterLabels: () => [],
-		appendClusterLabel: () => {},
-		appendNamingRun: () => {},
 		readNamingRuns: () => [],
 	} as unknown as GraphStore;
 	const chatStore: ChatStore = {
@@ -107,6 +103,80 @@ describe("birthSessionPartition", () => {
 		assert.equal(birthSessionOf(naked), null);
 		const partition = birthSessionPartition([reattributed, naked]);
 		assert.deepEqual(partition, [{ id: "chat2", members: ["survivor"] }], "the naked node joins nothing");
+	});
+});
+
+// ─── the notes mapping fallback (owner-approved 2026-09-23) ─────────────────
+
+describe("the notes mapping-line fallback", () => {
+	// The PRODUCTION notes shape: importNotes passes messages: null, so
+	// nodes are born with EMPTY provenance — the file's anchor is the
+	// mapping line (interlude live-smoke finding: the provenance-only rule
+	// left every imported file unclustered and invisible to the prober).
+	it("empty-provenance nodes birth under their first mapping line's session", () => {
+		const nodes = [
+			node("a", "Alpha", []),
+			node("b", "Beta", []),
+			node("c", "Gamma", []),
+			node("d", "Delta", [pt("chat1")]), // provenance wins — mapping ignored
+		];
+		const mappings = [
+			{ chatId: "src_notes", sourceId: "p1", graphNodeId: "a" },
+			{ chatId: "src_notes", sourceId: "p2", graphNodeId: "b" },
+			{ chatId: "src_notes", sourceId: "p3", graphNodeId: "c" },
+			// A chat mapping for a node that ALSO has provenance: never consulted.
+			{ chatId: "chat2", sourceId: "p4", graphNodeId: "d" },
+			// A mapping for a node that does not exist: ignored.
+			{ chatId: "src_notes", sourceId: "p5", graphNodeId: "ghost" },
+		];
+		const clusters = birthSessionPartition(nodes, mappings);
+		assert.deepEqual(clusters, [
+			{ id: "src_notes", members: ["a", "b", "c"] },
+			{ id: "chat1", members: ["d"] },
+		], "size-desc, then id asc — src_notes first");
+		// No mapping and no provenance: unclustered.
+		assert.deepEqual(birthSessionPartition([node("x", "X", [])], mappings), []);
+	});
+
+	it("graphSessionIndex lists imported files as kind:file with birth counts (production shape)", () => {
+		const nodes = [node("a", "Alpha", []), node("b", "Beta", []), node("c", "Gamma", [])];
+		const deps = fakeStores(nodes, {
+			mappings: [
+				{ chatId: "src_abc", sourceId: "p1", graphNodeId: "a" },
+				{ chatId: "src_abc", sourceId: "p2", graphNodeId: "b" },
+				{ chatId: "src_abc", sourceId: "p3", graphNodeId: "c" },
+			],
+			sources: [{ id: "src_abc", filePath: "/vault/learn vim.md", importedAt: "2026-09-22T00:00:00.000Z" }],
+		});
+		const index = graphSessionIndex(deps);
+		assert.deepEqual(index, [
+			{
+				id: "src_abc",
+				name: "/vault/learn vim.md",
+				kind: "file",
+				createdAt: "2026-09-22T00:00:00.000Z",
+				updatedAt: "2026-09-22T00:00:00.000Z",
+				propositions: 3,
+			},
+		], "the file births under its src id; the childless chat has no entry (birth sessions only)");
+	});
+
+	it("graphSessionPropositions lists the file's births under the src id", () => {
+		const events: LedgerEvent[] = [
+			{ nodeId: "a", kind: "observation", chatId: "src_abc", at: "2026-09-22T00:00:00.000Z", note: "solid", ref: "obs:p1" },
+		];
+		const deps = fakeStores([node("a", "Alpha", []), node("b", "Beta", [])], {
+			events,
+			mappings: [
+				{ chatId: "src_abc", sourceId: "p1", graphNodeId: "a" },
+				{ chatId: "src_abc", sourceId: "p2", graphNodeId: "b" },
+			],
+			sources: [{ id: "src_abc", filePath: "/vault/learn vim.md", importedAt: "2026-09-22T00:00:00.000Z" }],
+		});
+		assert.deepEqual(graphSessionPropositions(deps, "src_abc"), [
+			{ nodeId: "a", name: "Alpha", understanding: "solid", evaluatedAt: "2026-09-22T00:00:00.000Z" },
+			{ nodeId: "b", name: "Beta", understanding: null, evaluatedAt: null },
+		]);
 	});
 });
 

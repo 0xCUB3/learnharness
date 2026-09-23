@@ -14,7 +14,7 @@ async function main() {
 	const only = process.argv[2]; // optional: extract just one chat id
 	const chats = only ? chatStore.listChats().filter((c) => c.id === only) : chatStore.listChats();
 	console.log(`[backfill] ${chats.length} chats to extract`);
-	const pipeline = createExtractionPipeline({ chatStore, graphStore, embedder: async () => ({ embedded: 0, total: 0, skipped: "embeddings removed (wave 7)" }) });
+	const pipeline = createExtractionPipeline({ chatStore, graphStore });
 	for (const chat of chats) {
 		const t0 = Date.now();
 		try {

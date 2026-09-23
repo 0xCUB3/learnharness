@@ -27,7 +27,6 @@ import type { UIMessage } from "ai";
 import type { PiEngine } from "../src/agent/models.ts";
 import type {
 	AuditResult,
-	ClusterLabeling,
 	CoverageEntry,
 	ExtractionRunUsage,
 	GraphEdge,
@@ -69,17 +68,9 @@ function memoryLedgers() {
 	const checkpoints: SessionCheckpoint[] = [];
 	const coverage: CoverageEntry[] = [];
 	const sources = new Map<string, NotesSource>();
-	const clusterLabels: ClusterLabeling[] = [];
-	const namingRuns: NamingRunUsage[] = [];
+		const namingRuns: NamingRunUsage[] = [];
 	const positions = new Map<string, { x: number; y: number }>();
-	const embeddings = {
-		model: "",
-		dim: 0,
-		updatedAt: "",
-		vectors: new Map<string, number[]>(),
-		clusters: new Array<Array<string>>(),
-	};
-	return {
+		return {
 		appendNode: (n: GraphNode) => void nodes.push(n),
 		readNodes: () => nodes.map((n) => ({ ...n })),
 		appendEdge: (e: GraphEdge) => void edges.push(e),
@@ -108,10 +99,6 @@ function memoryLedgers() {
 			}
 		},
 		// Cluster labelings — mirrors the real store: append dedupes by id.
-		appendClusterLabel: (l: ClusterLabeling) => {
-			if (!clusterLabels.some((x) => x.id === l.id)) clusterLabels.push(l);
-		},
-		readClusterLabels: () => clusterLabels.map((l) => ({ ...l, core: [...l.core] })),
 		// Cluster-naming run usage — mirrors the real store: dedupe per startedAt.
 		appendNamingUsage: (entry: NamingRunUsage) => {
 			if (!namingRuns.some((r) => r.startedAt === entry.startedAt)) namingRuns.push(entry);
@@ -122,16 +109,6 @@ function memoryLedgers() {
 		writePositions: (next) => {
 			positions.clear();
 			for (const [id, p] of Object.entries(next)) positions.set(id, { x: p.x, y: p.y });
-		},
-		// The embedding ledger — the embedder writes it after a merge.
-		readEmbeddings: () => ({ model: embeddings.model, dim: embeddings.dim, vectors: Object.fromEntries([...embeddings.vectors].map(([id, v]) => [id, [...v]])), clusters: [...embeddings.clusters.map((c) => ({ members: [...c] }))], updatedAt: embeddings.updatedAt }),
-		writeEmbeddings: (next) => {
-			embeddings.model = next.model;
-			embeddings.dim = next.dim;
-			embeddings.updatedAt = next.updatedAt;
-			embeddings.vectors.clear();
-			for (const [id, v] of Object.entries(next.vectors)) embeddings.vectors.set(id, [...v]);
-			embeddings.clusters = next.clusters.map((c) => [...c.members]);
 		},
 		// The destructive seam (wave 6 session deletion) — mirrors the real
 		// store: replace the provided ledgers' full contents.
@@ -360,7 +337,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", verdict),
 		});
@@ -414,7 +390,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
 		// No direct engines AND no engineFor — the chain came up empty.
-		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers, embedder: fakeEmbedder });
+		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers });
 		await assert.rejects(pipeline.runExtraction(chatId), (err: unknown) => {
 			assert.ok(err instanceof ModelsNotConfiguredError);
 			assert.deepEqual(err.envelope.missing, ["cheap"]); // extractor + auditor are the cheap tier
@@ -438,7 +414,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", verdict),
 		});
@@ -448,7 +423,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// so the post-merge naming garnish is gone — no model spend, no
 		// naming-run records, no label writes.
 		assert.equal(ledgers.readNamingRuns().length, 0, "no naming runs minted");
-		assert.equal(ledgers.readClusterLabels().length, 0, "no label records appended");
 	});
 
 
@@ -466,7 +440,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			// NO direct values — the stages resolve ENTIRELY through engineFor
 			// (the role override → slot → factory-pin chain, read fresh per
 			// stage call in production; here, the scripted chain).
@@ -498,7 +471,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", verdict),
 			// If the direct values did NOT win, this throw would surface.
@@ -517,7 +489,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: silentModel(), // never submits the review
 		});
@@ -528,7 +499,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const failingExtractor = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: silentModel(),
 			auditor: submitModel("submit_review", { ...FINDINGS, dropped: [] }),
 		});
@@ -559,7 +529,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			// Each stage's first generate is the observation point: the
 			// registry must already carry this chat at the right phase.
 			extractor: submitModel("submit_findings", FINDINGS, () => seen.push(phaseOf())),
@@ -568,48 +537,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		await pipeline.runExtraction(chatId);
 		assert.deepEqual(seen, ["extracting", "auditing"]);
 		assert.equal(extractionStatuses().length, 0, "the registry clears when the run ends");
-	});
-
-	it("labels the post-batch embedding tail as its own phase — not 'merging' (2026-09-19 accuracy fix)", async () => {
-		const { chatId } = fixtureChat();
-		const ledgers = memoryLedgers();
-		// Gate the embedder so we can observe the registry WHILE the tail
-		// runs — mergeFindings has already returned, every batch is merged.
-		let releaseEmbed!: () => void;
-		const embedGate = new Promise<void>((resolve) => {
-			releaseEmbed = resolve;
-		});
-		let observed: string | undefined;
-		const gatedEmbedder = async (store: GraphStore) => {
-			await embedGate;
-			observed = extractionStatuses().find((r) => r.chatId === chatId)?.phase;
-			await fakeEmbedder(store);
-		};
-		const verdict: AuditResult = { propositions: FINDINGS.propositions, edges: [], attribution: { quiz: {} }, dropped: [] };
-		const pipeline = createExtractionPipeline({
-			chatStore,
-			graphStore: ledgers,
-			embedder: gatedEmbedder,
-			extractor: submitModel("submit_findings", FINDINGS),
-			auditor: submitModel("submit_review", verdict),
-		});
-		const run = pipeline.runExtraction(chatId);
-		// Wait for the tail: the phase must flip to "embedding" while the
-		// embedder hangs — the incident this fixes is minutes of "merging"
-		// AFTER the last merge, so the flip itself is the assertion.
-		const t0 = Date.now();
-		while (extractionStatuses().find((r) => r.chatId === chatId)?.phase !== "embedding") {
-			if (Date.now() - t0 > 2000) {
-				releaseEmbed();
-				await run;
-				assert.fail("the tail never flipped to embedding (stuck at 'merging'?)");
-			}
-			await new Promise((r) => setTimeout(r, 10));
-		}
-		releaseEmbed();
-		await run;
-		assert.equal(observed, "embedding", "still embedding through the tail, never back to 'merging'");
-		assert.equal(extractionStatuses().length, 0, "clears when done");
 	});
 
 	it("captures per-stage usage live, persists the run's usage into the chat record", async () => {
@@ -634,7 +561,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			// During the auditor's generate, the registry must already carry
 			// the extractor's fully accumulated live usage (2 steps × 10/5).
 			extractor: submitModel("submit_findings", FINDINGS),
@@ -676,7 +602,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: hangingModel(), // hangs until aborted — no step finishes
 			auditor: submitModel("submit_review", { propositions: [], edges: [], attribution: { quiz: {} }, dropped: [] }),
 		});
@@ -727,7 +652,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: gatedExtractor,
 			auditor: silentModel(),
 		});
@@ -761,7 +685,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: gatedExtractor,
 			auditor: silentModel(),
 		});
@@ -771,7 +694,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const observer = createExtractionPipeline({
 			chatStore,
 			graphStore: memoryLedgers(),
-			embedder: fakeEmbedder,
 			extractor: silentModel(),
 			auditor: silentModel(),
 		});
@@ -798,7 +720,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: silentModel(),
 			auditor: silentModel(),
 		});
@@ -838,28 +759,6 @@ const NOTES_VERDICT = {
 	dropped: [],
 } as const;
 
-/** Test seam for the embedder: semantic clustering died with wave 7
- *  (birth-session clusters + session-name labels), so the production
- *  embedder is a no-op stub pending Platform's ledger-port removal —
- *  this fake mirrors it: one identical vector per node persisted to the
- *  (still-live) embeddings ledger port, no clusters computed. */
-const fakeEmbedder = async (store: GraphStore) => {
-	const seen = new Set<string>();
-	const ids: string[] = [];
-	for (const n of store.readNodes()) {
-		if (seen.has(n.id)) continue;
-		seen.add(n.id);
-		ids.push(n.id);
-	}
-	store.writeEmbeddings({
-		model: "test/embedder",
-		dim: 3,
-		vectors: Object.fromEntries(ids.map((id) => [id, [1, 0, 0]])),
-		clusters: [],
-		updatedAt: "2026-09-13T00:00:00.000Z",
-	});
-};
-
 describe("the notes front door (importNotes — format-agnostic)", () => {
 	it("imports raw notes end to end: source record, file-scoped provenance, no quiz events", async () => {
 		const ledgers = memoryLedgers();
@@ -867,7 +766,6 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", NOTES_FINDINGS),
 			// During the auditor's call the registry must show the notes run.
 			auditor: submitModel("submit_review", NOTES_VERDICT, () => {
@@ -915,8 +813,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 			createExtractionPipeline({
 				chatStore,
 				graphStore: ledgers,
-				embedder: fakeEmbedder,
-				extractor: submitModel("submit_findings", NOTES_FINDINGS),
+					extractor: submitModel("submit_findings", NOTES_FINDINGS),
 				auditor: submitModel("submit_review", NOTES_VERDICT),
 			});
 		const first = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
@@ -935,7 +832,6 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: hangingModel(),
 			auditor: submitModel("submit_review", NOTES_VERDICT),
 		});
@@ -1017,7 +913,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: fauxEngine([findingsStep((v) => views.push(v)), findingsStep((v) => views.push(v))]),
 			auditor: fauxEngine([passThroughAuditStep(), passThroughAuditStep()]),
 		});
@@ -1059,7 +954,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			// Batch 1 submits and merges; batch 2's extractor call HANGS
 			// until the abort fires — the dock's abort button, mid-run.
 			extractor: fauxEngine([
@@ -1103,7 +997,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const finisher = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: fauxEngine([findingsStep((v) => reRunViews.push(v))]),
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
@@ -1125,7 +1018,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: fauxEngine([findingsStep()]),
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
@@ -1157,7 +1049,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const reOpener = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: fauxEngine([findingsStep((v) => reRunViews.push(v))]),
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
@@ -1180,7 +1071,6 @@ describe("the session-deletion guard (chat deleted mid-run)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", { propositions: FINDINGS.propositions, edges: [], attribution: { quiz: {} }, dropped: [] }, () => chatStore.deleteChat(chatId)),
 		});

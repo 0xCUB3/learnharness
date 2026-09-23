@@ -62,7 +62,7 @@ import { ModelMenuList, ThinkingMenuList } from "./model-menu";
  *  with the resolved default (owner: the hint ALWAYS names the default). */
 const SLOT_META: Record<ModelSlotName, { label: string; roster: string }> = {
 	strong: { label: "Strong", roster: "Prober + Teacher" },
-	cheap: { label: "Cheap", roster: "Researcher, demo builder, extractor, auditor, labeler" },
+	cheap: { label: "Cheap", roster: "Researcher, demo builder, extractor, auditor" },
 	vision: { label: "Vision", roster: "Visual maker + PDF reader" },
 };
 
