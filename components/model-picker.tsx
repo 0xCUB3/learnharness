@@ -39,7 +39,7 @@ function fetchCatalog(force = false): Promise<ModelCatalogResponse> {
 	return catalogInflight;
 }
 
-function useModelCatalog(): { catalog: ModelCatalogResponse | undefined; refresh: () => void } {
+export function useModelCatalog(): { catalog: ModelCatalogResponse | undefined; refresh: () => void } {
 	const [catalog, setCatalog] = useState(catalogCache);
 	useEffect(() => {
 		if (catalogCache) return;
@@ -62,6 +62,17 @@ function useModelCatalog(): { catalog: ModelCatalogResponse | undefined; refresh
 			});
 	}, []);
 	return { catalog, refresh };
+}
+
+/** provider:id → contextWindow over the cached catalog — the client-side
+ *  twin of the server's catalogContextLimits join (context-meter
+ *  amendment, owner 2026-09-23: pi's live catalog is the ONLY limit
+ *  source — no hardcoded fallback exists anywhere, so a model missing
+ *  from the index reads limit-null and the meter renders usage-only,
+ *  the honest-render precedent). Consumed by the stats bar: the same
+ *  cached /api/models fetch the picker rides feeds the denominator. */
+export function catalogLimits(catalog: Pick<ModelCatalogResponse, "models">): Map<string, number> {
+	return new Map(catalog.models.map((m) => [`${m.provider}:${m.id}`, m.contextWindow]));
 }
 
 /**

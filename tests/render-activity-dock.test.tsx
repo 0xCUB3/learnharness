@@ -109,6 +109,30 @@ describe("activity dock pure layer", () => {
 			extractions: [],
 		})[0]!;
 		assert.equal(uncatalogued.context, null);
+		// The numerator is the same cache-inclusive fold the session meter
+		// uses (context-meter audit, owner 2026-09-23): provider "input"
+		// EXCLUDES cacheRead/cacheWrite, so input+output alone reads wildly
+		// low on cache-heavy jobs — 10k+0.5k+120k+30k = 160.5k, not 10.5k.
+		const cached = toBlobs({
+			jobs: [
+				job({
+					usage: {
+						...base,
+						lastStep: {
+							inputTokens: 10_000,
+							outputTokens: 500,
+							cacheReadTokens: 120_000,
+							cacheWriteTokens: 30_000,
+							reasoningTokens: undefined,
+						},
+					},
+					contextLimit: 200_000,
+				}),
+			],
+			extractions: [],
+		})[0]!;
+		assert.equal(cached.context?.used, 160_500);
+		assert.equal(cached.context?.limit, 200_000);
 	});
 
 	it("extraction blobs carry no money/context (—, the doctrine)", () => {

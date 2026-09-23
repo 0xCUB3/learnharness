@@ -180,7 +180,18 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 		// blob shape's call — here the line simply hides).
 		const limit = job.contextLimit;
 		if (usage && lastStep && limit !== null && lastStep.inputTokens !== undefined) {
-			context = { used: lastStep.inputTokens + (lastStep.outputTokens ?? 0), limit };
+			// Same metric as the session meter (prices.ts stepFootprint — the
+			// context-meter audit, owner 2026-09-23): all four directions.
+			// Provider "input" EXCLUDES cacheRead/cacheWrite, so input+output
+			// alone reads wildly low on cache-heavy jobs.
+			context = {
+				used:
+					lastStep.inputTokens +
+					(lastStep.outputTokens ?? 0) +
+					(lastStep.cacheReadTokens ?? 0) +
+					(lastStep.cacheWriteTokens ?? 0),
+				limit,
+			};
 		}
 		return {
 			id: job.id,

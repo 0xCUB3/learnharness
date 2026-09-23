@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { contextWindow, sessionCost, turnCost, type ChatSettings, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, prettyModel } from "@/components/usage-format";
-import { ModelControl } from "@/components/model-picker";
+import { ModelControl, catalogLimits, useModelCatalog } from "@/components/model-picker";
 
 /**
  * The below-composer stats bar (wave 4 observability): the session's
@@ -56,7 +56,16 @@ export function StatsBar({
 			document.removeEventListener("keydown", onKeyDown);
 		};
 	}, [open]);
-	const ctx = contextWindow({ turns });
+	// The live-limits join (context-meter amendment, owner 2026-09-23):
+	// contextWindow's denominator resolves ONLY from pi's live catalog —
+	// built client-side over the picker's cached /api/models fetch (the
+	// same fetch ModelControl below rides; module-level dedupe). Catalog
+	// pending or failed → undefined index → limit null → USAGE-ONLY (the
+	// honest-render precedent, never a fake window); the usage-only render
+	// IS the null path.
+	const { catalog } = useModelCatalog();
+	const limits = useMemo(() => (catalog ? catalogLimits(catalog) : undefined), [catalog]);
+	const ctx = contextWindow({ turns }, limits);
 	const { cost, unpriced } = sessionCost({ turns });
 	// Honest cost: show dollars only when at least one turn priced;
 	// otherwise "—" (never a fake $0.0000).

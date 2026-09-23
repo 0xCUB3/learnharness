@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { StatsBar } from "../components/stats-bar.tsx";
+import { catalogLimits } from "../components/model-picker.tsx";
+import type { ModelCatalogEntry, ModelCatalogResponse } from "../src/core/contracts.ts";
 import { prettyModel } from "../components/usage-format.ts";
 import type { ChatSettings, TurnUsage } from "../src/core/contracts.ts";
 
@@ -89,5 +91,50 @@ describe("stats bar", () => {
 		assert.equal(prettyModel("openrouter:z-ai/glm-5.3-flash"), "Glm 5.3 Flash");
 		// qualified on a bare id: no suffix invented
 		assert.equal(prettyModel("z-ai/glm-5.3-flash", true), "Glm 5.3 Flash");
+	});
+});
+
+describe("catalogLimits (the stats-bar live-limits join, pure)", () => {
+	// The client-side twin of the server's catalogContextLimits join:
+	// provider:id → contextWindow straight from the cached /api/models
+	// payload. A static render holds no catalog (the fetch is a live
+	// concern — Playwright verifies the wiring), so the pure index shape
+	// is pinned here: one entry per model, the exact key contextWindow()
+	// looks up, missing models absent (→ limit null → usage-only).
+	const entry = (over: Pick<ModelCatalogEntry, "id" | "provider" | "contextWindow">): ModelCatalogEntry => ({
+		name: over.id,
+		reasoning: false,
+		input: ["text"],
+		supportedLevels: [],
+		cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+		maxTokens: 32_768,
+		...over,
+	});
+	const catalog: Pick<ModelCatalogResponse, "models"> = {
+		models: [
+			entry({ id: "z-ai/glm-5.3-flash", provider: "openrouter", contextWindow: 1_048_576 }),
+			entry({ id: "gpt-x", provider: "openai", contextWindow: 400_000 }),
+		],
+	};
+
+	it("builds provider:id → contextWindow over every catalog model", () => {
+		const limits = catalogLimits(catalog);
+		assert.equal(limits.get("openrouter:z-ai/glm-5.3-flash"), 1_048_576);
+		assert.equal(limits.get("openai:gpt-x"), 400_000);
+		assert.equal(limits.size, 2);
+	});
+
+	it("a model missing from the index is absent — limit null, usage-only (never a fallback)", () => {
+		const limits = catalogLimits(catalog);
+		assert.equal(limits.has("nope/unknown"), false);
+	});
+
+	it("same provider+model on different providers keys apart", () => {
+		const twin: Pick<ModelCatalogResponse, "models"> = {
+			models: [...catalog.models, entry({ id: "z-ai/glm-5.3-flash", provider: "zai", contextWindow: 200_000 })],
+		};
+		const limits = catalogLimits(twin);
+		assert.equal(limits.get("openrouter:z-ai/glm-5.3-flash"), 1_048_576);
+		assert.equal(limits.get("zai:z-ai/glm-5.3-flash"), 200_000);
 	});
 });
