@@ -153,6 +153,25 @@ export function toModelDto(model: Model<Api>): ModelDto {
 	};
 }
 
+/** The live-limits index (context-meter amendment, owner 2026-09-23):
+ *  provider:id → contextWindow from pi's catalog, over the SAME keyed
+ *  providers the picker federates. The one source for every context
+ *  meter's denominator — the stats-bar join holds /api/models' copy,
+ *  and the activity feed (observability.ts) resolves job limits
+ *  server-side through this. No hardcoded fallback exists anywhere:
+ *  a model missing here reads limit-null (usage-only, honest render). */
+export function catalogContextLimits(): Map<string, number> {
+	const keyed = keyedProviderIds();
+	const index = new Map<string, number>();
+	for (const provider of piModels().getProviders()) {
+		if (!keyed.has(provider.id)) continue;
+		for (const model of piModels().getModels(provider.id)) {
+			index.set(`${provider.id}:${model.id}`, model.contextWindow);
+		}
+	}
+	return index;
+}
+
 /** The full picker payload: every model of every configured provider
  *  (sorted by provider then id — stable, diff-friendly) + the config
  *  defaults a settings-less chat runs + the background roles' resolved

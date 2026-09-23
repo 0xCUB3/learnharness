@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ActivityIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
-import { CONTEXT_LIMITS, isModelsRefusal, jobCost } from "@/src/core";
+import { isModelsRefusal, jobCost } from "@/src/core";
 import { formatTokens, formatUsd } from "@/components/usage-format";
 
 /**
@@ -48,6 +48,9 @@ interface FeedUsage extends NonNullable<JobRecord["usage"]> {
 export interface FeedJob extends JobRecord {
 	title: string;
 	usage?: FeedUsage;
+	/** Server-joined live catalog limit (owner amendment 2026-09-23) —
+	 *  null when the model is missing from pi's catalog (no context line). */
+	contextLimit: number | null;
 }
 
 export interface FeedExtraction {
@@ -171,8 +174,12 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 		const usage = job.usage;
 		let context: ActivityBlob["context"] = null;
 		const lastStep = usage?.lastStep;
-		const limit = usage ? CONTEXT_LIMITS[usage.model] : undefined;
-		if (usage && lastStep && limit !== undefined && lastStep.inputTokens !== undefined) {
+		// Context-meter amendment (owner 2026-09-23): the limit comes off
+		// the FEED (server-joined from pi's live catalog) — no client-side
+		// table. Null limit = no context line (usage-only render is the
+		// blob shape's call — here the line simply hides).
+		const limit = job.contextLimit;
+		if (usage && lastStep && limit !== null && lastStep.inputTokens !== undefined) {
 			context = { used: lastStep.inputTokens + (lastStep.outputTokens ?? 0), limit };
 		}
 		return {

@@ -59,3 +59,42 @@ test("activityFeed: running jobs across ALL chats, running-only, title-joined, o
 		}
 	}
 });
+
+test("activityFeed: contextLimit is the server's live-catalog join (owner amendment, 2026-09-23)", () => {
+	// keyed-provider federation — the same env-key pattern as the
+	// model-catalog tests; file-local (each test file is its own process)
+	process.env.OPENROUTER_API_KEY ??= "test-key-openrouter-catalog";
+	const chat = chatStore.createChat("limit join chat");
+	const createdJobs: string[] = [];
+	const usageFor = (model: string) => ({
+		model,
+		inputTokens: 1_000,
+		outputTokens: 100,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		reasoningTokens: 0,
+		steps: 1,
+	});
+	try {
+		const known = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "tc_known" });
+		const unknown = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "tc_unknown" });
+		const bare = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "tc_bare" });
+		createdJobs.push(known.id, unknown.id, bare.id);
+		jobStore.updateJob(known.id, { usage: usageFor("openrouter:z-ai/glm-5.3-flash") });
+		jobStore.updateJob(unknown.id, { usage: usageFor("nope/unknown") });
+
+		const feed = activityFeed();
+		const knownJob = feed.jobs.find((j) => j.id === known.id)!;
+		assert.equal(knownJob.contextLimit, 1_048_576, "pi's catalog, joined server-side onto the feed");
+		const unknownJob = feed.jobs.find((j) => j.id === unknown.id)!;
+		assert.equal(unknownJob.contextLimit, null, "missing from the live catalog → null, never a guessed window");
+		const bareJob = feed.jobs.find((j) => j.id === bare.id)!;
+		assert.equal(bareJob.contextLimit, null, "no usage yet → no context line");
+	} finally {
+		fs.unlinkSync(`${PATHS.chats}/${chat.id}.json`);
+		const jobsDir = path.join(PATHS.data, "jobs");
+		for (const id of createdJobs) {
+			fs.unlinkSync(path.join(jobsDir, `${id}.json`));
+		}
+	}
+});

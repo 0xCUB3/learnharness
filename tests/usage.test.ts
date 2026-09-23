@@ -78,18 +78,22 @@ test("turnCost sums steps; sessionCost reports unpriced turns", () => {
 	assert.ok(totals.cost > 0);
 });
 
-test("contextWindow: last call's footprint against the model's limit", () => {
-	const cw = contextWindow({
-		turns: [
-			{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] },
-			{ id: "t2", messageId: "m2", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 90_000, outputTokens: 10_000 })] },
-		],
-	});
+test("contextWindow: last call's footprint against the live index's limit", () => {
+	const limits = new Map([["openrouter:z-ai/glm-5.3-flash", 1_048_576]]);
+	const cw = contextWindow(
+		{
+			turns: [
+				{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] },
+				{ id: "t2", messageId: "m2", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 90_000, outputTokens: 10_000 })] },
+			],
+		},
+		limits,
+	);
 	assert.ok(cw);
 	assert.equal(cw.model, "openrouter:z-ai/glm-5.3-flash");
 	assert.equal(cw.usedTokens, 100_000);
 	assert.equal(cw.limit, 1_048_576);
-	assert.equal(contextWindow({ turns: [] }), null);
+	assert.equal(contextWindow({ turns: [] }, limits), null);
 });
 
 test("contextWindow NUMERATOR: cache tokens count (owner audit, 2026-09-23)", () => {
@@ -97,70 +101,86 @@ test("contextWindow NUMERATOR: cache tokens count (owner audit, 2026-09-23)", ()
 	// while the real footprint was ~190k — provider `input` EXCLUDES the
 	// cached portion, so input+output alone is wildly low. The fold is
 	// pi's totalTokens semantics: all four fields.
-	const cw = contextWindow({
-		turns: [
-			{
-				id: "t1",
-				messageId: "m1",
-				at: "x",
-				model: "openrouter:z-ai/glm-5.3-flash",
-				steps: [call({ inputTokens: 40_000, outputTokens: 1_000, cacheReadTokens: 145_000, cacheWriteTokens: 4_000 })],
-			},
-		],
-	});
+	const limits = new Map([["openrouter:z-ai/glm-5.3-flash", 1_048_576]]);
+	const cw = contextWindow(
+		{
+			turns: [
+				{
+					id: "t1",
+					messageId: "m1",
+					at: "x",
+					model: "openrouter:z-ai/glm-5.3-flash",
+					steps: [call({ inputTokens: 40_000, outputTokens: 1_000, cacheReadTokens: 145_000, cacheWriteTokens: 4_000 })],
+				},
+			],
+		},
+		limits,
+	);
 	assert.ok(cw);
 	assert.equal(cw.usedTokens, 40_000 + 1_000 + 145_000 + 4_000, "input + output + cacheRead + cacheWrite");
 	// Cache fields absent (non-caching providers): the fold is unchanged.
-	const plain = contextWindow({
-		turns: [{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] }],
-	});
+	const plain = contextWindow(
+		{ turns: [{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 9_000, outputTokens: 1_000 })] }] },
+		limits,
+	);
 	assert.ok(plain);
 	assert.equal(plain.usedTokens, 10_000);
 });
 
-test("contextWindow DENOMINATOR: the live-limits index wins; CONTEXT_LIMITS is the fallback", () => {
+test("contextWindow DENOMINATOR: the live index is the ONLY source — no fallback (owner amendment, 2026-09-23)", () => {
 	const turns = [
 		{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 10_000, outputTokens: 1_000 })] },
 	];
-	// The live catalog (GET /api/models) wins even when it disagrees with
-	// the generated table.
 	const live = new Map([["openrouter:z-ai/glm-5.3-flash", 65_536]]);
 	const cw = contextWindow({ turns }, live);
 	assert.ok(cw);
-	assert.equal(cw.limit, 65_536, "the live index beats the static table");
-	// No live entry: the generated table serves the uncatalogued model.
-	assert.equal(contextWindow({ turns })!.limit, 1_048_576);
-	const emptyLive = new Map<string, number>();
-	assert.equal(contextWindow({ turns }, emptyLive)!.limit, 1_048_576, "an empty live index falls back too");
-	// Unknown to both: null (no meter, never a guessed limit).
-	assert.equal(contextWindow({ turns: [{ ...turns[0]!, model: "unknown/model" }] }), null);
-	assert.equal(contextWindow({ turns: [{ ...turns[0]!, model: "unknown/model" }] }, live), null);
+	assert.equal(cw.limit, 65_536, "pi's catalog, via the index, is the one source");
+	// No index at all (a client that hasn't fetched the catalog): the
+	// meter renders usage-only — limit null, never a guessed window.
+	const noIndex = contextWindow({ turns });
+	assert.ok(noIndex);
+	assert.equal(noIndex.usedTokens, 11_000);
+	assert.equal(noIndex.limit, null);
+	const emptyIndex = contextWindow({ turns }, new Map<string, number>());
+	assert.ok(emptyIndex);
+	assert.equal(emptyIndex.limit, null, "an empty index (failed fetch) is usage-only too");
+	// A model missing from the live catalog (historical session, package
+	// update removed it): usage-only, never a fake window.
+	const missing = contextWindow({ turns: [{ ...turns[0]!, model: "nope/gone-model" }] }, live);
+	assert.ok(missing);
+	assert.equal(missing.limit, null);
+	assert.equal(missing.usedTokens, 11_000, "the footprint still reads honestly");
 });
 
 test("contextWindow ride-along: a zeroed/aborted last step falls back to the previous step", () => {
 	// An aborted last call reports zeroed usage — that is not the session
 	// footprint. The honest reading is the previous step's usage.
-	const cw = contextWindow({
-		turns: [
-			{
-				id: "t1",
-				messageId: "m1",
-				at: "x",
-				model: "openrouter:z-ai/glm-5.3-flash",
-				steps: [
-					call({ inputTokens: 80_000, outputTokens: 5_000 }),
-					call({ inputTokens: 0, outputTokens: 0 }), // aborted — zeroed
-				],
-			},
-		],
-	});
+	const limits = new Map([["openrouter:z-ai/glm-5.3-flash", 1_048_576]]);
+	const cw = contextWindow(
+		{
+			turns: [
+				{
+					id: "t1",
+					messageId: "m1",
+					at: "x",
+					model: "openrouter:z-ai/glm-5.3-flash",
+					steps: [
+						call({ inputTokens: 80_000, outputTokens: 5_000 }),
+						call({ inputTokens: 0, outputTokens: 0 }), // aborted — zeroed
+					],
+				},
+			],
+		},
+		limits,
+	);
 	assert.ok(cw);
 	assert.equal(cw.usedTokens, 85_000, "the previous step's footprint, not a bogus tiny meter");
 	// ALL steps zeroed (a first-call abort): no reading at all — null.
 	assert.equal(
-		contextWindow({
-			turns: [{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 0, outputTokens: 0 })] }],
-		}),
+		contextWindow(
+			{ turns: [{ id: "t1", messageId: "m1", at: "x", model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 0, outputTokens: 0 })] }] },
+			limits,
+		),
 		null,
 	);
 });

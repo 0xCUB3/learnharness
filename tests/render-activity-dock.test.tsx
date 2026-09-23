@@ -26,6 +26,7 @@ function job(over: Partial<ActivityFeed["jobs"][number]> = {}): ActivityFeed["jo
 		createdAt: new Date(NOW - 45_000).toISOString(),
 		updatedAt: new Date(NOW - 1000).toISOString(),
 		title: "Limits lesson",
+		contextLimit: null,
 		...over,
 	};
 }
@@ -91,19 +92,23 @@ describe("activity dock pure layer", () => {
 		};
 		const withLast = job({
 			usage: { ...base, lastStep: step(90_000, 2_000) },
+			// The amendment (owner 2026-09-23): the limit is the server's
+			// live-catalog join riding the feed — the dock never resolves it.
+			contextLimit: 131_072,
 		});
 		const blob = toBlobs({ jobs: [withLast], extractions: [] })[0]!;
 		assert.equal(blob.context?.used, 92_000);
-		assert.equal(blob.context?.limit, 1048576);
+		assert.equal(blob.context?.limit, 131_072);
 		// No lastStep yet (capture pending) → "—", even though usage exists.
 		const stripped = toBlobs({ jobs: [job({ usage: { ...base } })], extractions: [] })[0]!;
 		assert.equal(stripped.context, null);
-		// Unknown model → no limit → "—".
-		const unknownModel = toBlobs({
-			jobs: [job({ usage: { ...base, model: "nope/unknown", lastStep: step(5, 5) } })],
+		// Model missing from the live catalog (historical session,
+		// package update) → the feed carries null → no context line.
+		const uncatalogued = toBlobs({
+			jobs: [job({ usage: { ...base, model: "nope/unknown", lastStep: step(5, 5), } })],
 			extractions: [],
 		})[0]!;
-		assert.equal(unknownModel.context, null);
+		assert.equal(uncatalogued.context, null);
 	});
 
 	it("extraction blobs carry no money/context (—, the doctrine)", () => {

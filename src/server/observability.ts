@@ -22,15 +22,22 @@
 import { extractionStatuses, type ExtractionPhase } from "../agent/subagents/extraction.ts";
 import { chatStore } from "../store/chats.ts";
 import { graphRevision } from "./graph.ts";
+import { catalogContextLimits } from "./model-catalog.ts";
 import { listJobs } from "./jobs.ts";
 import type { JobRecord } from "../core/contracts.ts";
 
 export { abortExtraction, extractionStatuses, type ExtractionPhase, type RunningExtraction } from "../agent/subagents/extraction.ts";
 export { chatStore } from "../store/chats.ts";
 
-/** A running sub-agent job, joined with its chat's title for the dock. */
+/** A running sub-agent job, joined with its chat's title for the dock.
+ *  contextLimit (context-meter amendment, owner 2026-09-23): the model's
+ *  live catalog limit, resolved SERVER-SIDE from pi's catalog — the dock
+ *  reads it off the feed instead of any client-side table. Null when the
+ *  model is missing from the catalog (the blob then renders no context
+ *  line — never a fake window). */
 export interface ActivityJob extends JobRecord {
 	title: string;
+	contextLimit: number | null;
 }
 
 /** One extraction-pipeline run (title joined), oldest first. */
@@ -54,11 +61,16 @@ export interface ActivityExtraction {
  *  returns the same stamp. */
 export function activityFeed(): { jobs: ActivityJob[]; extractions: ActivityExtraction[]; graphRevision: number } {
 	const chats = chatStore.listChats();
+	const limits = catalogContextLimits();
 	const jobs: ActivityJob[] = [];
 	for (const chat of chats) {
 		for (const job of listJobs(chat.id)) {
 			if (job.status === "running") {
-				jobs.push({ ...job, title: chat.title ?? chat.id });
+				jobs.push({
+					...job,
+					title: chat.title ?? chat.id,
+					contextLimit: job.usage ? (limits.get(job.usage.model) ?? null) : null,
+				});
 			}
 		}
 	}

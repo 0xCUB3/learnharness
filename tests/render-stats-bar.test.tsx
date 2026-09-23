@@ -50,9 +50,11 @@ describe("stats bar", () => {
 		const html = renderToStaticMarkup(
 			<StatsBar turns={[turn(), turn()]} />,
 		);
-		// last turn's last call: 10k in + 1k out = 11k; pi catalog limit
-		// 1_048_576 → "1M" (tables regenerated from pi-ai's catalog)
-		assert.match(html, /data-testid="stats-context">11k \/ 1M</);
+		// last turn's last call: 10k in + 1k out = 11k. The LIMIT is the
+		// live catalog's — and the bar doesn't hold the index yet (the
+		// catalog join lands with the UI chunk), so the meter renders
+		// USAGE-ONLY (owner amendment: never a fallback window).
+		assert.match(html, /data-testid="stats-context">11k</);
 		// pi catalog price 0.075/0.25 per 1M: each turn 10k×0.075 + 1k×0.25
 		// = $0.001 → two = $0.0020
 		assert.match(html, /data-testid="stats-cost">\$0\.0020</);
@@ -67,8 +69,10 @@ describe("stats bar", () => {
 			<StatsBar turns={[turn({ model: "nope/unknown" })]} />,
 		);
 		assert.match(html, /data-testid="stats-cost">—</);
-		// unknown model also kills the context limit
-		assert.match(html, /data-testid="stats-context">—</);
+		// unknown model: no catalog limit exists, but the footprint is
+		// still an honest reading — usage-only (never "—" theater over
+		// real data, never a fake window)
+		assert.match(html, /data-testid="stats-context">11k</);
 	});
 
 	it("prettyModel strips vendor + date suffix, capitalizes", () => {

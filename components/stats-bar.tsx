@@ -92,7 +92,7 @@ export function StatsBar({
 					className="flex items-center gap-1.5 tabular-nums transition-colors hover:text-foreground"
 				>
 					<span data-testid="stats-context">
-						{ctx ? `${formatTokens(ctx.usedTokens)} / ${formatTokens(ctx.limit)}` : "—"}
+						{ctx ? (ctx.limit !== null ? `${formatTokens(ctx.usedTokens)} / ${formatTokens(ctx.limit)}` : formatTokens(ctx.usedTokens)) : "—"}
 					</span>
 					<span aria-hidden>·</span>
 					<span data-testid="stats-cost">{costLabel}</span>
@@ -109,7 +109,7 @@ export function StatsBar({
 							<div className="flex justify-between gap-2">
 								<span>Context (last call)</span>
 								<span className="tabular-nums text-card-foreground">
-									{ctx ? `${formatTokens(ctx.usedTokens)} / ${formatTokens(ctx.limit)}` : "—"}
+									{ctx ? (ctx.limit !== null ? `${formatTokens(ctx.usedTokens)} / ${formatTokens(ctx.limit)}` : formatTokens(ctx.usedTokens)) : "—"}
 								</span>
 							</div>
 							<div className="flex justify-between gap-2">

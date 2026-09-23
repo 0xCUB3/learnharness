@@ -37,13 +37,12 @@ interface CatalogModel {
 	id: string;
 	name: string;
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-	contextWindow: number;
 }
 
 function main(): void {
 	// Every data file is {api: {modelId: entry}} — ids are per-provider
 	// namespaced already (openrouter's are slugs, native ones plain).
-	const priced = new Map<string, { cost: CatalogModel["cost"]; contextWindow: number }>();
+	const priced = new Map<string, { cost: CatalogModel["cost"] }>();
 	for (const file of fs.readdirSync(DATA_DIR).filter((f) => f.endsWith(".json"))) {
 		const provider = file.slice(0, -".json".length);
 		const catalog = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), "utf-8")) as Record<
@@ -52,13 +51,13 @@ function main(): void {
 		>;
 		for (const models of Object.values(catalog)) {
 			for (const [id, m] of Object.entries(models)) {
-				// A catalog entry without pricing/limit data gets no key at all
-				// (cost renders "—", never zero; the limit renders unknown).
-					if (!m.cost || m.contextWindow === undefined) continue;
+				// A catalog entry without pricing data gets no key at all
+				// (cost renders "—", never zero).
+				if (!m.cost) continue;
 				// First writer wins (an id can appear under two apis within one
 				// file with identical pricing; cross-file collisions cannot
 				// happen — keys are provider-qualified).
-				priced.set(`${provider}:${id}`, { cost: m.cost, contextWindow: m.contextWindow });
+				priced.set(`${provider}:${id}`, { cost: m.cost });
 			}
 		}
 	}
@@ -68,24 +67,20 @@ function main(): void {
 		.sort(([a], [b]) => a.localeCompare(b))
 		.map(([key, m]) => ({
 			price: `\t${JSON.stringify(key)}: { input: ${m.cost.input}, output: ${m.cost.output}, cacheRead: ${m.cost.cacheRead}, cacheWrite: ${m.cost.cacheWrite} },`,
-			limit: `\t${JSON.stringify(key)}: ${m.contextWindow},`,
 		}));
 
 	const tables = `/** Token prices, USD per 1M tokens. A missing model makes cost render
  *  as absent ("—"), never zero. Keys are provider-qualified ("provider:id")
  *  since the model slots wave; openrouter ids ALSO appear under their bare
  *  slug (the legacy stamp format, kept so pre-wave records keep pricing).
+ *  Context-window limits are NOT a table (owner amendment, 2026-09-23):
+ *  every meter's denominator reads pi's LIVE catalog (GET /api/models /
+ *  the activity feed's server-side join) — missing model, usage-only.
  *  Refresh: bump @earendil-works/pi-ai, then npx tsx scripts/sync-pricing.ts
  *  (reads pi-ai's shipped catalogs — the same source the engine and the
  *  picker use). */
 export const PRICES: Record<string, ModelPrice> = {
 ${rows.map((r) => r.price).join("\n")}
-};
-
-/** Context-window limits (tokens) per model — generated alongside PRICES,
- *  same key families. */
-export const CONTEXT_LIMITS: Record<string, number> = {
-${rows.map((r) => r.limit).join("\n")}
 };
 `;
 

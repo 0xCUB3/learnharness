@@ -53,9 +53,11 @@ export interface JobUsage {
 	/** How many model calls the run has made (each bills separately). */
 	steps: number;
 	/** The MOST RECENT model call's accounting (2026-09 dock contract): the
-	 * per-blob context line reads last-step input+output against the model's
-	 * CONTEXT_LIMITS — never the cumulative totals. Absent until the first
-	 * call completes; absent provider fields stay absent (never zero). */
+	 *  per-blob context line reads last-step input+output against the
+	 *  model's LIVE catalog limit (server-joined onto the activity feed —
+	 *  never the cumulative totals, never a client-side table). Absent
+	 *  until the first call completes; absent provider fields stay absent
+	 *  (never zero). */
 	lastStep?: CallUsage;
 }
 
