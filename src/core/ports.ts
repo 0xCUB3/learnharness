@@ -128,11 +128,15 @@ export interface GraphStore {
 	/** Replace the whole ledger (the settle is a full-graph computation). */
 	writePositions(positions: Record<string, Position>): void;
 
-	/** The embedding ledger (config.EMBEDDINGS_FILE). WRITTEN ONLY by
-	 *  the embedder (server/embeddings.ts) after a merge — read-only for
-	 *  clustering consumers (snapshot, settle, namer). */
+	/** The embeddings ledger (config.EMBEDDINGS_FILE) — INERT DATA since
+	 *  wave 7 (owner ruling 2026-09-23: the provider embedder is dead;
+	 *  clustering is birth-session, labels are session names). Kept ONLY
+	 *  because the graph-context injection (agent band, Teacher's pass
+	 *  removes it) still reads it for vector-space staleness — the seam
+	 *  dies with it in the follow-up interlude. graph-deletion keeps
+	 *  pruning dead vectors meanwhile (harmless housekeeping). */
 	readEmbeddings(): EmbeddingsLedger;
-	/** Replace the whole ledger (embedding is a full-batch computation). */
+	/** Replace the whole ledger (graph-deletion's vector pruning only). */
 	writeEmbeddings(ledger: EmbeddingsLedger): void;
 
 	/** THE DESTRUCTIVE SEAM (session-deletion wave 6, owner 2026-09-22 —
@@ -244,48 +248,3 @@ export interface AuthStore {
 	deleteAuthVar(name: string): void;
 }
 
-// ─── EmbeddingPort — BYOK provider embeddings (wave 6, 2026-09-23) ───────────
-
-/**
- * The provider-embedding seam (the local transformers embedder died with
- * this wave): vectors come from the user's keyed provider — OpenRouter,
- * OpenAI, or Google — named by graph.embeddingModel ("provider:id", null =
- * honestly off: embedding/clustering/injection skip with an info log).
- *
- * Owner decisions (2026-09-23) baked in:
- *  - The adapters are resolved FRESH per call from the setting + the auth
- *    store (key rotations land immediately — the search port's treatment).
- *  - Vectors are stored as the provider returns them (default dims, no
- *    truncation, no normalization); the ledger is self-describing on
- *    model + dim, and any model change voids it (full re-embed).
- *  - Usage (prompt tokens) flows back to the money channel: adapters
- *    report it, the caller records it as a CallUsage step.
- *
- * Pure types only (browser-safe): the adapters are server-side
- * (src/server/embeddings.ts) and arrive as injected dependencies.
- */
-
-/** Which side of retrieval the text is — providers bill identically but
- *  quality-optimize differently (OpenRouter's input_type, Gemini's
- *  taskType); every input in one call shares the task. */
-export type EmbeddingTask = "document" | "query";
-
-/** One embedding batch's result: vectors in input order, the model's
- *  identity + dim (the ledger stamps), and the provider-reported prompt
- *  token count (undefined = provider didn't report; cost stays honest
- *  "—" via the existing unpriced path). */
-export interface EmbeddingResult {
-	vectors: number[][];
-	/** The full "provider:id" slug — ledger/cost keys use it verbatim. */
-	model: string;
-	dim: number;
-	promptTokens?: number;
-}
-
-/** A live provider embedding adapter. `embed` throws on failure (adapters
- *  map HTTP errors to clear Error messages); callers treat failure as
- *  non-fatal per the extraction contract. */
-export interface EmbeddingPort {
-	model: string;
-	embed(texts: readonly string[], task: EmbeddingTask): Promise<EmbeddingResult>;
-}

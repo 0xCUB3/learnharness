@@ -134,37 +134,24 @@ describe("AgentSection (thin SSR)", () => {
 	});
 });
 
-describe("GraphSection — the dependency ladder", () => {
-	// Wave 6: without an embedding model the three dependent rungs are
-	// inert (dimmed, disabled, hinted) — pinned in embedding-settings.
-	// These ladder pins isolate the CHAIN logic with a model configured.
-	const MODEL: GraphSettings = { enabled: true, embeddingModel: "openai:text-embedding-3-small" };
-
-	it("defaults with a model set: all four rungs on, none disabled", () => {
-		const html = renderToStaticMarkup(<GraphSection graph={MODEL} onSectionChange={() => {}} />);
-		for (const key of ["enabled", "embedding", "clustering", "labeling"]) {
-			assert.ok(html.includes(`data-testid="graph-row-${key}"`), key);
-			assert.ok(!tagOf(html, `toggle-graph-${key}`).includes("disabled"), `${key} touchable`);
-		}
+describe("GraphSection — the collapsed master switch (wave 7)", () => {
+	// Wave 7 (owner ruling 2026-09-23): the section is the master switch
+	// ONLY — the embedding/clustering/labeling rungs and the BYOK model
+	// picker are gone (clustering is the free birth-session partition,
+	// labels ARE session names). One row, one toggle.
+	it("renders the single master-switch row", () => {
+		const html = renderToStaticMarkup(<GraphSection graph={undefined} onSectionChange={() => {}} />);
+		assert.ok(html.includes('data-testid="graph-row-enabled"'));
+		assert.ok(!html.includes("graph-row-embedding"), "the dead rungs render nothing");
+		assert.ok(!html.includes("Embedding model"), "the picker is gone");
+		assert.ok(!html.includes("graph-row-clustering"));
+		assert.ok(!html.includes("graph-row-labeling"));
+		assert.ok(tagOf(html, "toggle-graph-enabled").includes('aria-checked="true"'), "absent record = factory ON");
 	});
 
-	it("master off grays EVERY dependent (stored values persist, resolve inert)", () => {
-		const html = renderToStaticMarkup(
-			<GraphSection graph={{ ...MODEL, enabled: false, embedding: true, clustering: true, labeling: true }} onSectionChange={() => {}} />,
-		);
-		for (const key of ["embedding", "clustering", "labeling"]) {
-			assert.ok(tagOf(html, `toggle-graph-${key}`).includes("disabled"), `${key} disabled`);
-		}
-		assert.ok(!tagOf(html, "toggle-graph-enabled").includes("disabled"), "master itself stays touchable");
-	});
-
-	it("a mid-ladder break grays only what's below it", () => {
-		const html = renderToStaticMarkup(
-			<GraphSection graph={{ ...MODEL, embedding: true, clustering: false }} onSectionChange={() => {}} />,
-		);
-		assert.ok(!tagOf(html, "toggle-graph-embedding").includes("disabled"), "embedding touchable");
-		assert.ok(!tagOf(html, "toggle-graph-clustering").includes("disabled"), "clustering touchable");
-		assert.ok(tagOf(html, "toggle-graph-labeling").includes("disabled"), "labeling grayed");
+	it("a stored off record shows the switch off", () => {
+		const html = renderToStaticMarkup(<GraphSection graph={{ enabled: false }} onSectionChange={() => {}} />);
+		assert.ok(tagOf(html, "toggle-graph-enabled").includes('aria-checked="false"'));
 	});
 });
 

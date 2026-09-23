@@ -2752,30 +2752,6 @@ export const CONTEXT_LIMITS: Record<string, number> = {
 
 // ─── Pure helpers (folds + cost inference) ───────────────────────────────────
 
-// ─── Embedding prices (wave 6, 2026-09-23) ─────────────────────────────────
-
-/** Hand-maintained BYOK embedding prices, USD per 1M INPUT tokens — the
- *  sync script never touches this block (pi-ai's catalogs carry no
- *  embedding models, so the generated PRICES table has none of these).
- *  VERIFIED against provider pricing pages 2026-09-23: OpenAI's model
- *  docs ($0.02 3-small / $0.13 3-large / $0.10 ada-002), Google's pricing
- *  page ($0.15 gemini-embedding-001 / $0.20 Gemini Embedding 2 text),
- *  OpenRouter passes provider pricing through. output: 0 — embeddings
- *  emit no output tokens. Unlisted models stay unpriced ("—", never
- *  zero); tokens still get captured. */
-export const EMBEDDING_PRICES: Record<string, ModelPrice> = {
-	"openai:text-embedding-3-small": { input: 0.02, output: 0 },
-	"openai:text-embedding-3-large": { input: 0.13, output: 0 },
-	"openai:text-embedding-ada-002": { input: 0.1, output: 0 },
-	"google:gemini-embedding-001": { input: 0.15, output: 0 },
-	"google:gemini-embedding-2": { input: 0.2, output: 0 },
-	"openrouter:openai/text-embedding-3-small": { input: 0.02, output: 0 },
-	"openrouter:openai/text-embedding-3-large": { input: 0.13, output: 0 },
-	"openrouter:openai/text-embedding-ada-002": { input: 0.1, output: 0 },
-	"openrouter:google/gemini-embedding-001": { input: 0.15, output: 0 },
-};
-
-
 /** Sum a list of per-step usages into one CallUsage. A field stays
  *  undefined when EVERY step left it unreported — absent is not zero. */
 export function sumSteps(steps: readonly CallUsage[]): CallUsage {
@@ -2797,8 +2773,7 @@ export function callCost(
 	usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number },
 	model: string,
 ): number | null {
-	// Wave 6: the hand-maintained embedding overlay backs the lookup too.
-	const price = PRICES[model] ?? EMBEDDING_PRICES[model];
+	const price = PRICES[model];
 	if (!price) return null;
 	if (usage.inputTokens === undefined || usage.outputTokens === undefined) return null;
 	const cacheRead = usage.cacheReadTokens ?? 0;

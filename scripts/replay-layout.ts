@@ -18,6 +18,7 @@ const depthArg = process.argv.find((a) => a.startsWith("--depth="));
 const depthMode: "off" | "vertical" | "radial" =
 	depthArg === "--depth=vertical" ? "vertical" : depthArg === "--depth=radial" ? "radial" : "off";
 import { incrementalLayout } from "../src/core/layout.ts";
+import { birthSessionPartition } from "../src/core/session-clusters.ts";
 import type { GraphNode, NodeMapping, Position } from "../src/core/contracts.ts";
 
 function main() {
@@ -32,12 +33,9 @@ function main() {
 		nodes.push(line);
 	}
 	const edges = graphStore.readEdges();
-	// The semantic-topic source: the embedding ledger (run
-	// scripts/embed-graph.ts first if missing/stale).
-	const embeddings = graphStore.readEmbeddings();
-	if (Object.keys(embeddings.vectors).length === 0) {
-		console.warn("[replay] embedding ledger is empty — clusters will be absent (run scripts/embed-graph.ts)");
-	}
+	// The cluster source (wave 7): the birth-session partition, derived on
+	// read — same as the real settle (core/layout-settle.ts).
+	const birthClusters = birthSessionPartition(nodes);
 
 	// Batches: each imported file, in real import order (sources.json
 	// importedAt). A node belongs to the file whose mapping first claims it
@@ -85,9 +83,8 @@ function main() {
 		const batchNodes = nodes.filter((n) => delivered.has(n.id));
 		positions = incrementalLayout(batchNodes, activeEdges, positions, {
 			// The same partition the real settle would see for this batch:
-			// the persisted semantic topics, filtered to delivered nodes
-			// (never recomputed — the agglomerative pass is ~1.5s at scale).
-			clusters: embeddings.clusters
+			// the birth-session clusters, filtered to delivered nodes.
+			clusters: birthClusters
 				.map((c) => ({ members: c.members.filter((id) => delivered.has(id)) }))
 				.filter((c) => c.members.length > 0),
 			...(depthMode === "off"

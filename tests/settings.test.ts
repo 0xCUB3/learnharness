@@ -21,7 +21,7 @@ describe("FACTORY_SETTINGS (the compiled factory layer)", () => {
 	it("pins the owner-decided defaults", () => {
 		assert.equal(CURRENT_SETTINGS_VERSION, 1);
 		assert.deepEqual(FACTORY_SETTINGS.general, { autoUpdate: true });
-		assert.deepEqual(FACTORY_SETTINGS.graph, { enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null }); // BYOK wave 6: no factory embedding model
+		assert.deepEqual(FACTORY_SETTINGS.graph, { enabled: true }); // wave 7 collapse: the master switch ONLY
 		const a = FACTORY_SETTINGS.appearance;
 		assert.equal(a.mode, "dark");
 		assert.equal(a.background, null); // the mode's own default, not a factory hex
@@ -75,7 +75,7 @@ describe("sanitizeUserSettings", () => {
 				sessionNameSerif: false,
 				mdRendering: { headingWeight: 700, boldColor: "#ff8800", italicColor: null },
 			},
-			graph: { enabled: false, embedding: true, clustering: false, labeling: true },
+			graph: { enabled: false },
 		};
 		assert.deepEqual(sanitizeUserSettings(record), record);
 	});

@@ -150,47 +150,25 @@ describe("parseAppearanceSettingsBody", () => {
 });
 
 describe("parseGraphSettingsBody", () => {
-	it("parses the four-rung ladder replace-whole", () => {
-		const r = parseGraphSettingsBody({ enabled: false, embedding: false });
+	it("parses the collapsed section replace-whole (wave 7: the master switch ONLY)", () => {
+		const r = parseGraphSettingsBody({ enabled: false });
 		assert.ok(r.ok);
-		assert.deepEqual(r.settings, { enabled: false, embedding: false });
+		assert.deepEqual(r.settings, { enabled: false });
 		assert.equal(parseGraphSettingsBody({}).ok, true);
 	});
 
-	it("rejects non-boolean rungs and unknown bodies", () => {
+	it("rejects non-boolean switches and unknown bodies", () => {
 		assert.equal(parseGraphSettingsBody({ enabled: "off" }).ok, false);
 		assert.equal(parseGraphSettingsBody("nope").ok, false);
 	});
 
-	it("the ladder DEPENDENCY (graph → embedding → clustering → labeling) is a UI concern, not a parse concern", () => {
-		// Nothing stops a stored {enabled: false, labeling: true} — the
-		// values persist but resolve inert (grays out in the panel).
+	it("the dead wave-6 rungs in a body are ignored — the section collapses on write", () => {
+		// Old clients may still send {embedding: true, embeddingModel: …};
+		// the parser reads ONLY the master switch — the dead keys are not
+		// an error, they are just not part of the section anymore.
 		const r = parseGraphSettingsBody({ enabled: false, clustering: true, labeling: true });
 		assert.ok(r.ok);
-	});
-
-	it("embeddingModel (wave 6): null or a shipped-provider slug; anything else is a 400", () => {
-		const nulled = parseGraphSettingsBody({ embeddingModel: null });
-		assert.ok(nulled.ok);
-		assert.deepEqual(nulled.settings, { embeddingModel: null });
-		for (const slug of [
-			"openai:text-embedding-3-small",
-			"openrouter:openai/text-embedding-3-large",
-			"google:gemini-embedding-001",
-			// OpenRouter ids may carry a :free-style suffix — the provider is
-			// the part before the FIRST colon (live catalog fact, 2026-09-23).
-			"openrouter:liquid/lfm-2.5-embedding-350m:free",
-		]) {
-			const r = parseGraphSettingsBody({ embeddingModel: slug });
-			assert.ok(r.ok, slug);
-			assert.deepEqual(r.settings, { embeddingModel: slug });
-		}
-		// Bad shapes never become a live model.
-		assert.equal(parseGraphSettingsBody({ embeddingModel: "text-embedding-3-small" }).ok, false, "no provider prefix");
-		assert.equal(parseGraphSettingsBody({ embeddingModel: "bedrock:whatever" }).ok, false, "unshipped provider");
-		assert.equal(parseGraphSettingsBody({ embeddingModel: "openai:" }).ok, false, "empty id");
-		assert.equal(parseGraphSettingsBody({ embeddingModel: 42 }).ok, false, "non-string");
-		assert.equal(parseGraphSettingsBody({ embeddingModel: "openai:has spaces" }).ok, false, "whitespace id");
+		assert.deepEqual(r.settings, { enabled: false });
 	});
 });
 
