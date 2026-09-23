@@ -583,9 +583,11 @@ export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {
 	 *  the server layer — architecture law): production passes the
 	 *  provider-embedder batch (server/embeddings.ts embedNewNodes — BYOK
 	 *  wave 6; null model = it skips itself with an info log), tests fake
-	 *  it. Failure inside it is non-fatal by contract. When the result
-	 *  carries a `usage` stage (the EmbedBatchResult contract), it is
-	 *  recorded into the run's money-channel capture. */
+	 *  it. Failure inside it is non-fatal by contract, and since 02bd1b0
+	 *  it fails BY RESULT — landed vectors + partial usage ride the
+	 *  return value instead of a throw. When the result carries a
+	 *  `usage` stage (the EmbedBatchResult contract), it is recorded
+	 *  into the run's money-channel capture. */
 	embedder: (graphStore: GraphStore) => Promise<unknown>;
 }
 
@@ -673,7 +675,11 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		run.usage[stage]!.steps.push(usage);
 	}
 
-	/** The embedding tail's failure log (non-fatal by contract). */
+	/** The embedding tail's failure log (non-fatal by contract). Wave-6
+	 *  follow-up (02bd1b0): the production embedder no longer THROWS on
+	 *  embed failures (usage-on-error — landed vectors + partial usage ride
+	 *  the result), so this catch is belt-and-suspenders for injected
+	 *  embedders that still throw. */
 	function recordEmbedFailure(chatId: string): (err: unknown) => undefined {
 		return (err) => {
 			console.error(`[extraction ${chatId}] embedding failed (non-fatal):`, err);
@@ -683,9 +689,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 
 	/** Wave 6: fold the provider-embedding tail's reported usage into the
 	 *  run's capture — one ExtractionStageUsage per run (the embedder
-	 *  already aggregated its API calls into steps). Absent/skipped/failed
-	 *  embeds contribute nothing (a run that embedded nothing stays
-	 *  two-stage, like the whole local-embedder era). */
+	 *  already aggregated its API calls into steps). Skipped embeds
+	 *  (unconfigured) carry no usage; FAILED embeds still carry the landed
+	 *  batches' steps (usage-on-error, 02bd1b0) — a mid-run failure leaves
+	 *  a three-stage run's partial embedding spend on the ledger. A run
+	 *  that embedded nothing stays two-stage, like the whole
+	 *  local-embedder era. */
 	function captureEmbedUsage(chatId: string, result: unknown): void {
 		const stage = (result as { usage?: ExtractionStageUsage } | undefined)?.usage;
 		if (!stage) return;
@@ -859,8 +868,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			setPhase(chatId, "embedding", "chat");
 			// Semantic embeddings (DECIDED 2026-09-13): topics come from
 			// MEANING, so embed the new propositions BEFORE the settle and
-			// the namer look at clusters. Failure is non-fatal — clustering
-			// runs without the new nodes until the next merge retries.
+			// the namer look at clusters. Failure is non-fatal — the landed
+			// vectors persist (pay-once, 02bd1b0) and clustering runs with
+			// them; the next merge's retry embeds only what remains.
 			await captureEmbedUsage(chatId, await embed(graphStore).catch(recordEmbedFailure(chatId)));
 			// Option A: the layout ledger evolves with the merge (sync — the
 			// next snapshot fetch must already reflect the new nodes).
