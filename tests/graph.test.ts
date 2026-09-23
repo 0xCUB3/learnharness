@@ -20,7 +20,7 @@ import { after, describe, it } from "node:test";
 import type { UIMessage } from "ai";
 import type { AuditResult, NamingRunUsage } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
-import { clusterContentId, getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
+import { getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { LEDGER_FILES, PATHS, SOURCES_FILE, EMBEDDINGS_FILE } from "../config.ts";
@@ -409,11 +409,13 @@ describe("the merger (mergeFindings)", () => {
 		assert.equal(snap.nodeObservations[node.id]!["src_snapfixture"], "solid");
 	});
 
-	it("derives semantic clusters in graphSnapshot, joined with persisted labelings", () => {
-		// Three propositions; the cluster comes from the EMBEDDING ledger
-		// (semantic topics, DECIDED 2026-09-13) — the embedder persists the
-		// partition, the snapshot just reads it. Here we play the embedder.
+	it("derives BIRTH-SESSION clusters in graphSnapshot, labeled with the session's name", () => {
+		// Wave 7 (owner-locked 2026-09-23): embeddings are dead — a cluster is
+		// the session that BIRTHED its propositions, derived on read from
+		// provenance. No ledger partition to play, no LLM naming pass — the
+		// label IS the session's name (chat title / file path).
 		const tri = ["Alpha.", "Beta.", "Gamma cluster."] as const;
+		graphStore.upsertSource({ id: "src_clusterfixture", filePath: "/vault/cluster notes.md", importedAt: "2026-09-13T00:00:00.000Z" });
 		const merge = mergeFindings(
 			"src_clusterfixture",
 			{
@@ -422,7 +424,7 @@ describe("the merger (mergeFindings)", () => {
 					name: `Cluster node ${i + 1}`,
 					statement,
 					aliases: [],
-					messages: [],
+					messages: [`cluster_msg_${i + 1}`], // birth provenance — the message anchors
 					evidence: ["fixture evidence"],
 				})),
 				edges: [
@@ -437,35 +439,15 @@ describe("the merger (mergeFindings)", () => {
 			{ messages: null, foldedAt: "2026-09-13T00:00:00.000Z" },
 		);
 		assert.equal(merge.nodes, 3);
-		// The embedder's contract: recluster at the end of the batch and
-		// PERSIST the partition in the embeddings ledger.
-		const ids = tri.map((s) => getGraph(graphStore).nodes.find((n) => n.statement === s)!.id);
-		graphStore.writeEmbeddings({
-			model: "test/embedder",
-			dim: 2,
-			vectors: {},
-			clusters: [{ members: ids }],
-			updatedAt: "2026-09-13T00:00:00.000Z",
-		});
 		const snap = graphSnapshot(graphDeps);
 		// Presentation threshold: every cluster is >= 3 members.
 		assert.ok(snap.clusters.every((c) => c.members.length >= 3));
-		// Our trio is exactly one cluster, unlabeled until the namer runs.
+		// Our trio is exactly one cluster — the notes file that BIRTHED it,
+		// labeled with its path, id = the source id (stable, no content hash).
 		const mine = snap.clusters.find((c) => c.members.length === 3 && tri.every((s) => c.members.includes(snap.nodes.find((n) => n.statement === s)!.id)));
-		assert.ok(mine, "the 3-clique is a cluster");
-		assert.equal(mine!.label, null);
-		assert.match(mine!.id, /^clu_/);
-		// Mint the labeling the namer would append — the next read joins it.
-		graphStore.appendClusterLabel({
-			id: clusterContentId(mine!.members),
-			label: "Test region",
-			core: mine!.members,
-			createdAt: "2026-09-13T00:00:00.000Z",
-		});
-		const snap2 = graphSnapshot(graphDeps);
-		const claimed = snap2.clusters.find((c) => c.members.length === 3 && tri.every((s) => c.members.includes(snap2.nodes.find((n) => n.statement === s)!.id)))!;
-		assert.equal(claimed.label, "Test region");
-		assert.equal(claimed.id, clusterContentId(mine!.members), "the claimed cluster carries the record's id");
+		assert.ok(mine, "the trio is one cluster");
+		assert.equal(mine!.id, "src_clusterfixture");
+		assert.equal(mine!.label, "/vault/cluster notes.md", "a notes file is a birth-session — the label is its path");
 	});
 
 	it("derives sessions and per-session understanding observations in graphSnapshot", () => {

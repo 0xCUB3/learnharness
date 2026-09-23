@@ -1,5 +1,6 @@
-import type { EmbeddingsLedger, GraphEdge, GraphNode } from "./contracts.ts";
+import type { GraphEdge, GraphNode } from "./contracts.ts";
 import { incrementalLayout } from "./layout.ts";
+import { birthSessionPartition } from "./session-clusters.ts";
 import type { Position } from "./contracts.ts";
 
 /**
@@ -11,17 +12,16 @@ import type { Position } from "./contracts.ts";
  * finish before the next /api/graph fetch reflects the change.
  *
  * SPLIT FROM layout.ts deliberately (2026-09-13): layout.ts is in the
- * browser barrel, and the settle needs the Louvain partition for the
- * cluster centroid pull — the heavy deps must not ship in the client
- * bundle. Server code imports this module DIRECTLY; it is never
- * re-exported through src/core/index.ts.
+ * browser barrel, and the settle needs the cluster partition for the
+ * cluster centroid pull — this module must not ship in the client bundle.
+ * Server code imports it DIRECTLY; it is never re-exported through
+ * src/core/index.ts.
  */
 export function settleGraphLayout(graphStore: {
 	readNodes(): GraphNode[];
 	readEdges(): GraphEdge[];
 	readPositions(): Record<string, Position>;
 	writePositions(positions: Record<string, Position>): void;
-	readEmbeddings(): EmbeddingsLedger;
 }): void {
 	const nodes = graphStore.readNodes();
 	if (nodes.length === 0) return;
@@ -34,11 +34,12 @@ export function settleGraphLayout(graphStore: {
 	});
 	const edges = graphStore.readEdges();
 	const previous = new Map(Object.entries(graphStore.readPositions()));
-	// The cluster partition for the centroid pull: the SAME persisted
-	// semantic topics the snapshot renders (computed by the embedder
-	// once per batch, stored in the embedding ledger) — one cluster
-	// concept everywhere.
-	const communities = graphStore.readEmbeddings().clusters;
+	// The cluster partition for the centroid pull: the SAME birth-session
+	// partition the snapshot renders (derived from provenance on read —
+	// core/session-clusters.ts, wave 7) — one cluster concept everywhere.
+	// The unique list is the deduped set the partition needs (lines may
+	// repeat an id — first defines).
+	const communities = birthSessionPartition(unique);
 	const next = incrementalLayout(unique, edges, previous, { clusters: communities });
 	graphStore.writePositions(Object.fromEntries(next));
 }

@@ -81,6 +81,9 @@ export interface EffectiveSettings {
 		 *  passthrough delta — engine resolution (pin → auto → unavailable)
 		 *  lives in server/search.ts, where keys are visible. */
 		search: { engine?: SearchEngineId };
+		/** Prober graph tools (wave 7): passthrough delta as stored —
+		 * absent/undefined enabled = ON; consumers use graphToolsEnabled. */
+		graphTools: { enabled?: boolean };
 	};
 	/** The resolved strong/cheap/vision slots: each tier's concrete model or
 	 *  NULL when the tier holds no model (no factory floor — BYOK all the
@@ -178,6 +181,7 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 			tools: agent.tools ?? {},
 			prompts: agent.prompts ?? {},
 			search: agent.search ?? {},
+			graphTools: agent.graphTools ?? {},
 		},
 		models: {
 			strong: resolveSlot(modelsSection.strong),
@@ -227,4 +231,18 @@ export function extractionEnabled(graph: Required<GraphSettings>): boolean {
  */
 export function graphContextEnabled(graph: Required<GraphSettings>): boolean {
 	return graph.enabled && graph.embedding;
+}
+
+/**
+ * The PROBER GRAPH TOOLS gate (wave 7, owner ruling 2026-09-23): the
+ * toggle is an agent-capability switch (it gates tool registration), but
+ * the tools only mean anything when the graph itself runs — so the
+ * effective gate composes the graph master switch AND the toggle.
+ * Teacher's tool factories consume this at registration time.
+ */
+export function graphToolsEnabled(effective: {
+	graph: Required<GraphSettings>;
+	agent: { graphTools: { enabled?: boolean } };
+}): boolean {
+	return effective.graph.enabled && (effective.agent.graphTools.enabled ?? true);
 }

@@ -167,6 +167,19 @@ describe("sanitizeUserSettings", () => {
 		assert.equal(notObject?.agent?.search, undefined);
 	});
 
+	it("graphTools subsection: boolean survives; bad shapes drop (default ON resumes) — wave 7, 2026-09-23", () => {
+		const on = sanitizeUserSettings({ version: 1, agent: { graphTools: { enabled: true } } });
+		assert.deepEqual(on?.agent?.graphTools, { enabled: true });
+		const off = sanitizeUserSettings({ version: 1, agent: { graphTools: { enabled: false } } });
+		assert.deepEqual(off?.agent?.graphTools, { enabled: false });
+		const bare = sanitizeUserSettings({ version: 1, agent: { graphTools: {} } });
+		assert.deepEqual(bare?.agent?.graphTools, {});
+		const badShape = sanitizeUserSettings({ version: 1, agent: { graphTools: "on" } });
+		assert.equal(badShape?.agent?.graphTools, undefined);
+		const badEnabled = sanitizeUserSettings({ version: 1, agent: { graphTools: { enabled: "yes" } } });
+		assert.equal(badEnabled?.agent?.graphTools, undefined);
+	});
+
 	it("partial maps: booleans survive, non-boolean entries drop individually", () => {
 		const out = sanitizeUserSettings({ agent: { tools: { quiz: false, demo: true, visual: "x" } } });
 		assert.ok(out);

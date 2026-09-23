@@ -200,6 +200,14 @@ export interface AgentSettings {
 	 *  engine must still have its key, else search is honestly unavailable.
 	 *  Absent + no key = unavailable (no silent fallback, no default). */
 	search?: { engine?: SearchEngineId };
+	/** Prober graph tools (wave 7, owner ruling 2026-09-23): read-only
+	 *  knowledge-graph views for the prober agent — a session list +
+	 *  per-session propositions with understanding levels. Its SUBJECT
+	 *  is the graph but its MECHANISM is agent capability (tool
+	 *  registration), so it lives here in its OWN subsection, not in the
+	 *  tool-toggles map. Absent = enabled (the toggle discipline); the
+	 *  effective gate composes graph.enabled AND this switch. */
+	graphTools?: { enabled?: boolean };
 	/** System-prompt override SWITCHES keyed by segment path (absent key =
 	 *  off). Switch-on requires the override file to exist (enforced by the
 	 *  route); the switch is explicit so users keep a file on disk but run
@@ -418,6 +426,14 @@ function sanitizeAgent(raw: Record<string, unknown>): AgentSettings {
 	if (raw.search !== null && typeof raw.search === "object" && !Array.isArray(raw.search)) {
 		const engine = (raw.search as Record<string, unknown>).engine;
 		if (engine === "tavily" || engine === "brave") out.search = { engine };
+	}
+	// Prober graph tools (wave 7): its own agent-section subsection —
+	// lenient read side (a bad shape drops the key and the default ON
+	// resumes; the write side's parser is strict).
+	if (raw.graphTools !== null && typeof raw.graphTools === "object" && !Array.isArray(raw.graphTools)) {
+		const enabled = (raw.graphTools as Record<string, unknown>).enabled;
+		if (enabled === undefined) out.graphTools = {};
+		else if (typeof enabled === "boolean") out.graphTools = { enabled };
 	}
 	return out;
 }

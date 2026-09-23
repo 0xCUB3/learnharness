@@ -12,6 +12,7 @@ import { describe, it } from "node:test";
 import {
 	extractionEnabled,
 	graphContextEnabled,
+	graphToolsEnabled,
 	resolveConversationSpec,
 	resolveModelSpec,
 	resolveRoleSpec,
@@ -242,5 +243,21 @@ describe("the graph channel gates (the wave's seam honoring)", () => {
 		const off = resolveSettings({ version: 1, graph: { enabled: false } });
 		assert.equal(extractionEnabled(off.graph), false);
 		assert.equal(graphContextEnabled(off.graph), false);
+	});
+
+	it("PROBER GRAPH TOOLS gate (wave 7, owner ruling 2026-09-23): the agent toggle AND the graph master switch compose", () => {
+		const graph = { enabled: true, embedding: true, clustering: true, labeling: true, embeddingModel: null };
+		assert.equal(graphToolsEnabled({ graph, agent: { graphTools: {} } }), true, "absent subsection = ON");
+		assert.equal(graphToolsEnabled({ graph, agent: { graphTools: { enabled: true } } }), true);
+		assert.equal(graphToolsEnabled({ graph, agent: { graphTools: { enabled: false } } }), false);
+		const dead = { ...graph, enabled: false };
+		assert.equal(graphToolsEnabled({ graph: dead, agent: { graphTools: { enabled: true } } }), false, "graph off kills the tools regardless of the toggle");
+	});
+
+	it("graphTools rides resolveSettings: absent record → the empty subsection (ON); a record's delta passes through", () => {
+		const eff = resolveSettings(null);
+		assert.deepEqual(eff.agent.graphTools, {});
+		const off = resolveSettings({ version: 1, agent: { graphTools: { enabled: false } } });
+		assert.deepEqual(off.agent.graphTools, { enabled: false });
 	});
 });

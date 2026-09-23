@@ -77,6 +77,18 @@ describe("parseAgentSettingsBody", () => {
 		assert.equal(parseAgentSettingsBody({ search: { engine: 1 } }).ok, false);
 	});
 
+	it("graphTools: strict object subsection, enabled boolean when present — wave 7, 2026-09-23", () => {
+		const off = parseAgentSettingsBody({ graphTools: { enabled: false } });
+		assert.ok(off.ok);
+		assert.deepEqual(off.settings.graphTools, { enabled: false });
+		const bare = parseAgentSettingsBody({ graphTools: {} });
+		assert.ok(bare.ok);
+		assert.deepEqual(bare.settings.graphTools, {}, "explicit subsection with no key = the default ON");
+		assert.equal(parseAgentSettingsBody({ graphTools: "off" }).ok, false, "graphTools must be an object");
+		assert.equal(parseAgentSettingsBody({ graphTools: { enabled: "yes" } }).ok, false, "enabled must be a boolean");
+		assert.equal(parseAgentSettingsBody({ graphTools: null }).ok, false);
+	});
+
 	it("an empty {} agent section parses to {} (replace-whole clear)", () => {
 		const r = parseAgentSettingsBody({});
 		assert.ok(r.ok);

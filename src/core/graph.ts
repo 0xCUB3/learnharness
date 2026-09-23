@@ -51,8 +51,10 @@ import type {
 	GraphSnapshot,
 	LedgerEvent,
 	LedgerEventKind,
+	UnderstandingLevel,
 } from "./contracts.ts";
-import { matchClusterLabelings, MIN_CLUSTER_SIZE } from "./clusters.ts";
+import { MIN_CLUSTER_SIZE } from "./clusters.ts";
+import { birthSessionPartition } from "./session-clusters.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
@@ -496,23 +498,20 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		(nodeObservations[nodeId] ??= {})[chatId] = note;
 	}
 
-	// Semantic topic communities (DECIDED 2026-09-13, replacing structural
-	// Louvain): average-linkage clustering over embeddings — related
-	// topics, not reasoning chains. Edge-orphans join topics by meaning;
-	// stragglers stay loose (filtered at the presentation threshold
-	// below). The partition is computed ONCE per embedding batch by the
-	// embedder (the agglomerative pass is ~1.5s at current scale) and
-	// PERSISTED in the embedding ledger — reads just load it. Nodes whose
-	// embedding hasn't landed yet simply sit unclustered until the next
-	// read after the embedder runs.
-	const communities = deps.graphStore.readEmbeddings().clusters;
-	const claims = matchClusterLabelings(communities, deps.graphStore.readClusterLabels());
+	// BIRTH-SESSION CLUSTERS (wave 7, owner-locked 2026-09-23): embeddings
+	// are dead — a cluster is the SESSION THAT CREATED ITS PROPOSITIONS,
+	// derived on read from provenance (core/session-clusters.ts). The label
+	// is the session's NAME (chat title / file path): no LLM naming pass, no
+	// persisted partition to invalidate. MIN_CLUSTER_SIZE stays the hull
+	// presentation rule (a region needs >= 3 propositions for a hull). A
+	// birth session whose record is gone (deleted chat) keeps its members
+	// but renders unlabeled — honest, never guessed.
+	const communities = birthSessionPartition(nodes);
 	const clusters: Cluster[] = communities
-		.map((community, index) => ({ community, claim: claims[index] }))
-		.filter(({ community }) => community.members.length >= MIN_CLUSTER_SIZE)
-		.map(({ community, claim }) => ({
-			id: claim?.id ?? clusterContentId(community.members),
-			label: claim?.label ?? null,
+		.filter((community) => community.members.length >= MIN_CLUSTER_SIZE)
+		.map((community) => ({
+			id: community.id,
+			label: sessions[community.id] ?? fileSources[community.id] ?? null,
 			members: community.members,
 		}));
 
@@ -531,6 +530,119 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		clusters,
 		...(Object.keys(positions).length > 0 ? { positions } : {}),
 	};
+}
+
+// ─── Prober graph tools — the data seam (wave 7, owner-locked 2026-09-23) ───
+
+/** One session in the prober's graph view: every provenance anchor the
+ *  graph can name — a real chat (deep-linkable) or an imported notes file
+ *  (owner ruling 2026-09-23: files are birth-sessions too, kind "file").
+ *  The prober's session-list tool renders these; the per-session view is
+ *  graphSessionPropositions below. Pure derivation over the same ports
+ *  the snapshot reads — Teacher's tool handlers call these in-process. */
+export interface GraphSessionEntry {
+	/** chatId or notes source id ("src_…") — the birth-session key. */
+	id: string;
+	/** The chat's title, or the file's path — the cluster label's source. */
+	name: string;
+	/** A real chat (its record still exists) or an imported notes file. */
+	kind: "chat" | "file";
+	/** When the session began: the chat's createdAt, or the file's
+	 *  importedAt. null when no record can date it. */
+	createdAt: string | null;
+	/** Most recent activity: the chat's updatedAt, or the file's
+	 *  importedAt. null when no record can date it. */
+	updatedAt: string | null;
+	/** How many propositions were BORN in this session (birth-session
+	 *  clustering's count — shared/re-encountered nodes count for their
+	 *  birth session only). */
+	propositions: number;
+}
+
+/** The prober's session list: every birth session, most-recently-active
+ *  first (undatable records sink, in stable id order). */
+export function graphSessionIndex(deps: GraphDeps): GraphSessionEntry[] {
+	const counts = new Map<string, number>();
+	for (const cluster of birthSessionPartition(getGraph(deps.graphStore).nodes)) {
+		counts.set(cluster.id, cluster.members.length);
+	}
+	const chats = new Map(deps.chatStore.listChats().map((chat) => [chat.id, chat]));
+	const sources = new Map(deps.graphStore.readSources().map((s) => [s.id, s]));
+	const entries: GraphSessionEntry[] = [];
+	for (const [id, propositions] of counts) {
+		const chat = chats.get(id);		if (chat) {
+			entries.push({
+				id,
+				name: chat.title,
+				kind: "chat",
+				createdAt: chat.createdAt,
+				updatedAt: chat.updatedAt,
+				propositions,
+			});
+			continue;
+		}
+		const source = sources.get(id);
+		entries.push({
+			id,
+			name: source?.filePath ?? id,
+			kind: "file",
+			createdAt: source?.importedAt ?? null,
+			updatedAt: source?.importedAt ?? null,
+			propositions,
+		});
+	}
+	return entries.sort(
+		(a, b) =>
+			(b.updatedAt ?? "").localeCompare(a.updatedAt ?? "") ||
+			(b.createdAt ?? "").localeCompare(a.createdAt ?? "") ||
+			(a.id < b.id ? -1 : 1),
+	);
+}
+
+/** One birth proposition of one session, for the prober's per-session
+ *  view. `understanding` is the extractor's latest observation for
+ *  (node, session) — the named-word scale (solid/shaky/accepted/resisted/
+ *  not yet engaged) — and `evaluatedAt` is THAT event's own timestamp
+ *  (owner ruling 2026-09-23: quiz outcomes are evidence in the ledger,
+ *  but they never move the evaluation date — the level's event does). */
+export interface GraphSessionProposition {
+	nodeId: string;
+	/** The compact handle — the same name the canvas shows. */
+	name: string;
+	understanding: UnderstandingLevel | null;
+	/** The `at` of the event that minted `understanding`; null when the
+	 *  session never evaluated this proposition. */
+	evaluatedAt: string | null;
+}
+
+/** The propositions BORN in one session, with the session's latest
+ *  understanding of each. Latest observation wins by `at`, then by
+ *  ledger order (the same tie rule the snapshot's nodeObservations
+ *  uses). Members sorted by node id — deterministic. */
+export function graphSessionPropositions(deps: GraphDeps, sessionId: string): GraphSessionProposition[] {
+	const born = getGraph(deps.graphStore).nodes.filter(
+		(node) => node.provenance[0] !== undefined && node.provenance[0]!.chatId === sessionId,
+	);
+	const latest = new Map<string, { at: string; note: string; index: number }>();
+	deps.graphStore.readEvents().forEach((event, index) => {
+		if (event.kind !== "observation" || event.nodeId === null || event.chatId !== sessionId) return;
+		if (!event.note) return;
+		const current = latest.get(event.nodeId);
+		if (!current || event.at > current.at || (event.at === current.at && index > current.index)) {
+			latest.set(event.nodeId, { at: event.at, note: event.note, index });
+		}
+	});
+	return born
+		.map((node) => {
+			const observation = latest.get(node.id);
+			return {
+				nodeId: node.id,
+				name: node.name,
+				understanding: (observation?.note as UnderstandingLevel | undefined) ?? null,
+				evaluatedAt: observation?.at ?? null,
+			};
+		})
+		.sort((a, b) => (a.nodeId < b.nodeId ? -1 : 1));
 }
 
 // Re-export: the contract owns the shape; legacy importers still reach it.
