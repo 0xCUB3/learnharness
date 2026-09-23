@@ -218,6 +218,44 @@ export function wrapRegionLabel(
 	lines.push(`${tail}…`);
 	return lines;
 }
+
+/** Label-only cluster patch (rename-shuffle fix, 2026-09-23): apply a set
+ *  of live label updates to the data-side cluster records AND the built
+ *  region meta (re-wrapping the changed entries with the provided
+ *  measure — the same wrap a geometry build would produce). The
+ *  hull-silence guard travels here: a cluster whose CURRENT label is
+ *  null is a gone record — no rename can reach it. Pure, in-place on the
+ *  provided arrays; returns whether anything changed (the caller only
+ *  redraws when it did). Exported for tests. */
+export function applyClusterLabels(
+	clusters: { id: string; label: string | null }[],
+	regionMeta: { id: string; label: string | null; lines: string[] | null }[],
+	labels: ReadonlyMap<string, string | null>,
+	maxWidth: number,
+	maxLines: number,
+	measure: (s: string) => number,
+): boolean {
+	let changed = false;
+	for (const cluster of clusters) {
+		if (!labels.has(cluster.id)) continue;
+		if (cluster.label == null) continue; // hull silence: gone records stay silent
+		const label = labels.get(cluster.id) ?? null;
+		if (label === cluster.label) continue;
+		cluster.label = label;
+		changed = true;
+	}
+	if (!changed) return false;
+	for (const rm of regionMeta) {
+		if (!labels.has(rm.id)) continue;
+		if (rm.label == null) continue;
+		const label = labels.get(rm.id) ?? null;
+		rm.label = label;
+		rm.lines = label
+			? wrapRegionLabel(label, maxWidth, maxLines, measure)
+			: null;
+	}
+	return true;
+}
 const LABEL_MAX_WIDTH = 170; // wrap width at the reference label size, world units
 const LABEL_GAP = 2.9; // world units between node edge and first label line (the 2px-at-fit reference ÷ 0.69)
 const LABEL_LINE_HEIGHT = 1.3;
@@ -590,7 +628,7 @@ export class GraphCanvasRenderer {
 	/** World rect the bitmap covers (drawImage target coords). */
 	private regionRect: { minX: number; minY: number; w: number; h: number } | null = null;
 	/** Region labels: cluster centroid + hue, computed at splat build. */
-	private regionMeta: { label: string | null; lines: string[] | null; cx: number; cy: number; hue: number }[] = [];
+	private regionMeta: { id: string; label: string | null; lines: string[] | null; cx: number; cy: number; hue: number }[] = [];
 	private regionTuning: RegionTuning = DEFAULT_REGION_TUNING;
 	private physicsTuning: PhysicsTuning = DEFAULT_PHYSICS_TUNING;
 	/** Gravity center for the live sim (graph bbox centroid at setData). */
@@ -769,6 +807,42 @@ export class GraphCanvasRenderer {
 			this.simActive = true;
 		}
 		this.markDirty();
+	}
+
+	/** Label-only channel (rename-shuffle fix, 2026-09-23): live
+	 *  cluster-label updates with NO setData. The rename path used to
+	 *  build a fresh snapshot object, which flowed setData → geometry
+	 *  rebuild — and the rebuild treats the last-fetched ledger as
+	 *  authoritative and cancels any pending drag commit, so a rename
+	 *  visibly rewound the whole graph whenever display had drifted
+	 *  (recent drag, mid-anneal, physics re-anneal). This channel touches
+	 *  ONLY label text: the region meta the draw pass reads plus the
+	 *  data-side cluster record (so the next geometry rebuild —
+	 *  visibility/settings/size — keeps the fresh label). Nodes, the
+	 *  sim, positions, and the pending commit are never touched. */
+	setClusterLabels(labels: ReadonlyMap<string, string | null>): void {
+		const data = this.data;
+		if (!data) return;
+		const settings = this.settings;
+		// No settings yet → nothing is drawn; patch the data side only and
+		// let the next build derive the wrap (same guard the build uses).
+		if (!settings) {
+			applyClusterLabels(data.clusters, [], labels, REGION_LABEL_MAX_WIDTH, REGION_LABEL_MAX_LINES, () => 0);
+			return;
+		}
+		const ctx = this.ctx;
+		const prevFont = ctx.font;
+		ctx.font = `${LABEL_WEIGHT} ${settings.clusterLabelSize}px ${data.fontFamily}`;
+		const changed = applyClusterLabels(
+			data.clusters,
+			this.regionMeta,
+			labels,
+			REGION_LABEL_MAX_WIDTH,
+			REGION_LABEL_MAX_LINES,
+			(s) => ctx.measureText(s).width,
+		);
+		ctx.font = prevFont;
+		if (changed) this.markDirty();
 	}
 
 	setVisible(visible: ReadonlySet<string> | null): void {
@@ -1229,6 +1303,14 @@ export class GraphCanvasRenderer {
 						},
 		});
 		this.simById = new Map(data.nodes.map((n) => [n.id, n as LayoutNode]));
+		// Hygiene (2026-09-23 fix wave): a fresh sim starts at alpha 1 and
+		// never decays while stopped — so the first post-rebuild drag would
+		// re-anneal the whole graph at full strength (alphaTarget(0.3)
+		// glides DOWN from 1 instead of gently up from rest). Initialize at
+		// the settle floor so first-drag behavior matches steady-state
+		// drags. setPhysicsTuning still rehearses its explicit alpha(1)
+		// when a full re-anneal IS the point.
+		this.sim.alpha(SIM_SETTLE_ALPHA);
 	}
 
 	/** Rasterize cluster regions into the low-res world-space bitmap.
@@ -1296,6 +1378,7 @@ export class GraphCanvasRenderer {
 			}
 			if (members > 0) {
 				this.regionMeta.push({
+					id: cluster.id,
 					label: cluster.label || null,
 					cx: sumX / members,
 					cy: sumY / members,

@@ -129,6 +129,64 @@ export function isNodeVisible(node: Pick<GraphNode, "name" | "statement">, query
 	return node.name.toLowerCase().includes(q) || node.statement.toLowerCase().includes(q);
 }
 
+/** In-place sessions patch for a live rename (rename-shuffle fix,
+ *  2026-09-23). The OLD path built a fresh snapshot object, which
+ *  flowed through the [snapshot]-keyed setData effect → geometry
+ *  rebuild → last-fetched ledger became authoritative + pending drag
+ *  commit cancelled → the graph visibly rewound whenever display had
+ *  drifted. This seam NEVER changes object identity: same snapshot
+ *  reference, same clusters array — so the data feed cannot re-fire.
+ *  The display refresh rides a separate tick state, and the cluster
+ *  label itself goes through the renderer's label-only channel
+ *  (setClusterLabels). Exported for tests; pure display state only —
+ *  the server derives the same join on its next read. */
+export function renameSessionsPatch(snapshot: Pick<GraphSnapshot, "sessions">, id: string, title: string): void {
+	snapshot.sessions[id] = title;
+}
+
+/** Seed positions for nodes the ledger doesn't know yet (hygiene,
+ *  2026-09-23 fix wave): they used to fall through to a ?? 0 and dump
+ *  at the origin. Place them on a deterministic ring around the known
+ *  positions' centroid — angle hashed from the id (FNV-1a), golden-angle
+ *  spiral offset so even hash collisions spread. Stable across
+ *  remounts, far enough off the mass to see, and they relax with the
+ *  pack on the next drag. In-place on the provided map; pure otherwise. */
+export function seedMissingNodePositions(
+	nodes: readonly { id: string }[],
+	positions: Map<string, { x: number; y: number }>,
+): Map<string, { x: number; y: number }> {
+	if (positions.size === 0 || nodes.every((n) => positions.has(n.id))) return positions;
+	let minX = Infinity;
+	let minY = Infinity;
+	let maxX = -Infinity;
+	let maxY = -Infinity;
+	for (const p of positions.values()) {
+		if (p.x < minX) minX = p.x;
+		if (p.y < minY) minY = p.y;
+		if (p.x > maxX) maxX = p.x;
+		if (p.y > maxY) maxY = p.y;
+	}
+	const cx = (minX + maxX) / 2;
+	const cy = (minY + maxY) / 2;
+	const radius = Math.max(maxX - minX, maxY - minY, 40) * 0.7 + 20;
+	const missing = nodes.filter((n) => !positions.has(n.id));
+	missing.forEach((n, i) => {
+		// FNV-1a hash → [0,1) → angle; the golden-angle spiral offset
+		// both spreads collisions and staggers long paths deterministically.
+		let h = 0x811c9dc5;
+		for (let c = 0; c < n.id.length; c++) {
+			h ^= n.id.charCodeAt(c);
+			h = (h * 0x01000193) >>> 0;
+		}
+		const angle = ((h / 0xffffffff) * 2 * Math.PI + i * 2.39996323) % (2 * Math.PI);
+		positions.set(n.id, {
+			x: cx + Math.cos(angle) * radius,
+			y: cy + Math.sin(angle) * radius,
+		});
+	});
+	return positions;
+}
+
 // ---- Color helpers (canvas wants hex, not oklch) ---------------------------
 
 /** Resolve a CSS variable (oklch in this app) to #rrggbb via the canvas. */
@@ -921,27 +979,27 @@ export function GraphView() {
 		return () => window.removeEventListener("lh:graph-revision", onRevision);
 	}, [refreshCosts]);
 
-	/* Live rename labels (wave 7 interlude): a session rename anywhere
-	   (sidebar inline row, chat header) announces itself as lh:chat-renamed
-	   {id, title} — and the birth-session partition means that title IS
-	   the cluster label. Patch the snapshot in place: the sessions map
-	   (the detail card's provenance line) and the one matching cluster.
-	   No refetch — the server derives the same join on its next read, this
-	   just keeps the two views from disagreeing until then. Unlabeled
-	   clusters keep their hull-only silence (a null label is a GONE
-	   record — a rename can't reach one, and the guard holds the line). */
+	/* Live rename labels (rename-shuffle fix, 2026-09-23): a session
+	   rename anywhere (sidebar inline row, chat header) announces itself
+	   as lh:chat-renamed {id, title} — and the birth-session partition
+	   means that title IS the cluster label. The label update goes
+	   through the renderer's label-only channel (setClusterLabels): NO
+	   new snapshot object, NO setData, NO geometry rebuild — so the
+	   position ledger can't assert itself and a pending drag commit
+	   survives. The sessions map (the detail card's provenance line)
+	   patches in place; a tick bump re-renders the view so an open
+	   detail card reads the fresh title. Unlabeled clusters keep their
+	   hull-only silence — the null-label guard lives in the channel
+	   (applyClusterLabels): a rename can't reach a gone record. */
+	const [, setLabelTick] = useState(0);
 	useEffect(() => {
 		const onRenamed = (e: Event) => {
 			const { id, title } = (e as CustomEvent<{ id?: string; title?: string }>).detail ?? {};
 			if (typeof id !== "string" || typeof title !== "string" || id === "" || title === "") return;
-			setSnapshot((snap) => {
-				if (snap == null) return snap;
-				const sessions = { ...snap.sessions, [id]: title };
-				const clusters = snap.clusters.map((c) =>
-					c.id === id && c.label != null ? { ...c, label: title } : c,
-				);
-				return { ...snap, sessions, clusters };
-			});
+			const snap = snapshotRef.current;
+			if (snap != null) renameSessionsPatch(snap, id, title);
+			rendererRef.current?.setClusterLabels(new Map([[id, title]]));
+			setLabelTick((t) => t + 1);
 		};
 		window.addEventListener("lh:chat-renamed", onRenamed);
 		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
@@ -995,7 +1053,10 @@ export function GraphView() {
 				if (p) positions.set(node.id, { x: p.x, y: p.y });
 			}
 			if (positions.size > 0) {
-				posRef.current = positions;
+				// Hygiene (2026-09-23 fix wave): nodes the ledger doesn't know
+				// yet (raced mid-settle) get seeded ring positions instead of
+				// the old ?? 0 origin dump.
+				posRef.current = seedMissingNodePositions(snapshot.nodes, positions);
 				return () => {
 					posRef.current = null;
 				};

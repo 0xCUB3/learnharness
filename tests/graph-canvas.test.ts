@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import { describe, it, it as test } from "node:test";
 import {
+	applyClusterLabels,
 	arrowGeometry,
 	boxBlurRound,
 	fitTransform,
@@ -312,5 +313,83 @@ describe("wrapRegionLabel (wave 7: session names / file paths)", () => {
 	it("the ellipsis itself never exceeds the width", () => {
 		const lines = wrapRegionLabel("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", W, 2, measure);
 		assert.ok(measure(lines[1]!) <= W, "ellipsized tail fits");
+	});
+});
+
+
+describe("applyClusterLabels (the label-only rename channel)", () => {
+	const measure = (s: string) => s.length * 5;
+	const W = 220;
+	const MAXL = 3;
+
+	const fixture = () => ({
+		clusters: [
+			{ id: "chat_a", label: "Old title" },
+			{ id: "chat_b", label: null },
+			{ id: "seedplan", label: "Orbital mechanics" },
+		],
+		regionMeta: [
+			{ id: "chat_a", label: "Old title", lines: ["Old title"], cx: 0, cy: 0, hue: 10 },
+			{ id: "chat_b", label: null, lines: null, cx: 1, cy: 1, hue: 20 },
+			{ id: "seedplan", label: "Orbital mechanics", lines: ["Orbital mechanics"], cx: 2, cy: 2, hue: 30 },
+		],
+	});
+
+	it("patches the matching cluster and re-wraps its region meta", () => {
+		const f = fixture();
+		// 5px/char and W=220: a 45-char title just overflows one line
+		// ("...for the" is 40 chars, appending " graph" reads 46).
+		const longTitle = "A much longer new session title for the graph";
+		const changed = applyClusterLabels(
+			f.clusters, f.regionMeta, new Map([["chat_a", longTitle]]),
+			W, MAXL, measure,
+		);
+		assert.equal(changed, true);
+		assert.equal(f.clusters[0]!.label, longTitle);
+		assert.deepEqual(f.regionMeta[0]!.lines, ["A much longer new session title for the", "graph"]);
+		// untouched entries stay byte-identical
+		assert.equal(f.clusters[1]!.label, null);
+		assert.equal(f.clusters[2]!.label, "Orbital mechanics");
+		assert.deepEqual(f.regionMeta[2]!.lines, ["Orbital mechanics"]);
+	});
+
+	it("hull silence: a null-label cluster never gains a label", () => {
+		const f = fixture();
+		const changed = applyClusterLabels(
+			f.clusters, f.regionMeta, new Map([["chat_b", "Resurrected?"]]),
+			W, MAXL, measure,
+		);
+		assert.equal(changed, false);
+		assert.equal(f.clusters[1]!.label, null);
+		assert.equal(f.regionMeta[1]!.lines, null);
+	});
+
+	it("a label already matching is a no-op (no redraw)", () => {
+		const f = fixture();
+		const changed = applyClusterLabels(
+			f.clusters, f.regionMeta, new Map([["seedplan", "Orbital mechanics"]]),
+			W, MAXL, measure,
+		);
+		assert.equal(changed, false);
+	});
+
+	it("an explicit null clears a labeled cluster's lines", () => {
+		const f = fixture();
+		const changed = applyClusterLabels(
+			f.clusters, f.regionMeta, new Map([["chat_a", null]]),
+			W, MAXL, measure,
+		);
+		assert.equal(changed, true);
+		assert.equal(f.clusters[0]!.label, null);
+		assert.equal(f.regionMeta[0]!.lines, null);
+	});
+
+	it("unknown ids in the map change nothing", () => {
+		const f = fixture();
+		const changed = applyClusterLabels(
+			f.clusters, f.regionMeta, new Map([["chat_ghost", "Nope"]]),
+			W, MAXL, measure,
+		);
+		assert.equal(changed, false);
 	});
 });
