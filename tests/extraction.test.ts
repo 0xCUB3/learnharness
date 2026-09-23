@@ -43,7 +43,6 @@ import type { GraphStore } from "../src/core/ports.ts";
 import { abortExtraction, createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
 import { ModelsNotConfiguredError } from "../src/core/settings.ts";
 import { batchTag, coverageOf, coverageSlots } from "../src/core/coverage.ts";
-import { clusterNamingSettled, refreshClusterLabels } from "../src/agent/subagents/cluster-namer.ts";
 import { semanticClusters } from "../src/core/semantic-clusters.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
@@ -365,7 +364,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", verdict),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const stats = await pipeline.runExtraction(chatId);
 
@@ -428,7 +426,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		assert.equal(ledgers.readCoverage().length, 0);
 	});
 
-	it("a labeler-less run merges fine and SKIPS cluster naming honestly (BYOK, 2026-09-22)", async () => {
+	it("the LLM cluster-namer is DEAD (wave 7): a merge mints no naming runs — labels are session names now", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
 		// Identity-pass verdict: p1 becomes a new node, p2 dropped (no links).
@@ -444,11 +442,14 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", verdict),
-			// NO labeler: the cluster-naming garnish skips (console line),
-			// the merge itself is unaffected.
 		});
 		const stats = await pipeline.runExtraction(chatId);
 		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 3 });
+		// Wave 7 (950ddfd): birth-session clusters carry session-name labels,
+		// so the post-merge naming garnish is gone — no model spend, no
+		// naming-run records, no label writes.
+		assert.equal(ledgers.readNamingRuns().length, 0, "no naming runs minted");
+		assert.equal(ledgers.readClusterLabels().length, 0, "no label records appended");
 	});
 
 
@@ -501,7 +502,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", verdict),
-			labeler: submitModel("submit_labels", { labels: [] }),
 			// If the direct values did NOT win, this throw would surface.
 			engineFor: (role) => {
 				throw new Error(`engineFor should not be consulted for ${role} when a direct value is set`);
@@ -521,7 +521,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: silentModel(), // never submits the review
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await assert.rejects(pipeline.runExtraction(chatId), /the auditor never submitted a review/);
 		assert.equal(ledgers.readNodes().length, 0);
@@ -533,7 +532,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: silentModel(),
 			auditor: submitModel("submit_review", { ...FINDINGS, dropped: [] }),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await assert.rejects(failingExtractor.runExtraction(chatId), /the extractor never submitted findings/);
 		assert.equal(ledgers.readCheckpoints().length, 0);
@@ -567,7 +565,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			// registry must already carry this chat at the right phase.
 			extractor: submitModel("submit_findings", FINDINGS, () => seen.push(phaseOf())),
 			auditor: submitModel("submit_review", verdict, () => seen.push(phaseOf())),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await pipeline.runExtraction(chatId);
 		assert.deepEqual(seen, ["extracting", "auditing"]);
@@ -596,7 +593,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: gatedEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", verdict),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const run = pipeline.runExtraction(chatId);
 		// Wait for the tail: the phase must flip to "embedding" while the
@@ -646,7 +642,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			auditor: submitModel("submit_review", verdict, () =>
 				usageSeen.push(extractionStatuses().find((r) => r.chatId === chatId)?.usage.extractor?.steps.at(-1)?.inputTokens),
 			),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await pipeline.runExtraction(chatId);
 
@@ -685,7 +680,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: hangingModel(), // hangs until aborted — no step finishes
 			auditor: submitModel("submit_review", { propositions: [], edges: [], attribution: { quiz: {} }, dropped: [] }),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const runPromise = pipeline.runExtraction(chatId);
 
@@ -737,7 +731,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: gatedExtractor,
 			auditor: silentModel(),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 
 		const first = pipeline.runExtraction(chatId);
@@ -772,7 +765,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: gatedExtractor,
 			auditor: silentModel(),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		// A SECOND instance over DIFFERENT ledgers — the observer a separate
 		// route entry's module instance is in dev (the turn-liveness lesson:
@@ -783,7 +775,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: silentModel(),
 			auditor: silentModel(),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 
 		const first = pipeline.runExtraction(chatId);
@@ -811,7 +802,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			embedder: fakeEmbedder,
 			extractor: silentModel(),
 			auditor: silentModel(),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await assert.rejects(pipeline.runExtraction("chat_does_not_exist"), /Chat not found/);
 	});
@@ -849,24 +839,6 @@ const NOTES_VERDICT = {
 	dropped: [],
 } as const;
 
-const CLUSTER_FINDINGS = {
-	propositions: [
-		{ id: "p1", name: "Modal editing", statement: "Vim edits text through modal command modes.", aliases: [], messages: [], evidence: ["Normal mode keys are commands."], understanding: "solid" },
-		{ id: "p2", name: "Verb-object grammar", statement: "Vim commands compose as verb and object.", aliases: [], messages: [], evidence: ["d then motion deletes."], understanding: "solid" },
-		{ id: "p3", name: "Operator-pending", statement: "Vim enters operator-pending mode between verb and object.", aliases: [], messages: [], evidence: ["After d, a motion is expected."], understanding: "solid" },
-	],
-	edges: [
-		{ from: "p1", to: "p2", type: "follows", messages: [], evidence: ["e"] },
-		{ from: "p2", to: "p3", type: "follows", messages: [], evidence: ["e"] },
-	],
-} as const;
-
-const CLUSTER_VERDICT = {
-	propositions: CLUSTER_FINDINGS.propositions,
-	edges: CLUSTER_FINDINGS.edges,
-	dropped: [],
-} as const;
-
 /** Test seam for the embedder: fakes the post-merge embedding batch —
  *  one identical unit vector per node → semanticClusters merges them all
  *  into ONE topic — then persists the partition like the real embedder. */
@@ -888,66 +860,6 @@ const fakeEmbedder = async (store: GraphStore) => {
 	});
 };
 
-describe("cluster naming (the post-extraction garnish)", () => {
-	it("names a new community after a notes merge — one record, claimed on the next refresh", async () => {
-		const ledgers = memoryLedgers();
-		const namerCalls: number[] = [];
-		const labeler = submitModel("submit_labels", { labels: [{ key: "c0", label: "Vim modal grammar" }] }, () => namerCalls.push(1));
-		const pipeline = createExtractionPipeline({
-			chatStore,
-			graphStore: ledgers,
-			embedder: fakeEmbedder,
-			extractor: submitModel("submit_findings", CLUSTER_FINDINGS),
-			auditor: submitModel("submit_review", CLUSTER_VERDICT),
-			labeler,
-		});
-		const stats = await pipeline.importNotes({ filePath: "/vault/modal.md", text: "raw notes, any format" });
-		assert.deepEqual(stats, { nodes: 3, edges: 2, events: 3 });
-		// The refresh is fire-and-forget inside the pipeline — settle it.
-		await clusterNamingSettled();
-		assert.equal(namerCalls.length, 1, "ONE singular naming call");
-		const records = ledgers.readClusterLabels();
-		assert.equal(records.length, 1);
-		assert.equal(records[0]!.label, "Vim modal grammar");
-		assert.equal(records[0]!.core.length, 3);
-		assert.match(records[0]!.id, /^clu_/);
-		// Second refresh: core-survival claims it — nothing new to name.
-		const again = await refreshClusterLabels({ graphStore: ledgers, engine: labeler });
-		assert.equal(again.named, 0);
-		assert.equal(again.appended, 0);
-		assert.ok(again.claimed >= 1);
-		assert.equal(ledgers.readClusterLabels().length, 1, "no duplicate records");
-		// Money channel (2026-09 cost metrics): the naming call billed —
-		// ONE run record with the faux model, deterministic > 0 usage, and
-		// the refresh stats. The second refresh named nothing (no model
-		// call — early return), so no second record.
-		const namingRuns = ledgers.readNamingRuns();
-		assert.equal(namingRuns.length, 1, "one naming run billed");
-		assert.equal(namingRuns[0]!.model, labeler.model.id);
-		assert.ok(namingRuns[0]!.steps.length >= 1, "at least one billed step");
-		assert.ok((namingRuns[0]!.steps[0]!.inputTokens ?? 0) > 0, "usage estimated > 0");
-		assert.equal(namingRuns[0]!.stats.appended, 1);
-		assert.equal(namingRuns[0]!.stats.named, 1);
-		assert.ok(namingRuns[0]!.durationMs >= 0);
-	});
-
-	it("naming failure never fails the run", async () => {
-		const ledgers = memoryLedgers();
-		const pipeline = createExtractionPipeline({
-			chatStore,
-			graphStore: ledgers,
-			embedder: fakeEmbedder,
-			extractor: submitModel("submit_findings", CLUSTER_FINDINGS),
-			auditor: submitModel("submit_review", CLUSTER_VERDICT),
-			labeler: silentModel(), // never submits — the namer throws
-		});
-		const stats = await pipeline.importNotes({ filePath: "/vault/modal.md", text: "raw notes" });
-		assert.deepEqual(stats, { nodes: 3, edges: 2, events: 3 }, "the merge itself succeeded");
-		await clusterNamingSettled();
-		assert.equal(ledgers.readClusterLabels().length, 0, "nothing named, nothing appended");
-	});
-});
-
 describe("the notes front door (importNotes — format-agnostic)", () => {
 	it("imports raw notes end to end: source record, file-scoped provenance, no quiz events", async () => {
 		const ledgers = memoryLedgers();
@@ -962,7 +874,6 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 				const run = extractionStatuses().find((r) => r.chatId.startsWith("src_"));
 				seen.push({ kind: run?.kind, label: run?.label });
 			}),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const stats = await pipeline.importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
 
@@ -1007,7 +918,6 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 				embedder: fakeEmbedder,
 				extractor: submitModel("submit_findings", NOTES_FINDINGS),
 				auditor: submitModel("submit_review", NOTES_VERDICT),
-				labeler: submitModel("submit_labels", { labels: [] }),
 			});
 		const first = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
 		assert.deepEqual(first, { nodes: 1, edges: 0, events: 1 });
@@ -1028,7 +938,6 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 			embedder: fakeEmbedder,
 			extractor: hangingModel(),
 			auditor: submitModel("submit_review", NOTES_VERDICT),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const runPromise = pipeline.importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
 
@@ -1111,7 +1020,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			embedder: fakeEmbedder,
 			extractor: fauxEngine([findingsStep((v) => views.push(v)), findingsStep((v) => views.push(v))]),
 			auditor: fauxEngine([passThroughAuditStep(), passThroughAuditStep()]),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const stats = await pipeline.runExtraction(chatId);
 
@@ -1167,7 +1075,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 					}),
 			]),
 			auditor: fauxEngine([passThroughAuditStep()]),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const runPromise = pipeline.runExtraction(chatId);
 		// The abort must land while batch 2's extractor hangs. The faux
@@ -1199,7 +1106,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			embedder: fakeEmbedder,
 			extractor: fauxEngine([findingsStep((v) => reRunViews.push(v))]),
 			auditor: fauxEngine([passThroughAuditStep()]),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await finisher.runExtraction(chatId);
 		assert.equal(reRunViews.length, 1);
@@ -1222,7 +1128,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			embedder: fakeEmbedder,
 			extractor: fauxEngine([findingsStep()]),
 			auditor: fauxEngine([passThroughAuditStep()]),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await pipeline.runExtraction(chatId);
 		const messages = () => chatStore.getChat(chatId)!.messages as UIMessage[];
@@ -1255,7 +1160,6 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			embedder: fakeEmbedder,
 			extractor: fauxEngine([findingsStep((v) => reRunViews.push(v))]),
 			auditor: fauxEngine([passThroughAuditStep()]),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		await reOpener.runExtraction(chatId);
 		assert.equal(reRunViews.length, 1, "one batch: the single re-opened message");
@@ -1279,7 +1183,6 @@ describe("the session-deletion guard (chat deleted mid-run)", () => {
 			embedder: fakeEmbedder,
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: submitModel("submit_review", { propositions: FINDINGS.propositions, edges: [], attribution: { quiz: {} }, dropped: [] }, () => chatStore.deleteChat(chatId)),
-			labeler: submitModel("submit_labels", { labels: [] }),
 		});
 		const stats = await pipeline.runExtraction(chatId);
 

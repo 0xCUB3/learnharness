@@ -21,7 +21,6 @@ import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/coverage.ts";
 import { EXTRACTION } from "../../../config.ts";
-import { refreshClusterLabels } from "./cluster-namer.ts";
 
 /**
  * The extraction pipeline (vision §1 construction, 2026-09-02 redesign) — the
@@ -567,8 +566,6 @@ export interface ExtractionModels {
 	 *  engineFor chain (production wires no direct values). */
 	extractor?: PiEngine;
 	auditor?: PiEngine;
-	/** Test seam for the cluster namer (post-extraction garnish). */
-	labeler?: PiEngine;
 	/** Settings-resolved engine per role — the same slot treatment the
 	 *  job runner got, read FRESH per stage call (a settings PUT between
 	 *  stages lands). BYOK (owner, 2026-09-22): the chain (role override →
@@ -880,18 +877,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
 					`(${Math.round(performance.now() - t0)}ms total)`,
 			);
-			// Post-extraction garnish (DECIDED 2026-09-13): name new/changed
-			// clusters. Fire-and-forget — naming never fails the run.
-			const labelerEngine = stageEngine("labeler", deps.labeler);
-			if (labelerEngine) {
-				refreshClusterLabels({
-					graphStore,
-					engine: labelerEngine,
-					signal: runningExtractions.get(chatId)?.controller.signal,
-				}).catch(() => {});
-			} else {
-				console.info(`[extraction ${chatId}] cluster naming skipped — no labeler model configured`);
-			}
 			return stats;
 		} catch (err) {
 			persistRunUsage(chatId, Math.round(performance.now() - t0), batchesDone > 0 ? total : undefined);
@@ -1010,16 +995,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
 					`(${Math.round(performance.now() - t0)}ms total)`,
 			);
-			const labelerEngine = stageEngine("labeler", deps.labeler);
-			if (labelerEngine) {
-				refreshClusterLabels({
-					graphStore,
-					engine: labelerEngine,
-					signal: runningExtractions.get(id)?.controller.signal,
-				}).catch(() => {});
-			} else {
-				console.info(`[extraction ${id}] cluster naming skipped — no labeler model configured`);
-			}
 			return stats;
 		} catch (err) {
 			persistRunUsage(id, Math.round(performance.now() - t0), undefined);
