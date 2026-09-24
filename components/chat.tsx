@@ -5,6 +5,7 @@ import { useChat } from "@ai-sdk/react";
 import { lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { createChatTransport } from "@/components/chat-transport";
 import { SetupDialog } from "@/components/setup-dialog";
+import { Hint } from "@/components/ui/hint";
 import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
@@ -912,6 +913,7 @@ export function Chat({
 								onBlur={() => void commitRename(titleDraft)}
 								spellCheck={false}
 								aria-label="Session title"
+								title="Rename this session"
 								className="lh-no-drag min-w-[8ch] max-w-[70%] shrink-0 bg-transparent font-title text-3xl tracking-tight caret-current outline-none [field-sizing:content]"
 							/>
 							{/* flex-1 spacer during rename too, so the chips stay at
@@ -921,10 +923,15 @@ export function Chat({
 						</>
 					) : (
 					<>
-						<button
+						<Hint
+							// F2 renames (registry) — surfaced on the hover.
+							label="Rename session"
+							action="rename-session"
+							side="bottom"
+						>
+<button
 							type="button"
-							title="Rename session"
-							onClick={() => {
+														onClick={() => {
 								setTitleDraft(titleText);
 								setRenaming(true);
 							}}
@@ -932,6 +939,7 @@ export function Chat({
 						>
 							{titleText}
 							</button>
+						</Hint>
 							{/* flex-1 spacer: keeps the chips at the right edge AND stays a
 							    drag surface (no carve-out) — the freed bar is grippable. */}
 							<div className="min-w-4 flex-1" aria-hidden="true" />
@@ -941,16 +949,17 @@ export function Chat({
 					    structure beside the phase chip — access to the full-DAG popup
 					    at every width; the marginalia is the wide-screen glance view. */}
 					{planTree && (
-						<button
+						<Hint label="Open the full plan" side="bottom">
+<button
 							type="button"
 							data-testid="plan-chip"
 							onClick={() => setPlanOpen(true)}
-							title="Open the full plan"
 							className="lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground"
 						>
 							<WaypointsIcon className="size-3.5 text-primary" aria-hidden />
 							Plan
 						</button>
+</Hint>
 					)}
 					{/* The extraction ring (owner-locked redesign, 2026-09-24): fills
 					    with uncovered vs the chunk threshold, pulses while a run is in
@@ -1551,11 +1560,11 @@ function DockOverlay({
 				    mid-question unmount), and widening past the floor fades it
 				    back in. */}
 				{pending && plan && (
-					<button
+					<Hint label="Open the full plan" side="bottom">
+<button
 						type="button"
 						data-testid="plan-marginalia"
 						onClick={onOpenPlan}
-						title="Open the full plan"
 						style={{ left: `calc(50% + ${DOCK_W / 2 + MARGIN_GAP}px)` }}
 						className={`absolute bottom-5 right-4 top-0 cursor-pointer transition-[filter,opacity] duration-300 ease-out ${
 							expanded && flankW >= MARGIN_MIN_W
@@ -1565,6 +1574,7 @@ function DockOverlay({
 					>
 						{plan}
 					</button>
+</Hint>
 				)}
 			</div>
 		</div>

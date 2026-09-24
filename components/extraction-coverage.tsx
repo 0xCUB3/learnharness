@@ -5,6 +5,7 @@ import { useActivity } from "@/components/activity-dock";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useSettingsSaved } from "@/components/settings-signal";
 import { formatTokens } from "@/components/usage-format";
+import { Hint } from "@/components/ui/hint";
 import { timeAgo } from "@/components/sidebar";
 
 /**
@@ -290,18 +291,24 @@ export function CoverageRing({ chatId, refreshKey = 0 }: { chatId: string; refre
 	const fill = ringFill(coverage.uncoveredTokens, graph.chunkTokens);
 	return (
 		<div ref={rootRef} className="lh-no-drag relative shrink-0">
-			<button
-				type="button"
-				data-testid="coverage-ring"
-				onClick={() => setOpen((o) => !o)}
-				aria-expanded={open}
-				title="Extraction coverage — uncovered tokens vs the chunk threshold"
-				className="relative flex size-5 cursor-pointer items-center justify-center transition-opacity hover:opacity-80"
+			<Hint
+				// Plain language (tooltip wave) — "uncovered tokens vs the chunk
+				// threshold" was internal vocabulary.
+				label="How much of this session isn't in your graph yet — click for details"
+				side="bottom"
 			>
-				{/* The donut: track + fill. The whole ring pulses while a run
-				    is in flight (motion = the working-state signal). */}
-				<CoverageRingGlyph fill={fill} running={coverage.running} />
-			</button>
+				<button
+					type="button"
+					data-testid="coverage-ring"
+					onClick={() => setOpen((o) => !o)}
+					aria-expanded={open}
+					className="relative flex size-5 cursor-pointer items-center justify-center transition-opacity hover:opacity-80"
+				>
+					{/* The donut: track + fill. The whole ring pulses while a run
+					    is in flight (motion = the working-state signal). */}
+					<CoverageRingGlyph fill={fill} running={coverage.running} />
+				</button>
+			</Hint>
 			{open && (
 				<div
 					data-testid="coverage-ring-popover"

@@ -40,6 +40,7 @@ import type { ExtraProps } from "streamdown";
 import { MERMAID_FONT_SIZE, renderMermaid } from "@/components/mermaid-render";
 import { MermaidError } from "@/components/mermaid-error";
 import { chartSize, useSessionMermaid } from "@/components/session-overlay";
+import { Hint } from "@/components/ui/hint";
 
 // ─── The one affordance: the hover-reveal corner copy ────────────────────────
 
@@ -198,16 +199,22 @@ function MermaidInline({ chart }: { chart: string }) {
 			<div className="absolute top-0 right-0 flex items-start gap-0.5">
 				<CopyCorner getText={() => chart} label="Copy diagram source" />
 				{overlay && (
-					<button
+					<Hint
+					// Full-screen overlay copy (tooltip wave) — "session view" was
+					// internal direction-speak for the same thing.
+					label="Open full-screen"
+					side="bottom"
+				>
+<button
 						type="button"
 						aria-label="Expand diagram"
 						data-testid="md-mermaid-expand"
-						title="Expand into the session view"
-						className="flex size-6 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/md:opacity-100"
+												className="flex size-6 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/md:opacity-100"
 						onClick={() => overlay.openMermaid(chart)}
 					>
 						<MaximizeIcon className="size-3.5" />
 					</button>
+				</Hint>
 				)}
 			</div>
 		</div>

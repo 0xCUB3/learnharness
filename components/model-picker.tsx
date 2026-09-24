@@ -7,6 +7,7 @@ import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
 import { composeSlotModel } from "@/components/settings/agent-section";
 import { MenuShell } from "@/components/menu-shell";
+import { Hint } from "@/components/ui/hint";
 import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-signal";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
 
@@ -252,12 +253,18 @@ export function ModelControl() {
 
 	return (
 		<div ref={containerRef} className="relative flex items-center gap-1.5" data-testid="model-control">
-			<button
+			<Hint
+				// User language (tooltip wave): no tier/prober vocabulary. ⌘K
+				// opens this same menu (registry, override-aware).
+				label="The main model for your sessions"
+				action="open-model-picker"
+				side="bottom"
+			>
+				<button
 				type="button"
 				data-testid="stats-model"
 				onClick={() => openMenu("model")}
 				aria-expanded={open === "model"}
-				title="Strong tier model (prober + teacher) — set app-wide"
 				// Chrome look (owner, fix wave round 3): matches the graph
 				// view's floating top-right buttons (import notes, gear,
 				// coverage) — blurred, fuller opacity, shadowed — so the
@@ -267,7 +274,13 @@ export function ModelControl() {
 				<span className="text-card-foreground">{effectiveId ? prettyModel(effectiveId) : "—"}</span>
 				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>
-			<button
+			</Hint>
+			<Hint
+				// User language (tooltip wave) — no "tier" vocabulary.
+				label="How much the main model thinks"
+				side="bottom"
+			>
+				<button
 				type="button"
 				data-testid="stats-thinking"
 				onClick={() => {
@@ -277,7 +290,6 @@ export function ModelControl() {
 					openMenu("thinking");
 				}}
 				aria-expanded={open === "thinking"}
-				title="Strong tier thinking level — set app-wide"
 				// Chrome look (owner, fix wave round 3): matches the graph
 				// view's floating top-right buttons (import notes, gear,
 				// coverage) — blurred, fuller opacity, shadowed — so the
@@ -291,6 +303,7 @@ export function ModelControl() {
 				</span>
 				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>
+			</Hint>
 
 			{/* The shared dropdown body (extracted 2026-09-20): the agent
 			    settings' slot selects and the setup dialog use the exact same

@@ -140,7 +140,7 @@ describe("plan block render", () => {
 		// Snapshot statuses render as carried.
 		assert.match(html, /data-testid="plan-node-a" data-status="visited"/);
 		assert.match(html, /data-testid="plan-node-b" data-status="upcoming"/);
-		assert.match(html, /Open the full plan/);
+		assert.ok(html.includes('aria-label="Open the full plan"'), "the trigger names itself (tooltip copy)");
 	});
 
 });

@@ -44,6 +44,7 @@ import type { ModelsSettings } from "@/src/core";
 import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/menu-shell";
 import { notifySettingsSaved } from "@/components/settings-signal";
 import { KeysSection } from "./keys-section.tsx";
+import { Hint } from "@/components/ui/hint";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 
@@ -70,6 +71,10 @@ const DialogContext = createContext<{ open: (section?: string, row?: string) => 
 /** AppShell-level mount: the sidebar row and the mod+, chord call this.
  *  `open(section)` lands the dialog on a specific section (the first-run
  *  setup flow deep-links to Keys when no provider key exists yet). */
+/** The auto-update row's hint (tooltip wave): honest user language — no
+ *  stream vocabulary. Exported for the copy pin (tooltip-mechanism test). */
+export const AUTO_UPDATE_HINT = "Automatic updates arrive in an upcoming release";
+
 export function SettingsDialogProvider({
 	children,
 }: {
@@ -258,7 +263,13 @@ export function SettingsDialogBody({
 			{/* Header — the app's quiet CMU title language. */}
 			<header className="flex h-15 shrink-0 items-center gap-3 border-b border-border px-5">
 				<h2 className="font-title text-2xl tracking-tight">Settings</h2>
-				<button
+				<Hint
+						// Esc closes the dialog (its own listener) — surface it.
+						label="Close"
+						binding="escape"
+						side="left"
+					>
+						<button
 					type="button"
 					aria-label="Close settings"
 					data-testid="settings-close"
@@ -275,6 +286,7 @@ export function SettingsDialogBody({
 						<path d="M4 4l8 8M12 4l-8 8" />
 					</svg>
 				</button>
+					</Hint>
 			</header>
 
 			<div className="flex min-h-0 flex-1">
@@ -340,7 +352,7 @@ export function SettingsDialogBody({
 								>
 									<SettingsRow
 										label="Auto-update"
-										hint="The update mechanism ships in a later wave"
+										hint={AUTO_UPDATE_HINT}
 										testid="row-auto-update"
 									>
 										<Toggle

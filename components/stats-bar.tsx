@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { contextWindow, sessionCost, turnCost, type ChatSettings, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, prettyModel } from "@/components/usage-format";
 import { ModelControl, catalogLimits, useModelCatalog } from "@/components/model-picker";
+import { Hint } from "@/components/ui/hint";
 
 /**
  * The below-composer stats bar (wave 4 observability): the session's
@@ -92,11 +93,16 @@ export function StatsBar({
 			    exists (turns). Pre-chat renders nothing (see the header). */}
 			{turns.length > 0 && (
 			<div ref={barRef} className="relative">
-				<button
+				<Hint
+						// Copy kept (the scout approved) — machinery moved to the
+						// styled tooltip (tooltip wave).
+						label="Session stats — per-turn detail"
+						side="bottom"
+					>
+						<button
 					type="button"
 					onClick={() => setOpen((o) => !o)}
 					aria-expanded={open}
-					title="Session stats — per-turn detail"
 					data-testid="stats-summary"
 					className="flex items-center gap-1.5 tabular-nums transition-colors hover:text-foreground"
 				>
@@ -106,6 +112,7 @@ export function StatsBar({
 					<span aria-hidden>·</span>
 					<span data-testid="stats-cost">{costLabel}</span>
 				</button>
+					</Hint>
 				{open && (
 					<div
 						data-testid="stats-detail"

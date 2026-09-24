@@ -204,6 +204,10 @@ describe("activity section render", () => {
 		assert.match(html, /Background agents/);
 		// Total cost: nothing priced → "—" in the header.
 		assert.match(html, /activity-total-cost[^>]*>—</);
+		// Truncation-reveals KEEP native title (tooltip wave mechanism rule):
+		// the truncated activity + title spans carry title= — a styled
+		// tooltip adds nothing over an ellipsis reveal.
+		assert.match(html, /title="building sandbox…"/);
 	});
 
 

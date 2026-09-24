@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2Icon, MicIcon } from "lucide-react";
 import { useSettingsDialog } from "@/components/settings/settings-dialog";
+import { Hint } from "@/components/ui/hint";
 
 /**
  * Voice dictation — the cloud engine (STT wave 1, 2026-09-17).
@@ -481,37 +482,51 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 
 	if (!active) {
 		return (
-			<button
-				type="button"
-				onClick={() => {
-					if (keyless) {
-						clearError();
-						openSettings("keys", DEEPGRAM_KEY_ID);
-					} else {
-						toggle();
-					}
-				}}
-				title={error ?? "Dictate into the composer"}
-				aria-label={error ? `Dictation failed: ${error}` : "Start dictation"}
-				data-testid="dictation-toggle"
+			<Hint
+				// Errored: the button span truncates the line — the tooltip is its
+				// full reveal (the keyless line KEEPS "Deepgram" — owner overrule:
+				// it's the Keys row label, the truth the user needs). Otherwise the
+				// quiet label + the live ⌘D binding.
+				label={error ?? "Dictate"}
+				action={error ? undefined : "toggle-dictation"}
+				side="top"
+			>
+				<button
+					type="button"
+					onClick={() => {
+						if (keyless) {
+							clearError();
+							openSettings("keys", DEEPGRAM_KEY_ID);
+						} else {
+							toggle();
+						}
+					}}
+					aria-label={error ? `Dictation failed: ${error}` : "Start dictation"}
+					data-testid="dictation-toggle"
 				// Same blurring as the floating chrome (owner, fix wave round 3),
 			// but lower opacity — the mic stays quieter than the model pills.
 			className="flex h-7 w-full items-center justify-center gap-1.5 rounded-md border border-border/50 bg-card/50 text-xs text-muted-foreground/70 shadow-lg backdrop-blur transition-colors hover:border-border hover:text-muted-foreground"
 			>
-				<MicIcon className="size-3.5" />
-				<span className="max-w-full truncate">{error ?? "Dictate"}</span>
-			</button>
+					<MicIcon className="size-3.5" />
+					<span className="max-w-full truncate">{error ?? "Dictate"}</span>
+				</button>
+			</Hint>
 		);
 	}
 
 	return (
 		<div className="flex w-full min-w-0 items-center gap-2" data-testid="dictation-bar">
-			<button
-				type="button"
-				onClick={toggle}
-				disabled={phase === "stopping"}
-				title="Stop dictation (Esc)"
-				aria-label="Stop dictation"
+			<Hint
+				// The owner flagged this copy good ("Stop dictation (Esc)") —
+				// kept verbatim; only the machinery moved to the styled tooltip.
+				label="Stop dictation (Esc)"
+				side="top"
+			>
+				<button
+					type="button"
+					onClick={toggle}
+					disabled={phase === "stopping"}
+					aria-label="Stop dictation"
 				data-testid="dictation-toggle"
 				className="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-destructive/10 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
 			>
@@ -520,8 +535,9 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 				) : (
 					<MicIcon className="size-3.5" />
 				)}
-				Stop
-			</button>
+					Stop
+				</button>
+			</Hint>
 			<span className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive" aria-hidden />
 			{/* Fixed width while recording — nothing ever appends text beside it
 			    (no interims, owner round 1). Cells carry no minimum width; the

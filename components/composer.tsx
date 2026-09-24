@@ -2,6 +2,7 @@
 
 import { CheckIcon, CornerDownLeftIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Hint } from "@/components/ui/hint";
 
 /**
  * The chat composer — content row ONLY (the persistent rounded shell lives in
@@ -108,13 +109,21 @@ export function Composer({
 					// pending on the next message; a side question now rides the
 					// acceptance as its note instead).
 				<div className="flex shrink-0 flex-col justify-end gap-1" data-testid="plan-verdict-buttons">
-					<button
-						type="button"
-						onClick={verdict.onAccept}
+					<Hint
+						// Enter accepts too — one press, either button (the user
+						// decided 2026-09-19; surface keys honestly per state).
+						label="Accept the plan"
+						binding="enter"
+						side="left"
+					>
+						<button
+							type="button"
+							onClick={verdict.onAccept}
 						className="flex h-[19px] items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 text-xs font-medium text-white transition-colors hover:bg-emerald-500"
 					>
 						<CheckIcon className="size-3" /> Accept plan
 					</button>
+					</Hint>
 					<button
 						type="button"
 						onClick={verdict.onDecline}
@@ -124,10 +133,18 @@ export function Composer({
 					</button>
 				</div>
 			) : (
-				<button
-					type="submit"
-					aria-label={busy ? "Stop" : "Send"}
-					disabled={!busy && !canSend}
+				<Hint
+					// Per-state truth (tooltip wave): busy → the square STOPS the
+					// stream, and Esc aborts it too; otherwise Enter sends when the
+					// box has text.
+					label={busy ? "Stop the reply" : "Send"}
+					binding={busy ? "escape" : "enter"}
+					side="left"
+				>
+					<button
+						type="submit"
+						aria-label={busy ? "Stop" : "Send"}
+						disabled={!busy && !canSend}
 					className={cn(
 						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
 						busy
@@ -137,6 +154,7 @@ export function Composer({
 				>
 					{busy ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
 				</button>
+				</Hint>
 			)}
 		</form>
 	);

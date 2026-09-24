@@ -13,6 +13,7 @@ import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
+import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -154,6 +155,7 @@ export function SidebarToggle() {
 				open ? "w-0 -mr-3" : "w-9 mr-0 lh-closed-toggle",
 			)}
 		>
+			<Hint label="Open sidebar" action="toggle-sidebar">
 			<Button
 				variant="ghost"
 				size="icon"
@@ -168,6 +170,7 @@ export function SidebarToggle() {
 				    The small look is the standard, both directions. */}
 				<PanelLeftOpenIcon className="size-4" />
 			</Button>
+			</Hint>
 		</span>
 	);
 }
@@ -541,22 +544,26 @@ function SessionsSidebar() {
 					    with the lights' own edge-inset as the gap. */}
 					{/* Hover mirrors the ghost toggle buttons (owner ask, 2026-09-17):
 					    same size-9 chip geometry, same hover:bg-accent treatment. */}
-					<Link
-						href="/"
-						aria-label="Home"
-						className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
-					>
-						<LhMark className="size-6" />
-					</Link>
-					<Button
-						variant="ghost"
-						size="icon"
-						aria-label="Close sidebar"
-						onClick={toggle}
-						className="lh-no-drag"
-					>
-						<PanelLeftCloseIcon className="size-4" />
-					</Button>
+					<Hint label="Home" side="bottom">
+						<Link
+							href="/"
+							aria-label="Home"
+							className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
+						>
+							<LhMark className="size-6" />
+						</Link>
+					</Hint>
+					<Hint label="Close sidebar" action="toggle-sidebar">
+						<Button
+							variant="ghost"
+							size="icon"
+							aria-label="Close sidebar"
+							onClick={toggle}
+							className="lh-no-drag"
+						>
+							<PanelLeftCloseIcon className="size-4" />
+						</Button>
+					</Hint>
 				</div>
 
 				<button
@@ -572,6 +579,7 @@ function SessionsSidebar() {
 
 				<div className="mx-3 mb-1 flex items-center gap-2">
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
+					<Hint label="Search sessions" action="sessions-search" side="bottom">
 					<span className="relative flex-1">
 						<Input
 							ref={searchRef}
@@ -587,12 +595,13 @@ function SessionsSidebar() {
 									e.currentTarget.blur();
 								}
 							}}
-							placeholder="Search..."
+							placeholder="Search…"
 							aria-label="Search sessions"
 							className="h-6 rounded-sm border-border bg-background pl-6 text-xs placeholder:text-muted-foreground/60"
 						/>
 						<SearchIcon className="pointer-events-none absolute left-1.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground/70" />
 					</span>
+					</Hint>
 				</div>
 
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
@@ -639,15 +648,17 @@ function SessionsSidebar() {
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
 					<div className="px-3 pb-3 pt-1">
-						<button
-							type="button"
-							onClick={() => openSettings()}
-							data-testid="settings-entry"
-							className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-						>
-							<SettingsIcon className="size-3" />
-							Settings
-						</button>
+						<Hint label="Settings" action="open-settings" side="right">
+							<button
+								type="button"
+								onClick={() => openSettings()}
+								data-testid="settings-entry"
+								className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+							>
+								<SettingsIcon className="size-3" />
+								Settings
+							</button>
+						</Hint>
 					</div>
 				</div>
 

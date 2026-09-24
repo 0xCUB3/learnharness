@@ -69,7 +69,7 @@ describe("AgentSection (thin SSR)", () => {
 			assert.ok(html.includes(`data-testid="slot-model-${slot}"`), `${slot} model trigger`);
 			assert.ok(html.includes(`data-testid="slot-thinking-${slot}"`), `${slot} thinking trigger`);
 			// the roster hint rides every row
-			assert.ok(html.includes("Prober + Teacher") || slot !== "strong", "strong roster");
+			assert.ok(html.includes("The main model for your sessions") || slot !== "strong", "strong roster");
 		}
 		// Fix wave: no Default anywhere — an unpicked slot reads "—"
 		// (the owner's no-factory-fallback language), and no menu
@@ -107,7 +107,7 @@ describe("AgentSection (thin SSR)", () => {
 		const rows = [...toolsGroup.matchAll(/data-testid="(graph-tools-row|tool-row-\w+)"/g)].map((m) => m[1]);
 		assert.equal(rows[0], "graph-tools-row", "graph tools is the FIRST row of the Tools group");
 		// (the apostrophe in "sessions'" HTML-escapes — match up to it)
-		assert.ok(html.includes("Connects prior sessions"), "the describing hint");
+		assert.ok(html.includes("Lets the tutor consult your knowledge map between sessions"), "the describing hint");
 		assert.ok((html.split('data-testid="graph-tools-row"')[1] ?? "").includes('aria-checked="true"'), "absent = on");
 		const rowHtml = html.split('data-testid="graph-tools-row"')[1]?.split('data-testid="tool-row-')[0] ?? "";
 		assert.ok(!rowHtml.includes("opacity-40"), "lit while the graph is on (the search row may dim — no keys in SSR)");
@@ -198,7 +198,7 @@ describe("AppearanceSection (thin SSR)", () => {
 	it("mode is rendered DISABLED — dark-only this wave, no lying control", () => {
 		const html = renderToStaticMarkup(<AppearanceSection appearance={undefined} onSectionChange={() => {}} />);
 		assert.ok(tagOf(html, "select-mode").includes("disabled"), "mode select disabled");
-		assert.ok(html.includes("Light ships with the design wave"));
+		assert.ok(html.includes("Coming soon"));
 		// The whole row dims, graph-view style (the control never adds its own).
 		assert.ok(tagOf(html, "row-mode").includes("opacity-40"), "mode row dims whole");
 	});
@@ -238,7 +238,7 @@ describe("KeyboardSection (thin SSR)", () => {
 
 	it("displayOnly actions list but never offer Rebind", () => {
 		const html = renderToStaticMarkup(<KeyboardSection />);
-		assert.ok(html.includes("Owned by a surface — not rebindable"));
+		assert.ok(html.includes("Fixed — part of this screen"));
 		assert.ok(!html.includes(`data-testid="kbd-rebind-question-next-row"`), "surface keys stay put");
 		assert.ok(!html.includes(`data-testid="kbd-rebind-model-menu-pick"`));
 	});

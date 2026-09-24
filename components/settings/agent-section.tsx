@@ -62,9 +62,9 @@ import { ModelMenuList, ThinkingMenuList } from "./model-menu";
 /** One slot's display identity — the tier's roster as the row hint rides
  *  with the resolved default (owner: the hint ALWAYS names the default). */
 const SLOT_META: Record<ModelSlotName, { label: string; roster: string }> = {
-	strong: { label: "Strong", roster: "Prober + Teacher" },
-	cheap: { label: "Cheap", roster: "Researcher, demo builder, extractor, auditor" },
-	vision: { label: "Vision", roster: "Visual maker + PDF reader" },
+	strong: { label: "Strong", roster: "The main model for your sessions" },
+	cheap: { label: "Cheap", roster: "The assistants that research, build demos, and grade your work" },
+	vision: { label: "Vision", roster: "The assistants that draw and read PDFs" },
 };
 
 /** The search engines this wave ships (src/core/search.ts) + their labels. */
@@ -403,7 +403,7 @@ export function AgentSection({
 			<div key={info.path} data-testid={`prompt-segment-${info.path}`}>
 				<SettingsRow
 					label={info.path}
-					hint={fileExists ? undefined : "no override file yet — write one below"}
+					hint={fileExists ? undefined : "No changes yet — add yours below"}
 					testid={`prompt-row-${info.path}`}
 					dimmed={!fileExists}
 				>
@@ -434,7 +434,7 @@ export function AgentSection({
 							<textarea
 								readOnly
 								value={info.sourceText}
-								aria-label={`source ${info.path}`}
+								aria-label="The original instructions"
 								className="h-24 w-full resize-y rounded-sm border border-border bg-muted p-2 font-ui text-xs text-muted-foreground"
 							/>
 						</div>
@@ -443,8 +443,8 @@ export function AgentSection({
 							<textarea
 								value={segmentDraft[info.path] ?? info.overrideText ?? ""}
 								onChange={(e) => setSegmentDraft({ ...segmentDraft, [info.path]: e.target.value })}
-								aria-label={`override ${info.path}`}
-								placeholder="Write the override text…"
+								aria-label="Your version of the instructions"
+								placeholder="Add your own instructions…"
 								className="h-24 w-full resize-y rounded-sm border border-border bg-background p-2 font-ui text-xs text-foreground outline-none"
 							/>
 						</div>
@@ -454,7 +454,7 @@ export function AgentSection({
 								onClick={() => void saveSegment(info.path, segmentDraft[info.path] ?? "")}
 								className="text-xs text-foreground underline-offset-2 hover:underline"
 							>
-								Save override
+								Save
 							</button>
 							{fileExists && (
 								<button
@@ -462,7 +462,7 @@ export function AgentSection({
 									onClick={() => void deleteSegment(info.path)}
 									className="text-xs text-muted-foreground/70 underline-offset-2 hover:text-red-500 hover:underline"
 								>
-									Delete override
+									Delete
 								</button>
 							)}
 						</div>
@@ -597,7 +597,7 @@ export function AgentSection({
 					return (
 						<SettingsRow
 							label="Graph tools"
-							hint={graphOn ? "Connects prior sessions' knowledge into new ones — the prober reads the knowledge map" : "Graph is disabled"}
+							hint={graphOn ? "Lets the tutor consult your knowledge map between sessions" : "Graph is disabled"}
 							testid="graph-tools-row"
 							dimmed={!graphOn}
 						>

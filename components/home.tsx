@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { SetupDialog } from "@/components/setup-dialog";
+import { Hint } from "@/components/ui/hint";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { useDefaultSettings } from "@/components/default-settings";
 import { DictationBar, useDictation } from "@/components/dictation";
@@ -176,7 +177,13 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 						rows={1}
 						className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 					/>
-					<button
+					<Hint
+						// Enter starts the session too (the form submits).
+						label="Start session"
+						binding="enter"
+						side="left"
+					>
+						<button
 						type="submit"
 						aria-label="Start session"
 						disabled={!topic.trim() || busy}
@@ -184,6 +191,7 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 					>
 						<CornerDownLeftIcon className="size-5" />
 						</button>
+					</Hint>
 					</form>
 					{/* Same as the chat view's under-composer stats bar (owner) — no
 					    session yet, so the LEFT side renders nothing (wave 7 sweep)

@@ -39,6 +39,7 @@ import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
 import { MenuShell } from "@/components/menu-shell";
 import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-signal";
+import { Hint } from "@/components/ui/hint";
 import { type ProviderKeyInfo } from "@/components/settings/keys-section";
 import { ProviderMenuList } from "@/components/settings/model-menu";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
@@ -397,7 +398,8 @@ export function SetupDialog({
 			>
 				<header className="flex h-15 shrink-0 items-center gap-3 border-b border-border px-5">
 					<h2 className="font-title text-2xl tracking-tight">Set up your models</h2>
-					<button
+					<Hint label="Close" binding="escape" side="left">
+<button
 						type="button"
 						aria-label="Close setup"
 						data-testid="setup-close"
@@ -406,6 +408,7 @@ export function SetupDialog({
 					>
 						✕
 					</button>
+</Hint>
 				</header>
 
 				{stage === "keys" ? (

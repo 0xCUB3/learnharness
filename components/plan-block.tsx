@@ -15,6 +15,7 @@ import { curveBasis, line } from "d3-shape";
 import { fitGraphView, fitZoomFor, zoomedGraphView, type Viewport } from "@/components/pan-zoom";
 import type { PlanBlockData, PlanNodeStatus, PlanTree } from "@/src/core";
 import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
+import { Hint } from "@/components/ui/hint";
 
 /**
  * PLAN BLOCKS — the plan lives in the chat (wave 4): persisted
@@ -542,11 +543,12 @@ export function PlanBlock({ data, onOpen }: { data: PlanBlockData; onOpen: () =>
 	const statusMap = useMemo(() => new Map(data.nodes.map((n) => [n.id, n.status] as const)), [data]);
 	const statusOf = (id: string): PlanNodeStatus => statusMap.get(id) ?? "upcoming";
 	return (
-		<button
+		<Hint label="Open the full plan" side="bottom">
+<button
 			type="button"
 			data-testid="plan-block-full"
+			aria-label="Open the full plan"
 			onClick={onOpen}
-			title="Open the full plan"
 			className="block w-full text-left"
 		>
 			{/* pad keeps centered strokes + the glow halo inside the frame; the
@@ -562,6 +564,7 @@ export function PlanBlock({ data, onOpen }: { data: PlanBlockData; onOpen: () =>
 			monochrome
 		/>
 		</button>
+</Hint>
 	);
 }
 
@@ -745,7 +748,8 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 			<div className="mb-2 flex items-center gap-2">
 				<span className="text-sm font-medium">The plan</span>
 				<span className="text-xs text-muted-foreground">live — statuses derive from your check outcomes</span>
-				<button
+				<Hint label="Close" binding="escape" side="left">
+<button
 					type="button"
 					onClick={onClose}
 					aria-label="Close"
@@ -754,6 +758,7 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 				>
 					<XIcon className="size-4" />
 				</button>
+</Hint>
 			</div>
 			<div
 				ref={viewportRef}
@@ -797,18 +802,19 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 						<div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-2">
 							<span className="text-xs text-muted-foreground/60">Drag to pan · scroll to zoom</span>
 							<div className="flex gap-1">
-								<button
+								<Hint label="Zoom out" side="bottom">
+<button
 									type="button"
-									title="Zoom out"
 									aria-label="Zoom out"
 									onClick={() => stepZoom(1 / 1.25)}
 									className="pointer-events-auto flex size-7 items-center justify-center rounded-md border border-border/70 bg-card/80 text-muted-foreground backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
 								>
 									<MinusIcon className="size-3.5" />
 								</button>
-								<button
+</Hint>
+								<Hint label="Fit plan to screen" side="bottom">
+<button
 									type="button"
-									title="Fit plan to screen"
 									aria-label="Fit plan to screen"
 									onClick={fitView}
 									data-testid="plan-popup-fit"
@@ -816,15 +822,17 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 								>
 									<MaximizeIcon className="size-3.5" />
 								</button>
-								<button
+</Hint>
+								<Hint label="Zoom in" side="bottom">
+<button
 									type="button"
-									title="Zoom in"
 									aria-label="Zoom in"
 									onClick={() => stepZoom(1.25)}
 									className="pointer-events-auto flex size-7 items-center justify-center rounded-md border border-border/70 bg-card/80 text-muted-foreground backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
 								>
 									<PlusIcon className="size-3.5" />
 								</button>
+</Hint>
 							</div>
 						</div>
 					</>

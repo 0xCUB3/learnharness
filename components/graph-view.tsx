@@ -70,6 +70,7 @@ import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useActivity } from "@/components/activity-dock";
 import { MenuShell } from "@/components/menu-shell.tsx";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
+import { Hint } from "@/components/ui/hint";
 import {
 	ARROW_LENGTH_LADDER,
 	CHARGE_RANGE,
@@ -326,9 +327,13 @@ function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 	usePopoverDismiss(rootRef, open, () => setOpen(false));
 	return (
 		<div ref={rootRef} className="relative">
-			<button
+			<Hint
+				// Plain language (tooltip wave) — no internal vocabulary.
+				label="What the graph has spent — click for details"
+				side="bottom"
+			>
+				<button
 				type="button"
-				title="Graph pipeline costs — click for the breakdown"
 				aria-expanded={open}
 				onClick={() => setOpen((o) => !o)}
 				className={`rounded-lg px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent ${
@@ -337,6 +342,7 @@ function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 			>
 				${displayCostTotals(costs).totalDollars.toFixed(2)}
 			</button>
+			</Hint>
 			{open && (
 				<div className="absolute right-0 top-full mt-2 max-h-[60vh] overflow-y-auto">
 					<GraphCostPanel costs={costs} />
@@ -437,9 +443,13 @@ function GraphSettingsControl({
 	const physicsTuning = settings.physics;
 	return (
 		<div ref={rootRef} className="relative">
-			<button
+			<Hint
+				// User language (tooltip wave) — "rendering" is internal.
+				label="Graph display settings"
+				side="bottom"
+			>
+				<button
 				type="button"
-				title="Rendering settings"
 				aria-expanded={open}
 				onClick={() => setOpen((o) => !o)}
 				className={`flex size-9 items-center justify-center rounded-xl border bg-card/85 shadow-lg backdrop-blur transition-colors hover:bg-accent ${
@@ -448,6 +458,7 @@ function GraphSettingsControl({
 			>
 				<SettingsIcon className="size-4" />
 			</button>
+			</Hint>
 			{open && (
 				// Viewport-capped + internally scrollable — the coverage
 				// dropdown's exact pattern (owner, 2026-09-17): max-h keeps a
@@ -835,6 +846,12 @@ export function GraphChromeRow({
 		<>
 			{!isEmpty && (
 				<div className="graph-chrome-fade-in w-56 min-w-0 shrink rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+					<Hint
+						// ⌘F focuses node search (surface-scoped registry action).
+						label="Search nodes"
+						action="find"
+						side="bottom"
+					>
 					<div className="relative">
 						<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 						<input
@@ -842,10 +859,12 @@ export function GraphChromeRow({
 							value={query}
 							onChange={(e) => onQuery(e.target.value)}
 							placeholder="Search nodes…"
+							aria-label="Search nodes"
 							spellCheck={false}
 							className="h-7 w-full rounded-lg border bg-background pl-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
 						/>
 					</div>
+					</Hint>
 					{noMatch && (
 						<div className="px-1.5 pt-1 text-[11px] text-muted-foreground">No matching nodes.</div>
 					)}
