@@ -42,7 +42,9 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.proseFontSize, 16);
 		assert.equal(eff.appearance.sessionNameSerif, true);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 900);
-		assert.deepEqual(eff.graph, { enabled: true }); // wave 7 collapse: the master switch ONLY
+		// wave 7 collapse: the master switch ONLY + the redesign's chunk
+		// budget — absent record resolves the factory 4096 (the old config constant)
+		assert.deepEqual(eff.graph, { enabled: true, extractionChunkTokens: 4096 });
 	});
 
 	it("explicit record values win over every factory default", () => {
@@ -75,8 +77,12 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.mode, "light");
 		assert.equal(eff.appearance.proseFontSize, 20);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 600);
-		// wave 7 collapse: the section IS the master switch.
-		assert.deepEqual(eff.graph, { enabled: false });
+		// wave 7 collapse: the section IS the master switch (absent budget
+		// field = factory 4096 — a pre-redesign record resolves cleanly).
+		assert.deepEqual(eff.graph, { enabled: false, extractionChunkTokens: 4096 });
+		// The chunk budget rides the same resolution: stored value wins.
+		const budgeted = resolveSettings({ version: 1, graph: { extractionChunkTokens: 2000 } });
+		assert.deepEqual(budgeted.graph, { enabled: true, extractionChunkTokens: 2000 });
 	});
 
 	it("partial role override: thinkingLevel alone borrows the SLOT's model (or nothing, without one)", () => {

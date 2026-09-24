@@ -21,6 +21,7 @@ import type { UIMessage } from "ai";
 import type { AuditResult, NamingRunUsage } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
 import { getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
+import { coverageSlots } from "../src/core/coverage.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { LEDGER_FILES, PATHS, SOURCES_FILE } from "../config.ts";
@@ -618,7 +619,7 @@ describe("graph ledger store", () => {
 // ─── session deletion (wave 6 — the first destructive ledger operation) ─────
 
 import { deleteChatTraces, type ChatDeletionStats } from "../src/core/graph-deletion.ts";
-import { deleteChatSession } from "../src/server/chats.ts";
+import { deleteChatSession, sessionCoverage } from "../src/server/chats.ts";
 import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import {
@@ -987,5 +988,73 @@ describe("single-node deletion (deleteNodeTraces + deleteGraphNode, node interlu
 		assert.equal(graphStore.readNodes().some((n) => n.id === "n_orch"), false);
 		// And a second call is an honest 404.
 		assert.deepEqual(deleteGraphNode("n_orch"), { ok: false, status: 404, code: "not_found", error: "No such node" });
+	});
+});
+
+describe("session coverage read (extraction-UX redesign, 2026-09-24)", () => {
+	it("one session's block: derived uncovered, the newest fold, honest nulls", () => {
+		// Empty coverage: everything uncovered, no fold yet, not running.
+		const chat = fixtureChat("coverage read", [
+			user("cov_u1", "tell me about coverage reads"),
+			user("cov_u2", "and about per-session blocks"),
+			user("cov_u3", "a third distinct message"),
+		]);
+		const empty = sessionCoverage(chat.id)!;
+		assert.ok(empty);
+		assert.equal(empty.totalMessages, 3);
+		assert.equal(empty.coveredCount, 0);
+		assert.equal(empty.uncoveredCount, 3);
+		assert.equal(empty.coveredTokens, 0);
+		assert.ok(empty.uncoveredTokens > 0);
+		assert.equal(empty.running, false);
+		assert.equal(empty.lastFoldedAt, null, "no fold yet");
+
+		// Fold the first two messages: the read derives the split + the
+		// newest fold timestamp from the ledger rows.
+		const slots = coverageSlots(chatStore.getChat(chat.id)!.messages as UIMessage[]);
+		graphStore.appendCoverage({ chatId: chat.id, fp: slots[0]!.fp, tokens: slots[0]!.tokens, foldedAt: "2026-09-24T10:00:00.000Z" });
+		graphStore.appendCoverage({ chatId: chat.id, fp: slots[1]!.fp, tokens: slots[1]!.tokens, foldedAt: "2026-09-24T11:30:00.000Z" });
+		// Another session's row must not leak into this read.
+		graphStore.appendCoverage({ chatId: "chat_other", fp: slots[2]!.fp, tokens: slots[2]!.tokens, foldedAt: "2026-09-24T23:00:00.000Z" });
+
+		const cov = sessionCoverage(chat.id)!;
+		assert.equal(cov.totalMessages, 3);
+		assert.equal(cov.coveredCount, 2);
+		assert.equal(cov.uncoveredCount, 1);
+		assert.equal(cov.coveredTokens, slots[0]!.tokens + slots[1]!.tokens);
+		assert.equal(cov.uncoveredTokens, slots[2]!.tokens);
+		assert.equal(cov.lastFoldedAt, "2026-09-24T11:30:00.000Z", "the NEWEST fold, and scoped to this session's rows");
+	});
+
+	it("running: true only for THIS session's chat-kind run (the registry pin)", () => {
+		const chat = fixtureChat("coverage running", [user("cov_r1", "running pin")]);
+		const g = globalThis as { __lhExtractionRuns?: unknown };
+		const realRuns = g.__lhExtractionRuns;
+		try {
+			g.__lhExtractionRuns = {
+				running: new Map([
+					// a notes run for the same id is NOT this session's chat run
+					["src_notes", { chatId: "src_notes", kind: "notes", phase: "extracting", startedAt: 1, usage: {}, controller: new AbortController() }],
+					["other_chat", { chatId: "other_chat", kind: "chat", phase: "auditing", startedAt: 2, usage: {}, controller: new AbortController() }],
+				]),
+				inFlight: new Set(),
+				lastStartedAt: 0,
+			};
+			assert.equal(sessionCoverage(chat.id)!.running, false, "no chat-kind run for this id");
+			g.__lhExtractionRuns = {
+				running: new Map([
+					[chat.id, { chatId: chat.id, kind: "chat", phase: "extracting", startedAt: 3, usage: {}, controller: new AbortController() }],
+				]),
+				inFlight: new Set(),
+				lastStartedAt: 0,
+			};
+			assert.equal(sessionCoverage(chat.id)!.running, true);
+		} finally {
+			g.__lhExtractionRuns = realRuns;
+		}
+	});
+
+	it("unknown chat → null (the caller owns the 404)", () => {
+		assert.equal(sessionCoverage("chat_never_was"), null);
 	});
 });

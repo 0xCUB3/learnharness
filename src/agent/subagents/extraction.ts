@@ -4,7 +4,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { lhTool, toPiTools } from "../lh-tool.ts";
 import type { ModelRole } from "../../../config.ts";
-import { ModelsNotConfiguredError, ROLE_SLOT, type ModelSlotName } from "../../core/settings.ts";
+import { FACTORY_SETTINGS, ModelsNotConfiguredError, ROLE_SLOT, type ModelSlotName } from "../../core/settings.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import type {
@@ -20,7 +20,6 @@ import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../
 import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/coverage.ts";
-import { EXTRACTION } from "../../../config.ts";
 
 /**
  * The extraction pipeline (vision §1 construction, 2026-09-02 redesign) — the
@@ -569,7 +568,15 @@ export interface ExtractionModels {
 	engineFor?: (role: ModelRole) => PiEngine | undefined;
 }
 
-export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {}
+export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {
+	/** The chunk budget — the transcript-token share of the extractor's
+	 *  context; batches fill to it (the trigger fires on the same number,
+	 *  read fresh per turn by the composition root). OPTIONAL with the
+	 *  factory default (4096) so test fixtures stay minimal; the server
+	 *  callers wire the live effective settings (extraction-UX redesign,
+	 *  2026-09-24). */
+	getChunkTokens?: () => number;
+}
 
 export interface NotesImportInput {
 	/** The source's file path — its identity (deterministic src id) AND its
@@ -760,10 +767,11 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
 				return { nodes: 0, edges: 0, events: 0 };
 			}
-			const batches = batchRuns(covered.uncovered, EXTRACTION.chunkTokens);
+			const chunkTokens = deps.getChunkTokens?.() ?? FACTORY_SETTINGS.graph.extractionChunkTokens;
+			const batches = batchRuns(covered.uncovered, chunkTokens);
 			console.info(
 				`[extraction ${chatId}] pipeline start — ${covered.uncoveredTokens} uncovered tok, ` +
-					`${covered.uncoveredCount} messages, ${batches.length} batch(es) of ≤${EXTRACTION.chunkTokens} tok`,
+					`${covered.uncoveredCount} messages, ${batches.length} batch(es) of ≤${chunkTokens} tok`,
 			);
 			for (const batch of batches) {
 				// The batch's prompt view: SESSION header + the batch's lines,

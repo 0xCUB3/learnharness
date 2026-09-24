@@ -22,7 +22,7 @@ import type {
 	ModelsSettings,
 	RoleModelOverride,
 } from "../core/settings.ts";
-import { BACKGROUND_MODEL_ROLES, MODEL_SLOTS } from "../core/settings.ts";
+import { BACKGROUND_MODEL_ROLES, EXTRACTION_CHUNK_TOKENS_FLOOR, MODEL_SLOTS } from "../core/settings.ts";
 import { TOGGLEABLE_TOOLS } from "../core/pending.ts";
 
 /** Parsed-or-rejected — `ok: false` carries the 400's error message. */
@@ -283,14 +283,32 @@ export function parseAppearanceSettingsBody(body: unknown): SettingsBodyResult<A
 export function parseGraphSettingsBody(body: unknown): SettingsBodyResult<GraphSettings> {
 	const raw = asRecord(body);
 	if (!raw) return { ok: false, error: "Invalid JSON body" };
-	// Wave 7 collapse (owner ruling 2026-09-23): the section is the master
-	// switch ONLY. PUT is replace-whole — a body like {enabled: true} IS the
-	// whole section now; the dead rungs' keys in old records are unread
-	// (the sanitizer drops them; see sanitizeGraph).
+	// Wave 7 collapse (owner ruling 2026-09-23) + the extraction-UX
+	// redesign (2026-09-24): the section is the master switch and the
+	// chunk budget. PUT is replace-whole — a body like {enabled: true} IS
+	// the whole section (extractionChunkTokens absent = factory default at
+	// resolution); the dead rungs' keys in old records are unread (the
+	// sanitizer drops them; see sanitizeGraph).
 	const settings: GraphSettings = {};
 	if (raw.enabled !== undefined) {
 		if (typeof raw.enabled !== "boolean") return { ok: false, error: "enabled must be a boolean" };
 		settings.enabled = raw.enabled;
+	}
+	if (raw.extractionChunkTokens !== undefined) {
+		if (typeof raw.extractionChunkTokens !== "number" || !Number.isFinite(raw.extractionChunkTokens)) {
+			return { ok: false, error: "extractionChunkTokens must be a number" };
+		}
+		const floored = Math.floor(raw.extractionChunkTokens);
+		if (floored < EXTRACTION_CHUNK_TOKENS_FLOOR) {
+			// the floor's rationale lives on GraphSettings.extractionChunkTokens:
+			// every run pays the graph-carrying prompt overhead — penny-batches
+			// cost more per extracted token than the content is worth.
+			return {
+				ok: false,
+				error: `extractionChunkTokens must be at least ${EXTRACTION_CHUNK_TOKENS_FLOOR} (smaller batches waste the per-run graph overhead)`,
+			};
+		}
+		settings.extractionChunkTokens = floored;
 	}
 	return { ok: true, settings };
 }

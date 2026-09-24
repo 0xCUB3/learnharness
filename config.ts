@@ -60,17 +60,6 @@ export type ModelRole =
  * pipeline.
  */
 /**
- * The extraction trigger (vision-extraction-coverage.md, 2026-09-15): a run
- * fires when a chat's UNCOVERED transcript tokens reach the chunk budget.
- * Runs are token-budgeted batches of the oldest uncovered messages — this
- * knob is the transcript share of the extractor's context (it also carries
- * the whole graph + instructions), so it bounds both cost and chunk size.
- * Replaces the old every-3-quiz-answers trigger, which never fired for
- * quiz-less sessions.
- */
-export const EXTRACTION = { chunkTokens: 4096 } as const;
-
-/**
  * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction
  * pipeline. Line shapes: src/core/contracts.ts.
  */

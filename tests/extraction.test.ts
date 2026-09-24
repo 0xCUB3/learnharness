@@ -890,7 +890,7 @@ function passThroughAuditStep(): FauxResponseStep {
 }
 
 /** A session with UNCOVERED-multiple-batch mass: five long distinct messages
- *  (~1200 tok each — 3600+1200 > EXTRACTION.chunkTokens 4096 → batches of
+ *  (~1200 tok each — 3600+1200 > the factory chunk budget 4096 → batches of
  *  [m1,m2,m3] and [m4,m5]). */
 function chunkyChat() {
 	const chat = chatStore.createChat("Chunky coverage fixture");

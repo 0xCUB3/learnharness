@@ -1,6 +1,8 @@
 import { abortExtraction, extractionStatuses } from "../agent/subagents/extraction.ts";
+import { coverageOf } from "../core/coverage.ts";
 import { deleteChatTraces, type ChatDeleteMode, type ChatDeletionStats } from "../core/graph-deletion.ts";
 import { titleFromPrompt } from "../core/contracts.ts";
+import type { UIMessage } from "ai";
 import { graphRevision } from "./graph.ts";
 import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
@@ -109,4 +111,48 @@ export async function deleteChatSession(chatId: string, mode: ChatDeleteMode): P
 	const jobsRemoved = stores.jobStore.deleteJobsForChat(chatId);
 	stores.chatStore.deleteChat(chatId);
 	return { ok: true, mode, stats, jobsRemoved, graphRevision: graphRevision() };
+}
+
+/** One session's coverage read (extraction-UX redesign, owner dispatch
+ *  2026-09-24): the chat view's ring meter + popover data — the same
+ *  derivation the all-sessions list serves (/api/graph/coverage), scoped
+ *  to one chat. "Uncovered" stays DERIVED per request (fingerprint the
+ *  transcript, diff the coverage ledger — never dual-tracked).
+ *
+ *  lastFoldedAt: the newest coverage row's fold timestamp — a cheap single
+ *  pass over the chat's ledger rows (the ring popover's "last extraction"
+ *  line); null before the session's first fold. */
+export interface SessionCoverage {
+	totalMessages: number;
+	coveredCount: number;
+	uncoveredCount: number;
+	coveredTokens: number;
+	uncoveredTokens: number;
+	/** True while a chat-kind extraction run is registered for this session. */
+	running: boolean;
+	/** ISO of the newest fold in this session's coverage rows; null before any. */
+	lastFoldedAt: string | null;
+}
+
+/** The per-session coverage block (see SessionCoverage). Null when the
+ *  chat doesn't exist — callers own the 404. */
+export function sessionCoverage(chatId: string): SessionCoverage | null {
+	const record = stores.chatStore.getChat(chatId);
+	if (!record) return null;
+	const entries = stores.graphStore.readCoverage();
+	const cov = coverageOf(record.messages as UIMessage[], entries, chatId);
+	let lastFoldedAt: string | null = null;
+	for (const entry of entries) {
+		if (entry.chatId !== chatId) continue;
+		if (lastFoldedAt === null || entry.foldedAt > lastFoldedAt) lastFoldedAt = entry.foldedAt;
+	}
+	return {
+		totalMessages: cov.slots.length,
+		coveredCount: cov.coveredCount,
+		uncoveredCount: cov.uncoveredCount,
+		coveredTokens: cov.coveredTokens,
+		uncoveredTokens: cov.uncoveredTokens,
+		running: extractionStatuses().some((run) => run.kind === "chat" && run.chatId === chatId),
+		lastFoldedAt,
+	};
 }

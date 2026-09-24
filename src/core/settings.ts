@@ -255,6 +255,26 @@ export interface GraphSettings {
 	 *  names, and the prober graph tools read the ledgers directly — there
 	 *  is nothing left to configure. Data stays stored either way. */
 	enabled?: boolean;
+	/** The chunk budget (extraction-UX redesign, owner 2026-09-24): the
+	 *  transcript-token share of the extractor's context — a run fires
+	 *  when a chat's UNCOVERED tokens reach it, and the run batches the
+	 *  oldest uncovered messages into runs of ≤ this many tokens. It
+	 *  bounds both cost and chunk size (the extractor prompt also
+	 *  carries the whole graph + instructions, so a smaller budget means
+	 *  more, smaller runs — each paying that fixed overhead).
+	 *
+	 *  FACTORY DEFAULT 4096 (the pre-setting constant, config.ts's
+	 *  EXTRACTION.chunkTokens — vision-extraction-coverage.md, 2026-09-15).
+	 *
+	 *  FLOOR 500 (EXTRACTION_CHUNK_TOKENS_FLOOR, the implementer's call
+	 *  per the owner's dispatch): every run pays the graph-carrying
+	 *  prompt overhead out of the write channel's money — a budget below
+	 *  ~500 tokens would fire penny-batches that cost more per extracted
+	 *  token than the content is worth, so the sanitizer clamps and the
+	 *  PUT rejects below it. NO CEILING on purpose: a large budget just
+	 *  delays extraction — the user's stated cost/thoroughness tradeoff,
+	 *  not a misconfiguration to police. */
+	extractionChunkTokens?: number;
 }
 
 /** THE record. Every section optional (delta); unknown top-level keys are
@@ -307,8 +327,13 @@ export const FACTORY_SETTINGS: FactorySettings = {
 		sessionNameSerif: true,
 		mdRendering: { headingWeight: 900, boldColor: null, italicColor: null },
 	},
-	graph: { enabled: true },
+	graph: { enabled: true, extractionChunkTokens: 4096 },
 };
+
+/** The chunk budget's validated floor (GraphSettings.extractionChunkTokens
+ *  — see its doc for the penny-batch rationale; the settings PUT names this
+ *  in its rejection, the sanitizer clamps to it). */
+export const EXTRACTION_CHUNK_TOKENS_FLOOR = 500;
 
 // ─── Sanitizer ─────────────────────────────────────────────────────────────
 
@@ -462,9 +487,20 @@ function sanitizeGraph(raw: Record<string, unknown>): GraphSettings {
 	// this reconstruction — the migration story: the next graph-section
 	// write (PUT is replace-whole) persists the collapsed shape, and no
 	// active code ever looks at the stale fields.
+	//
+	// extractionChunkTokens (extraction-UX redesign, 2026-09-24): the chunk
+	// budget — clamp-never-reject (the bd68486 discipline): a finite
+	// positive number floors to EXTRACTION_CHUNK_TOKENS_FLOOR (fractions
+	// floor to integers), anything else drops to the factory default at
+	// resolution. A disk record below the floor (older app, hand edit)
+	// clamps UP — the floor is a cost protection, not data to honor.
 	const out: GraphSettings = {};
 	const enabled = boolOrDrop(raw.enabled);
 	if (enabled !== undefined) out.enabled = enabled;
+	const rawTokens = raw.extractionChunkTokens;
+	if (typeof rawTokens === "number" && Number.isFinite(rawTokens) && rawTokens > 0) {
+		out.extractionChunkTokens = Math.max(EXTRACTION_CHUNK_TOKENS_FLOOR, Math.floor(rawTokens));
+	}
 	return out;
 }
 

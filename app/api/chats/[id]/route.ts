@@ -1,4 +1,4 @@
-import { deleteChatSession, getChat, isTurnRunning, stores, type ChatDeleteMode } from "@/src/server";
+import { deleteChatSession, getChat, isTurnRunning, sessionCoverage, stores, type ChatDeleteMode } from "@/src/server";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
@@ -6,7 +6,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 	if (!chat) return Response.json({ error: "Not found" }, { status: 404 });
 	// turnInFlight lets a returning client re-attach to a running turn
 	// (chat-handler write-ahead + registry — see src/server/turn-liveness.ts).
-	return Response.json({ ...chat, turnInFlight: isTurnRunning(id) });
+	// coverage (extraction-UX redesign, 2026-09-24): the chat view's ring
+	// meter — one session's read of the same derivation /api/graph/coverage
+	// serves for all sessions. getChat already 404'd, so the block exists.
+	return Response.json({ ...chat, turnInFlight: isTurnRunning(id), coverage: sessionCoverage(id) });
 }
 
 /**

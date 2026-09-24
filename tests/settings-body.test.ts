@@ -162,6 +162,28 @@ describe("parseGraphSettingsBody", () => {
 		assert.equal(parseGraphSettingsBody("nope").ok, false);
 	});
 
+	it("extractionChunkTokens: whole tokens ≥ the 500 floor (extraction-UX redesign, 2026-09-24)", () => {
+		const ok = parseGraphSettingsBody({ enabled: true, extractionChunkTokens: 2048 });
+		assert.ok(ok.ok);
+		assert.deepEqual(ok.settings, { enabled: true, extractionChunkTokens: 2048 });
+		// absent = unset — replace-whole keeps the factory default at resolution
+		const absent = parseGraphSettingsBody({ enabled: true });
+		assert.ok(absent.ok);
+		assert.deepEqual(absent.settings, { enabled: true });
+		// fractions floor to whole tokens
+		const fraction = parseGraphSettingsBody({ extractionChunkTokens: 1024.9 });
+		assert.ok(fraction.ok);
+		assert.equal(fraction.settings.extractionChunkTokens, 1024);
+		// below the cost floor: 400 with the floor named (penny-batches)
+		const tiny = parseGraphSettingsBody({ extractionChunkTokens: 100 });
+		assert.equal(tiny.ok, false, "below-floor rejected");
+		assert.match(tiny.ok === false ? tiny.error : "", /at least 500/);
+		// junk shapes: 400
+		assert.equal(parseGraphSettingsBody({ extractionChunkTokens: "4096" }).ok, false);
+		assert.equal(parseGraphSettingsBody({ extractionChunkTokens: NaN }).ok, false);
+		assert.equal(parseGraphSettingsBody({ extractionChunkTokens: null }).ok, false);
+	});
+
 	it("the dead wave-6 rungs in a body are ignored — the section collapses on write", () => {
 		// Old clients may still send {embedding: true, embeddingModel: …};
 		// the parser reads ONLY the master switch — the dead keys are not

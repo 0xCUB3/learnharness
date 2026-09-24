@@ -317,7 +317,10 @@ export async function handleChatRequest(
 				// pipeline knobs — embedding/clustering/labeling — gate inside the
 				// pipeline and its consumers, later waves, via the same resolved view.)
 				if (extractionEnabled(effective.graph)) {
-					triggerExtraction(stores, extraction, chatId);
+					// Fresh per-turn read of the graph section's chunk budget
+					// (extraction-UX redesign, 2026-09-24): the trigger compares
+					// against it and the pipeline's batches share it.
+					triggerExtraction(stores, extraction, chatId, effective.graph.extractionChunkTokens);
 				}
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.

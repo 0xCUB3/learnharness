@@ -205,6 +205,10 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 			// the embedding/clustering/labeling rungs and the BYOK embeddingModel
 			// are gone (stale record keys are simply never read here).
 			enabled: graph.enabled ?? FACTORY_SETTINGS.graph.enabled,
+			// The chunk budget (extraction-UX redesign, 2026-09-24): absent
+			// (pre-redesign record, fresh install) resolves to the factory
+			// 4096; the sanitizer has already clamped/floored any stored value.
+			extractionChunkTokens: graph.extractionChunkTokens ?? FACTORY_SETTINGS.graph.extractionChunkTokens,
 		},
 	};
 }
@@ -216,7 +220,7 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
  * switch. Used by the chat-handler's post-turn trigger. (Wave 7: the master
  * switch is the ONLY graph setting left — the section collapsed.)
  */
-export function extractionEnabled(graph: Required<GraphSettings>): boolean {
+export function extractionEnabled(graph: { enabled: boolean }): boolean {
 	return graph.enabled;
 }
 
@@ -228,7 +232,7 @@ export function extractionEnabled(graph: Required<GraphSettings>): boolean {
  * Teacher's tool factories consume this at registration time.
  */
 export function graphToolsEnabled(effective: {
-	graph: Required<GraphSettings>;
+	graph: { enabled: boolean };
 	agent: { graphTools: { enabled?: boolean } };
 }): boolean {
 	return effective.graph.enabled && (effective.agent.graphTools.enabled ?? true);

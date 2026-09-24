@@ -19,7 +19,6 @@ import type { UIMessage } from "ai";
 import { withPlanBlocks } from "../core/plan-blocks.ts";
 import { coverageOf } from "../core/coverage.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
-import { EXTRACTION } from "../../config.ts";
 import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { ModelsNotConfiguredError } from "../core/settings.ts";
 
@@ -74,11 +73,14 @@ export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMe
 /**
  * The graph write channel (vision §1 construction): the extraction pipeline
  * (extractor → auditor → merger — the sole graph writer) runs ASYNC once a
- * chat's UNCOVERED transcript tokens reach EXTRACTION.chunkTokens
+ * chat's UNCOVERED transcript tokens reach the chunk budget
  * (vision-extraction-coverage.md, 2026-09-15 — replacing the old
  * every-3-quiz-answers count: content size is the honest signal, and
- * quiz-less sessions extract too). The pipeline itself extracts only the
- * uncovered batches. Fire-and-forget — never blocks the turn; failures are
+ * quiz-less sessions extract too). The budget is the graph section's
+ * extractionChunkTokens setting (extraction-UX redesign, 2026-09-24) —
+ * the composition root passes the per-turn effective read (chat-handler
+ * resolves fresh per turn, same as every other gate). The pipeline
+ * itself extracts only the uncovered batches. Fire-and-forget — never blocks the turn; failures are
  * logged by the pipeline and leave coverage untouched, so the next trigger
  * (or the manual extract button) re-runs what's left.
  *
@@ -90,13 +92,14 @@ export function triggerExtraction(
 	deps: { chatStore: ChatStore; graphStore: GraphStore },
 	extraction: ExtractionPipeline,
 	chatId: string,
+	chunkTokens: number,
 ): void {
 	if (process.env.NODE_ENV === "test") return;
 	try {
 		const record = deps.chatStore.getChat(chatId);
 		if (!record) return;
 		const covered = coverageOf(record.messages as UIMessage[], deps.graphStore.readCoverage(), chatId);
-		if (covered.uncoveredTokens < EXTRACTION.chunkTokens) return;
+		if (covered.uncoveredTokens < chunkTokens) return;
 		void extraction.runExtraction(chatId).catch((err) => {
 			// BYOK (owner, 2026-09-22): an unconfigured write channel SKIPS
 			// (the coverage ledger keeps the messages uncovered — the next
