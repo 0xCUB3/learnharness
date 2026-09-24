@@ -4,7 +4,14 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { lhTool, toPiTools } from "../lh-tool.ts";
 import type { ModelRole } from "../../../config.ts";
-import { FACTORY_SETTINGS, ModelsNotConfiguredError, ROLE_SLOT, type ModelSlotName } from "../../core/settings.ts";
+import {
+	FACTORY_SETTINGS,
+	ModelsNotConfiguredError,
+	ProviderKeyMissingError,
+	ROLE_SLOT,
+	type ModelSlotName,
+	type ProviderKeyMissing,
+} from "../../core/settings.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import type {
@@ -566,6 +573,14 @@ export interface ExtractionModels {
 	 *  slot → NOTHING) may end EMPTY → undefined; the front doors refuse
 	 *  with ModelsNotConfiguredError before any stage runs. */
 	engineFor?: (role: ModelRole) => PiEngine | undefined;
+	/** Key-presence gate (provider-key interlude, 2026-09-25): given a
+	 *  stage engine's provider + the role's slot tier, the injected check
+	 *  returns the refusal envelope when the provider's key is missing
+	 *  (null = run). Same injection discipline as the job runner's seam
+	 *  (the agent layer may not read the key store); absent in tests that
+	 *  inject engines directly (test engines never owe a key). A keyless
+	 *  stage refuses with ProviderKeyMissingError BEFORE any batch runs. */
+	providerKeyMissing?: (provider: string, tier: ModelSlotName) => ProviderKeyMissing | null;
 }
 
 export interface ExtractionPipelineDeps extends GraphDeps, ExtractionModels {
@@ -623,14 +638,29 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	const stageEngine = (role: ModelRole, override?: PiEngine): PiEngine | undefined =>
 		override ?? deps.engineFor?.(role);
 	/** The per-need refusal guard: which slot tiers the pipeline's stages
-	 *  found unset (test values count as configured — they ARE engines). */
-	function refuseIfStagesUnconfigured(): void {
+	 *  found unset (test values count as configured — they ARE engines),
+	 *  and whether a configured stage's provider key is gone (provider-key
+	 *  interlude, 2026-09-25) — both refuse BEFORE any batch runs. */
+	function refuseIfStagesUnready(): void {
+		const stages: readonly [ModelRole, PiEngine | undefined][] = [
+			["extractor", stageEngine("extractor", deps.extractor)],
+			["auditor", stageEngine("auditor", deps.auditor)],
+		];
 		const missing = new Set<ModelSlotName>();
-		if (!stageEngine("extractor", deps.extractor)) missing.add(ROLE_SLOT.extractor);
-		if (!stageEngine("auditor", deps.auditor)) missing.add(ROLE_SLOT.auditor);
+		for (const [role, engine] of stages) if (!engine) missing.add(ROLE_SLOT[role]);
 		if (missing.size > 0) {
 			console.info(`[extraction] refused — no model configured for: ${[...missing].join(", ")}`);
 			throw new ModelsNotConfiguredError([...missing]);
+		}
+		// Key-presence parity: first offender surfaces (extractor before
+		// auditor); fixing that key re-gates and the next run surfaces the
+		// next offender, if any.
+		for (const [role, engine] of stages) {
+			const refusal = deps.providerKeyMissing?.(engine!.model.provider, ROLE_SLOT[role]);
+			if (refusal) {
+				console.info(`[extraction] refused — ${JSON.stringify(refusal)}`);
+				throw new ProviderKeyMissingError(refusal.provider, refusal.slots);
+			}
 		}
 	}
 	// THE SHARED REGISTRIES (runs() above — globalThis): every pipeline
@@ -758,10 +788,11 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		try {
 			const record = chatStore.getChat(chatId);
 			if (!record) throw new Error(`Chat not found: ${chatId}`);
-			// BYOK per-need gate (owner, 2026-09-22): the write channel needs
-			// extractor + auditor engines; an empty chain refuses BEFORE any
+			// BYOK per-need gate (owner, 2026-09-22) + key presence
+			// (2026-09-25): the write channel needs extractor + auditor
+			// engines AND their providers' keys; a refusal lands BEFORE any
 			// stage runs (typed — the trigger skips, routes surface 503).
-			refuseIfStagesUnconfigured();
+			refuseIfStagesUnready();
 			const covered = coverageOf(record.messages as UIMessage[], graphStore.readCoverage(), chatId);
 			if (covered.uncovered.length === 0) {
 				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
@@ -921,9 +952,10 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		inFlight.add(id);
 		const t0 = performance.now();
 		try {
-			// BYOK per-need gate (owner, 2026-09-22): same refusal as the chat
-			// front door — no extractor/auditor engines, no run.
-			refuseIfStagesUnconfigured();
+			// BYOK per-need gate (owner, 2026-09-22) + key presence
+			// (2026-09-25): same refusal as the chat front door — no
+			// extractor/auditor engines, or a stage key gone, no run.
+			refuseIfStagesUnready();
 			console.info(`[extraction ${id}] notes pipeline start (${input.filePath})`);
 			setPhase(id, "extracting", "notes", input.filePath);
 			const findings = await notesExtract(input);

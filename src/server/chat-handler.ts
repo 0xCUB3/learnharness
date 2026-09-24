@@ -10,13 +10,14 @@ import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { createPiTurnResponse } from "./pi/ui-stream.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
+import { providerKeyPresent } from "./keys.ts";
 import {
 	extractionEnabled,
 	graphToolsEnabled,
 	resolveConversationSpec,
 	resolveRoleSpec,
 } from "../core/settings-resolution.ts";
-import { modelsNotConfigured } from "../core/settings.ts";
+import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope, type ProviderKeyMissing } from "../core/settings.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { persistTurn, triggerExtraction, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
@@ -50,6 +51,12 @@ const jobRunner = createJobRunner({
 	// undefined and the runner refuses the spawn honestly.
 	engineFor: (role) =>
 		resolveEngine(role),
+	// Key-presence gate (provider-key interlude, 2026-09-25): the runner
+	// reads the resolved engine's provider and asks THIS check (the agent
+	// layer may not read the key store); a missing key refuses the spawn
+	// with the 503-envelope family instead of dying mid-run.
+	providerKeyMissing: (provider, tier) =>
+		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
 	// Search port wave (2026-09-20): the researcher's web_search runs on the
 	// injected port — resolved FRESH per job (key rotations land immediately).
 	// null = honestly unavailable; the dispatch-level drop (below) uses the
@@ -67,6 +74,11 @@ export const extraction = createExtractionPipeline({
 	// with the typed ModelsNotConfiguredError. Direct test values still win.
 	engineFor: (role) =>
 		resolveEngine(role),
+	// Key-presence gate (provider-key interlude, 2026-09-25): same check
+	// the job runner gets — a stage engine whose provider key is gone
+	// refuses BEFORE any batch runs (the typed throw), never mid-run.
+	providerKeyMissing: (provider, tier) =>
+		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
 });
 
 
@@ -147,6 +159,21 @@ export async function handleChatRequest(
 	);
 	if (!conversation) {
 		const envelope = modelsNotConfigured(["strong"]);
+		console.info(`[chat ${chatId}] turn refused — ${JSON.stringify(envelope)}`);
+		return Response.json(envelope, { status: 503 });
+	}
+
+	// THE KEY-PRESENCE GATE (provider-key interlude, owner, 2026-09-25): a
+	// pinned model is not enough — its PROVIDER's key must be present, or
+	// the turn dies mid-stream masked to a generic error. Truth is env-first
+	// (providerKeyPresent reads what pi-ai would read at request time), so
+	// an env-shadowed key passes. Same placement discipline as the models
+	// gate: BEFORE beginTurn (no liveness effects) and the write-ahead
+	// persist (nothing durable changes); wake-pipeline turns ride the same
+	// path. The affected tier is strong — the conversation chain's own tier
+	// (a chat.model override still resolves through it).
+	if (!providerKeyPresent(conversation.provider)) {
+		const envelope = providerKeyMissingEnvelope(conversation.provider, ["strong"]);
 		console.info(`[chat ${chatId}] turn refused — ${JSON.stringify(envelope)}`);
 		return Response.json(envelope, { status: 503 });
 	}

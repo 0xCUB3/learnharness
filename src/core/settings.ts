@@ -28,6 +28,7 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { AUTH_PROVIDER_KEYS } from "./auth-keys.ts";
 import type { ModelRole } from "../../config.ts";
 import type { ChatSettings } from "./contracts/chat.ts";
 import type { SearchEngineId } from "./search.ts";
@@ -130,6 +131,56 @@ export class ModelsNotConfiguredError extends Error {
 		super(modelsNotConfigured(missing).error);
 		this.name = "ModelsNotConfiguredError";
 		this.envelope = modelsNotConfigured(missing);
+	}
+}
+
+/** The key-presence refusal (provider-key interlude, owner, 2026-09-25):
+ * a PINNED model is not enough — its provider's key must be present, or
+ * the action dies mid-stream masked to a generic error. Same envelope
+ * family as modelsNotConfigured: HTTP callers get 503 + this JSON;
+ * in-band consumers (the job record's error field) carry the human
+ * `error` line. `provider` names whose key is gone; `slots` names the
+ * slot tier(s) the refused action resolves to that provider. */
+export const PROVIDER_KEY_MISSING_CODE = "provider_key_missing" as const;
+export interface ProviderKeyMissing {
+	/** Human-readable — safe to render as-is. */
+	error: string;
+	/** The machine discriminator the client switches on. */
+	code: typeof PROVIDER_KEY_MISSING_CODE;
+	/** The provider whose key is gone, e.g. "openrouter". */
+	provider: string;
+	/** Which slot tiers the refused action resolves to that provider. */
+	slots: ModelSlotName[];
+}
+/** The refusal wording's invariant tail — the matcher below keys on it
+ * (the label prefix varies by provider). */
+const PROVIDER_KEY_MISSING_TAIL = "key is set — add one in Settings → Keys";
+export function providerKeyMissing(provider: string, slots: ModelSlotName[]): ProviderKeyMissing {
+	const label = AUTH_PROVIDER_KEYS.find((p) => p.id === provider)?.label ?? provider;
+	return {
+		error: `No ${label} ${PROVIDER_KEY_MISSING_TAIL}`,
+		code: PROVIDER_KEY_MISSING_CODE,
+		provider,
+		slots,
+	};
+}
+/** The refusal error text (same discipline as isModelsRefusal): UI
+ * consumers detect key-refused work by the wording (info tone, not
+ * scary-error) — the envelope's home module owns the string so the
+ * writer and the matcher can never drift. */
+export function isProviderKeyRefusal(error: string | undefined): boolean {
+	return !!error && error.endsWith(PROVIDER_KEY_MISSING_TAIL);
+}
+/** The typed throw for in-process seams (extraction pipeline) — the
+ * ProviderKeyMissing sibling of ModelsNotConfiguredError: callers catch
+ * it to skip honestly (trigger) or surface the 503 envelope (routes). */
+export class ProviderKeyMissingError extends Error {
+	readonly envelope: ProviderKeyMissing;
+	constructor(provider: string, slots: ModelSlotName[]) {
+		const envelope = providerKeyMissing(provider, slots);
+		super(envelope.error);
+		this.name = "ProviderKeyMissingError";
+		this.envelope = envelope;
 	}
 }
 

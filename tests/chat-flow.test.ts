@@ -36,6 +36,11 @@ import type { TeachingAgent } from "../src/agent/teacher-agent.ts";
 import type { UIMessage } from "ai";
 import { PATHS } from "../config.ts";
 
+// The key-presence turn gate (provider-key interlude, 2026-09-25): scripted
+// turns pin openrouter per chat — the gate reads env-first truth, so the
+// key must be present in the test process like any real setup.
+process.env.OPENROUTER_API_KEY ??= "test-key-presence-gate";
+
 const QUIZ_INPUT = {
 	question: "Which planet is closest to the sun?",
 	options: [
@@ -610,5 +615,58 @@ describe("the BYOK turn gate (no factory floor — owner, 2026-09-22)", () => {
 		const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
 		assert.equal(res.status, 200, "chat.settings.model satisfies the chain without any record slot");
 		await drain(res);
+	});
+});
+
+// ─── the key-presence turn gate (provider-key interlude, owner, 2026-09-25) ─
+
+describe("the key-presence turn gate (provider-key interlude, 2026-09-25)", () => {
+	// The gate's truth is env-first (keyValue): in tests process.env is the
+	// WHOLE truth (the throwaway data dir has no auth.json), so each test
+	// pins its provider's env var explicitly and restores it after.
+	it("a pinned provider whose key is gone refuses with 503 provider_key_missing — nothing lingers", async () => {
+		const chat = chatStore.createChat("Test: keyless provider");
+		createdChats.push(chat.id);
+		const saved = process.env.TOGETHER_API_KEY;
+		delete process.env.TOGETHER_API_KEY;
+		try {
+			// The chat's own model override pins the provider — the same
+			// chain the strong slot rides. The gate fires BEFORE the engine
+			// build, so the fake model id never hits the catalog.
+			chatStore.saveSettings(chat.id, { model: { provider: "together", id: "no-such-model" } });
+			const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me something" }] };
+			const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
+
+			assert.equal(res.status, 503, "the key-presence gate refuses before beginTurn");
+			const body = (await res.json()) as { error: string; code: string; provider: string; slots: string[] };
+			assert.equal(body.code, "provider_key_missing");
+			assert.equal(body.provider, "together", "the envelope names whose key is gone");
+			assert.deepEqual(body.slots, ["strong"], "the conversation tier is the affected slot");
+			assert.equal(body.error, "No Together key is set — add one in Settings → Keys", "the human line names the provider");
+			assert.equal(isTurnRunning(chat.id), false, "the refusal never registers a live turn");
+			assert.equal(chatStore.getChat(chat.id)!.messages.length, 0, "no write-ahead persist before the gate");
+		} finally {
+			if (saved !== undefined) process.env.TOGETHER_API_KEY = saved;
+		}
+	});
+
+	it("an env-present key passes the gate (gate by what would run)", async () => {
+		const chat = chatStore.createChat("Test: env-keyed provider");
+		createdChats.push(chat.id);
+		const saved = process.env.OPENAI_API_KEY;
+		process.env.OPENAI_API_KEY = "test-key-presence-gate";
+		try {
+			// A REAL catalog model: the engine build AFTER the gate must
+			// resolve — the injected agent replaces the loop, not the build.
+			chatStore.saveSettings(chat.id, { model: { provider: "openai", id: "gpt-4" } });
+			const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me something" }] };
+			const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
+
+			assert.equal(res.status, 200, "the env-shadowed key counts as present — the turn runs");
+			await drain(res);
+		} finally {
+			if (saved !== undefined) process.env.OPENAI_API_KEY = saved;
+			else delete process.env.OPENAI_API_KEY;
+		}
 	});
 });
