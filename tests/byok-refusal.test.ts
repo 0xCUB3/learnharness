@@ -2,7 +2,13 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { parseModelsRefusal } from "../components/chat.tsx";
 import { prefillFromSlots, prefillLevelFromPin, setupStage } from "../components/setup-dialog.tsx";
-import { isModelsRefusal, modelsNotConfigured } from "../src/core/settings.ts";
+import {
+	isModelsRefusal,
+	isProviderKeyRefusal,
+	modelsNotConfigured,
+	providerKeyMissing,
+	PROVIDER_KEY_MISSING_CODE,
+} from "../src/core/settings.ts";
 import type { ModelCatalogEntry, ModelSlotName } from "../src/core/index.ts";
 
 /**
@@ -39,6 +45,35 @@ describe("isModelsRefusal — the job-record matcher", () => {
 		assert.equal(isModelsRefusal(modelsNotConfigured(["cheap"]).error), true);
 		assert.equal(isModelsRefusal(undefined), false);
 		assert.equal(isModelsRefusal("FAILED: headless crashed"), false);
+	});
+});
+
+describe("providerKeyMissing — the envelope factory (provider-key interlude, 2026-09-25)", () => {
+	it("names the provider from the curated label and carries the exact machine code", () => {
+		const envelope = providerKeyMissing("openrouter", ["strong"]);
+		assert.deepEqual(envelope, {
+			error: "No OpenRouter key is set — add one in Settings → Keys",
+			code: PROVIDER_KEY_MISSING_CODE,
+			provider: "openrouter",
+			slots: ["strong"],
+		});
+		assert.equal(envelope.code, "provider_key_missing");
+	});
+
+	it("an unknown provider falls back to its raw id as the label", () => {
+		const envelope = providerKeyMissing("weird", ["cheap"]);
+		assert.equal(envelope.error, "No weird key is set — add one in Settings → Keys");
+	});
+});
+
+describe("isProviderKeyRefusal — the job-record matcher (provider-key interlude)", () => {
+	it("matches the envelope wording regardless of provider label, not real failures", () => {
+		assert.equal(isProviderKeyRefusal(providerKeyMissing("together", ["cheap"]).error), true);
+		assert.equal(isProviderKeyRefusal(providerKeyMissing("openai", ["strong"]).error), true);
+		assert.equal(isProviderKeyRefusal(""), false);
+		assert.equal(isProviderKeyRefusal(undefined), false);
+		assert.equal(isProviderKeyRefusal("FAILED: headless crashed"), false);
+		assert.equal(isProviderKeyRefusal(modelsNotConfigured(["strong"]).error), false, "the models refusal is a different failure");
 	});
 });
 

@@ -21,7 +21,7 @@ import {
 } from "../../core/contracts.ts";
 import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import type { ModelRole } from "../../../config.ts";
-import { ROLE_SLOT, modelsNotConfigured } from "../../core/settings.ts";
+import { ROLE_SLOT, modelsNotConfigured, type ModelSlotName, type ProviderKeyMissing } from "../../core/settings.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
@@ -84,6 +84,12 @@ export interface JobRunnerDeps {
 	 *  drop (jobTools' searchAvailable) uses the same signal — jobs already
 	 *  in flight when a key disappears still fail honestly, never crash. */
 	searchProvider?: () => SearchProvider | null;
+	/** Key-presence gate (provider-key interlude, 2026-09-25): given the
+	 *  resolved engine's provider + the kind's slot tier, return the
+	 *  refusal envelope when the provider's key is missing (null = run).
+	 *  Injected because the agent layer may not read the key store; absent
+	 *  in tests that inject engines directly (test engines never owe a key). */
+	providerKeyMissing?: (provider: string, tier: ModelSlotName) => ProviderKeyMissing | null;
 }
 
 export interface JobRunner {
@@ -189,18 +195,15 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			return;
 		}
 		const engine = pickEngine(job.kind);
-		if (!engine) {
-			// BYOK per-need refusal (owner, 2026-09-22): this kind's tier has
-			// no model. Refuse through the SAME convention as every other
-			// failed job — record the honest error (no status flip:
-			// finalizeJob owns the terminal flip after delivery), then steer
-			// the kind's failure shape through finishJob so the wake
-			// pipeline resumes the lesson and the teacher reads the refusal
-			// instead of waiting forever on a job it already dispatched.
-			const tier = ROLE_SLOT[KIND_ROLE[job.kind]];
-			const envelope = modelsNotConfigured([tier]);
-			const reason = `${envelope.error} (missing: ${tier})`;
-			console.info(`[job ${jobId}] refused — ${JSON.stringify(envelope)}`);
+		// The per-need refusal guards (BYOK 2026-09-22 / provider-key
+		// interlude 2026-09-25): no engine for the kind's tier, or the
+		// resolved engine's provider key gone — both refuse through the SAME
+		// convention as every other failed job: record the honest error (no
+		// status flip: finalizeJob owns the terminal flip after delivery),
+		// then steer the kind's failure shape through finishJob so the wake
+		// pipeline resumes the lesson and the teacher reads the refusal
+		// instead of waiting forever on a job it already dispatched.
+		const refuse = async (reason: string): Promise<void> => {
 			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 			const resolved = resolveInput(job, input) as
 				| ResearchToolInput
@@ -229,6 +232,23 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 									pagesConsulted: [],
 								};
 			await finishJob(jobId, failure);
+		};
+		if (!engine) {
+			const tier = ROLE_SLOT[KIND_ROLE[job.kind]];
+			const envelope = modelsNotConfigured([tier]);
+			console.info(`[job ${jobId}] refused — ${JSON.stringify(envelope)}`);
+			await refuse(`${envelope.error} (missing: ${tier})`);
+			return;
+		}
+		// Key presence (2026-09-25): the engine exists, but its provider's
+		// key may be gone — refuse the spawn BEFORE the loop, same
+		// convention (the injected check reads the key store; absent in
+		// engine-injecting tests).
+		const keyRefusal =
+			deps.providerKeyMissing?.(engine.model.provider, ROLE_SLOT[KIND_ROLE[job.kind]]) ?? null;
+		if (keyRefusal) {
+			console.info(`[job ${jobId}] refused — ${JSON.stringify(keyRefusal)}`);
+			await refuse(keyRefusal.error);
 			return;
 		}
 		try {

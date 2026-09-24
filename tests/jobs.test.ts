@@ -58,6 +58,7 @@ import { persistTurn, withMessageIds } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { createJobRunner, pdfModelOverride, researchModelOverride } from "../src/agent/subagents/runner.ts";
+import { providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts";
 import type { PiEngine } from "../src/agent/models.ts";
 import type { SearchProvider } from "../src/core/search.ts";
 import { PATHS } from "../config.ts";
@@ -65,6 +66,11 @@ import { PATHS } from "../config.ts";
 const JOBS_DIR = path.join(PATHS.data, "jobs");
 
 const createdChats: string[] = [];
+
+// The key-presence turn gate (provider-key interlude, 2026-09-25): scripted
+// turns pin openrouter per chat — the gate reads env-first truth, so the
+// key must be present in the test process like any real setup.
+process.env.OPENROUTER_API_KEY ??= "test-key-presence-gate";
 const createdJobs: string[] = [];
 
 function trackChat(id: string) {
@@ -1385,6 +1391,59 @@ describe("BYOK job refusal (no factory floor)", () => {
 		const text = delivery.steers[0]!.parts[0];
 		assert.ok(
 			text.type === "text" && text.text.includes("Research failed: No model configured"),
+			"the steer carries the kind's failure shape",
+		);
+		const result = done.result as ResearchResult;
+		assert.equal(result.sources.length, 0, "the failure result matches the research convention");
+	});
+});
+
+// ─── provider-key: the key-presence job refusal (owner, 2026-09-25) ─────────
+
+describe("provider-key job refusal (key-presence interlude)", () => {
+	it("an engine whose provider key is gone refuses the spawn — envelope wording, no phantom run", async () => {
+		const chat = chatStore.createChat("Test: keyless spawn");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, [
+			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
+			{
+				id: "a1",
+				role: "assistant",
+				parts: [{ type: "tool-research", toolCallId: "call-km1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." }],
+			},
+		] as never);
+
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-km1" });
+		trackJob(job.id);
+
+		const delivery = fakeDeliver();
+		// The chain RESOLVES (an engine exists) — the KEY is what's missing.
+		// The injected check is the server seam's stand-in: it sees the
+		// engine's provider + the kind's slot tier, exactly as wired.
+		const engine = fauxEngine([]);
+		const seen: Array<[string, ModelSlotName]> = [];
+		const runner = createJobRunner({
+			chatStore,
+			jobStore,
+			deliver: delivery.deliver,
+			engineFor: () => engine,
+			providerKeyMissing: (provider, tier) => {
+				seen.push([provider, tier]);
+				return providerKeyMissing(provider, [tier]);
+			},
+		});
+		await runner.runJob(job.id);
+
+		// The refusal lands through the SAME convention as every failed job:
+		// honest record, kind failure shape steered, terminal flip after.
+		const done = jobStore.getJob(job.id)!;
+		assert.equal(done.status, "error", "the job lands error, never a phantom run");
+		assert.equal(done.error, providerKeyMissing(engine.model.provider, ["cheap"]).error, "the envelope's error line verbatim");
+		assert.deepEqual(seen, [[engine.model.provider, "cheap"]], "the check saw the engine's provider + the researcher's tier");
+		assert.equal(delivery.steers.length, 1, "the refusal STEERED — the teacher is not stranded");
+		const text = delivery.steers[0]!.parts[0];
+		assert.ok(
+			text.type === "text" && text.text.includes(`Research failed: No ${engine.model.provider} key is set`),
 			"the steer carries the kind's failure shape",
 		);
 		const result = done.result as ResearchResult;

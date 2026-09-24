@@ -14,7 +14,12 @@
  * /api/graph/status, as with session runs.
  */
 import { extraction } from "@/src/server";
-import { ModelsNotConfiguredError, type EmissionStats } from "@/src/core";
+import {
+	ModelsNotConfiguredError,
+	PROVIDER_KEY_MISSING_CODE,
+	ProviderKeyMissingError,
+	type EmissionStats,
+} from "@/src/core";
 
 export const dynamic = "force-dynamic";
 
@@ -23,10 +28,14 @@ interface ImportResult {
 	ok: boolean;
 	stats?: EmissionStats;
 	error?: string;
-	/** The machine discriminator when ok:false is the BYOK refusal (owner,
-	 *  2026-09-22) — the client can open the setup flow off it. */
-	code?: "models_not_configured";
+	/** The machine discriminator when ok:false is a config refusal — the
+	 * BYOK models refusal (owner, 2026-09-22) or the provider-key refusal
+	 * (2026-09-25); the client can open the setup/keys flow off it. */
+	code?: "models_not_configured" | (typeof PROVIDER_KEY_MISSING_CODE);
 	missing?: string[];
+	/** The key-refusal specifics (provider_key_missing only). */
+	provider?: string;
+	slots?: string[];
 }
 
 export async function POST(request: Request) {
@@ -54,6 +63,17 @@ export async function POST(request: Request) {
 						error: err.envelope.error,
 						code: "models_not_configured",
 						missing: err.envelope.missing,
+					});
+					continue;
+				}
+				if (err instanceof ProviderKeyMissingError) {
+					results.push({
+						filePath: file.name,
+						ok: false,
+						error: err.envelope.error,
+						code: PROVIDER_KEY_MISSING_CODE,
+						provider: err.envelope.provider,
+						slots: err.envelope.slots,
 					});
 					continue;
 				}

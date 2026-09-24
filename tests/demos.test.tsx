@@ -1,3 +1,4 @@
+
 /**
  * Demo + visual artifact tests (W6) — deterministic, zero network, no real
  * Chrome:
@@ -82,6 +83,13 @@ function testRunner() {
 	return { steers, runner };
 }
 import { artifactRenderers } from "../components/artifacts/index.ts";
+
+// The key-presence turn gate (provider-key interlude, 2026-09-25): scripted
+// turns pin openrouter per chat — the gate reads env-first truth, so the
+// key must be present in the test process like any real setup.
+process.env.OPENROUTER_API_KEY ??= "test-key-presence-gate";
+
+
 
 const JOBS_DIR = path.join(PATHS.data, "jobs");
 const createdChats: string[] = [];
