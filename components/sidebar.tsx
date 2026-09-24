@@ -8,6 +8,7 @@ import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import type { ChatDeleteMode } from "@/src/core";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
+import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
@@ -376,11 +377,13 @@ function SessionsSidebar() {
 	const listRef = useRef<HTMLDivElement>(null);
 
 	/* ── Wave 6 chunk A: context menu + inline rename + deletion ──
-	   Right-click a session row → MenuShell with exactly two actions
-	   (owner ruling): Rename (inline, below) and Delete (the two-option
-	   dialog). The anchor is the row that was right-clicked — assigned
-	   into a ref before the state flip so the shell measures it on its
-	   first (hidden) pass. */
+	   Right-click a session row → MenuShell: the extraction coverage
+	   block (owner-locked redesign, 2026-09-24 — numbers + the manual
+	   Extract affordance, separated by a hairline) above the two
+	   session-management actions (owner ruling): Rename (inline, below)
+	   and Delete (the two-option dialog). The anchor is the row that was
+	   right-clicked — assigned into a ref before the state flip so the
+	   shell measures it on its first (hidden) pass. */
 	const [ctxChatId, setCtxChatId] = useState<string | null>(null);
 	const ctxAnchorRef = useRef<HTMLElement | null>(null);
 	const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -648,16 +651,25 @@ function SessionsSidebar() {
 					</div>
 				</div>
 
-				{/* The context menu (wave 6): exactly two actions (owner
-				    ruling — no more). MenuShell owns placement/focus/arrow
+				{/* The context menu (wave 6 + the extraction-UX redesign): the
+				    coverage block above, then exactly two management actions
+				    (owner ruling — no more). MenuShell owns placement/focus/arrow
 				    cycling; the dismissal effect above owns the contract. */}
 				{ctxChatId !== null && (
 					<MenuShell
 						anchorRef={ctxAnchorRef}
 						testid="session-context-menu"
 						preferredSide="down"
-						menuClass="flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+						menuClass="flex w-52 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
 					>
+						{/* The extraction block (owner-locked redesign, 2026-09-24):
+						    what the extractor hasn't covered yet + the manual Extract
+						    affordance — visually separated from the management
+						    actions below by a hairline. Fetched on menu open (the
+						    block mounts WITH the menu); 409 = benign (already
+						    running). Renders nothing on a failed read. */}
+						<CoverageMenuBlock chatId={ctxChatId} />
+						<div className="my-0.5 border-t border-border/60" aria-hidden="true" />
 						<button
 							type="button"
 							data-testid="ctx-rename"

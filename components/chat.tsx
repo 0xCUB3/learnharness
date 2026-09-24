@@ -35,6 +35,7 @@ import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TeacherUIMessage, TurnUsage } from "@/src/core";
 import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
+import { CoverageRing } from "@/components/extraction-coverage";
 import { findPendingToolCall, phaseAt3, phaseTimeline, streamingToolActivity } from "@/src/core";
 import { slotsConfigured, type ModelsSettings } from "@/src/core";
 import { useSettingsSaved } from "@/components/settings-signal";
@@ -478,6 +479,9 @@ export function Chat({
 	// The live plan popup (wave 4): opened by any transcript plan block, the
 	// top-bar plan chip, and the dock band's marginalia.
 	const [planOpen, setPlanOpen] = useState(false);
+	// The coverage ring's refresh chain (extraction-UX redesign): bumped at
+	// turn settle — the moment this session's uncovered mass changes.
+	const [coverageTick, setCoverageTick] = useState(0);
 	// The mermaid focus (chrome-melt wave, 2026-09-19): md-blocks' expand
 	// button registers the chart source here; the overlay (and the plan
 	// popup) mount INSIDE the session-area div — both are session-scoped, so
@@ -584,6 +588,10 @@ export function Chat({
 			// immediate: turns-only refetch — the stats bar updates even while
 			// the server's persist/endTurn lags the client by milliseconds
 			void syncTurns();
+			// The coverage ring re-reads at turn settle too (extraction-UX
+			// redesign, 2026-09-24): this turn's messages just joined the
+			// uncovered mass; the ring's own running-poll handles runs.
+			setCoverageTick((t) => t + 1);
 			// Turn-end nudge (accuracy wave, 2026-09-19): the extraction
 			// pipeline fires at this turn's onFinish — the dock's poll would
 			// discover a started run up to 10s late. Refetch the activity feed
@@ -922,6 +930,11 @@ export function Chat({
 							Plan
 						</button>
 					)}
+					{/* The extraction ring (owner-locked redesign, 2026-09-24): fills
+					    with uncovered vs the chunk threshold, pulses while a run is in
+					    flight, vanishes when the graph is off. Click → the exact
+					    numbers. Before the phase label — the chips cluster right. */}
+					<CoverageRing chatId={chatId} refreshKey={coverageTick} />
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
 				</header>
 

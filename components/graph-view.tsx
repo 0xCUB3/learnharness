@@ -66,7 +66,6 @@ import Link from "next/link";
 import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
 import { incrementalLayout, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
-import { GraphCoverageControl } from "./graph-coverage.tsx";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useActivity } from "@/components/activity-dock";
 import { MenuShell } from "@/components/menu-shell.tsx";
@@ -1398,12 +1397,6 @@ export function GraphView() {
 					</div>
 					</>
 				)}
-				{/* Extraction coverage — between search and import (2026-09-17);
-					always present, even when the graph is EMPTY — an empty graph
-					with unextracted sessions is exactly when it matters (extract
-					→ the graph gains nodes). The panel re-reads when background
-					runs settle (refreshTick). */}
-				<div className="shrink-0"><GraphCoverageControl refreshKey={refreshTick} /></div>
 				{!isEmpty && (
 				<>
 					{/* Import notes — its own container (36px, header band). */}

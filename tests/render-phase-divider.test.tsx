@@ -30,6 +30,14 @@ describe("PhaseChip (header)", () => {
 		}
 	});
 
+	it("UN-PILLED (owner, extraction-UX redesign 2026-09-24): a flat tag — no border, no rounding, no padding", () => {
+		const html = renderToStaticMarkup(<PhaseChip phase="plan" />);
+		assert.ok(!html.includes("rounded-full"), "no pill curve");
+		assert.ok(!html.includes("border-border"), "no border chrome");
+		assert.ok(!html.includes("px-2"), "no pill padding");
+		assert.match(html, /class="[^"]*text-xs font-medium uppercase/, "the quiet flat label keeps its type treatment");
+	});
+
 	it("NEVER shows a working spinner — the pill's curve suits text, not glyph cells (owner, round 2)", () => {
 		const html = renderToStaticMarkup(<PhaseChip phase="teach" />);
 		assert.ok(!html.includes("braille-spinner"), "the chip is label-only by design");

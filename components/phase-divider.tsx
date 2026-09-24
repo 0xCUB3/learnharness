@@ -31,18 +31,20 @@ const CHIP_LABEL: Record<Phase3, string> = {
 	teach: "Teaching",
 };
 
-/** The header chip: the phase label, monochrome — label-only by design
- *  (see the component note: the pill's curve suits text, not glyphs). */
+/** The header label: the phase as a quiet flat tag (owner,
+ *  extraction-UX redesign 2026-09-24 — the UN-PILL round): no border, no
+ *  pill chrome, no padding — the Plan chip is the only button-shaped thing
+ *  in the top bar now. Still pure decoration (owner ask, 2026-09-17): no
+ *  tooltip, not selectable, not interactive in any way — no pointer events
+ *  at all, so it is part of the drag surface instead of a carved-out
+ *  target. */
 export function PhaseChip({ phase }: { phase: Phase3 }) {
-	// Pure decoration (owner ask, 2026-09-17): no tooltip, not selectable,
-	// not interactive in any way — no pointer events at all, so it is part
-	// of the drag surface instead of a carved-out target.
 	return (
 		<span
 			data-testid="phase-chip"
 			data-phase={phase}
 			aria-hidden="true"
-			className="pointer-events-none flex shrink-0 select-none items-center rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+			className="pointer-events-none flex shrink-0 select-none items-center text-xs font-medium uppercase tracking-wide text-muted-foreground"
 		>
 			{CHIP_LABEL[phase]}
 		</span>
