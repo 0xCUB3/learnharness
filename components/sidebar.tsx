@@ -377,11 +377,11 @@ function SessionsSidebar() {
 	const listRef = useRef<HTMLDivElement>(null);
 
 	/* ── Wave 6 chunk A: context menu + inline rename + deletion ──
-	   Right-click a session row → MenuShell: the extraction coverage
-	   block (owner-locked redesign, 2026-09-24 — numbers + the manual
-	   Extract affordance, separated by a hairline) above the two
-	   session-management actions (owner ruling): Rename (inline, below)
-	   and Delete (the two-option dialog). The anchor is the row that was
+	   Right-click a session row → MenuShell: the two management actions
+	   first (owner ruling), then — below a hairline — the extraction
+	   coverage block (owner-locked redesign 2026-09-24, order refined
+	   2026-09-24: Rename/Delete on top, the numbers + manual Extract
+	   affordance at the bottom). The anchor is the row that was
 	   right-clicked — assigned into a ref before the state flip so the
 	   shell measures it on its first (hidden) pass. */
 	const [ctxChatId, setCtxChatId] = useState<string | null>(null);
@@ -662,14 +662,12 @@ function SessionsSidebar() {
 						preferredSide="down"
 						menuClass="flex w-52 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
 					>
-						{/* The extraction block (owner-locked redesign, 2026-09-24):
-						    what the extractor hasn't covered yet + the manual Extract
-						    affordance — visually separated from the management
-						    actions below by a hairline. Fetched on menu open (the
-						    block mounts WITH the menu); 409 = benign (already
-						    running). Renders nothing on a failed read. */}
-						<CoverageMenuBlock chatId={ctxChatId} />
-						<div className="my-0.5 border-t border-border/60" aria-hidden="true" />
+						{/* The two management actions first, then the extraction block
+						    (owner refinement round, 2026-09-24): Rename/Delete stay at the
+						    top, the coverage numbers + Extract affordance sit below the
+						    hairline — the block is info + a stateful affordance, the
+						    actions above it. Fetched on menu open (the block mounts WITH
+						    the menu); 409 = benign. Renders nothing on a failed read. */}
 						<button
 							type="button"
 							data-testid="ctx-rename"
@@ -693,6 +691,8 @@ function SessionsSidebar() {
 						>
 							Delete…
 						</button>
+						<div className="my-0.5 border-t border-border/60" aria-hidden="true" />
+						<CoverageMenuBlock chatId={ctxChatId} />
 					</MenuShell>
 				)}
 
