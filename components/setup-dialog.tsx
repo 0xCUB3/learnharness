@@ -12,11 +12,13 @@
  * STAGED BY DEPENDENCY (owner, 2026-09-20: "first keys, then models —
  * there's no point presenting the model picker before the user has set a
  * key because there are no models to pick then"):
- *   Stage 1 — no keyed provider: "add a provider key first" + a button
- *     that deep-links the settings dialog on Keys. The draft lives in
- *     the caller's state, untouched; after the key lands the next
- *     submit/CTA click reopens here at stage 2 (the /api/models check is
- *     fresh per open — saving a key immediately widens the pickers).
+ *   Stage 1 — no keyed provider: a SELF-CONTAINED first-key screen
+ *     (zero-keys wave, owner 2026-09-25): provider picker + one key
+ *     input + save via PUT /api/keys/:id. The dialog STAYS MOUNTED —
+ *     saving dispatches the "keys" signal, the fetch effect re-runs on
+ *     it, and the stage flips to the pickers on its own. No Settings
+ *     round-trip anymore; the draft lives in the caller's state,
+ *     untouched throughout.
  *   Stage 2 — Strong → Cheap → Vision pickers over the FEDERATED catalog
  *     (keyed providers only), the vision slot filtered to image-capable
  *     models, in the app's shared dropdown language (ModelMenuList).
@@ -36,7 +38,9 @@ import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings } from 
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
 import { MenuShell } from "@/components/menu-shell";
-import { notifySettingsSaved } from "@/components/settings-signal";
+import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-signal";
+import { type ProviderKeyInfo } from "@/components/settings/keys-section";
+import { ProviderMenuList } from "@/components/settings/model-menu";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
 import { ThinkingMenuList } from "@/components/settings/model-menu";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -101,19 +105,123 @@ export function prefillLevelFromPin(
 	return populateLevel(pin?.thinkingLevel, entry.supportedLevels);
 }
 
+/** Stage 1's pure body — exported for SSR pins (the delete/settings
+ *  body pattern). The wrapper owns state + effects + the portal.
+ *
+ * The first-key screen (owner, zero-keys wave): provider picker (the
+ * app's shared dropdown language, ProviderMenuList), one paste input,
+ * Save. A save that 400s keeps the line inline (the keys section's
+ * shape-gates write user-facing error text). */
+export function SetupKeysBody({
+	providers,
+	provider,
+	value,
+	saving,
+	error,
+	menuOpen,
+	onToggleMenu,
+	onPick,
+	onValue,
+	onSave,
+	menuAnchor,
+}: {
+	/** The full provider roster (GET /api/keys providers) — undefined
+	 *  while it loads; the picker renders an honest empty state then. */
+	providers: ProviderKeyInfo[] | undefined;
+	/** The chosen provider; null = the picker trigger reads "Pick a
+	 *  provider…". */
+	provider: ProviderKeyInfo | null;
+	value: string;
+	saving: boolean;
+	error: string | null;
+	menuOpen: boolean;
+	onToggleMenu: () => void;
+	onPick: (p: ProviderKeyInfo) => void;
+	onValue: (v: string) => void;
+	onSave: () => void;
+	/** The MenuShell anchor — wired by the wrapper (its triggerRef). */
+	menuAnchor: React.RefObject<HTMLDivElement | null>;
+}) {
+	return (
+		<div className="flex flex-col gap-3 px-6 py-5" data-testid="setup-stage-keys">
+			<p className="text-sm text-foreground">First, add a provider key.</p>
+			<p className="text-xs text-muted-foreground">
+				The model pickers list only what your keys unlock — there is nothing to pick until one exists.
+			</p>
+			<div className="flex flex-col gap-2">
+				<div ref={menuAnchor} className="relative max-w-96">
+					<button
+						type="button"
+						aria-label="Provider"
+						data-testid="setup-key-provider"
+						aria-expanded={menuOpen}
+						onClick={onToggleMenu}
+						className="flex h-7 w-full items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+					>
+						<span className="min-w-0 flex-1 truncate text-left">{provider ? provider.label : "Pick a provider…"}</span>
+						<span aria-hidden className="text-muted-foreground">
+							▾
+						</span>
+					</button>
+					{menuOpen && (
+						<MenuShell
+							anchorRef={menuAnchor}
+							testid="setup-key-provider-menu"
+							preferredSide="down"
+							align="left"
+							menuClass="flex w-[22rem] flex-col rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
+						>
+							<ProviderMenuList providers={providers ?? []} onPick={onPick} />
+						</MenuShell>
+					)}
+				</div>
+				{provider && (
+					<div className="flex max-w-96 items-center gap-2">
+						<input
+							type="text"
+							value={value}
+							onChange={(e) => onValue(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" && value.trim()) onSave();
+							}}
+							placeholder="Paste key…"
+							aria-label={`${provider.label} key`}
+							data-testid="setup-key-input"
+							disabled={saving}
+							autoFocus
+							className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-background px-1.5 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-muted-foreground/50"
+						/>
+						<button
+							type="button"
+							onClick={onSave}
+							disabled={saving || !value.trim()}
+							data-testid="setup-key-save"
+							className="shrink-0 rounded-sm border border-border bg-background px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 disabled:cursor-not-allowed disabled:opacity-40"
+						>
+							{saving ? "Saving…" : "Save key"}
+						</button>
+					</div>
+				)}
+				{error && (
+					<p role="alert" data-testid="setup-key-error" className="text-xs text-red-400">
+						{error}
+					</p>
+				)}
+			</div>
+		</div>
+	);
+}
+
 export function SetupDialog({
 	open,
 	onClose,
 	/** Saved: the models section landed; the caller marks configured and
 	 *  replays the intercepted draft. */
 	onDone,
-	/** Deep-link to the Keys section ("add a provider key first"). */
-	onOpenKeys,
 }: {
 	open: boolean;
 	onClose: () => void;
 	onDone: (models: ModelsSettings) => void;
-	onOpenKeys: () => void;
 }) {
 	const [body, setBody] = useState<ModelsBody | null>(null);
 	const [failed, setFailed] = useState(false);
@@ -124,19 +232,46 @@ export function SetupDialog({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [openMenu, setOpenMenu] = useState<{ slot: ModelSlotName; kind: "model" | "thinking" } | null>(null);
+	// Stage 1's first-key screen (zero-keys wave): the provider roster,
+	// the chosen provider + pasted value, its busy/error pair, and its own
+	// menu-open bit (the slot menus' dismissal machinery covers it too —
+	// see the trigger testid branch below).
+	const [keyProviders, setKeyProviders] = useState<ProviderKeyInfo[] | undefined>(undefined);
+	const [keyProvider, setKeyProvider] = useState<ProviderKeyInfo | null>(null);
+	const [keyValue, setKeyValue] = useState("");
+	const [keySaving, setKeySaving] = useState(false);
+	const [keyError, setKeyError] = useState<string | null>(null);
+	const [keyMenuOpen, setKeyMenuOpen] = useState(false);
 	/** The open menu's trigger wrapper — the shared shell's anchor (fix
 	 *  wave chunk B): one menu open at a time, so one ref suffices, and
 	 *  the menu PORTALS out of this dialog's overflow-hidden frame — it
 	 *  extends beyond the dialog exactly like the settings menus do. */
 	const triggerRef = useRef<HTMLDivElement>(null);
+	// Stage 1's provider-picker trigger wrapper — the shared shell's anchor
+	// (the slot menus use the same single-ref pattern). Declared with the
+	// other hooks: the early `if (!open) return null` sits below them all.
+	const keyTriggerRef = useRef<HTMLDivElement>(null);
 
-	// Fresh /api/models per open — a key saved a moment ago (stage 1 →
-	// Keys → back) widens the pickers immediately, no restart.
+	// The keys signal (zero-keys wave): keys-section saves/deletes AND
+	// THIS dialog's own first-key save dispatch it; the fetch effect below
+	// re-runs on it, so saving a key flips the stage to the pickers with
+	// the widened catalog — no restart, no Settings round-trip.
+	const [keysTick, setKeysTick] = useState(0);
+	useSettingsSaved((section) => {
+		if (section === "keys") setKeysTick((t) => t + 1);
+	});
+
+	// Fresh /api/models per open AND per keys change — a key saved a
+	// moment ago (stage 1's own screen) widens the pickers immediately.
 	useEffect(() => {
 		if (!open) return;
 		setPicked({});
 		setLevels({});
 		setError(null);
+		fetch("/api/keys")
+			.then((r) => r.json())
+			.then((b: { providers?: ProviderKeyInfo[] }) => setKeyProviders(b.providers ?? []))
+			.catch(() => setKeyProviders([]));
 		fetch("/api/models")
 			.then((r) => r.json())
 			.then((b: ModelsBody) => {
@@ -158,7 +293,7 @@ export function SetupDialog({
 				setLevels(preLevels);
 			})
 			.catch(() => setFailed(true));
-	}, [open]);
+	}, [open, keysTick]);
 
 	// Esc + outside-click — layered dismissal, closable WITHOUT
 	// configuring (browsing stays possible; the gate is the send
@@ -168,6 +303,10 @@ export function SetupDialog({
 		if (!open) return;
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape") return;
+			if (keyMenuOpen) {
+				setKeyMenuOpen(false);
+				return;
+			}
 			if (openMenu !== null) setOpenMenu(null);
 			else onClose();
 		};
@@ -185,12 +324,36 @@ export function SetupDialog({
 			window.removeEventListener("keydown", onKey);
 			document.removeEventListener("pointerdown", onPointerDown);
 		};
-	}, [open, onClose, openMenu]);
+	}, [open, onClose, openMenu, keyMenuOpen]);
 
 	if (!open) return null;
 
 	const stage = failed ? "keys" : setupStage(body ? body.providers : null);
 	const allPicked = SLOT_ORDER.every((s) => picked[s]);
+
+	/** Stage 1's save: PUT the pasted key, dispatch the keys signal, and
+	 *  CLEAN the local screen — the signal re-fetch widens the catalog and
+	 *  the stage flips to the pickers on its own; the dialog stays mounted
+	 *  the whole way. Shape-gate 400s keep their user-facing line inline. */
+	async function saveKey() {
+		if (!keyProvider || !keyValue.trim() || keySaving) return;
+		setKeySaving(true);
+		setKeyError(null);
+		const res = await fetch(`/api/keys/${encodeURIComponent(keyProvider.envVar)}`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ value: keyValue }),
+		}).catch(() => null);
+		setKeySaving(false);
+		if (!res || !res.ok) {
+			const body = (await res?.json().catch(() => ({}))) as { error?: string } | undefined;
+			setKeyError(res ? (body?.error ?? `Save failed (${res.status})`) : "Save failed — network");
+			return;
+		}
+		setKeyProvider(null);
+		setKeyValue("");
+		notifySettingsSaved("keys");
+	}
 
 	async function save() {
 		if (!allPicked || saving) return;
@@ -246,23 +409,30 @@ export function SetupDialog({
 				</header>
 
 				{stage === "keys" ? (
-					<div className="flex flex-col gap-3 px-6 py-5" data-testid="setup-stage-keys">
-						<p className="text-sm text-foreground">
-							{failed ? "Model catalog could not be loaded — check the connection and retry." : "First, add a provider key."}
-						</p>
-						<p className="text-xs text-muted-foreground">
-							The model pickers list only what your keys unlock — there is nothing to pick until one exists.
-						</p>
-						<div>
-							<button
-								type="button"
-								data-testid="setup-open-keys"
-								onClick={onOpenKeys}
-								className="rounded-sm border border-border bg-background px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
-							>
-								Open Keys settings
-							</button>
-						</div>
+					<div className="flex flex-col px-6 py-5">
+						{failed ? (
+							<p className="text-sm text-foreground">
+								Model catalog could not be loaded — check the connection and retry.
+							</p>
+						) : (
+							<SetupKeysBody
+								providers={keyProviders}
+								provider={keyProvider}
+								value={keyValue}
+								saving={keySaving}
+								error={keyError}
+								menuOpen={keyMenuOpen}
+								menuAnchor={keyTriggerRef}
+								onToggleMenu={() => setKeyMenuOpen((v) => !v)}
+								onPick={(p) => {
+									setKeyProvider(p);
+									setKeyMenuOpen(false);
+									setKeyError(null);
+								}}
+								onValue={setKeyValue}
+								onSave={() => void saveKey()}
+							/>
+						)}
 					</div>
 				) : (
 					<div className="flex flex-col gap-4 overflow-y-auto px-6 py-5" data-testid="setup-stage-pickers">

@@ -5,7 +5,7 @@ import { useChat } from "@ai-sdk/react";
 import { lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { createChatTransport } from "@/components/chat-transport";
 import { SetupDialog } from "@/components/setup-dialog";
-import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
+import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
 	Conversation,
@@ -25,7 +25,7 @@ import { DictationBar, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useActivity } from "@/components/activity-dock";
-import { mergeAdopted, type ChatSettings, type ModelSlotName } from "@/src/core";
+import { isProviderKeyRefusal, mergeAdopted, type ChatSettings, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
@@ -103,6 +103,21 @@ export function parseModelsRefusal(message: string | undefined): ModelSlotName[]
 		return null;
 	} catch {
 		return null;
+	}
+}
+
+/** The provider-key refusal's transport seam (zero-keys wave, Platform's
+ *  66dbea9): same discipline as parseModelsRefusal — the 503 body rides
+ *  the thrown error message verbatim, so the envelope's own matcher
+ *  (core, invariant-tail) decides; the wording can never drift client-
+ *  side. Exported pure for tests. */
+export function parseProviderKeyRefusal(message: string | undefined): boolean {
+	if (!message) return false;
+	try {
+		const body = JSON.parse(message) as { code?: unknown; error?: unknown };
+		return body.code === "provider_key_missing" && typeof body.error === "string" && isProviderKeyRefusal(body.error);
+	} catch {
+		return false;
 	}
 }
 
@@ -315,6 +330,10 @@ export function Chat({
 	// refusal interception share one SetupDialog mount. `configured` is
 	// seeded server-side (slotsConfigured on the record) and flips on Save.
 	const [configured, setConfigured] = useState(initialConfigured);
+	// The zero-keys truth (zero-keys wave): no provider key = the pill
+	// takes precedence over the models CTA (keys come first in the chain).
+	// Reads once on mount, re-reads on the "keys" signal.
+	const zeroKeys = useZeroKeys();
 	// Cross-surface freshness (fix wave): another surface's models write —
 	// setup save, composer pick, a settings write — re-reads the record so
 	// the setup CTA appears/disappears live (it used to lag until reload).
@@ -326,7 +345,6 @@ export function Chat({
 			.catch(() => {});
 	});
 	const [setupOpen, setSetupOpen] = useState(false);
-	const { open: openSettings } = useSettingsDialog();
 	/** The last explicitly-sent draft (composer send, verdict note): the
 	 *  refusal flow restores it into the composer and Save replays it.
 	 *  Auto-continuations (probe answers) never set it — their refusal
@@ -344,7 +362,11 @@ export function Chat({
 	useEffect(() => {
 		if (!error) return;
 		const missing = parseModelsRefusal(error.message);
-		if (!missing) return; // a real error keeps the honest banner
+		// The key-refusal twin (zero-keys wave): a pinned model whose
+		// provider key is gone gets the SAME treatment — revert-draft and
+		// open setup (the dialog derives to its first-key stage on its own).
+		const keyRefused = parseProviderKeyRefusal(error.message);
+		if (!missing && !keyRefused) return; // a real error keeps the honest banner
 		// ORDER MATTERS: clearError() flips this effect's own dep (`error`)
 		// and would cancel the in-flight work below — so the banner dismiss,
 		// the draft restore, and the dialog open all land TOGETHER after the
@@ -1087,17 +1109,21 @@ export function Chat({
 					dictationSlot={<DictationBar dictation={dictation} />}
 					dictationCancel={dictation.cancel}
 					setupCta={
-						!configured && (
-							<div className="pointer-events-auto mb-2 flex justify-center">
-								<button
-									type="button"
-									data-testid="setup-cta"
-									onClick={() => setSetupOpen(true)}
-									className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
-								>
-									Set up your models
-								</button>
-							</div>
+						zeroKeys ? (
+							<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
+						) : (
+							!configured && (
+								<div className="pointer-events-auto mb-2 flex justify-center">
+									<button
+										type="button"
+										data-testid="setup-cta"
+										onClick={() => setSetupOpen(true)}
+										className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+									>
+										Set up your models
+									</button>
+								</div>
+							)
 						)
 					}
 					composer={
@@ -1164,10 +1190,6 @@ export function Chat({
 					draftRef.current = t;
 					void sendMessage({ text: t });
 				}
-			}}
-			onOpenKeys={() => {
-				setSetupOpen(false);
-				openSettings("keys");
 			}}
 		/>
 		</ChatActionsContext.Provider>

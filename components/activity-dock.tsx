@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ActivityIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
-import { isModelsRefusal, jobCost } from "@/src/core";
+import { isModelsRefusal, isProviderKeyRefusal, jobCost } from "@/src/core";
 import { formatTokens, formatUsd } from "@/components/usage-format";
 
 /**
@@ -204,8 +204,15 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 			context,
 			// BYOK (owner, 2026-09-22): a refusal is info, not failure —
 			// the honest line the runner left ("failed") reads as setup
-			// needed, matching the dispatch card's quiet tone.
-			activity: isModelsRefusal(job.error) ? "needs model setup" : (job.activity ?? ""),
+			// needed, matching the dispatch card's quiet tone. The
+			// provider-key refusal twin (zero-keys wave, Platform's
+			// 66dbea9): a pinned model whose key is gone reads as the key
+			// being needed, same quiet tone.
+			activity: isModelsRefusal(job.error)
+				? "needs model setup"
+				: isProviderKeyRefusal(job.error)
+					? "needs a provider key"
+					: (job.activity ?? ""),
 			model: usage?.model,
 			steps: usage?.steps,
 		};

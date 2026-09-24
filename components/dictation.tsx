@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2Icon, MicIcon } from "lucide-react";
+import { useSettingsDialog } from "@/components/settings/settings-dialog";
 
 /**
  * Voice dictation — the cloud engine (STT wave 1, 2026-09-17).
@@ -80,6 +81,17 @@ export const METER_TICK_MS = 60;
 /** Rolling history: 48 cells × 60ms ≈ 2.9s of recent loudness. */
 export const METER_CELLS = 48;
 
+/** The Deepgram key's id in the keys store (the env-var name — the Keys
+ *  section's openRow state and the PUT /api/keys/:id seam). */
+export const DEEPGRAM_KEY_ID = "DEEPGRAM_API_KEY";
+
+/** The client-authored KEYLESS line (zero-keys wave, owner 2026-09-25):
+ * the token route's raw 503 message is dev-speak ("add it to auth.json
+ * (desktop) or .env.local (dev)") — the surface says the short truth
+ * instead. Exported for pins; the errored idle button's click recognizes
+ * it and deep-links Settings → Keys → the Deepgram row. */
+export const DICTATION_KEYLESS = "Dictation needs a Deepgram key";
+
 /** RMS (0..1) → normalized 0..1 across the audible dB window. */
 export function rmsToMeter(rms: number): number {
 	if (rms <= 0) return 0;
@@ -146,6 +158,10 @@ export type Dictation = {
 	 *  semantics (owner, 2026-09-17 round 3): Esc is a cancel, not a stop —
 	 *  before, it flushed exactly like the toggle did. */
 	cancel: () => void;
+	/** Clear the terminal error without starting a run (zero-keys wave):
+	 * the keyless click leaves for Settings and the surface must come
+	 * back clean. */
+	clearError: () => void;
 };
 
 /**
@@ -208,11 +224,17 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		setPhase("idle");
 	}, []);
 
-	/** Mint a short-lived token (the route holds the real key server-side). */
+	/** Mint a short-lived token (the route holds the real key server-side).
+	 *  The keyless 503 (no DEEPGRAM_API_KEY) is the route's ONLY 503 — the
+	 *  raw message is dev-speak, so the error becomes the short
+	 *  client-authored line (zero-keys wave, owner 2026-09-25). */
 	const mintToken = useCallback(async () => {
 		const res = await fetch("/api/stt/token");
 		const data = (await res.json()) as { token?: string; message?: string };
-		if (!res.ok || !data.token) throw new Error(data.message ?? `token route ${res.status}`);
+		if (!res.ok || !data.token) {
+			if (res.status === 503) throw new Error(DICTATION_KEYLESS);
+			throw new Error(data.message ?? `token route ${res.status}`);
+		}
 		return data.token;
 	}, []);
 
@@ -392,7 +414,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		return () => window.removeEventListener("lh:kbd-cancel-dictation", cancel);
 	}, [cancel]);
 
-	return { phase, error, levelRef, active: phase !== "idle", toggle, stop, cancel };
+	return { phase, error, levelRef, active: phase !== "idle", toggle, stop, cancel, clearError: () => setError(null) };
 }
 
 /**
@@ -408,7 +430,13 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
  *             (full text in the tooltip), cleared on the next click.
  */
 export function DictationBar({ dictation }: { dictation: Dictation }) {
-	const { phase, error, levelRef, toggle, active } = dictation;
+	const { phase, error, levelRef, toggle, active, clearError } = dictation;
+	const { open: openSettings } = useSettingsDialog();
+	/** The keyless click (zero-keys wave, owner dictation trio): the errored
+	 *  idle button deep-links Settings → Keys → the Deepgram row and clears
+	 *  the error — the surface is clean when the user returns. Any other
+	 *  error keeps the old behavior (click = retry, which clears). */
+	const keyless = error === DICTATION_KEYLESS;
 	const [levels, setLevels] = useState<number[]>(() => new Array(METER_CELLS).fill(0));
 	const recording = phase === "recording" || phase === "stopping";
 	/** Adaptive cell count (owner round 2): derived from the meter's
@@ -455,7 +483,14 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 		return (
 			<button
 				type="button"
-				onClick={toggle}
+				onClick={() => {
+					if (keyless) {
+						clearError();
+						openSettings("keys", DEEPGRAM_KEY_ID);
+					} else {
+						toggle();
+					}
+				}}
 				title={error ?? "Dictate into the composer"}
 				aria-label={error ? `Dictation failed: ${error}` : "Start dictation"}
 				data-testid="dictation-toggle"

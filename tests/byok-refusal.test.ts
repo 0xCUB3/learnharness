@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelsRefusal } from "../components/chat.tsx";
+import { parseModelsRefusal, parseProviderKeyRefusal } from "../components/chat.tsx";
 import { prefillFromSlots, prefillLevelFromPin, setupStage } from "../components/setup-dialog.tsx";
 import {
 	isModelsRefusal,
@@ -63,6 +63,21 @@ describe("providerKeyMissing — the envelope factory (provider-key interlude, 2
 	it("an unknown provider falls back to its raw id as the label", () => {
 		const envelope = providerKeyMissing("weird", ["cheap"]);
 		assert.equal(envelope.error, "No weird key is set — add one in Settings → Keys");
+	});
+});
+
+describe("parseProviderKeyRefusal — the send refusal detector's twin (zero-keys wave)", () => {
+	it("reads the envelope's own code + invariant tail — the wording can never drift client-side", () => {
+		const REFUSED = JSON.stringify(providerKeyMissing("openrouter", ["strong"]));
+		assert.equal(parseProviderKeyRefusal(REFUSED), true);
+		assert.equal(parseProviderKeyRefusal(JSON.stringify(providerKeyMissing("anthropic", ["strong", "vision"]))), true);
+	});
+
+	it("anything else is a real error — false, the honest banner stays", () => {
+		assert.equal(parseProviderKeyRefusal(REFUSAL), false); // the models refusal is NOT this one
+		assert.equal(parseProviderKeyRefusal("FAILED: headless crashed"), false);
+		assert.equal(parseProviderKeyRefusal(undefined), false);
+		assert.equal(parseProviderKeyRefusal("{not json"), false);
 	});
 });
 

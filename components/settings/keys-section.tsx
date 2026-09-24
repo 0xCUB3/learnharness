@@ -28,6 +28,7 @@ import { AUTH_KEYS, type AuthKeyStatus } from "@/src/core";
 import { SettingsGroup } from "./controls.tsx";
 import { ProviderMenuList } from "./model-menu.tsx";
 import { MenuShell } from "@/components/menu-shell";
+import { notifySettingsSaved } from "@/components/settings-signal";
 
 /** One pi-ai provider with plain API-key auth (the Platform seam —
  *  derived from pi-ai's own env-key table; no drift possible). */
@@ -313,12 +314,21 @@ function AddProviderRow({
 	);
 }
 
-export function KeysSection() {
+export function KeysSection({
+	/** A deep-linked row to unfold on arrival (zero-keys wave): the
+	 *  dictation error's click lands here on DEEPGRAM_API_KEY. Followed
+	 *  while mounted too — the settings dialog's while-open retarget
+	 *  pattern. undefined = nothing seeded. */
+	initialRow,
+}: {
+	initialRow?: string;
+}) {
 	const [statuses, setStatuses] = useState<AuthKeyStatus[] | null>(null);
 	const [providers, setProviders] = useState<ProviderKeyInfo[] | undefined>(undefined);
 	const [loading, setLoading] = useState(true);
-	/** The unfolded row (its id), null = all folded. */
-	const [openRow, setOpenRow] = useState<string | null>(null);
+	/** The unfolded row (its id), null = all folded. Seeded by the
+	 *  deep-link (initialRow) and re-followed when it retargets. */
+	const [openRow, setOpenRow] = useState<string | null>(initialRow ?? null);
 	/** The paste editor for a freshly chosen Add-provider target. */
 	const [adding, setAdding] = useState<ProviderKeyInfo | null>(null);
 	const [addError, setAddError] = useState<string | null>(null);
@@ -354,6 +364,13 @@ export function KeysSection() {
 		void reload();
 	}, []);
 
+	// The deep-link follow: a retarget while the section is open (the
+	// same while-open pattern the dialog's section nav uses) unfolds the
+	// named row; a fresh mount seeds it via the useState initializer.
+	useEffect(() => {
+		if (initialRow !== undefined) setOpenRow(initialRow);
+	}, [initialRow]);
+
 	async function saveKey(id: string, value: string): Promise<string | null> {
 		const res = await fetch(`/api/keys/${id}`, {
 			method: "PUT",
@@ -365,12 +382,17 @@ export function KeysSection() {
 			return body.error ?? `Save failed (${res.status})`;
 		}
 		await reload();
+		// The cross-surface keys signal (zero-keys wave): the zero-keys pill,
+		// the setup dialog's stage advance, and any other keys reader hear
+		// that a key landed — deletions included (see deleteKey below).
+		notifySettingsSaved("keys");
 		return null;
 	}
 
 	async function deleteKey(id: string): Promise<void> {
 		await fetch(`/api/keys/${id}`, { method: "DELETE" }).catch(() => undefined);
 		await reload();
+		notifySettingsSaved("keys");
 	}
 
 	if (loading || statuses === null) {

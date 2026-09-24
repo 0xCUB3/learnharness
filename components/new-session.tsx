@@ -8,7 +8,7 @@ import { DictationBar, useDictation } from "@/components/dictation";
 import { useDefaultSettings } from "@/components/default-settings";
 import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
-import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
+import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
 import type { ChatSettings } from "@/src/core";
 
@@ -165,8 +165,10 @@ export function NewSession({
 	// 33 providers, chats cannot start. The draft stays in the textarea;
 	// Save completes and the send replays.
 	const [configured, setConfigured] = useState(initialConfigured);
+	// The zero-keys truth (zero-keys wave): no provider key = the pill
+	// takes precedence over the models CTA (keys come first in the chain).
+	const zeroKeys = useZeroKeys();
 	const [setupOpen, setSetupOpen] = useState(false);
-	const { open: openSettings } = useSettingsDialog();
 
 	const send = useCallback((force = false) => {
 		if (!text.trim() || busy) return;
@@ -195,7 +197,10 @@ export function NewSession({
 				settings={settings}
 				onSettingsSaved={saveDraft}
 				setupCta={
-					!configured && (
+					zeroKeys ? (
+						<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
+					) : (
+						!configured && (
 						<div className="pointer-events-auto mb-2 flex justify-center">
 							<button
 								type="button"
@@ -206,10 +211,12 @@ export function NewSession({
 								Set up your models — chats start after the three picks
 							</button>
 						</div>
+						)
 					)
 				}
 			/>
-			{/* First-run setup: the send interception's landing surface. */}
+			{/* First-run setup: the send interception's landing surface — stage
+			    1 is the self-contained first-key screen (zero-keys wave). */}
 			<SetupDialog
 				open={setupOpen}
 				onClose={() => setSetupOpen(false)}
@@ -218,11 +225,7 @@ export function NewSession({
 					setSetupOpen(false);
 					send(true); // the queued draft sends
 				}}
-				onOpenKeys={() => {
-					setSetupOpen(false);
-					openSettings("keys");
-				}}
-			/>
+				/>
 		</>
 	);
 }

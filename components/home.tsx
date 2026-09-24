@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { SetupDialog } from "@/components/setup-dialog";
-import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
+import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { useDefaultSettings } from "@/components/default-settings";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { SidebarToggle } from "@/components/sidebar";
@@ -27,8 +27,10 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 	// a topic opens the setup dialog WITH THE DRAFT PRESERVED (Save
 	// stores the slots and the queued message sends).
 	const [configured, setConfigured] = useState(initialConfigured);
+	// The zero-keys truth (zero-keys wave): no provider key = the pill
+	// takes precedence over the models CTA (keys come first in the chain).
+	const zeroKeys = useZeroKeys();
 	const [setupOpen, setSetupOpen] = useState(false);
-	const { open: openSettings } = useSettingsDialog();
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// topic draft; the strip lives in the stats bar's middle slot.
 	const dictation = useDictation({
@@ -113,17 +115,21 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 			    px-4) so nothing shifts when a session starts (owner). */}
 			<div className="pointer-events-none absolute inset-x-0 bottom-0 pb-5">
 				<div className="pointer-events-auto mx-auto w-full max-w-[46rem] px-4">
-					{!configured && (
-						<div className="mb-2 flex justify-center">
-							<button
-								type="button"
-								data-testid="setup-cta"
-								onClick={() => setSetupOpen(true)}
-								className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
-							>
-								Set up your models — chats start after the three picks
-							</button>
-						</div>
+					{zeroKeys ? (
+						<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
+					) : (
+						!configured && (
+							<div className="mb-2 flex justify-center">
+								<button
+									type="button"
+									data-testid="setup-cta"
+									onClick={() => setSetupOpen(true)}
+									className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+								>
+									Set up your models — chats start after the three picks
+								</button>
+							</div>
+						)
 					)}
 					<form
 						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
@@ -176,8 +182,9 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 			</div>
 
 			{/* First-run setup (unconfigured): the CTA's target and the send
-			    interception's landing surface. onDone replays the intercepted
-			    draft; onOpenKeys deep-links the settings dialog (stage 1). */}
+			    interception's landing surface — stage 1 is the self-contained
+			    first-key screen (zero-keys wave); onDone replays the
+			    intercepted draft. */}
 			<SetupDialog
 				open={setupOpen}
 				onClose={() => setSetupOpen(false)}
@@ -186,11 +193,7 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 					setSetupOpen(false);
 					void start(true); // the queued draft sends
 				}}
-				onOpenKeys={() => {
-					setSetupOpen(false);
-					openSettings("keys");
-				}}
-			/>
+				/>
 		</div>
 	);
 }
