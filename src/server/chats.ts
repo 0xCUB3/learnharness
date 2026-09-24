@@ -114,10 +114,11 @@ export async function deleteChatSession(chatId: string, mode: ChatDeleteMode): P
 }
 
 /** One session's coverage read (extraction-UX redesign, owner dispatch
- *  2026-09-24): the chat view's ring meter + popover data — the same
- *  derivation the all-sessions list serves (/api/graph/coverage), scoped
- *  to one chat. "Uncovered" stays DERIVED per request (fingerprint the
- *  transcript, diff the coverage ledger — never dual-tracked).
+ *  2026-09-24): the chat view's ring meter + popover data, scoped to one
+ *  chat (the all-sessions GET died with this redesign — nothing consumed
+ *  it once the sidebar and ring read here; the Extract POST stays).
+ *  Uncovered stays DERIVED per request (fingerprint the transcript,
+ *  diff the coverage ledger — never dual-tracked).
  *
  *  lastFoldedAt: the newest coverage row's fold timestamp — a cheap single
  *  pass over the chat's ledger rows (the ring popover's "last extraction"

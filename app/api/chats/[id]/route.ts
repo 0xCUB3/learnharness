@@ -7,8 +7,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 	// turnInFlight lets a returning client re-attach to a running turn
 	// (chat-handler write-ahead + registry — see src/server/turn-liveness.ts).
 	// coverage (extraction-UX redesign, 2026-09-24): the chat view's ring
-	// meter — one session's read of the same derivation /api/graph/coverage
-	// serves for all sessions. getChat already 404'd, so the block exists.
+	// meter + sidebar block — THE coverage surface (the all-sessions GET
+	// route died with the redesign; the Extract POST stays). getChat
+	// already 404'd, so the block exists.
 	return Response.json({ ...chat, turnInFlight: isTurnRunning(id), coverage: sessionCoverage(id) });
 }
 

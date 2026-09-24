@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import * as fs from "node:fs";
 import type { UIMessage } from "ai";
 
 import {
@@ -155,5 +156,17 @@ describe("batchTag — deterministic, ref-stable, mutation-sensitive", () => {
 		const slots = coverageSlots([user("m1", "aaaa"), user("m2", "bbbb")]);
 		const mutated = coverageSlots([user("m1", "aaaa!"), user("m2", "bbbb")]);
 		assert.notEqual(batchTag(slots), batchTag(mutated));
+	});
+});
+describe("the all-sessions coverage GET is dead (extraction-UX close-out, 2026-09-24)", () => {
+	it("the route file is gone — the only coverage endpoint is the Extract POST", () => {
+		// UI confirmation (ff1ec7a): nothing client-side consumes the
+		// all-sessions list anymore — the sidebar block and the ring both
+		// read GET /api/chats/[id]'s coverage block. This pin guards against
+		// a merge resurrecting the dead surface.
+		assert.equal(fs.existsSync("app/api/graph/coverage/route.ts"), false, "the all-sessions GET route is deleted");
+		// stays by design: the manual-extract front door (sidebar block's
+		// Extract affordance) lives on.
+		assert.equal(fs.existsSync("app/api/graph/coverage/extract/route.ts"), true, "the Extract POST survives");
 	});
 });
