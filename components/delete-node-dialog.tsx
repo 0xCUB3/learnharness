@@ -80,15 +80,12 @@ export function DeleteNodeBody({
 			className="w-[32rem] max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-5 shadow-xl"
 		>
 			<h2 className="font-title text-2xl tracking-tight text-destructive">Delete node?</h2>
-			{/* The node name below the title in JetBrains Mono inline-code
-			    (owner, polish round): topic names are short technical
-			    handles — mono suits them; the serif title keeps the
-			    family voice ("Delete node?", like "Delete "session"?"). */}
+			{/* The node name below the title in JetBrains Mono (owner,
+			    2026-09-24): the name is the payload — mono suits it, and
+			    NO code-block chrome (the font already says code), sized up
+			    to text-lg so it reads. Same shape as the session dialog. */}
 			<div className="mt-1.5">
-				<code
-					data-testid="node-name-code"
-					className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground"
-				>
+				<code data-testid="node-name-code" className="font-mono text-lg text-foreground">
 					{node.name}
 				</code>
 			</div>

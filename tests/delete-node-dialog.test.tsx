@@ -73,10 +73,14 @@ describe("DeleteNodeDialog (thin SSR)", () => {
 	it("the body at loading: the frame + the pre-flight read pending (effects never fire in SSR — the wrapper's own state)", () => {
 		const html = bodyAt("loading");
 		assert.match(html, /data-testid="delete-node-dialog"/);
-		// (owner, polish round) the serif title is just "Delete node?" in
-		// destructive red; the NAME rides below in JetBrains Mono code.
+		// (owner, 2026-09-24) the serif title is just "Delete node?" in
+		// destructive red; the NAME rides below in JetBrains Mono, sized up
+		// (text-lg), NO code-block chrome — same shape as the session dialog.
 		assert.match(html, /Delete node\?/);
 		assert.match(html, /text-destructive/); // the red title
+		const name = html.match(/data-testid="node-name-code"[^>]*>/)?.[0] ?? "";
+		assert.match(name, /font-mono text-lg/); // bigger, mono
+		assert.ok(!name.includes("bg-muted"), "no code-block chrome — the font already says code")
 		assert.match(html, /data-testid="node-name-code"[^>]*>Kepler&#x27;s three laws</); // the name in mono
 		assert.match(html, /data-testid="node-impact-loading"/);
 	});

@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { RenameRow, SessionRow } from "../components/sidebar.tsx";
-import { DELETE_OPTIONS, DeleteSessionDialog } from "../components/delete-session-dialog.tsx";
+import { DeleteSessionBody, DeleteSessionDialog, TRACES_COPY } from "../components/delete-session-dialog.tsx";
 import type { ChatListItem } from "../src/core/index.ts";
 
 /**
@@ -51,7 +51,7 @@ describe("RenameRow — the inline rename surface", () => {
 	});
 });
 
-describe("DeleteSessionDialog — the locked two-option copy (portals no-op in SSR; pin the pure seam)", () => {
+describe("DeleteSessionDialog — the node-dialog shape (owner flow rework 2026-09-24; portals no-op in SSR; pin the pure body)", () => {
 	it("closed (chat=null) renders nothing", () => {
 		const html = renderToStaticMarkup(
 			<DeleteSessionDialog chat={null} onClose={() => {}} onDeleted={() => {}} />,
@@ -59,18 +59,68 @@ describe("DeleteSessionDialog — the locked two-option copy (portals no-op in S
 		assert.equal(html, "");
 	});
 
-	it("exactly two options, both modes covered, consequences in plain language", () => {
-		assert.equal(DELETE_OPTIONS.length, 2);
-		const modes = DELETE_OPTIONS.map((o) => o.mode).sort();
-		assert.deepEqual(modes, ["delete-nodes", "preserve-graph"]);
+	it("red serif title 'Delete session?', the session name below in mono, sized up, no code-block chrome", () => {
+		const html = renderToStaticMarkup(
+			<DeleteSessionBody
+				chat={{ id: "c1", title: "Orbital mechanics" }}
+				traces={false}
+				busy={false}
+				failure={null}
+				onTraces={() => {}}
+				onClose={() => {}}
+				onRun={() => {}}
+			/>,
+		);
+		assert.match(html, /Delete session\?/);
+		assert.match(html, /text-destructive[^"]*">Delete session\?</); // the red title
+		// the name: mono, text-lg (sized up), NO bg-muted code-block chrome
+		const name = html.match(/data-testid="session-name-code"[^>]*>/)?.[0] ?? "";
+		assert.match(name, /font-mono text-lg/);
+		assert.ok(!name.includes("bg-muted"), "no code-block chrome");
+		assert.match(html, /data-testid="session-name-code"[^>]*>Orbital mechanics</);
 	});
 
-	it("the graph-touching option says so; the session-only option promises the graph stays", () => {
-		const preserve = DELETE_OPTIONS.find((o) => o.mode === "preserve-graph");
-		const nodes = DELETE_OPTIONS.find((o) => o.mode === "delete-nodes");
-		assert.ok(preserve?.body.includes("graph stays"));
-		assert.ok(nodes?.body.includes("leave the graph"));
-		// shared-topics survival is stated on the destructive option
-		assert.ok(nodes?.body.includes("survive"));
+	it("one unchecked-by-default checkbox for the graph traces — the graph-touching consequence says so", () => {
+		const html = renderToStaticMarkup(
+			<DeleteSessionBody
+				chat={{ id: "c1", title: "Orbital mechanics" }}
+				traces={false}
+				busy={false}
+				failure={null}
+				onTraces={() => {}}
+				onClose={() => {}}
+				onRun={() => {}}
+			/>,
+		);
+		// unchecked by default (preserve-graph) — React SSR omits the
+		// attribute when false, so pin its ABSENCE on the rendered input
+		assert.ok(!/"checked"/.test(html), "unchecked by default");
+		// plain-language consequences on the checkbox body
+		assert.ok(html.includes(TRACES_COPY.title));
+		assert.ok(html.includes("leave the graph too"));
+		assert.ok(html.includes("survive"));
+		// the old two-button design is gone
+		assert.ok(!html.includes("delete-option-preserve"));
+		assert.ok(!html.includes("delete-option-nodes"));
+	});
+
+	it("bottom row matches the node dialog: quiet Cancel + destructive-red Delete", () => {
+		const html = renderToStaticMarkup(
+			<DeleteSessionBody
+				chat={{ id: "c1", title: "Orbital mechanics" }}
+				traces={true}
+				busy={true}
+				failure={null}
+				onTraces={() => {}}
+				onClose={() => {}}
+				onRun={() => {}}
+			/>,
+		);
+		assert.match(html, /data-testid="delete-cancel"[^>]*>Cancel</);
+		const del = html.match(/data-testid="delete-confirm"[^>]*>/)?.[0] ?? "";
+		assert.match(del, /border-destructive\/50/);
+		assert.match(html, /data-testid="delete-confirm"[^>]*>Deleting…</); // busy label on Delete
+		// the checkbox survives a busy render (disabled, not unmounted)
+		assert.match(html, /data-testid="delete-traces-checkbox"[^>]*disabled=""/);
 	});
 });
