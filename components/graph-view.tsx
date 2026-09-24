@@ -293,6 +293,23 @@ function fmtRunCost(dollars: number | null): string {
 }
 
 /**
+ * The cost figures the UI DISPLAYS (owner refinement round, 2026-09-24):
+ * extraction + audit only. Cluster naming is dead — labels are session
+ * titles / file names — so the core's naming fold (and its historical
+ * spend) is deliberately not shown anywhere: the pill and the panel must
+ * agree, and both read THIS, never GraphCostSummary.totalDollars.
+ */
+export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
+	totalDollars: number;
+	unpricedRuns: number;
+} {
+	return {
+		totalDollars: costs.stages.extraction.dollars + costs.stages.audit.dollars,
+		unpricedRuns: costs.stages.extraction.unpricedRuns + costs.stages.audit.unpricedRuns,
+	};
+}
+
+/**
  * The graph-pipeline cost control (2026-09-20 placement wave): a bare
  * cumulative-dollars number — no pill chrome (owner: "just a number"),
  * hover-highlighted, click toggles the breakdown panel. Same dismiss
@@ -316,7 +333,7 @@ function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
 				}`}
 			>
-				${costs.totalDollars.toFixed(2)}
+				${displayCostTotals(costs).totalDollars.toFixed(2)}
 			</button>
 			{open && (
 				<div className="absolute right-0 top-full mt-2 max-h-[60vh] overflow-y-auto">
@@ -328,17 +345,23 @@ function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 }
 
 /**
- * The cost control's expanded panel: stage totals (extraction / audit /
- * cluster-naming — dollars headline, tokens secondary) + the recent-runs
- * list. Presentational: the fold happens server-side
- * (core/cost-summary.ts); dollars are inferred read-time, never stored.
+ * The cost control's expanded panel: stage totals (extraction / audit —
+ * dollars headline, tokens secondary) + the recent-runs list.
+ * Presentational: the fold happens server-side (core/cost-summary.ts);
+ * dollars are inferred read-time, never stored. Cluster naming is GONE
+ * from the panel (owner refinement round, 2026-09-24): labels are session
+ * titles / file names now, the namer is dead, and its historical spend is
+ * not tracked anymore — the headline sums the displayed stages only and
+ * naming-kind runs never reach the list.
  */
 function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 	const stageRows: [string, GraphCostSummary["stages"]["extraction"]][] = [
 		["Extraction", costs.stages.extraction],
 		["Audit", costs.stages.audit],
-		["Cluster naming", costs.stages.naming],
 	];
+	// The displayed figures come from displayCostTotals (naming excluded —
+	// the pill and this panel must agree).
+	const { totalDollars, unpricedRuns } = displayCostTotals(costs);
 	return (
 		<div className="w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
 			<div className="mb-2 flex items-baseline justify-between">
@@ -346,9 +369,9 @@ function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 					Graph pipeline costs
 				</span>
 				<span className="text-foreground tabular-nums">
-					${costs.totalDollars.toFixed(2)}
-					{costs.unpricedRuns > 0 && (
-						<span className="text-muted-foreground"> · {costs.unpricedRuns} unpriced</span>
+					${totalDollars.toFixed(2)}
+					{unpricedRuns > 0 && (
+						<span className="text-muted-foreground"> · {unpricedRuns} unpriced</span>
 					)}
 				</span>
 			</div>
@@ -370,24 +393,23 @@ function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 				))}
 			</div>
 			<div className="mt-2 flex flex-col gap-0.5 border-t pt-2">
-				{costs.runs.map((run) => (
-					<div key={run.startedAt} className="flex items-baseline justify-between gap-2 text-[11px]">
-						<span className="min-w-0 flex-1 truncate text-muted-foreground">
-							<span className="text-foreground/70">{timeAgo(run.startedAt)}</span>{" "}
-							{run.title}
-							{run.merged && (
-								<span className="text-muted-foreground">
-									{" "}
-									+{run.merged.nodes}n
-								</span>
-							)}
-							{run.kind === "naming" && (
-								<span className="text-muted-foreground"> {run.labels ?? 0} labels</span>
-							)}
-						</span>
-						<span className="shrink-0 tabular-nums">{fmtRunCost(run.dollars)}</span>
-					</div>
-				))}
+				{costs.runs
+					.filter((run) => run.kind !== "naming")
+					.map((run) => (
+						<div key={run.startedAt} className="flex items-baseline justify-between gap-2 text-[11px]">
+							<span className="min-w-0 flex-1 truncate text-muted-foreground">
+								<span className="text-foreground/70">{timeAgo(run.startedAt)}</span>{" "}
+								{run.title}
+								{run.merged && (
+									<span className="text-muted-foreground">
+										{" "}
+										+{run.merged.nodes}n
+									</span>
+								)}
+							</span>
+							<span className="shrink-0 tabular-nums">{fmtRunCost(run.dollars)}</span>
+						</div>
+					))}
 			</div>
 		</div>
 	);
@@ -942,7 +964,8 @@ export function GraphView() {
 	}, []);
 
 	// Graph pipeline costs (2026-09 cost metrics wave): the cumulative fold
-	// of every usage channel (chat + notes extraction runs, cluster naming)
+	// of the usage channels (chat + notes extraction runs; the dead namer's
+	// channel is not displayed anymore, owner 2026-09-24)
 	// behind the bottom-left cost pill. Fetched once on mount and refetched
 	// when a pipeline run finishes (running -> none) so fresh spend lands
 	// without a manual reload. Best-effort: a fetch failure never blocks
