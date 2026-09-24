@@ -170,6 +170,10 @@ describe("render smoke tests", () => {
 		assert.ok(html.includes('role="group"'), "checkbox group");
 		assert.ok((html.match(/role="checkbox"/g) ?? []).length >= 3, "options AND the Other row are checkboxes");
 		assert.ok(html.includes('data-testid="other-option"'), "Other is still an option row in multi-select");
+		// The bigger \u2713 glyph (text-base, 2026-09-24 owner round) only
+		// mounts on a CHECKED row — unreachable from the unselected static
+		// render, so it's live-verified (Playwright: 14px computed in the
+		// 16px box) instead of pinned here.
 	});
 
 	it("a malformed question input renders the quiet fallback, never a crash", () => {

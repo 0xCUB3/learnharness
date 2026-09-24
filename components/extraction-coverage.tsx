@@ -97,7 +97,7 @@ async function requestExtract(chatId: string): Promise<boolean> {
 // ─── The sidebar context menu's coverage block ──────────────────────────────
 
 /**
- * The info block at the top of the session context menu (owner-locked
+ * The info block at the bottom of the session context menu (owner-locked
  * redesign): what the extractor hasn't covered yet, plus the manual Extract
  * affordance — visually separated from Rename/Delete below (those stay the
  * two session-management actions). Fetched ON MENU OPEN (the block mounts
@@ -191,7 +191,7 @@ export function CoverageMenuBody({
 			) : (
 				<span className="flex flex-col">
 					<span className="tabular-nums text-foreground">
-						{formatTokens(coverage.uncoveredTokens)} uncovered
+						{formatTokens(coverage.uncoveredTokens)} tok uncovered
 					</span>
 					<span className="tabular-nums text-muted-foreground">
 						{coverage.uncoveredCount} message{coverage.uncoveredCount === 1 ? "" : "s"} unextracted
@@ -305,7 +305,7 @@ export function CoverageRing({ chatId, refreshKey = 0 }: { chatId: string; refre
 			{open && (
 				<div
 					data-testid="coverage-ring-popover"
-					className="absolute bottom-full right-0 z-40 mb-1.5 w-64 rounded-xl border bg-card p-3 text-xs shadow-xl"
+					className="absolute top-full right-0 z-40 mt-1.5 w-64 rounded-xl border bg-card p-3 text-xs shadow-xl"
 				>
 					<CoverageRingDetail coverage={coverage} chunkTokens={graph.chunkTokens} />
 				</div>
