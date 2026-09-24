@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { SetupDialog } from "@/components/setup-dialog";
-import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
+import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { useDefaultSettings } from "@/components/default-settings";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { SidebarToggle } from "@/components/sidebar";
@@ -30,6 +30,10 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 	// The zero-keys truth (zero-keys wave): no provider key = the pill
 	// takes precedence over the models CTA (keys come first in the chain).
 	const zeroKeys = useZeroKeys();
+	// The strong slot's keyless truth (pre-send key guards, owner interlude
+	// 2026-09-25): keys may exist generally while the STRONG slot's pinned
+	// provider has none — the same skip-everything treatment on send.
+	const strongKeyless = useStrongKeyless();
 	const [setupOpen, setSetupOpen] = useState(false);
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// topic draft; the strip lives in the stats bar's middle slot.
@@ -53,6 +57,17 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 		// is the onDone path — the state this closure captured is still
 		// the pre-save `configured`, the state update hasn't landed yet.
 		if (!configured && !force) {
+			setSetupOpen(true);
+			return;
+		}
+		// The pre-send KEY guards (owner interlude, no-orphan-chats): the
+		// models case guards BEFORE creation; the key cases must too — a
+		// refused first send would otherwise leave an orphan error-shell
+		// chat in the sidebar (the 503 lands only after POST /api/chats
+		// already created the record). Same skip-everything-and-open-setup
+		// treatment; `force` (setup's onDone replay) bypasses, and the
+		// server's 503 gate remains the belt for /chat/[id] sessions.
+		if (!force && (zeroKeys || strongKeyless)) {
 			setSetupOpen(true);
 			return;
 		}

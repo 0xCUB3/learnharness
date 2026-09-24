@@ -8,7 +8,7 @@ import { DictationBar, useDictation } from "@/components/dictation";
 import { useDefaultSettings } from "@/components/default-settings";
 import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
-import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
+import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
 import type { ChatSettings } from "@/src/core";
 
@@ -168,6 +168,10 @@ export function NewSession({
 	// The zero-keys truth (zero-keys wave): no provider key = the pill
 	// takes precedence over the models CTA (keys come first in the chain).
 	const zeroKeys = useZeroKeys();
+	// The strong slot's keyless truth (pre-send key guards, owner interlude
+	// 2026-09-25): keys may exist generally while the STRONG slot's pinned
+	// provider has none — the same skip-everything treatment on send.
+	const strongKeyless = useStrongKeyless();
 	const [setupOpen, setSetupOpen] = useState(false);
 
 	const send = useCallback((force = false) => {
@@ -178,6 +182,16 @@ export function NewSession({
 			setSetupOpen(true);
 			return;
 		}
+		// The pre-send KEY guards (owner interlude, no-orphan-chats): guard
+		// BEFORE startDraftSession creates the record — a refused first
+		// send would otherwise leave an orphan error-shell chat in the
+		// sidebar. Same skip-everything-and-open-setup treatment; `force`
+		// (setup's onDone replay) bypasses, and the server's 503 gate
+		// remains the belt for /chat/[id] sessions.
+		if (!force && (zeroKeys || strongKeyless)) {
+			setSetupOpen(true);
+			return;
+		}
 		setBusy(true);
 		void startDraftSession(text, settings, fetch)
 			.then((target) => {
@@ -185,7 +199,7 @@ export function NewSession({
 				else setBusy(false);
 			})
 			.catch(() => setBusy(false));
-	}, [text, busy, settings, router, configured]);
+	}, [text, busy, settings, router, configured, zeroKeys, strongKeyless]);
 
 	return (
 		<>

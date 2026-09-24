@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { hasProviderKey, ZeroKeysPill } from "../components/setup-cta.tsx";
+import { hasProviderKey, strongKeyless, ZeroKeysPill } from "../components/setup-cta.tsx";
+import type { ModelCatalogResponse } from "../src/core/index.ts";
 import { SetupKeysBody } from "../components/setup-dialog.tsx";
 import { DICTATION_KEYLESS, DEEPGRAM_KEY_ID } from "../components/dictation.tsx";
 import type { AuthKeyStatus } from "../src/core/auth-keys.ts";
@@ -114,5 +115,42 @@ describe("the dictation keyless seam (owner dictation trio)", () => {
 
 	it("the Deepgram row id matches the keys store (KeysSection openRow)", () => {
 		assert.equal(DEEPGRAM_KEY_ID, "DEEPGRAM_API_KEY");
+	});
+});
+/** A minimal catalog double — only the two halves the strong-keyless guard
+ *  reads: the strong pin and the present-key providers list. */
+const catalog = (strongProvider: string | null, ...keyedProviders: string[]): ModelCatalogResponse => ({
+	models: [],
+	defaults: null,
+	rolePins: { researcher: null, demoBuilder: null, visualMaker: null, extractor: null, auditor: null },
+	slots: {
+		strong: strongProvider
+			? { model: { provider: strongProvider, id: `${strongProvider}/model` }, thinkingLevel: "low" }
+			: null,
+		cheap: null,
+		vision: null,
+	},
+	providers: keyedProviders.map((id) => ({ id, envVar: `${id.toUpperCase()}_API_KEY`, keyPresent: true })),
+});
+
+describe("strongKeyless — the pre-send guard's truth (owner interlude, no-orphan-chats)", () => {
+	it("strong pinned to a provider whose key is gone: the guard FIRES", () => {
+		// keys exist generally (anthropic), but the strong slot pins openrouter
+		assert.equal(strongKeyless(catalog("openrouter", "anthropic")), true);
+		// no keys at all with a strong pin: also keyless (guard case 1 fires too)
+		assert.equal(strongKeyless(catalog("openrouter")), true);
+	});
+
+	it("strong provider's key present: the guard does NOT fire — the normal send path stays open", () => {
+		assert.equal(strongKeyless(catalog("openrouter", "openrouter", "anthropic")), false);
+		// belt check: a provider row never counts when keyPresent is false
+		const lying = catalog("openrouter", "openrouter", "anthropic");
+		lying.providers[0]!.keyPresent = false;
+		assert.equal(strongKeyless(lying), true);
+	});
+
+	it("no strong pin (the models guard owns that case) or catalog not loaded: false — the server gate remains the belt", () => {
+		assert.equal(strongKeyless(catalog(null, "openrouter")), false);
+		assert.equal(strongKeyless(undefined), false);
 	});
 });
