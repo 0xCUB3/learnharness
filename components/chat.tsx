@@ -1070,9 +1070,11 @@ export function Chat({
 						<div aria-hidden data-testid="dock-spacer" style={{ height: dockReserve }} />
 				</ConversationContent>
 				{/* The dock: an overlay sibling of the scroller (the
-				    use-stick-to-bottom pattern — like the scroll button). Before
-				    the button in DOM order so the button keeps painting above
-				    the dock, as it always has. */}
+				    use-stick-to-bottom pattern). The scroll-down button lives
+				    INSIDE the overlay now (owner refinement round, 2026-09-24):
+				    anchored to the dock block's top edge, so it rides every
+				    height morph (typing, a question growing the band, the
+				    fold) and NEVER overlaps the composer. */}
 				<DockOverlay
 					pending={pending}
 					chatId={chatId}
@@ -1128,7 +1130,6 @@ export function Chat({
 						});
 					}}
 				/>
-				<ConversationScrollButton />
 				</Conversation>
 
 				{/* The session-scoped focuses (chrome-melt wave, 2026-09-19): mounted
@@ -1504,6 +1505,18 @@ function DockOverlay({
 						turns={turns}
 						dictationSlot={dictationSlot}
 					/>
+					{/* The scroll-down disc (moved here from the Conversation,
+					    owner refinement round 2026-09-24): anchored to the BLOCK's
+					    top edge — above the composer shell AND the stats row, in
+					    the gradient's transparent band — so it never overlaps
+					    any dock element. Because the anchor is the block itself
+					    (not the scroller's bottom), it rides every height change
+					    LIVE: typing growth, a pending question expanding the
+					    band, the 180ms fold morph. pointer-events-auto: the
+					    overlay is none by default. The isAtBottom/scrollToBottom
+					    context still reaches it — DockOverlay is a Conversation
+					    child. */}
+					<ConversationScrollButton className="pointer-events-auto bottom-full mb-2" />
 				</div>
 				{/* The plan marginalia (owner, plan-placement round): the bare
 				    diagram in the band's right flank — boundaless, meet-fitted, part
