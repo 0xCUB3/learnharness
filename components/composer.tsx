@@ -35,6 +35,7 @@ export function Composer({
 	autoFocus,
 	verdict,
 	onEscape,
+	placeholder = "Ask, answer, or steer the lesson…",
 }: {
 	busy: boolean;
 	value: string;
@@ -50,6 +51,10 @@ export function Composer({
 	/** Escape while a dictation runs stops it (STT wave, 2026-09-17). No-op
 	 *  when absent — Esc otherwise means nothing in the composer. */
 	onEscape?: () => void;
+	/** The textarea's placeholder (owner refinement round, 2026-09-24):
+	 *  active sessions read "Ask, answer, or steer the lesson…"; the fresh
+	 *  new-session page asks the graph view's opening question instead. */
+	placeholder?: string;
 }) {
 	return (
 		<form
@@ -90,7 +95,7 @@ export function Composer({
 							else if (action === "send") onSend();
 						}
 				}}
-				placeholder="Ask, answer, or steer the lesson…"
+				placeholder={placeholder}
 				autoFocus={autoFocus}
 				rows={1}
 				className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"

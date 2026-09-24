@@ -6,7 +6,6 @@ import { Conversation, ConversationContent, ConversationEmptyState } from "@/com
 import { Composer } from "@/components/composer";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { useDefaultSettings } from "@/components/default-settings";
-import { PhaseChip } from "@/components/phase-divider";
 import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
@@ -92,10 +91,9 @@ export function DraftShell({
 			<div className="flex min-w-0 flex-1 flex-col">
 				{/* h-15 (60px) matches the chat header and the sidebar's LH wordmark
 			    band (owner, round 6). */}
-			<header className="lh-drag relative flex h-15 items-center gap-3 px-3">
+			<header className="lh-drag flex h-15 items-center gap-3 border-b border-border px-3">
 					<SidebarToggle />
 					<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">New session</div>
-					<PhaseChip phase="probe" />
 				</header>
 
 				<div className="relative flex min-h-0 flex-1">
@@ -125,6 +123,11 @@ export function DraftShell({
 										canSend={canSend}
 										autoFocus
 										onEscape={dictation.active ? dictation.cancel : undefined}
+										// The opening question, same as the graph view's new-session
+										// input (owner refinement round, 2026-09-24) — no lesson has
+										// started yet, so the composer must not read like one is in
+										// flight.
+										placeholder="What do you want to learn?"
 									/>
 								</div>
 								<StatsBar

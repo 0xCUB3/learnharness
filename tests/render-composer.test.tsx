@@ -13,7 +13,7 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Composer, enterAction } from "../components/composer.tsx";
 
-function render(opts: { busy?: boolean; canSend?: boolean } = {}) {
+function render(opts: { busy?: boolean; canSend?: boolean; placeholder?: string } = {}) {
 	return renderToStaticMarkup(
 		<Composer
 			busy={opts.busy ?? false}
@@ -22,6 +22,7 @@ function render(opts: { busy?: boolean; canSend?: boolean } = {}) {
 			onSend={() => {}}
 			onStop={() => {}}
 			canSend={opts.canSend ?? true}
+			{...(opts.placeholder ? { placeholder: opts.placeholder } : {})}
 		/>,
 	);
 }
@@ -29,8 +30,14 @@ function render(opts: { busy?: boolean; canSend?: boolean } = {}) {
 describe("Composer", () => {
 	it("chat placeholder + send button", () => {
 		const html = render();
-		assert.match(html, /Ask, answer, or steer the lesson/);
+		assert.match(html, /Ask, answer, or steer the lesson/, "the default — active sessions");
 		assert.ok(html.includes('aria-label="Send"'), "send button present");
+	});
+
+	it("placeholder is overridable — the new-session page asks the graph view's question", () => {
+		const html = render({ placeholder: "What do you want to learn?" });
+		assert.match(html, /What do you want to learn\?/);
+		assert.ok(!html.includes("Ask, answer"), "the session placeholder must not ride along");
 	});
 
 	it("busy: send button becomes stop", () => {
