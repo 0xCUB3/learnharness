@@ -323,8 +323,19 @@ function QuestionDockForm({
 		else if (kind === "quiz")
 			setSel((prev) => ({ ...prev, selected: new Set(), otherSelected: false, dontKnow: !prev.dontKnow }));
 		else {
-			selectOther();
-			otherInputRef.current?.focus();
+			// Space on the ask's Other row (owner refinement round,
+			// 2026-09-24): SELECTING it focuses the input for typing, but
+			// the Space that DESELECTS an already-selected Other must never
+			// drop the user back into the typing field — the core's
+			// toggleOther has no single-select off-path (it displaces), so
+			// the off-path lives here: clear the pick, keep the typed text,
+			// focus stays where it is. Re-selecting is the way back into
+			// the field.
+			if (sel.otherSelected) setSel((prev) => ({ ...prev, otherSelected: false, dontKnow: false }));
+			else {
+				otherInputRef.current?.focus();
+				selectOther();
+			}
 		}
 	};
 
@@ -439,7 +450,7 @@ function QuestionDockForm({
 										)}
 									>
 										{isSel && (
-											<span className={cn(qd.mode === "multi-select" ? "text-xs" : "size-1.5 rounded-full bg-current")}>
+											<span className={cn(qd.mode === "multi-select" ? "text-base leading-none" : "size-1.5 rounded-full bg-current")}>
 												{qd.mode === "multi-select" ? "✓" : ""}
 											</span>
 										)}
@@ -509,7 +520,7 @@ function QuestionDockForm({
 									)}
 								>
 									{sel.otherSelected && (
-										<span className={cn(qd.mode === "multi-select" ? "text-xs" : "size-1.5 rounded-full bg-current")}>
+										<span className={cn(qd.mode === "multi-select" ? "text-base leading-none" : "size-1.5 rounded-full bg-current")}>
 											{qd.mode === "multi-select" ? "✓" : ""}
 										</span>
 									)}
@@ -522,6 +533,20 @@ function QuestionDockForm({
 										// Typing selects the row — displacing in
 										// single-select, alongside the siblings in multi.
 										setSel((prev) => (prev.otherSelected ? prev : toggleOther(selectMode, prev)));
+									}}
+									onKeyDown={(e) => {
+										// Esc escapes the typing (owner refinement round,
+										// 2026-09-24): focus leaves the input, the row STAYS
+										// selected — deselection is the next Space's job, acting
+										// on the row — and the arrow walk resumes from this
+										// row (kbdIdx pins it). stopPropagation keeps the
+										// window chain from reading this Esc as abort-turn.
+										if (e.key === "Escape") {
+											e.preventDefault();
+											e.stopPropagation();
+											e.currentTarget.blur();
+											setKbdIdx(optionCount);
+										}
 									}}
 									placeholder="Type your own answer…"
 									className="lh-input w-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
