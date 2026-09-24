@@ -6,9 +6,10 @@ import { bindingForAction, formatBinding, type KeyAction } from "@/src/core"
 
 /**
  * The tooltip composition for icon and pill controls (tooltip wave, owner
- * 2026-09-25). The styled Radix tooltip (ui/tooltip.tsx, adopted as-is —
- * no restyling) carries the label, with the control's shortcut appended as
- * an em-dash suffix when it has one ("Dictate — ⌘D").
+ * 2026-09-25; subtlety round same day). The styled Radix tooltip carries
+ * the label, with the control's shortcut appended in parentheses when
+ * it has one ("Dictate (⌘D)") — the owner call: the em-dash suffix read
+ * as too much air.
  *
  * The binding is override-aware: pass `action` for registry shortcuts (a
  * user rebind in Settings → Keyboard changes the suffix live), or
@@ -31,7 +32,7 @@ interface HintProps {
 	children: React.ReactElement
 }
 
-/** The composition itself, pure — "Dictate" + ⌘D → "Dictate — ⌘D". Exported
+/** The composition itself, pure — "Dictate" + ⌘D → "Dictate (⌘D)". Exported
  *  for the mechanism pins (tests/tooltip-mechanism.test.tsx). */
 export function hintText(label: string, action?: KeyAction, binding?: string): string {
 	const live = action
@@ -39,7 +40,7 @@ export function hintText(label: string, action?: KeyAction, binding?: string): s
 		: binding
 			? formatBinding(binding)
 			: ""
-	return live ? `${label} — ${live}` : label
+	return live ? `${label} (${live})` : label
 }
 
 export function Hint({ label, action, binding, side = "top", children }: HintProps) {

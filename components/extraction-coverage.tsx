@@ -292,9 +292,8 @@ export function CoverageRing({ chatId, refreshKey = 0 }: { chatId: string; refre
 	return (
 		<div ref={rootRef} className="lh-no-drag relative shrink-0">
 			<Hint
-				// Plain language (tooltip wave) — "uncovered tokens vs the chunk
-				// threshold" was internal vocabulary.
-				label="How much of this session isn't in your graph yet — click for details"
+				// Trimmed (owner, subtlety round 2026-09-25).
+				label="How much of this session isn't mapped yet"
 				side="bottom"
 			>
 				<button

@@ -328,8 +328,8 @@ function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 	return (
 		<div ref={rootRef} className="relative">
 			<Hint
-				// Plain language (tooltip wave) — no internal vocabulary.
-				label="What the graph has spent — click for details"
+				// Trimmed (owner, subtlety round 2026-09-25).
+				label="Graph costs — click for details"
 				side="bottom"
 			>
 				<button
@@ -884,16 +884,24 @@ export function GraphChromeRow({
 						e.target.value = ""; // allow re-picking the same file
 					}}
 				/>
-				<button
-					type="button"
-					disabled={importing}
-					onClick={() => fileInputRef.current?.click()}
-					data-testid="import-notes"
+				<Hint
+					// The one button whose action isn't obvious from its label:
+					// the missing fact is where imports go (owner, subtlety
+					// round 2026-09-25).
+					label="Import notes into the graph"
+					side="bottom"
+				>
+					<button
+						type="button"
+						disabled={importing}
+						onClick={() => fileInputRef.current?.click()}
+						data-testid="import-notes"
 					className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
 				>
-					<UploadIcon className="size-3" />
-					{importing ? "Importing…" : "Import notes…"}
-				</button>
+						<UploadIcon className="size-3" />
+						{importing ? "Importing…" : "Import notes…"}
+					</button>
+				</Hint>
 			</div>
 			{!isEmpty && (
 				// Rendering settings — own component; the gear toggles it. The

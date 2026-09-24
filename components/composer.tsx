@@ -133,18 +133,13 @@ export function Composer({
 					</button>
 				</div>
 			) : (
-				<Hint
-					// Per-state truth (tooltip wave): busy → the square STOPS the
-					// stream, and Esc aborts it too; otherwise Enter sends when the
-					// box has text.
-					label={busy ? "Stop the reply" : "Send"}
-					binding={busy ? "escape" : "enter"}
-					side="left"
-				>
-					<button
-						type="submit"
-						aria-label={busy ? "Stop" : "Send"}
-						disabled={!busy && !canSend}
+				// No tooltip on the send square — the ↵ glyph is the
+				// affordance and Enter is obvious (owner, subtlety
+				// round 2026-09-25).
+				<button
+					type="submit"
+					aria-label={busy ? "Stop" : "Send"}
+					disabled={!busy && !canSend}
 					className={cn(
 						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
 						busy
@@ -154,7 +149,6 @@ export function Composer({
 				>
 					{busy ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
 				</button>
-				</Hint>
 			)}
 		</form>
 	);

@@ -544,7 +544,15 @@ function SessionsSidebar() {
 					    with the lights' own edge-inset as the gap. */}
 					{/* Hover mirrors the ghost toggle buttons (owner ask, 2026-09-17):
 					    same size-9 chip geometry, same hover:bg-accent treatment. */}
-					<Hint label="Home" side="bottom">
+					<Hint
+						// Kept (owner, subtlety round 2026-09-25) but to the RIGHT
+						// of the logo, carrying its real shortcut: ⌘G jumps to
+						// the graph view (keyboard-shortcuts routes it to "/",
+						// the same destination as this logo).
+						label="Home"
+						action="jump-graph"
+						side="right"
+					>
 						<Link
 							href="/"
 							aria-label="Home"

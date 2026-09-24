@@ -17,23 +17,30 @@ import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Hint, hintText } from "../components/ui/hint.tsx";
+import { TOOLTIP_DELAY_MS } from "../components/ui/tooltip.tsx";
 import { AUTO_UPDATE_HINT } from "../components/settings/settings-dialog.tsx";
 
-describe("hintText — the em-dash composition", () => {
+describe("hintText — the parenthesized composition", () => {
 	it("a registry action appends the LIVE binding (override-aware source)", () => {
-		assert.equal(hintText("Dictate", "toggle-dictation"), "Dictate — ⌘D");
-		assert.equal(hintText("Settings", "open-settings"), "Settings — ⌘,");
-		assert.equal(hintText("Search sessions", "sessions-search"), "Search sessions — ⌘⇧F");
+		assert.equal(hintText("Dictate", "toggle-dictation"), "Dictate (⌘D)");
+		assert.equal(hintText("Settings", "open-settings"), "Settings (⌘,)");
+		assert.equal(hintText("Search sessions", "sessions-search"), "Search sessions (⌘⇧F)");
 	});
 
 	it("surface-owned keys ride the binding prop (no registry entry)", () => {
-		assert.equal(hintText("Close", undefined, "escape"), "Close — Esc");
-		assert.equal(hintText("Send", undefined, "enter"), "Send — ↵");
+		assert.equal(hintText("Close", undefined, "escape"), "Close (Esc)");
+		assert.equal(hintText("Send", undefined, "enter"), "Send (↵)");
 	});
 
 	it("no shortcut = the label alone, no dangling dash", () => {
 		assert.equal(hintText("Home"), "Home");
 		assert.equal(hintText("Stop dictation (Esc)"), "Stop dictation (Esc)");
+	});
+});
+
+describe("subtlety round pins (owner 2026-09-25)", () => {
+	it("the rest delay is 500ms — tooltips appear on pause, never in passing", () => {
+		assert.equal(TOOLTIP_DELAY_MS, 500);
 	});
 });
 

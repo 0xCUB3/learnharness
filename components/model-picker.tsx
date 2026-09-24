@@ -254,9 +254,10 @@ export function ModelControl() {
 	return (
 		<div ref={containerRef} className="relative flex items-center gap-1.5" data-testid="model-control">
 			<Hint
-				// User language (tooltip wave): no tier/prober vocabulary. ⌘K
-				// opens this same menu (registry, override-aware).
-				label="The main model for your sessions"
+				// Trimmed (owner, subtlety round 2026-09-25): "Model selector"
+				// — the long sentence was way too much. ⌘K opens this same
+				// menu (registry, override-aware).
+				label="Model selector"
 				action="open-model-picker"
 				side="bottom"
 			>
@@ -276,8 +277,8 @@ export function ModelControl() {
 			</button>
 			</Hint>
 			<Hint
-				// User language (tooltip wave) — no "tier" vocabulary.
-				label="How much the main model thinks"
+				// Trimmed (owner, subtlety round 2026-09-25).
+				label="Thinking level"
 				side="bottom"
 			>
 				<button
