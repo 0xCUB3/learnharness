@@ -27,7 +27,7 @@ Hold the architecture along two orthogonal axes:
 |---|---|---|
 | **Classroom** — session engine | `data/chats/*.json` | the turn pipeline, prober→teacher, plan tree, questions, phases |
 | **Workbench** — background labor | `data/jobs/*.json` | job runner, researcher/demo-builder/visual-maker, steer delivery |
-| **Library** — world model | `data/graph/*` ledgers | extraction pipeline (sole graph writer), derivation, embeddings, clusters |
+| **Library** — world model | `data/graph/*` ledgers | extraction pipeline (sole graph writer), derivation, birth-session clusters |
 | **Stage** — presentation shell | nothing server-side | components/, graph canvas, docks — pure consumer via `/api/*` |
 | **Machine room** — host | process + config | Electron main, standalone Next server, `config.ts`, data-dir seam, BYOK keys |
 
@@ -55,8 +55,8 @@ Dependency arrows point **down only**. Each layer may import the core barrel; no
 ├──────────────────────────────────────────────────────────────┤
 │ CORE       src/core        pure domain: contracts (6 domains),│
 │            ports, merger + derivation, coverage, question-   │
-│            core, plan-tree, phases, layout, graph-context,   │
-│            prices. No IO (two files use node:crypto — pure    │
+│            core, plan-tree, phases, layout, prices. No IO     │
+│            (two files use node:crypto — pure                  │
 │            but node-bound, hence kept out of the barrel)      │
 ├──────────────────────────────────────────────────────────────┤
 │ STORE      src/store       fs adapters: chats · graph        │
@@ -78,27 +78,27 @@ Dependency arrows point **down only**. Each layer may import the core barrel; no
 ```mermaid
 flowchart TB
     subgraph SHELL["SHELL — render + transport, no domain logic"]
-        APP["app/ — pages + 16 API route handlers"]
+        APP["app/ — pages + 25 API route handlers"]
         COMP["components/ — session + home UI, graph canvas"]
     end
 
     subgraph SERVER["SERVER — src/server — composition + seams"]
         SBAR["barrel index.ts — THE server surface"]
         ROOTS["composition roots: stores.ts (storage) · chat-handler.ts (turn)"]
-        SEAMS["service seams: turn-service · jobs (wake) · turn-liveness · commit-positions · observability · model-catalog · settings-body · embeddings"]
+        SEAMS["service seams: turn-service · jobs (wake) · turn-liveness · commit-positions · observability · model-catalog · settings-body"]
         PIB["pi/ — engine bridge: record-adapter (record → pi messages) · ui-stream (pi events → SSE)"]
     end
 
     subgraph AGENT["AGENT — src/agent — LLM loops, deps injected"]
         TEACH["prober + teacher agents · tools · prompt fragments"]
         SUBS["sub-agents: researcher · demo-builder · visual-maker"]
-        PIPE["extraction pipeline · cluster-namer · graph-context job"]
+        PIPE["extraction pipeline"]
     end
 
     subgraph CORE["CORE — src/core — pure domain, zero IO"]
         CONTRACTS["contracts/ — 6 domains: plan · graph · chat · jobs · probe · models"]
         PORTS["ports.ts — ChatStore · GraphStore · JobStore (types only)"]
-        BRAIN["merger + derivation · coverage · question-core · plan-tree · phases · layout · graph-context · prices · tool-parts"]
+        BRAIN["merger + derivation · coverage · question-core · plan-tree · phases · layout · prices · tool-parts"]
         CBAR["barrel index.ts — browser-safe exports ONLY"]
     end
 
@@ -107,7 +107,7 @@ flowchart TB
         PORTLESS["render-settings.ts · default-settings.ts (portless)"]
     end
 
-    CFG["config.ts — leaf settings: MODELS · EXTRACTION.chunkTokens · PATHS"]
+    CFG["config.ts — leaf facts: PATHS · LEDGER_FILES · engine-construction facts (no models — BYOK slots own those)"]
 
     COMP -->|"lint zone: @/src/core only"| CBAR
     APP -->|"lint zone: @/src/core + @/src/server"| CBAR
@@ -139,15 +139,15 @@ flowchart TB
 
 ### 2.1 The core barrel and browser-safety
 
-`src/core/index.ts` exports only browser-safe modules — pure logic + types, no node builtins, no fs, no network. Deliberately **not** barrel-exported (server code imports them directly): `graph.ts` and `coverage.ts` (need `node:crypto`), `clusters.ts` and `semantic-clusters.ts` and `layout-settle.ts` (heavy deps / server-only roles). Port *types* are types-only, hence safe to re-export. This split is what lets the same core serve browser (grading, layout, plan statuses, cost folding) and server (merger, derivation, coverage).
+`src/core/index.ts` exports only browser-safe modules — pure logic + types, no node builtins, no fs, no network. Deliberately **not** barrel-exported (server code imports them directly): `graph.ts` and `coverage.ts` (need `node:crypto`), `clusters.ts`, `session-clusters.ts` and `layout-settle.ts` (server-only roles). Port *types* are types-only, hence safe to re-export. This split is what lets the same core serve browser (grading, layout, plan statuses, cost folding) and server (merger, derivation, coverage).
 
 ### 2.2 Contracts — one file per domain
 
 `src/core/contracts.ts` is a barrel over six domain files, each owned outright by its stream (schema changes in a domain you don't own go through the master session):
 
 - `contracts/plan.ts` — plan tree types + derived statuses (`derivePlanStatuses`)
-- `contracts/graph.ts` — graph domain: ledgers, findings/audit shapes, snapshot, embeddings, clusters
-- `contracts/chat.ts` — session records, usage/money channel, settings, verdicts, graph-context shapes
+- `contracts/graph.ts` — graph domain: ledgers, findings/audit shapes, snapshot, birth-session clusters
+- `contracts/chat.ts` — session records, usage/money channel, settings, verdicts
 - `contracts/jobs.ts` — the ack-and-steer protocol: job records, steer message builders, deterministic steer ids, usage accumulation
 - `contracts/probe.ts` — probe assessment + the shared zod schema
 - `contracts/models.ts` — client-safe model-catalog shapes
@@ -158,19 +158,19 @@ flowchart TB
 
 Storage is **per-entity semantic ports**, never one generic interface: `ChatStore`, `GraphStore`, `JobStore` (`src/core/ports.ts` — types only). The fs adapters (`src/store/{chats,graph,jobs}.ts`) implement them and contain persistence and nothing else. Two more adapters (`src/store/{render-settings,default-settings}.ts`) are portless free functions re-exported through the server barrel — a deliberate pragmatic bypass, documented here so nobody mistakes it for the pattern.
 
-**Idioms.** Graph evidence lives in **append-only JSONL ledgers** (corrupt-line-tolerant reads; strict shape guards drop invalid lines, never guess). Chats, jobs, positions, embeddings, sources, and the settings blobs are whole-file read-modify-write JSON. All writes are synchronous, single-process (atomicity rides the Node event loop). Merge/dedup/derivation semantics are **reader-side, in core** — the store never decides.
+**Idioms.** Graph evidence lives in **append-only JSONL ledgers** (corrupt-line-tolerant reads; strict shape guards drop invalid lines, never guess). Chats, jobs, positions, sources, and the settings blobs are whole-file read-modify-write JSON. All writes are synchronous, single-process (atomicity rides the Node event loop). Merge/dedup/derivation semantics are **reader-side, in core** — the store never decides.
 
-- **`src/server/stores.ts` is THE composition root for storage**: it instantiates the adapters and hands the port objects to everything else (chat-handler, job runner, extraction pipeline, graph-context job, graph/positions/chats routes, turn services). It is the single place a storage decision (JSON vs SQLite, local vs remote) gets re-made.
-- **`src/server/chat-handler.ts` is THE composition root for a turn**: it wires the stores, the job runner, the extraction pipeline, the graph-context job, and the pi engine into the stream response (`setTurnRunner`/`setJobRespawn`/`setContextRespawn` register its seams for the wake pipeline). All logic lives behind the seams it calls.
+- **`src/server/stores.ts` is THE composition root for storage**: it instantiates the adapters and hands the port objects to everything else (chat-handler, job runner, extraction pipeline, graph/positions/chats routes, turn services). It is the single place a storage decision (JSON vs SQLite, local vs remote) gets re-made.
+- **`src/server/chat-handler.ts` is THE composition root for a turn**: it wires the stores, the job runner, the extraction pipeline, and the pi engine into the stream response (`setTurnRunner`/`setJobRespawn` register its seams for the wake pipeline). All logic lives behind the seams it calls.
 - The agent layer is dependency-inverted throughout: `createJobRunner({ chatStore, jobStore, deliver })`, `createExtractionPipeline({ chatStore, graphStore, extractor?, auditor?, embedder })`, `createTeacherTools({ chatId, chatStore, jobStore, spawn })`, `createProberAgent`/`createTeacherAgent(engine?, tools?, …)`. Tests inject the same ports production wires — or swap an in-memory port.
 
-The engine side is adapted too: `src/agent/models.ts` (`piEngineFor`) wraps OpenRouter via pi-ai per role from `config.ts` MODELS (prober, teacher, researcher, demoBuilder, visualMaker, extractor, auditor, labeler — each a model id + thinking `effort`), and `src/server/pi/` bridges the two SDK worlds: `record-adapter.ts` (persisted UIMessage record → stateless pi `Message[]`, dangling tool calls get synthesized INTERRUPTED results) and `ui-stream.ts` (pi agent events → AI-SDK UIMessage SSE).
+The engine side is adapted too: `src/agent/models.ts` (`piEngineFor`) resolves each role's engine from the user's **model slots** (BYOK: `settings.json` `models` section — strong/cheap/vision — plus per-role/chat overrides; a chain that ends empty refuses honestly with 503 `models_not_configured`), and `src/server/pi/` bridges the two SDK worlds: `record-adapter.ts` (persisted UIMessage record → stateless pi `Message[]`, dangling tool calls get synthesized INTERRUPTED results) and `ui-stream.ts` (pi agent events → AI-SDK UIMessage SSE).
 
 ```mermaid
 flowchart LR
     subgraph DRIVING["DRIVING ADAPTERS — inbound"]
         BROWSER["Browser UI — components/: question dock (addToolOutput) · graph canvas · docks"]
-        HTTP["HTTP transport — app/api/*: 16 route handlers"]
+        HTTP["HTTP transport — app/api/*: 25 route handlers"]
         NOTES["Notes front door — POST /api/graph/import"]
         ELEC["Electron main — thin launcher, spawns server, LH_DATA_DIR + BYOK env"]
     end
@@ -178,14 +178,13 @@ flowchart LR
     subgraph HEXCORE["THE CORE — src/core (pure domain)"]
         direction TB
         SESS["session brain: phases · plan-tree · question-core · pending · steer builders"]
-        GBRAIN["graph brain: merger + derivation · coverage · graph-context · clusters · layout"]
+        GBRAIN["graph brain: merger + derivation · coverage · clusters · layout"]
         PORTSBOX["PORTS (types only): ChatStore · GraphStore · JobStore"]
     end
 
     subgraph DRIVEN["DRIVEN ADAPTERS — outbound"]
         FS["fs stores — src/store (data/)"]
         LLM["LLM engines — pi-ai/OpenRouter via piEngineFor"]
-        EMBED["local embedder — transformers.js EmbeddingGemma-300M"]
         HEAD["headless Chrome — demo verify · SVG render"]
         DEEP["Deepgram STT — token-minting route, browser-side WebSocket"]
         WEB["web tools — Google CSE + Readability/Jina (researcher)"]
@@ -201,7 +200,6 @@ flowchart LR
     PORTSBOX --> FS
     SESS --> LLM
     GBRAIN --> LLM
-    GBRAIN --> EMBED
     SESS --> HEAD
     SESS --> WEB
     BROWSER --> DEEP
@@ -235,7 +233,7 @@ flowchart TB
 
     subgraph LIBRARY["LIBRARY — world model (owns data/graph ledgers)"]
         EXTRACT["extraction pipeline — extractor → auditor → merger (SOLE graph writer)"]
-        DERIVE["derivation — graphSnapshot · clusters · semantic search (reads, never write)"]
+        DERIVE["derivation — graphSnapshot · birth-session clusters (reads, never write)"]
         GRAPHDATA["append-only ledgers — data/graph/*.jsonl"]
     end
 
@@ -254,13 +252,12 @@ flowchart TB
     TURN -->|"triggerExtraction when uncoveredTokens ≥ chunkTokens [trigger seam, single-flight]"| EXTRACT
     EXTRACT -->|"reads transcript as evidence [ChatStore port]"| CHATDATA
     EXTRACT -->|"append-only ledger writes [GraphStore port — sole writer]"| GRAPHDATA
-    EXTRACT -->|"graph-context injection: semantic top-K under token budget [one-shot steer]"| TURN
-    DERIVE -->|"pure read: snapshot for home + context [graphSnapshot]"| GRAPHDATA
+    DERIVE -->|"pure read: snapshot for home [graphSnapshot]"| GRAPHDATA
     UI -->|"GET /api/graph (read) · PUT positions (sanctioned exception) · POST import"| DERIVE
     HOST -.->|"hosts every server-side system"| TURN
 ```
 
-Three server-side systems, each the sole writer of its own store, connected by exactly four protocols: the **turn request** (Stage→Classroom), the **ack-and-steer** loop (Classroom→Workbench→Classroom), the **extraction trigger + transcript read** (Classroom→Library), and the **graph-context injection** (Library→Classroom). The Stage touches systems only through the thin HTTP transport.
+Three server-side systems, each the sole writer of its own store, connected by exactly three protocols: the **turn request** (Stage→Classroom), the **ack-and-steer** loop (Classroom→Workbench→Classroom), and the **extraction trigger + transcript read** (Classroom→Library). The Stage touches systems only through the thin HTTP transport; the teacher reaches the Library directly through the gated prober tools (`list_sessions` / `list_propositions`) rather than any injected context.
 
 ---
 
@@ -284,7 +281,6 @@ sequenceDiagram
     Note over H,L: already running → 409; retryingFetch waits, re-fetches<br/>the record, merges unsent client messages by id, re-POSTs
     H->>H: claimSteers — coalesce queued steers into outgoing
     H->>CS: saveMessages (write-ahead: persist even before the stream)
-    H->>F: triggerGraphContext — one-shot semantic context injection (async)
     H->>A: build agent from record (probe_done part in transcript ⇒ teacher)
     Note over H,A: recordToPiMessages: stateless rebuild; dangling<br/>tool calls get synthesized INTERRUPTED results
     A-->>B: SSE stream (ui-stream bridge)
@@ -320,9 +316,9 @@ flowchart TB
     CRASH["crash recovery: listJobs → recoverStaleJobs (stale >15min)<br/>re-deliver results / respawn via setJobRespawn"] --> PUMP
 ```
 
-Job status flips done/error only after the wake turn persists. Delivery is **exactly-once**: deterministic steer ids (`steer_<jobId>`, `steer_probe_<chatId>`, `steer_ctx_<chatId>`), `steerDelivered` checks at every claim point, and `claimSteers` finalizing in-transcript steers instead of re-appending. The client adopts the wake turn through the same `turnInFlight` machinery as returning mid-stream (busy shimmer, composer gate, append-only `mergeAdopted` adoption) and renders steers as artifacts — never a bubble.
+Job status flips done/error only after the wake turn persists. Delivery is **exactly-once**: deterministic steer ids (`steer_<jobId>`, `steer_probe_<chatId>`), `steerDelivered` checks at every claim point, and `claimSteers` finalizing in-transcript steers instead of re-appending. The client adopts the wake turn through the same `turnInFlight` machinery as returning mid-stream (busy shimmer, composer gate, append-only `mergeAdopted` adoption) and renders steers as artifacts — never a bubble.
 
-Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable model — `MODELS.visualMaker`).
+Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (needs a vision-capable model — the `vision` slot in settings).
 
 ---
 
@@ -332,15 +328,13 @@ Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its 
 
 ```mermaid
 flowchart TB
-    TRIG["trigger seam (turn-service): coverageOf(record, coverageLedger)<br/>— uncovered tokens ≥ EXTRACTION.chunkTokens?"] -->|"yes, single-flight per source"| RUN["extraction.runExtraction(chatId)"]
+    TRIG["trigger seam (turn-service): coverageOf(record, coverageLedger)<br/>— uncovered tokens ≥ graph.extractionChunkTokens (settings)?"] -->|"yes, single-flight per source"| RUN["extraction.runExtraction(chatId)"]
     IMPORT["POST /api/graph/import (notes front door)<br/>deterministic src id = sha256(path) — idempotent re-imports"] -->|"importNotes: shared pipeline, second extractor prompt"| RUN
     RUN --> BATCH["batchRuns — greedy token-budgeted batches of oldest uncovered messages"]
     BATCH --> EXT["EXTRACTOR (LLM) — sees ONLY the transcript view<br/>(tree-blind; the same messageViewLines the fingerprint hashes)"]
     EXT --> AUD["AUDITOR (LLM) — sees findings + current graph;<br/>verifies evidence verbatim, judges identity (link-or-create), drops + logs unbacked"]
     AUD --> MERGE["MERGER (deterministic, core/graph.ts) — the ONLY ledger writer:<br/>identity via validated linkTo · dedupe edges · rebuild quiz events from tool parts · coverage checkpoint"]
-    MERGE --> EMB["embedNewNodes (injected local embedder) — non-fatal"]
-    EMB --> SETTLE["settleGraphLayout — resting positions ledger"]
-    SETTLE --> LABEL["refreshClusterLabels — one cheap LLM call per new cluster,<br/>core-survival label persistence — fire-and-forget"]
+    MERGE --> SETTLE["settleGraphLayout — resting positions ledger"]
     MERGE -->|"failure at ANY stage"| NOTHING["checkpoints nothing — the next trigger re-runs"]
 ```
 
@@ -348,13 +342,13 @@ flowchart TB
 
 **Division of trust** (the pipeline's core rule): the LLM stages supply only judgment — *what was learned*, *what follows/supports what*, *which proposition each quiz tested*, and the auditor's *identity* verdict (whether a proposition IS an existing node). Everything the model could silently mis-copy — event kinds (`correct`/`miss`/`dont-know`), timestamps, idempotency refs, notes, provenance points — is rebuilt deterministically by the merger from the transcript's tool parts. The extractor files verbatim evidence quotes; the auditor drops anything unbacked and logs every drop. Conservative throughout: duplicates over wrong merges, drop over invent.
 
-**Coverage, not quiz-counting** (supersedes the v1 every-N-quiz-answers trigger): each message's *view* (the same lines the extractor sees) is hashed into a per-chat fingerprint ledger (`coverage.jsonl`); "covered" means exactly "what the model saw." Uncovered = fingerprint diff, never dual-tracked; runs are greedy token-budgeted batches (`EXTRACTION.chunkTokens`, config.ts) of the oldest uncovered messages — quiz-less sessions extract too. A coarse `sessions.jsonl` checkpoint still marks each merged run. The trigger seam (`turn-service.ts`) is trigger-agnostic from the pipeline's side: when a better mechanism lands (session end, idle, explicit flush), only the seam changes. Single-flight per source; the run registry powers the coverage UI and true abort.
+**Coverage, not quiz-counting** (supersedes the v1 every-N-quiz-answers trigger): each message's *view* (the same lines the extractor sees) is hashed into a per-chat fingerprint ledger (`coverage.jsonl`); "covered" means exactly "what the model saw." Uncovered = fingerprint diff, never dual-tracked; runs are greedy token-budgeted batches (`graph.extractionChunkTokens` — a settings knob, default 4096, floor 500, read fresh each turn) of the oldest uncovered messages — quiz-less sessions extract too. A coarse `sessions.jsonl` checkpoint still marks each merged run. The trigger seam (`turn-service.ts`) is trigger-agnostic from the pipeline's side: when a better mechanism lands (session end, idle, explicit flush), only the seam changes. Single-flight per source; the run registry powers the coverage UI and true abort.
 
 **Two front doors, one pipeline**: chat transcripts (quiz-triggered) and raw personal notes (`POST /api/graph/import` — each file becomes a `NotesSource` playing the `chatId` role, deterministic id from the path hash).
 
-**The read channel is pure derivation.** `GET /api/graph` reads the ledgers (`graphSnapshot`: merged nodes/edges, folded observations, cluster partition + labels, positions) — the home view never triggers a write. Node states are always recomputed from the ledger, never stored.
+**The read channel is pure derivation.** `GET /api/graph` reads the ledgers (`graphSnapshot`: merged nodes/edges, folded observations, birth-session clusters, positions) — the home view never triggers a write. Node states are always recomputed from the ledger, never stored.
 
-**Graph context is semantic, not structural** (supersedes hotspot+1-hop): at session start the learner's topic is embedded (local EmbeddingGemma-300M, `server/embeddings.ts`), the top-K propositions under a token budget are selected (`core/graph-context.ts`), and the result is delivered as a one-shot **steer message** (marked in the UI) — not baked into the system prompt. Same embeddings power home-graph semantic search and the persisted cluster partition (average-linkage agglomerative clustering over node vectors, similarity ≥ 0.6), with cluster labels from one cheap LLM call per new/changed cluster under a core-survival persistence rule.
+**The teacher probes, nothing is injected** (supersedes the semantic-injection experiment, killed 2026-09-23): the teacher reaches the graph on its own terms through two read-only prober tools — `list_sessions` (birth sessions, the learner's files) and `list_propositions` (a session's extracted statements) — gated by the `agent.graphTools` setting (composing with `graph.enabled`). No topic embedding, no top-K selection, no session-start steer; the agent decides what to look at, and the graph never writes into a lesson unbidden.
 
 **Rendering**: a hand-rolled Canvas 2D renderer (`components/graph-canvas.ts` — one rAF loop, dirty-flag idle, d3-zoom camera, zoom-gated label fade, cluster hulls computed at draw time) over a d3-force layout in core (`layout.ts`, warm-started `incrementalLayout` + `settleGraphLayout`). Render settings and drag-committed positions persist server-side; the camera persists per-device in localStorage.
 
@@ -440,7 +434,7 @@ All deterministic, no network: engines are injected (pi-ai's **faux provider** �
 
 1. **Pure core units** — merger via real adapters, derivation, coverage, question grading, plan tree, phases, clusters, layout, tool-parts, prices, fuzzy search.
 2. **Server flows** — `handleChatRequest` driven end-to-end with scripted faux engines: persistence, liveness, steer claiming, the wake pipeline (409 retry, quiz deferral, idempotency), crash recovery, the data-dir seam (including a fresh child process).
-3. **Sub-agent loops** — researcher/demo-builder/visual-maker with fake headless APIs; the extraction pipeline end-to-end (audit drops, failure-checkpoints-nothing, single-flight, abort); cluster naming; graph-context job.
+3. **Sub-agent loops** — researcher/demo-builder/visual-maker with fake headless APIs; the extraction pipeline end-to-end (audit drops, failure-checkpoints-nothing, single-flight, abort).
 4. **Render tests** — transcript, cards, docks, composer, sidebar, coverage, stats via React server-side rendering (`renderToStaticMarkup`), no DOM library.
 
 Gates on every change: `tsc` clean, all tests, `eslint` clean, `next build` clean.
@@ -454,10 +448,10 @@ Every place the architecture is designed to be cut — the "one file" a future c
 | Seam | File | What it swaps |
 |---|---|---|
 | Storage decision (JSON→SQLite, remote) | `src/server/stores.ts` | the adapters, once |
-| LLM engine / model per role | `config.ts` MODELS + `src/agent/models.ts` (`piEngineFor`) | provider wiring, one place |
+| LLM engine / model per role | settings `models` slots + `src/agent/models.ts` (`piEngineFor`) | provider wiring, one place |
 | Turn composition | `src/server/chat-handler.ts` | what a turn consists of |
 | Extraction trigger | `src/server/turn-service.ts` (`triggerExtraction`) | when the Library runs |
-| Graph delivery to teacher | `core/graph-context.ts` + `agent/subagents/graph-context.ts` | what the teacher knows at session start |
+| Graph access for teacher | `src/agent/tools/graph.ts` (`list_sessions` / `list_propositions`) | what the teacher can probe, one gate |
 | Steer delivery (wake) | `src/server/jobs.ts` + injected `deliver` | how background results re-enter lessons |
 | Agent construction (tests) | `handleChatRequest(req, buildAgent?)` | scripted engines, no refactor |
 | Sub-agent verification | `sub-agents/headless.ts` (`headlessOverride`) | demo/SVG verification, no Chrome |

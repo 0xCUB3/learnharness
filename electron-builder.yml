@@ -14,7 +14,31 @@ productName: LearnHarness
 directories:
   output: dist
 files:
-  # Only the shell goes into the asar.
+  # Only the shell goes into the asar. ORDER IS LOAD-BEARING (payload
+  # wave, 2026-09-24): electron-builder's dependency collector packs the
+  # whole production dep tree into node_modules/ REGARDLESS of this
+  # allow-list — normalizeFiles turns this array into one {filter: [...]}
+  # fileSet, getNodeModuleFileMatcher feeds EVERY filter entry (positives
+  # included) to the per-dep copier, and without a negation its implicit
+  # '**/*' passes everything (the measured result: a 502MB asar holding
+  # next/@ai-sdk/pdfjs/mermaid/puppeteer… while the launcher requires
+  # nothing but electron + node builtins — the server ships via
+  # extraResources).
+  #
+  # The fix is gitignore-style ordering (verified against the installed
+  # app-builder-lib 26.15.3 + a DEBUG-mode rebuild): '!**/*' first excludes
+  # EVERYTHING, the two positives after it re-include only the shell.
+  # The per-dep collector then contributes ZERO files — app-builder-lib's
+  # filter evaluates each dep file's DESTINATION path (the
+  # stat.moduleFullFilePath quirk in util/filter.js getRelativePath), so
+  # '!**/*' matches every 'node_modules/<dep>/...' path and the bare
+  # positives can never re-include one (DEBUG logs confirm filesCount=0
+  # for all 566 modules). If a future electron-builder fixes that quirk,
+  # ~1MB of package.json stubs would start landing — harmless. The
+  # two-package.json layout avoids the collector entirely but
+  # restructures the repo. app.asar.unpacked dies with it: the natives
+  # were only unpacked because their packages were packed.
+  - "!**/*"
   - electron/**/*
   - package.json
 extraResources:
@@ -35,6 +59,11 @@ mac:
     - target: dmg
       arch:
         - arm64
+  # Locale trim (payload wave, 2026-09-24): English-only app — cuts
+  # every non-en .lproj from the frameworks (the STT/mic entitlements
+  # don't depend on locales). Revisit only if localization ever lands.
+  electronLanguages:
+    - en
   category: public.app-category.education
   # Laid for the STT milestone (researcher-verified): the TCC mic prompt
   # reads this string; macOS asks regardless of Electron's own handlers.

@@ -52,14 +52,6 @@ export type ModelRole =
 	| "auditor";
 
 /**
- * The extraction pipeline (vision §1 construction): the sole graph writer.
- * Triggered per chat once this many NEW quiz answers have landed since the
- * chat's last extraction checkpoint. The trigger mechanism is a v1
- * placeholder — deliberately isolated behind one seam
- * (server/turn-service.ts) so it can be swapped without touching the
- * pipeline.
- */
-/**
  * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction
  * pipeline. Line shapes: src/core/contracts.ts.
  */

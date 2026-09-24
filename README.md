@@ -27,14 +27,13 @@ npm run desktop:dist   # build + package the desktop app (electron-builder)
 # one-shot data scripts (run from the master tree only — data never crosses trees)
 npx tsx --env-file=.env.local scripts/import-notes.ts <dir>   # bulk-import notes → graph
 npx tsx --env-file=.env.local scripts/backfill-graph.ts       # wipe + re-extract every chat
-npx tsx --env-file=.env.local scripts/embed-graph.ts          # embed/backfill the whole graph
 npx tsx --env-file=.env.local scripts/replay-layout.ts        # re-derive layout from the ledgers
 npx tsx scripts/sync-pricing.ts                               # regenerate core/prices.ts tables
 ```
 
 ## Environment (`.env.local`)
 
-Secrets and machine-specific paths only. Model choice and thinking budgets are product tuning, not environment — they live in **`config.ts` → `MODELS`** (prober, teacher, researcher, demoBuilder, visualMaker, extractor, auditor, labeler; each an OpenRouter model id + reasoning `effort`). The extraction batch threshold is there too (`EXTRACTION.chunkTokens`).
+Secrets and machine-specific paths only. Model choice and thinking budgets are the user's, not the environment's — BYOK model slots live in **settings** (`models` section: strong/cheap/vision, provider + model id + optional thinking level; per-role and per-chat overrides ride on top). The extraction batch threshold is a settings knob too (`graph.extractionChunkTokens`, default 4096, floor 500).
 
 | Variable | Purpose |
 |---|---|
@@ -70,7 +69,7 @@ flowchart TB
 
     subgraph LIBRARY["LIBRARY — world model (owns data/graph ledgers)"]
         EXTRACT["extraction pipeline:<br/>extractor → auditor → merger<br/>(the SOLE graph writer)"]
-        DERIVE["derivation — graphSnapshot · embeddings · clusters<br/>(pure reads)"]
+        DERIVE["derivation — graphSnapshot · birth-session clusters<br/>(pure reads)"]
         LEDG[("append-only ledgers<br/>data/graph/*.jsonl")]
     end
 
@@ -113,17 +112,17 @@ src/
     tools/probe.ts              probe_done (probe→teach handoff seam)
     tools/jobs.ts               research / demo / visual tool surfaces
     tools/web.ts                web_search (Google CSE) + web_fetch (researcher only)
-    subagents/                  researcher · demo-builder · visual-maker,
+    subagents/                  researcher · demo-builder · visual-maker
+                                · pdf-reader,
                                 extraction pipeline (extractor/auditor + merger handoff),
-                                runner (async protocol), cluster-namer, graph-context job,
-                                headless Chrome helper, abort registry
+                                runner (async protocol), headless Chrome helper,
+                                abort registry
   server/chat-handler.ts       THE turn composition root (liveness · steers · persist · stream)
-  server/turn-service.ts       turn seams: persist · graph-context · extraction trigger
+  server/turn-service.ts       turn seams: persist · extraction trigger
   server/jobs.ts               the wake pipeline: serialized per-chat steer delivery,
                                server-side wake turns, crash recovery
   server/stores.ts              THE storage composition root — the one place adapters wire in
   server/turn-liveness.ts       per-chat turn registry (one turn per chat, ever)
-  server/embeddings.ts          local EmbeddingGemma-300M embedder (transformers.js)
   server/observability.ts       the activity feed (running jobs + extraction, abort)
   server/pi/                    the engine bridge: record-adapter (record → pi messages)
                                 · ui-stream (pi events → UIMessage SSE)
@@ -133,17 +132,18 @@ src/
   core/ports.ts                 storage ports — ChatStore · GraphStore · JobStore
                                 (core code depends on these types only)
   core/                         question-core, plan-tree, phases, pending, graph
-                                (merger/derivation), coverage, graph-context, layout,
-                                clusters, prices, tool-parts — all pure: storage
+                                (merger/derivation), coverage, layout, clusters,
+                                prices, tool-parts — all pure: storage
                                 arrives as parameters
   store/                        fs adapters implementing the ports: chats · graph
                                 ledgers · jobs (+ render-settings, default-settings)
 electron/                       desktop launcher + security guard (spawns the standalone
                                 server; 1 IPC channel; LH_DATA_DIR + BYOK env)
 scripts/                        build-server.mjs (packaging guards), import-notes,
-                                backfill-graph, embed-graph, replay-layout, sync-pricing
-data/                           chats/ · graph/ (12 ledger + map files) · jobs/ ·
-                                default-settings.json — runtime state, git-ignored
+                                backfill-graph, replay-layout, sync-pricing
+data/                           chats/ · graph/ (six ledgers + positions/sources/
+                                render-settings maps) · jobs/ · settings.json —
+                                runtime state, git-ignored
 ```
 
 ## Key mechanisms
@@ -152,9 +152,9 @@ data/                           chats/ · graph/ (12 ledger + map files) · jobs
 
 **The formal plan tree (author-once).** The teacher authors the session's dependency tree with one schema-validated tool — `plan_init`, whose mermaid-subset input is parsed deterministically (line-numbered errors) and validated as a DAG. The tree persists in the chat record; progress is never mutated — `current`/`visited`/upcoming are **derived** from tagged quiz calls in the transcript, and the panel renders that derivation.
 
-**The async sub-agent protocol (ack-and-steer).** `research` / `demo` / `visual` are server-executed tools: the call resolves immediately mid-turn with a fire-and-forget ack and the teacher keeps teaching; a background runner works in parallel (the client polls `/api/activity` and `/api/jobs`). On completion the runner builds a **steer message** — a user-role `UIMessage` whose text part is the model-facing result and whose `data-subagent-artifact` part carries the full result for the client — and the **wake pipeline** delivers it: a per-chat serialized queue waits for the turn to end and no question to be pending, then fires a server-side teacher turn that weaves the result into the lesson. Delivery is exactly-once (deterministic steer ids, delivered-flag checks at every claim point); stalled jobs are recovered on read; aborted jobs deliver an abort steer. The client adopts the wake turn through the same `turnInFlight` machinery as returning mid-stream (busy shimmer, composer gate) and renders steers as artifacts — never a bubble. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (vision-capable model — `MODELS.visualMaker` in config.ts).
+**The async sub-agent protocol (ack-and-steer).** `research` / `demo` / `visual` are server-executed tools: the call resolves immediately mid-turn with a fire-and-forget ack and the teacher keeps teaching; a background runner works in parallel (the client polls `/api/activity` and `/api/jobs`). On completion the runner builds a **steer message** — a user-role `UIMessage` whose text part is the model-facing result and whose `data-subagent-artifact` part carries the full result for the client — and the **wake pipeline** delivers it: a per-chat serialized queue waits for the turn to end and no question to be pending, then fires a server-side teacher turn that weaves the result into the lesson. Delivery is exactly-once (deterministic steer ids, delivered-flag checks at every claim point); stalled jobs are recovered on read; aborted jobs deliver an abort steer. The client adopts the wake turn through the same `turnInFlight` machinery as returning mid-stream (busy shimmer, composer gate) and renders steers as artifacts — never a bubble. Sub-agents **verify, never one-shot**: the demo-builder headlessly executes its HTML in system Chrome before delivery; the visual-maker renders each SVG and looks at it (vision-capable model — the `vision` slot in settings).
 
-**The knowledge graph (two channels, one writer).** The write channel: the extraction pipeline — extractor (LLM, tree-blind: sees only the transcript view — propositions as true statements, `follows`/`supports` edges, retroactive quiz attribution, one-word understanding observations) → auditor (LLM: sees findings + the current graph; drops anything without verbatim evidence, stamps each survivor with an identity verdict — link to an existing node or create) → merger (`mergeFindings`, deterministic: applies the verdicts, link-appends phrasings/provenance, rebuilds quiz events from the transcript's tool parts, dedupes, checkpoints coverage) → embeddings + layout settle + cluster naming. Triggered when a chat's **uncovered tokens** (message-view fingerprints, `coverage.jsonl`) cross `EXTRACTION.chunkTokens` — one swappable seam (`turn-service.ts`); failure checkpoints nothing, the next trigger re-runs. The same pipeline serves the **notes front door** (`POST /api/graph/import`: any `*.md`/`*.txt` becomes a source; re-imports are idempotent by path hash). The read channel: `GET /api/graph` derives the snapshot from the ledgers — a pure read; the home view is a hand-rolled Canvas 2D renderer (one rAF loop, dirty-flag idle, d3-zoom camera, zoom-gated labels, cluster hulls) over a d3-force layout, with server-persisted render settings and drag-committed positions. At session start the learner's topic is embedded and the top-K propositions under a token budget are delivered to the teacher as a one-shot context steer (marked in the UI) — same embeddings power search and the cluster partition.
+**The knowledge graph (two channels, one writer).** The write channel: the extraction pipeline — extractor (LLM, tree-blind: sees only the transcript view — propositions as true statements, `follows`/`supports` edges, retroactive quiz attribution, one-word understanding observations) → auditor (LLM: sees findings + the current graph; drops anything without verbatim evidence, stamps each survivor with an identity verdict — link to an existing node or create) → merger (`mergeFindings`, deterministic: applies the verdicts, link-appends phrasings/provenance, rebuilds quiz events from the transcript's tool parts, dedupes, checkpoints coverage) → layout settle. Triggered when a chat's **uncovered tokens** (message-view fingerprints, `coverage.jsonl`) cross `graph.extractionChunkTokens` (a settings knob, default 4096, floor 500 — read fresh per turn); failure checkpoints nothing, the next trigger re-runs. The same pipeline serves the **notes front door** (`POST /api/graph/import`: any `*.md`/`*.txt` becomes a source; re-imports are idempotent by path hash). The read channel: `GET /api/graph` derives the snapshot from the ledgers — a pure read; the home view is a hand-rolled Canvas 2D renderer (one rAF loop, dirty-flag idle, d3-zoom camera, zoom-gated labels, cluster hulls) over a d3-force layout, with server-persisted render settings and drag-committed positions. Clusters are **birth-session groupings**: a node joins the cluster of the session that birthed it (a chat, or an imported notes file as a file-kind session), derived at read — no embedding pass, no naming pass. The teacher reaches the graph on its own terms through the gated prober tools (`list_sessions` / `list_propositions`, the `agent.graphTools` setting) — there is no automatic context injection.
 
 **Dictation.** Optional speech-to-text: the server mints short-lived Deepgram tokens; audio streams browser→Deepgram over WebSocket, never through the server.
 
@@ -173,4 +173,4 @@ The teaching methodology comes from the Obsidian-based POC (`~/Desktop/Obsidian/
 
 ## Data
 
-Nothing under `data/` is ever tracked by git. Chats, graph ledgers, jobs, embeddings, positions, and the settings records are plain files (JSON/JSONL) — inspect them freely; they are the canonical records. The desktop app relocates the whole directory via `LH_DATA_DIR`.
+Nothing under `data/` is ever tracked by git. Chats, graph ledgers, jobs, positions, and the settings records are plain files (JSON/JSONL) — inspect them freely; they are the canonical records. The desktop app relocates the whole directory via `LH_DATA_DIR`.
