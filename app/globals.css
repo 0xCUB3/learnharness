@@ -438,6 +438,30 @@ body {
 	}
 }
 
+/* Graph chrome fade-in (empty-graph chrome wave, owner 2026-09-25): the
+   search + settings controls appear ONCE, as the first nodes land —
+   Import Notes always renders (the empty graph's entry point), the other
+   two mount only when the snapshot has nodes. Same understated register
+   as settings-pop (a plain fade); reduced-motion appears instantly. */
+@keyframes chrome-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+.graph-chrome-fade-in {
+	animation: chrome-fade-in 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.graph-chrome-fade-in {
+		animation: none;
+	}
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Electron merged chrome (owner, 2026-09-17). The system title bar is
    hidden (titleBarStyle: "hiddenInset" in electron/main.cjs); the app's

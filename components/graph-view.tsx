@@ -798,6 +798,98 @@ function GraphSettingsControl({
 	);
 }
 
+/** The top-chrome actions row's body (empty-graph chrome wave, owner
+ *  2026-09-25): Import Notes renders ALWAYS (graph enabled) — it's the
+ *  one action that works on an empty graph, the entry point itself;
+ *  search + settings render only when the snapshot has nodes (dead
+ *  controls are lies — the honesty principle). The two gated controls
+ *  fade in on their mount (graph-chrome-fade-in, globals.css — the
+ *  appear-once transition as the first nodes land). Exported pure for
+ *  the empty/populated SSR pins (the DeleteNodeBody pattern). */
+export function GraphChromeRow({
+	isEmpty,
+	query,
+	onQuery,
+	noMatch,
+	importing,
+	searchInputRef,
+	fileInputRef,
+	onImportFiles,
+	settings,
+	changeSettings,
+}: {
+	isEmpty: boolean;
+	query: string;
+	onQuery: (v: string) => void;
+	/** The search panel's "No matching nodes." note (computed by the
+	 *  wrapper — it owns visibleIds + the snapshot). */
+	noMatch: boolean;
+	importing: boolean;
+	searchInputRef: React.RefObject<HTMLInputElement | null>;
+	fileInputRef: React.RefObject<HTMLInputElement | null>;
+	onImportFiles: (files: FileList | null) => void;
+	settings: GraphRenderSettings;
+	changeSettings: (update: (cur: RenderSettings) => RenderSettings) => void;
+}) {
+	return (
+		<>
+			{!isEmpty && (
+				<div className="graph-chrome-fade-in w-56 min-w-0 shrink rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+					<div className="relative">
+						<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+						<input
+							ref={searchInputRef}
+							value={query}
+							onChange={(e) => onQuery(e.target.value)}
+							placeholder="Search nodes…"
+							spellCheck={false}
+							className="h-7 w-full rounded-lg border bg-background pl-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
+						/>
+					</div>
+					{noMatch && (
+						<div className="px-1.5 pt-1 text-[11px] text-muted-foreground">No matching nodes.</div>
+					)}
+				</div>
+			)}
+			{/* Import notes — its own container (36px, header band); ALWAYS
+			    rendered (the empty-graph ruling above — the entry point). */}
+			<div className="shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+				<input
+					ref={fileInputRef}
+					type="file"
+					multiple
+					accept=".md,.markdown,.txt"
+					className="hidden"
+					onChange={(e) => {
+						onImportFiles(e.target.files);
+						e.target.value = ""; // allow re-picking the same file
+					}}
+				/>
+				<button
+					type="button"
+					disabled={importing}
+					onClick={() => fileInputRef.current?.click()}
+					data-testid="import-notes"
+					className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+				>
+					<UploadIcon className="size-3" />
+					{importing ? "Importing…" : "Import notes…"}
+				</button>
+			</div>
+			{!isEmpty && (
+				// Rendering settings — own component; the gear toggles it. The
+				// gear sits at the far right (owner, round 3) so its panel drops
+				// at the very right edge, over less of the graph. The fade wrapper
+				// is a plain shrink-0 flex child — the panel itself positions
+				// within GraphSettingsControl's own relative root, unaffected.
+				<div className="graph-chrome-fade-in shrink-0">
+					<GraphSettingsControl settings={settings} changeSettings={changeSettings} />
+				</div>
+			)}
+		</>
+	);
+}
+
 export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1394,63 +1486,21 @@ export function GraphView() {
 			    and clickable on top of them. The row is a stacking context, so
 			    its open dropdowns cover the number; clicks land on the panel. */}
 			<div className="relative z-20 flex min-w-0 items-start gap-2">
-				{!isEmpty && (
-					<>
-					{/* Search — its own container (icon + input + no-match note).
-					    The header band's flexible element: w-56 normally, shrinks
-					    (min-w-0) when the column's width cap binds in narrow
-					    windows — the row's other controls are shrink-0. */}
-					<div className="w-56 min-w-0 shrink rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
-						<div className="relative">
-							<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-							<input
-								ref={searchInputRef}
-								value={query}
-								onChange={(e) => setQuery(e.target.value)}
-								placeholder="Search nodes…"
-								spellCheck={false}
-								className="h-7 w-full rounded-lg border bg-background pl-8 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
-							/>
-						</div>
-						{snapshot !== null && visibleIds.size === 0 && query.trim() !== "" && (
-							<div className="px-1.5 pt-1 text-[11px] text-muted-foreground">
-								No matching nodes.
-							</div>
-						)}
-					</div>
-					</>
-				)}
-				{!isEmpty && (
-				<>
-					{/* Import notes — its own container (36px, header band). */}
-					<div className="shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
-						<input
-							ref={fileInputRef}
-							type="file"
-							multiple
-							accept=".md,.markdown,.txt"
-							className="hidden"
-							onChange={(e) => {
-								onImportFiles(e.target.files);
-								e.target.value = ""; // allow re-picking the same file
-							}}
-						/>
-						<button
-							type="button"
-							disabled={importing}
-							onClick={() => fileInputRef.current?.click()}
-							className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
-						>
-							<UploadIcon className="size-3" />
-							{importing ? "Importing…" : "Import notes…"}
-						</button>
-					</div>
-					{/* Rendering settings — own component; the gear toggles it. The
-						    gear sits at the far right (owner, round 3) so its panel
-						    drops at the very right edge, over less of the graph. */}
-					<GraphSettingsControl settings={settings} changeSettings={changeSettings} />
-					</>
-				)}
+				{/* The actions row (empty-graph chrome wave, owner 2026-09-25):
+				    Import Notes always — the empty graph's entry point; search +
+				    settings only when nodes exist, fading in on their mount. */}
+				<GraphChromeRow
+					isEmpty={isEmpty}
+					query={query}
+					onQuery={setQuery}
+					noMatch={snapshot !== null && visibleIds.size === 0 && query.trim() !== ""}
+					importing={importing}
+					searchInputRef={searchInputRef}
+					fileInputRef={fileInputRef}
+					onImportFiles={onImportFiles}
+					settings={settings}
+					changeSettings={changeSettings}
+				/>
 			</div>
 
 			{/* Top-right tail (owner, 2026-09-20): the pipeline cost number —
