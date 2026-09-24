@@ -277,8 +277,11 @@ export function ModelControl() {
 			</button>
 			</Hint>
 			<Hint
-				// Trimmed (owner, subtlety round 2026-09-25).
-				label="Thinking level"
+				// "Thinking" + its real shortcut via the registry (owner interlude
+				// 2026-09-25): ⇧⇥ cycles the level, so "Thinking (⇧⇥)" —
+				// rebind-live like every Hint suffix.
+				label="Thinking"
+				action="cycle-thinking"
 				side="bottom"
 			>
 				<button

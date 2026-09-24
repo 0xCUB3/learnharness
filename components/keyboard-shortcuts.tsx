@@ -31,10 +31,16 @@ import {
 	eventBinding,
 	formatBinding,
 	isTypingSurface,
+	kbdEventForAction,
 	KEYBOARD_ACTIONS,
 } from "@/src/core";
 import { isDictationActive } from "@/components/dictation";
 import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
+
+// Re-exported for the contract pin (tests/keyboard-toggle-sidebar.test.ts):
+// the dispatcher composes event names through the ONE helper — a second
+// spelling here is how the ⌘B bug happened.
+export { kbdEventForAction };
 
 export function KeyboardShortcuts() {
 	const router = useRouter();
@@ -109,7 +115,7 @@ export function KeyboardShortcuts() {
 					handlersRef.current.setCheatOpen(true);
 					break;
 				default:
-					window.dispatchEvent(new CustomEvent(`lh:kbd-${action}`));
+					window.dispatchEvent(new CustomEvent(kbdEventForAction(action)));
 			}
 		};
 		window.addEventListener("keydown", onKeyDown);

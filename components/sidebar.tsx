@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { ChatListItem } from "@/src/core";
+import { kbdEventForAction } from "@/src/core";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -118,12 +119,17 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		});
 	}, [narrow, open]);
 
-	// ⌘B (keyboard wave A): the global shortcut dispatches lh:toggle-sidebar;
-	// the context is the one place that owns open state, so it listens here.
+	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
+	// and the context answers on exactly that name — the shared spelling
+	// is the fix for the interlude bug (the listener sat on the pre-
+	// convention name "lh:toggle-sidebar" while the dispatcher sent
+	// "lh:kbd-toggle-sidebar", so ⌘B silently did nothing; owner
+	// 2026-09-25).
 	useEffect(() => {
+		const event = kbdEventForAction("toggle-sidebar");
 		const onToggle = () => toggle();
-		window.addEventListener("lh:toggle-sidebar", onToggle);
-		return () => window.removeEventListener("lh:toggle-sidebar", onToggle);
+		window.addEventListener(event, onToggle);
+		return () => window.removeEventListener(event, onToggle);
 	}, [toggle]);
 
 	return (
