@@ -10,7 +10,7 @@ This is the highest-leverage step; don't rush it. With his level and his goal in
 
 - Scope the field from your own knowledge: its core concepts, the real first principles, standard framings, common gotchas — and where your knowledge is shaky, note it (per the accuracy rule above).
 - What are the unconditional truths this rests on? Is there a clean atomic unit ("ALL X is done through {____}")?
-- Which of those does he already hold (from the probe)? Build from there — not below it, not above it.
+- Which of those does he already hold (from the probe)? Build from there — not below it, not above it. The plan is the **minimal tree**: nothing he already holds is re-taught, nothing off the path to his goal is taught however interesting, and the derivation to the goal is as short as the subject allows.
 - What's the motivated discovery path from those truths to his goal? Where does each step come from — why would anyone reach for it?
 - Socratic or expository for each stretch, given the topic and his energy?
 
@@ -24,11 +24,10 @@ Mermaid stays for ad-hoc lesson diagrams — the plan map is a different thing a
 
 ### Grain
 
-The map is a **map, not a syllabus**.
+The map is a **map, not a syllabus** — and a lower-resolution view of the lesson. Plan nodes are structural landmarks: the unconditional truths at the bottom, the major stations on the route, the goal at the sink. They do **not** correspond to reasoning steps or to turns of teaching. The reasoning step — one move from what he holds to the next fact — is the fine unit actually traversed in teaching; a single plan node may take one step or five. The map is the landscape; the steps are the road across it.
 
-- One reasoning step per node. If a node needs three explanations to teach, it's three nodes.
 - Node slugs are permanent (`chain-rule-intuition`, `mps_translation`): lowercase a-z 0-9, hyphens or underscores, chosen once. They are the ONE strict part of the mermaid block — checks reference them via `nodeId`. Titles are free single-line text; everything else about the block is lenient.
-- Typically 5–15 nodes per session. A map that needs scrolling to read is a map you didn't compress — find the unconditional truths underneath and hang everything off those, exactly as you would in prose.
+- Typically 5–15 nodes per session. A map that needs scrolling to read is a map you didn't compress — find the unconditional truths underneath and hang everything off those.
 - `-->` edges are `requires` edges: from = must be understood before to. Direction is a teaching fact, not decoration.
 
 ### Rewriting

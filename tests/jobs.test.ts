@@ -1067,7 +1067,7 @@ describe("prompt composition", () => {
 		}
 		// it loads in sorted fragment order: right after 20-teaching, before 30-jobs
 		assert.ok(
-			teacher.indexOf("Question principles") > teacher.indexOf("# Teach — the loop"),
+			teacher.indexOf("Question principles") > teacher.indexOf("# Teach — one step at a time"),
 			"principles sit after the teaching loop",
 		);
 		// the prober's doctrine: the "no rush" framing is gone, quick measurement in
