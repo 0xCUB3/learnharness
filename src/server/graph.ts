@@ -42,14 +42,14 @@ export function graphCosts(): GraphCostSummary {
 		.readSources()
 		.filter((s) => s.extractions?.length)
 		.map((s) => ({ filePath: s.filePath, extractions: s.extractions! }));
-	return graphCostSummary({ chats, sources, naming: stores.graphStore.readNamingRuns() });
+	return graphCostSummary({ chats, sources });
 }
 
 /** The graph's version stamp (session-deletion wave 6): the max mtime
- *  across every graph data file — ledgers, positions, embeddings. Moves
- *  on ANY graph write (merge append, settle, embed, or a deletion's
- *  atomic rewrite), never moves on reads, and needs no bookkeeping of
- *  its own: the fs IS the counter. Consumers poll it (the activity feed
+ * across every graph data file — ledgers, positions. Moves on ANY
+ * graph write (merge append, settle, or a deletion's atomic rewrite),
+ * never moves on reads, and needs no bookkeeping of its own: the fs
+ * IS the counter. Consumers poll it (the activity feed
  *  carries it; the DELETE response returns it) to know clusters/layout
  *  must refetch — the "graph changed underneath me" signal. */
 export function graphRevision(): number {
@@ -61,7 +61,6 @@ export function graphRevision(): number {
 		LEDGER_FILES.mappings,
 		LEDGER_FILES.sessions,
 		LEDGER_FILES.coverage,
-		LEDGER_FILES.namingRuns,
 		POSITIONS_FILE,
 	]) {
 		try {

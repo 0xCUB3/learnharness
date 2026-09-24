@@ -12,7 +12,7 @@ import {
 	type CostSummaryInput,
 	type GraphCostSummary,
 } from "../src/core/cost-summary.ts";
-import type { CallUsage, ExtractionRunUsage, NamingRunUsage } from "../src/core/contracts.ts";
+import type { CallUsage, ExtractionRunUsage } from "../src/core/contracts.ts";
 import { PRICES, callCost } from "../src/core/prices.ts";
 
 /** A model with full published pricing (from the generated registry). */
@@ -43,40 +43,30 @@ const extractionRun = (
 	...(stats ? { stats } : {}),
 });
 
-const namingRun = (startedAt: number, model: string, appended: number): NamingRunUsage => ({
-	startedAt,
-	at: new Date(startedAt).toISOString(),
-	durationMs: 4_000,
-	model,
-	steps: [step(500, 50)],
-	stats: { detected: 8, claimed: 6, named: 2, appended },
-});
-
 describe("graphCostSummary (the cost pill's fold)", () => {
-	test("folds all three channels: stage totals, tokens, newest-first runs", () => {
+	test("folds both channels: stage totals, tokens, newest-first runs", () => {
+		// (The cluster-naming channel died with the extraction-UX close-out,
+		// 2026-09-24 — two channels: chat + notes front doors.)
 		const input: CostSummaryInput = {
 			chats: [{ title: "Testing session", extractions: [extractionRun(100, PRICED, PRICED)] }],
 			sources: [{ filePath: "/vault/modal.md", extractions: [extractionRun(200, PRICED, PRICED)] }],
-			naming: [namingRun(300, PRICED, 2)],
 		};
 		const s = graphCostSummary(input);
 		const extStep = callCost(step(1000, 200), PRICED)!;
 		const audStep = callCost(step(2000, 100), PRICED)!;
 		assert.equal(s.stages.extraction.dollars, extStep * 2);
 		assert.equal(s.stages.audit.dollars, audStep * 2);
-		assert.equal(s.stages.naming.dollars, callCost(step(500, 50), PRICED));
 		assert.equal(s.stages.extraction.runs, 2);
-		assert.equal(s.stages.naming.runs, 1);
 		assert.equal(s.stages.extraction.tokens.inputTokens, 2000);
 		assert.equal(s.stages.audit.tokens.outputTokens, 200);
-		assert.equal(s.totalDollars, extStep * 2 + audStep * 2 + callCost(step(500, 50), PRICED)!);
-		// All three runs, newest first, titles joined per front door.
+		assert.equal(s.totalDollars, extStep * 2 + audStep * 2);
+		// Both runs, newest first, titles joined per front door — every
+		// run is kind "extraction" now.
 		assert.deepEqual(
 			s.runs.map((r) => r.title),
-			["Cluster naming", "/vault/modal.md", "Testing session"],
+			["/vault/modal.md", "Testing session"],
 		);
-		assert.equal(s.runs[0]!.labels, 2);
-		assert.equal(s.runs[0]!.kind, "naming");
+		assert.deepEqual(s.runs.map((r) => r.kind), ["extraction", "extraction"]);
 		assert.equal(s.unpricedRuns, 0);
 	});
 
@@ -84,7 +74,6 @@ describe("graphCostSummary (the cost pill's fold)", () => {
 		const s: GraphCostSummary = graphCostSummary({
 			chats: [{ title: "partial", extractions: [extractionRun(100, PRICED, "unknown-model")] }],
 			sources: [{ filePath: "/vault/x.md", extractions: [extractionRun(200, "unknown-model", "unknown-model")] }],
-			naming: [],
 		});
 		assert.equal(s.stages.audit.unpricedRuns, 2);
 		assert.equal(s.stages.audit.dollars, 0); // never a silent zero: unpricedRuns says it
@@ -101,7 +90,6 @@ describe("graphCostSummary (the cost pill's fold)", () => {
 		const s = graphCostSummary({
 			chats: [{ title: "chat", extractions }],
 			sources: [],
-			naming: [],
 			recentCap: 2,
 		});
 		assert.equal(s.runs.length, 2);
@@ -114,13 +102,11 @@ describe("graphCostSummary (the cost pill's fold)", () => {
 		const s = graphCostSummary({
 			chats: [{ title: "failed", extractions: [extractionRun(100, PRICED, PRICED)] }],
 			sources: [],
-			naming: [],
 		});
 		assert.equal(s.runs[0]!.merged, undefined);
-		const empty = graphCostSummary({ chats: [], sources: [], naming: [] });
+		const empty = graphCostSummary({ chats: [], sources: [] });
 		assert.equal(empty.totalDollars, 0);
 		assert.equal(empty.runs.length, 0);
-		assert.equal(empty.stages.naming.runs, 0);
 		assert.equal(empty.stages.extraction.tokens.inputTokens, undefined);
 	});
 });

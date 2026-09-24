@@ -1,10 +1,12 @@
 /**
  * Graph-pipeline cost summary (2026-09 graph cost metrics wave) — the pure
- * fold behind the graph view's cost pill. Three usage channels in: chat
- * extraction runs (ChatRecord.extractions), notes-source runs
- * (NotesSource.extractions), and cluster-naming runs (naming-runs.jsonl).
- * Out: per-stage totals (extraction / audit / cluster-naming) + a capped
- * recent-runs list.
+ * fold behind the graph view's cost pill. Two usage channels in: chat
+ * extraction runs (ChatRecord.extractions) and notes-source runs
+ * (NotesSource.extractions). Out: per-stage totals (extraction / audit)
+ * + a capped recent-runs list. (The cluster-naming channel died with the
+ * extraction-UX close-out, 2026-09-24 — UI's displayCostTotals had already
+ * dropped it; historical naming-runs.jsonl spend is simply not displayed,
+ * the same ruling as wave 7's stages.embedding.)
  *
  * MONEY CHANNEL LAW: dollars are INFERRED here at read time via
  * core/prices.ts — never stored anywhere. An unpriced model contributes
@@ -15,7 +17,7 @@
  * barrel so the pill/panel components carry no cost math.
  */
 
-import type { CallUsage, EmissionStats, ExtractionRunUsage, NamingRunUsage } from "./contracts.ts";
+import type { CallUsage, EmissionStats, ExtractionRunUsage } from "./contracts.ts";
 import { callCost, sumSteps } from "./prices.ts";
 
 /** One pipeline stage's cumulative cost across every run. */
@@ -37,7 +39,7 @@ export interface RecentRun {
 	at: string;
 	durationMs: number;
 	/** "extraction" covers both front doors (chat + notes). */
-	kind: "extraction" | "naming";
+	kind: "extraction";
 	/** Chat title / source file path / fixed label for naming runs. */
 	title: string;
 	/** Whole-run inferred USD; null only when EVERY stage is unpriced. */
@@ -45,8 +47,6 @@ export interface RecentRun {
 	tokens: CallUsage;
 	/** What the run merged into the graph; absent on failed runs. */
 	merged?: EmissionStats;
-	/** Naming runs: labeling records appended (extraction runs omit it). */
-	labels?: number;
 }
 
 /** The cost pill's whole payload: stage totals + recent runs. */
@@ -56,13 +56,12 @@ export interface GraphCostSummary {
 	/** Runs where EVERY stage was unpriced (totalDollars excludes them). */
 	unpricedRuns: number;
 	/** The billable pipeline stages. (Wave 7, owner ruling 2026-09-23:
-	 *  back to three — the embedding stage is gone with the provider
-	 *  embedder; historical records' stages.embedding spend is simply not
-	 *  displayed.) */
+	 *  the embedding stage is gone with the provider embedder; the
+	 *  2026-09-24 close-out culled cluster naming the same way —
+	 *  historical spend on either is simply not displayed.) */
 	stages: {
 		extraction: StageCost;
 		audit: StageCost;
-		naming: StageCost;
 	};
 	/** Newest first, capped at `recentCap` (default 10). */
 	runs: RecentRun[];
@@ -74,8 +73,6 @@ export interface CostSummaryInput {
 	chats: { title: string; extractions: ExtractionRunUsage[] }[];
 	/** Notes-front-door runs: imported file path + the source's usage log. */
 	sources: { filePath: string; extractions: ExtractionRunUsage[] }[];
-	/** Cluster-naming runs (graph-global ledger). */
-	naming: NamingRunUsage[];
 	recentCap?: number;
 }
 
@@ -116,7 +113,6 @@ function mergeTokens(into: CallUsage, steps: readonly CallUsage[]): void {
 export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	const extraction = emptyStage();
 	const audit = emptyStage();
-	const naming = emptyStage();
 	const runs: RecentRun[] = [];
 
 	const foldExtractionRun = (run: ExtractionRunUsage, title: string) => {
@@ -158,23 +154,6 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	for (const source of input.sources) {
 		for (const run of source.extractions) foldExtractionRun(run, source.filePath);
 	}
-	for (const run of input.naming) {
-		naming.runs++;
-		mergeTokens(naming.tokens, run.steps);
-		const dollars = stageDollars(run.model, run.steps);
-		if (dollars === null) naming.unpricedRuns++;
-		else naming.dollars += dollars;
-		runs.push({
-			startedAt: run.startedAt,
-			at: run.at,
-			durationMs: run.durationMs,
-			kind: "naming",
-			title: "Cluster naming",
-			dollars,
-			tokens: sumSteps(run.steps),
-			labels: run.stats.appended,
-		});
-	}
 
 	runs.sort((a, b) => b.startedAt - a.startedAt);
 	const capped = runs.slice(0, input.recentCap ?? 10);
@@ -182,9 +161,9 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	// A run is "unpriced" when it billed nothing countable at all.
 	const unpricedRuns = runs.filter((r) => r.dollars === null).length;
 	return {
-		totalDollars: extraction.dollars + audit.dollars + naming.dollars,
+		totalDollars: extraction.dollars + audit.dollars,
 		unpricedRuns,
-		stages: { extraction, audit, naming },
+		stages: { extraction, audit },
 		runs: capped,
 	};
 }

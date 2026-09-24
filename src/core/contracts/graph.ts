@@ -79,27 +79,6 @@ export interface NamingRunStats {
 	appended: number;
 }
 
-/** One cluster-naming run's usage record — the money channel's THIRD stage
- *  (graph cost metrics, 2026-09). The namer is graph-global (tied to no
- *  chat or source), so runs live in their own append-only ledger
- *  (config.LEDGER_FILES.namingRuns). Appended when a run actually called
- *  the model; skipped refreshes (nothing to name) never bill and never
- *  append. Idempotent per startedAt — same discipline as every usage
- *  channel. Cost is INFERRED at read time from steps + model
- *  (core/prices.ts) — dollars are never stored. */
-export interface NamingRunUsage {
-	/** ms epoch — the idempotency key. */
-	startedAt: number;
-	/** ISO — wall-clock time of the run. */
-	at: string;
-	durationMs: number;
-	/** The naming run's labeler role model id (the role died in wave 7;
-	 * the field stays as the historical record's shape). */
-	model: string;
-	/** Every billed call (usually ONE — the namer is single-submit). */
-	steps: CallUsage[];
-	stats: NamingRunStats;
-}
 
 export interface GraphNode {
 	/** Opaque stable id, store-assigned: "n_" + nanoid-like. */

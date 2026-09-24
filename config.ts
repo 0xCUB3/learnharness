@@ -73,9 +73,6 @@ export const LEDGER_FILES = {
 	 *  the checkpoint's replacement for chat extractions — notes keep
 	 *  sessions.jsonl, whole-file as they are). */
 	coverage: path.join(PATHS.graph, "coverage.jsonl"),
-	/** Cluster-naming run usage (contracts/graph.ts NamingRunUsage) — the
-	 *  money channel's third stage; graph-global, so its own ledger. */
-	namingRuns: path.join(PATHS.graph, "naming-runs.jsonl"),
 } as const;
 
 /**

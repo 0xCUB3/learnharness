@@ -60,7 +60,6 @@ function fakeStores(
 		readClusterLabels: () => [],
 		appendClusterLabel: () => {},
 		appendNamingRun: () => {},
-		readNamingRuns: () => [],
 	} as unknown as GraphStore;
 	const chatStore: ChatStore = {
 		listChats: () =>

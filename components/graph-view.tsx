@@ -298,6 +298,8 @@ function fmtRunCost(dollars: number | null): string {
  * titles / file names — so the core's naming fold (and its historical
  * spend) is deliberately not shown anywhere: the pill and the panel must
  * agree, and both read THIS, never GraphCostSummary.totalDollars.
+ * (The core fold's naming stage was then culled outright — 2026-09-24 —
+ * so the recent-runs list carries extraction runs only.)
  */
 export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
 	totalDollars: number;
@@ -393,9 +395,7 @@ function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 				))}
 			</div>
 			<div className="mt-2 flex flex-col gap-0.5 border-t pt-2">
-				{costs.runs
-					.filter((run) => run.kind !== "naming")
-					.map((run) => (
+				{costs.runs.map((run) => (
 						<div key={run.startedAt} className="flex items-baseline justify-between gap-2 text-[11px]">
 							<span className="min-w-0 flex-1 truncate text-muted-foreground">
 								<span className="text-foreground/70">{timeAgo(run.startedAt)}</span>{" "}

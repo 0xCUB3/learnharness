@@ -32,7 +32,6 @@ import type {
 	GraphEdge,
 	GraphNode,
 	LedgerEvent,
-	NamingRunUsage,
 	NodeMapping,
 	NotesSource,
 	SessionCheckpoint,
@@ -68,7 +67,6 @@ function memoryLedgers() {
 	const checkpoints: SessionCheckpoint[] = [];
 	const coverage: CoverageEntry[] = [];
 	const sources = new Map<string, NotesSource>();
-		const namingRuns: NamingRunUsage[] = [];
 	const positions = new Map<string, { x: number; y: number }>();
 		return {
 		appendNode: (n: GraphNode) => void nodes.push(n),
@@ -99,11 +97,6 @@ function memoryLedgers() {
 			}
 		},
 		// Cluster labelings — mirrors the real store: append dedupes by id.
-		// Cluster-naming run usage — mirrors the real store: dedupe per startedAt.
-		appendNamingUsage: (entry: NamingRunUsage) => {
-			if (!namingRuns.some((r) => r.startedAt === entry.startedAt)) namingRuns.push(entry);
-		},
-		readNamingRuns: () => namingRuns.map((r) => ({ ...r, steps: [...r.steps], stats: { ...r.stats } })),
 		// The layout ledger — settleGraphLayout writes it after each merge.
 		readPositions: () => Object.fromEntries([...positions].map(([id, p]) => [id, { ...p }])),
 		writePositions: (next) => {
@@ -422,7 +415,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// Wave 7 (950ddfd): birth-session clusters carry session-name labels,
 		// so the post-merge naming garnish is gone — no model spend, no
 		// naming-run records, no label writes.
-		assert.equal(ledgers.readNamingRuns().length, 0, "no naming runs minted");
 	});
 
 
