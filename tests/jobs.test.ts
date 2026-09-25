@@ -58,7 +58,7 @@ import { providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts"
 import type { PiEngine } from "../src/agent/models.ts";
 import type { SearchProvider } from "../src/core/search.ts";
 import { PATHS } from "../config.ts";
-import { projectNative } from "../src/core/projection.ts";
+import { projectView as projectNative } from "../src/core/view.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import type { SteerInput, TurnInput } from "../src/core/input-events.ts";
 

@@ -26,7 +26,7 @@ import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseSt
 import type { PiEngine } from "../src/agent/models.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { newPlanBlockMessage } from "../src/core/native-messages.ts";
-import { projectNative } from "../src/core/projection.ts";
+import { projectView as projectNative } from "../src/core/view.ts";
 import type {
 	AuditResult,
 	CoverageEntry,
@@ -42,7 +42,7 @@ import type {
 import type { GraphStore } from "../src/core/ports.ts";
 import { abortExtraction, createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError, providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts";
-import { batchTag, coverageOf, coverageSlots } from "../src/core/coverage.ts";
+import { batchTag, coverageOf, coverageSlots, messageViewLines } from "../src/core/coverage.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
@@ -399,7 +399,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// a new event (vision-extraction-coverage.md).
 		const events = ledgers.readEvents();
 		const record = chatStore.getChat(chatId)!;
-		const expectedTag = batchTag(coverageSlots(projectNative(record.messages)));
+		const expectedTag = batchTag(coverageSlots(record.messages));
 		assert.deepEqual(
 			events.map((e) => [e.kind, e.ref, e.nodeId]),
 			[
@@ -415,12 +415,18 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// one entry per transcript message, fingerprinted content each —
 		// the same turns are never extracted twice.
 		const covered = ledgers.readCoverage();
-		assert.equal(covered.length, projectNative(record.messages).length);
+		// Wave D: the coverage unit is the VISIBLE native message — bonded
+		// riders with no view lines (a textless call message) are context,
+		// never checkpointed.
+		const visible = record.messages.filter(
+			(m) => messageViewLines(m, m.id).length > 0,
+		).length;
+		assert.equal(covered.length, visible);
 		assert.ok(covered.every((c) => c.chatId === chatId && c.fp.length === 64 && c.tokens > 0));
 		assert.equal(ledgers.readCheckpoints().length, 0, "the chat path writes coverage, not the legacy checkpoint");
 
 		assert.equal(
-			coverageOf(projectNative(record.messages), covered, chatId).uncoveredCount,
+			coverageOf(record.messages, covered, chatId).uncoveredCount,
 			0,
 			"every message is now covered",
 		);
@@ -1020,9 +1026,9 @@ describe("the chunked pipeline (extraction coverage)", () => {
 
 		// Per-batch coverage: every message checkpointed, nothing legacy.
 		const coverage = ledgers.readCoverage();
-		assert.equal(coverage.length, projectNative(record.messages).length);
+		assert.equal(coverage.length, record.messages.length);
 		assert.equal(ledgers.readCheckpoints().length, 0);
-		assert.equal(coverageOf(projectNative(record.messages), coverage, chatId).uncoveredCount, 0);
+		assert.equal(coverageOf(record.messages, coverage, chatId).uncoveredCount, 0);
 
 		// A second run is a NO-OP: nothing uncovered → no model calls, no
 		// new usage entry (no money spent on covered ground).
@@ -1075,7 +1081,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		// Batch 1's emissions are kept and its messages stay covered.
 		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 1 });
 		assert.equal(ledgers.readCoverage().length, 3, "batch 1 checkpointed its three messages");
-		const cov = coverageOf(projectNative(record.messages), ledgers.readCoverage(), chatId);
+		const cov = coverageOf(record.messages, ledgers.readCoverage(), chatId);
 		assert.equal(cov.uncoveredCount, 2, "the in-flight batch's messages stay uncovered");
 
 		// The re-run — the manual extract button — picks up ONLY the
@@ -1109,9 +1115,9 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
 		await pipeline.runExtraction(chatId);
-		// Wave B: the record is native — coverage reads the projection.
+		// Wave D: the record IS native history — coverage reads it directly.
 		const record = () => chatStore.getChat(chatId)!.messages;
-		const messages = () => projectNative(record());
+		const messages = () => record();
 		assert.equal(coverageOf(messages(), ledgers.readCoverage(), chatId).uncoveredCount, 0);
 
 		// Data parts are invisible to the extraction view — a plan-block

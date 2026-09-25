@@ -57,7 +57,7 @@ import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
-import { projectNative } from "../src/core/projection.ts";
+import { projectView as projectNative } from "../src/core/view.ts";
 import type { PiEngine } from "../src/agent/models.ts";
 
 /**

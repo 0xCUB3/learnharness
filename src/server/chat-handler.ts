@@ -322,7 +322,6 @@ export async function handleChatInput(
 		// late views reattach via GET /api/chats/[id]/stream.
 		const handle = runPiTurn({
 			agent: constructed,
-			base: merged,
 			// Stream-level failures are provider/transport internals — masked,
 			// like the SDK defaults. Tool-input validation messages never
 			// route through here: they ride the error-result path and reach the

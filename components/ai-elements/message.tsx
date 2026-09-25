@@ -15,9 +15,10 @@ import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { createMathPlugin } from "@streamdown/math";
-import type { UIMessage } from "ai";
+
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
+import type { LhViewMessage } from "@/src/core";
 import {
   createContext,
   memo,
@@ -36,7 +37,7 @@ import { mdComponents } from "@/components/md-blocks";
 import { transformMathDelimiters } from "@/src/core";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
-  from: UIMessage["role"];
+  from: LhViewMessage["role"];
 };
 
 export const Message = ({ className, from, ...props }: MessageProps) => (

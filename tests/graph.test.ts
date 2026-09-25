@@ -20,7 +20,7 @@ import { after, describe, it } from "node:test";
 import type { AuditResult } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
-import { projectNative } from "../src/core/projection.ts";
+import { projectView as projectNative } from "../src/core/view.ts";
 import { getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
 import { coverageSlots } from "../src/core/coverage.ts";
 import { graphStore } from "../src/store/graph.ts";
@@ -33,12 +33,12 @@ const graphDeps = { chatStore, graphStore } as const satisfies GraphDeps;
 /** The session merge source for a chat — what the pipeline passes: the live
  *  transcript + its updatedAt checkpoint stamp. (Notes imports pass
  *  messages: null — see the notes-merger test below.) */
-function sessionSource(chatId: string): { messages: ReturnType<typeof projectNative>; foldedAt: string } {
+function sessionSource(chatId: string): { messages: LhMessage[]; foldedAt: string } {
 	// Wave B: the record is native history — the merger's transcript view
 	// reads through the one-way projection (same shape the extraction
 	// pipeline passes: its batch slots are projected messages).
 	const record = chatStore.getChat(chatId)!;
-	return { messages: projectNative(record.messages), foldedAt: record.updatedAt };
+	return { messages: record.messages, foldedAt: record.updatedAt };
 }
 
 // ─── ledger isolation (backup-and-clear of data/graph/*.jsonl) ──────────────
@@ -1036,7 +1036,7 @@ describe("session coverage read (extraction-UX redesign, 2026-09-24)", () => {
 
 		// Fold the first two messages: the read derives the split + the
 		// newest fold timestamp from the ledger rows.
-		const slots = coverageSlots(projectNative(chatStore.getChat(chat.id)!.messages));
+		const slots = coverageSlots(chatStore.getChat(chat.id)!.messages);
 		graphStore.appendCoverage({ chatId: chat.id, fp: slots[0]!.fp, tokens: slots[0]!.tokens, foldedAt: "2026-09-24T10:00:00.000Z" });
 		graphStore.appendCoverage({ chatId: chat.id, fp: slots[1]!.fp, tokens: slots[1]!.tokens, foldedAt: "2026-09-24T11:30:00.000Z" });
 		// Another session's row must not leak into this read.

@@ -7,11 +7,11 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { UIMessage } from "ai";
+import type { LhViewMessage } from "../src/core/view.ts";
 import { streamingToolActivity } from "../src/core/pending.ts";
 
-function msg(role: string, parts: unknown[]): UIMessage {
-	return { id: "m1", role, parts } as unknown as UIMessage;
+function msg(role: string, parts: unknown[]): LhViewMessage {
+	return { id: "m1", role, parts } as unknown as LhViewMessage;
 }
 
 function toolPart(tool: string, state: string) {

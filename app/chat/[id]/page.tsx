@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { Chat } from "@/components/chat";
-import { projectNative, slotsConfigured, type TeacherUIMessage } from "@/src/core";
+import { slotsConfigured } from "@/src/core";
 import { getChat, isTurnRunning, readSettingsRecord } from "@/src/server";
 
 export const dynamic = "force-dynamic";
@@ -24,9 +24,10 @@ export default async function ChatPage({
 			key={chat.id}
 			chatId={chat.id}
 			title={chat.title}
-			// Wave B: the record is native history — the client view is the
-				// one-way projection (GET /api/chats/[id] serves the same shape).
-				initialMessages={projectNative(chat.messages) as TeacherUIMessage[]}
+			// Wave D: the record IS native agent history — the client view is
+				// derived app-side (core/view.ts projectView; GET serves the same
+				// native messages).
+				initialMessages={chat.messages}
 			initialConfigured={slotsConfigured(record?.models)}
 			initialPrompt={prompt}
 			// A teacher turn that outlived its client: the remounted view must

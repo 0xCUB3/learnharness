@@ -39,7 +39,8 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { isToolUIPart, type UIMessage } from "ai";
+import type { LhMessage } from "./native-messages.ts";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { CoverageEntry } from "./contracts/graph.ts";
 import type {
 	AuditResult,
@@ -85,7 +86,7 @@ function newGraphNodeId(): string {
  *  fresh understanding observations land as new events; the notes path
  *  passes neither and keeps the whole-file checkpoint. */
 export interface MergeSource {
-	messages: UIMessage[] | null;
+	messages: LhMessage[] | null;
 	foldedAt: string;
 	/** The batch being merged (chat path): one entry per message in
 	 *  `messages`, same order — undefined (notes path / coverage-less
@@ -97,7 +98,11 @@ export interface MergeSource {
 
 // ─── transcript scanning (shared by the merger + trigger) ─────────────────────
 
-/** A flattened, order-preserving view of every tool part in a transcript. */
+/** A flattened, order-preserving view of every tool call (+ its result
+ *  state) in a native transcript. Wave D: the pairing is native — calls
+ *  come from assistant content blocks; a result map built from the
+ *  toolResult messages carries the outcome (a dangling call is
+ *  input-available, an error result is output-error). */
 interface ToolPartView {
 	name: string;
 	toolCallId: string;
@@ -106,17 +111,27 @@ interface ToolPartView {
 	output: unknown;
 }
 
-function toolParts(messages: UIMessage[]): ToolPartView[] {
+function toolParts(messages: LhMessage[]): ToolPartView[] {
+	const results = new Map<string, ToolResultMessage>();
+	for (const m of messages) {
+		if ((m as { role?: string }).role === "toolResult") {
+			results.set((m as ToolResultMessage).toolCallId, m as ToolResultMessage);
+		}
+	}
 	const out: ToolPartView[] = [];
-	for (const message of messages) {
-		for (const part of message.parts) {
-			if (!isToolUIPart(part)) continue;
+	for (const m of messages) {
+		if ((m as { role?: string }).role !== "assistant") continue;
+		const content = (m as { content?: unknown }).content;
+		if (!Array.isArray(content)) continue;
+		for (const block of content as Array<{ type?: string; id?: string; name?: string; arguments?: unknown }>) {
+			if (block.type !== "toolCall" || typeof block.id !== "string") continue;
+			const result = results.get(block.id);
 			out.push({
-				name: part.type.slice("tool-".length),
-				toolCallId: part.toolCallId,
-				state: part.state,
-				input: part.input,
-				output: part.output,
+				name: block.name ?? "",
+				toolCallId: block.id,
+				state: result ? (result.isError ? "output-error" : "output-available") : "input-available",
+				input: block.arguments,
+				output: result && !result.isError ? result.details : undefined,
 			});
 		}
 	}

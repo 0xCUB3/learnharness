@@ -16,8 +16,7 @@
  */
 
 import type { PlanBlockData, PlanTree } from "./contracts.ts";
-import { derivePlanStatuses } from "./contracts.ts";
-import type { UIMessage } from "ai";
+import { derivePlanStatusesLh } from "./contracts.ts";
 import type { LhMessage } from "./native-messages.ts";
 import { newPlanBlockMessage } from "./native-messages.ts";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
@@ -32,9 +31,11 @@ export interface PlanBlockPart {
 }
 
 /** The snapshot payload (unchanged since wave 4): statuses derived AT
- *  EMISSION time from the transcript — the block never re-derives. */
-function snapshot(tree: PlanTree, messages: readonly UIMessage[]): PlanBlockData {
-	const statuses = derivePlanStatuses(tree, messages);
+ *  EMISSION time from the transcript — the block never re-derives. Wave D:
+ *  the derivation reads the NATIVE transcript (quiz CALLS only — results
+ *  feed nothing, contracts/plan.ts derivePlanStatusesLh). */
+function snapshot(tree: PlanTree, messages: readonly LhMessage[]): PlanBlockData {
+	const statuses = derivePlanStatusesLh(tree, messages);
 	return {
 		kind: "full",
 		at: new Date().toISOString(),
@@ -68,14 +69,14 @@ export function emittedPlanBlockCalls(messages: readonly LhMessage[]): Set<strin
  *  once; a later turn's rewrite gets its own block — the golden-master
  *  rule the UIMessage-era attach had) that the record hasn't already
  *  emitted. `tree` is the record's current tree (the plan tool saved it
- *  during the turn); `transcript` is the full PROJECTED transcript the
- *  status derivation reads.
+ *  during the turn); `transcript` is the full NATIVE transcript the status
+ *  derivation reads.
  */
 export function planBlocksFor(
 	record: readonly LhMessage[],
 	newMessages: readonly LhMessage[],
 	tree: PlanTree | null | undefined,
-	transcript: readonly UIMessage[],
+	transcript: readonly LhMessage[],
 ): LhMessage[] {
 	if (!tree || tree.nodes.length === 0) return [];
 	const emitted = emittedPlanBlockCalls(record);

@@ -13,9 +13,8 @@ import { PATHS } from "../../config.ts";
 import type { ChatStore } from "../core/ports.ts";
 import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
 import type { LhMessage } from "../core/native-messages.ts";
-import { findPendingToolCall } from "../core/pending.ts";
-import { phaseAt3 } from "../core/phases.ts";
-import { projectNative } from "../core/projection.ts";
+import { danglingQuestionOf } from "../core/native-messages.ts";
+import { phaseAt3Lh } from "../core/phases.ts";
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
@@ -58,7 +57,6 @@ function listChats(): ChatSummary[] {
 				// zero-back-compat wipe makes these "corrupt") must not blank the
 				// whole sidebar — same isolation getChat's per-file catch gives.
 				try {
-					const projected = projectNative(messages);
 					return {
 						// turns and extractions stay out of the list payload (list =
 						// summaries; usage aggregates ride the full record, the picker
@@ -66,13 +64,14 @@ function listChats(): ChatSummary[] {
 						...summary,
 						messageCount: messages.length,
 						// Record-derived status for the session picker: phase from the
-						// transcript's explicit markers (probe_done / plan_init — the
-						// event-driven phases, docs/probe-teach-split.md §4), pending
-						// question from the last unanswered quiz/ask part — both read
-						// through the one-way projection. Liveness (busy) is NOT
-						// record-derived — the API route merges it (ChatListItem).
-						phase: phaseAt3(projected),
-						pendingQuestion: findPendingToolCall(projected) !== null,
+						// transcript's explicit events (probe_done concluded / verdict
+						// accepted — docs/probe-teach-split.md §4), pending question
+						// from the native dangling-call scan. Wave D: both folds read
+						// the NATIVE record (core/phases.ts phaseAt3Lh +
+						// native-messages.ts danglingQuestionOf). Liveness (busy) is
+						// NOT record-derived — the API route merges it (ChatListItem).
+						phase: phaseAt3Lh(messages),
+						pendingQuestion: danglingQuestionOf(messages) !== null,
 					};
 				} catch (err) {
 					console.error(`[chat ${summary.id}] summary projection failed:`, err);

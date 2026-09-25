@@ -1,7 +1,8 @@
 "use client";
 
 import { CheckIcon, CircleX } from "lucide-react";
-import type { PdfResult, ResearchResult, SubagentArtifactData, TeacherUIMessage } from "@/src/core";
+import type { PdfResult, ResearchResult, SubagentArtifactData } from "@/src/core";
+import type { LhViewMessage } from "@/src/core";
 import { isSubagentFailure } from "@/src/core";
 import { DemoOutputCard } from "@/components/artifacts/demo-card";
 import { PdfBriefCard, ResearchBriefCard } from "@/components/artifacts/job-card";
@@ -24,7 +25,7 @@ import { VisualOutputCard } from "@/components/artifacts/visual-card";
  *     The sub-agent's verification notes are model-facing glue and do NOT
  *     render; only a failure note does.
  */
-export function SubagentSteerCard({ message }: { message: TeacherUIMessage }) {
+export function SubagentSteerCard({ message }: { message: LhViewMessage }) {
 	const artifactPart = message.parts.find((p) => p.type === "data-subagent-artifact");
 	const data = artifactPart?.data as SubagentArtifactData | undefined;
 	// The abort steer (2026-09 dock semantics): its message-type part is

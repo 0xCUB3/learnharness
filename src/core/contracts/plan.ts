@@ -115,3 +115,28 @@ export interface PlanToolResult {
 	tree: PlanTree;
 }
 
+
+// ─── the native fold (Wave D: derivePlanStatuses over LhMessage[]) ───────────
+
+import type { LhMessage } from "../native-messages.ts";
+
+/** The same derivation over the NATIVE record: quiz CALLS only (any state —
+ *  a dangling call still moves position; results feed nothing). */
+export function derivePlanStatusesLh(tree: PlanTree, messages: readonly LhMessage[]): DerivedPlanStatuses {
+	const ids = new Set(tree.nodes.map((n) => n.id));
+	const runs: string[] = [];
+	for (const m of messages) {
+		if ((m as { role?: string }).role !== "assistant") continue;
+		const content = (m as { content?: unknown }).content;
+		if (!Array.isArray(content)) continue;
+		for (const block of content as Array<{ type?: string; name?: string; arguments?: unknown }>) {
+			if (block.type !== "toolCall" || block.name !== "quiz") continue;
+			const nodeId = (block.arguments as { nodeId?: unknown } | undefined)?.nodeId;
+			if (typeof nodeId !== "string" || !ids.has(nodeId)) continue;
+			if (runs.at(-1) !== nodeId) runs.push(nodeId);
+		}
+	}
+	const current = runs.at(-1) ?? null;
+	const visited = new Set(runs.slice(0, -1));
+	return { current, visited };
+}

@@ -1,4 +1,3 @@
-import { isToolUIPart } from "ai";
 import type { PiEngine } from "../models.ts";
 import type { SearchProvider } from "../../core/search.ts";
 import {
@@ -23,8 +22,6 @@ import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import type { ModelRole } from "../../../config.ts";
 import { ROLE_SLOT, modelsNotConfigured, type ModelSlotName, type ProviderKeyMissing } from "../../core/settings.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
-import { projectNative } from "../../core/projection.ts";
-import type { UIMessage } from "ai";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
@@ -276,22 +273,18 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		if (input) return input;
 		const chat = chatStore.getChat(job.chatId);
 		if (!chat) return undefined;
-		// Wave B: the record is native history — the transcript scan reads
-		// through the projection (same shape the old record held).
-		return (findToolPart(projectNative(chat.messages), job.toolCallId)?.input ?? undefined) as
-			| JobToolInput
-			| undefined;
-	}
-
-	// ─── shared plumbing ────────────────────────────────────────────────────
-
-	function findToolPart(messages: UIMessage[], toolCallId: string) {
-		for (const m of messages) {
-			for (const part of m.parts) {
-				if (isToolUIPart(part) && part.toolCallId === toolCallId) return part;
+		// Wave D: the record is native history — the scan reads the native
+		// assistant blocks directly (a toolCall's arguments are the input).
+		for (const m of chat.messages) {
+			if ((m as { role?: string }).role !== "assistant") continue;
+			const content = (m as { content?: unknown }).content;
+			if (!Array.isArray(content)) continue;
+			for (const block of content as Array<{ type?: string; id?: string; arguments?: unknown }>) {
+				if (block.type !== "toolCall" || block.id !== job.toolCallId) continue;
+				return block.arguments as JobToolInput | undefined;
 			}
 		}
-		return null;
+		return undefined;
 	}
 
 	/**

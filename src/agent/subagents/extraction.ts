@@ -1,5 +1,4 @@
 import * as crypto from "node:crypto";
-import type { UIMessage } from "ai";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type Static, type TSchema } from "typebox";
@@ -28,7 +27,6 @@ import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../
 import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/coverage.ts";
-import { projectNative } from "../../core/projection.ts";
 
 /**
  * The extraction pipeline (vision §1 construction, 2026-09-02 redesign) — the
@@ -93,12 +91,11 @@ import { projectNative } from "../../core/projection.ts";
 export function transcriptView(record: ChatRecord): string {
 	// The shared seam (core/coverage.ts messageViewLines): the LLM's prompt
 	// view and the coverage fingerprint use ONE line builder, so "covered"
-	// means — exactly — what the extractor saw. Wave B: the record is native
-	// history — the extraction view reads through the one-way projection.
+	// means — exactly — what the extractor saw. Wave D: the record is native
+	// history — the view reads the native messages directly.
 	const lines = [`SESSION: ${record.title}`];
-	const projected = projectNative(record.messages);
-	projected.forEach((message, index) => {
-		lines.push(...messageViewLines(message, message.id || `m${index}`));
+	record.messages.forEach((message, index) => {
+		lines.push(...messageViewLines(message, (message as { id?: string }).id || `m${index}`));
 	});
 	return lines.join("\n");
 }
@@ -871,14 +868,16 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// engines AND their providers' keys; a refusal lands BEFORE any
 			// stage runs (typed — the trigger skips, routes surface 503).
 			refuseIfStagesUnready();
-			const projected = projectNative(record.messages);
-			const covered = coverageOf(projected, graphStore.readCoverage(), chatId);
+			const covered = coverageOf(record.messages, graphStore.readCoverage(), chatId);
 			if (covered.uncovered.length === 0) {
 				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
 				return { nodes: 0, edges: 0, events: 0 };
 			}
 			const chunkTokens = deps.getChunkTokens?.() ?? FACTORY_SETTINGS.graph.extractionChunkTokens;
-			const batches = batchRuns(covered.uncovered, chunkTokens);
+			// The batcher's one rule (owner, Wave D): a tool-call message and
+			// its result message(s) are INSEPARABLE — one chunk, covered
+			// together, read together (core/coverage.ts batchRuns).
+			const batches = batchRuns(covered.slots, covered.uncovered, chunkTokens);
 			console.info(
 				`[extraction ${chatId}] pipeline start — ${covered.uncoveredTokens} uncovered tok, ` +
 					`${covered.uncoveredCount} messages, ${batches.length} batch(es) of ≤${chunkTokens} tok`,
@@ -887,13 +886,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				// The batch's prompt view: SESSION header + the batch's lines,
 				// same provenance [id] tags the fingerprints used (coverage
 				// and prompt share ONE line builder — core/coverage.ts).
-				const mids = projected.map((m, i) => (m.id || `m${i}`) as string);
 				const view = [
 					`SESSION: ${record.title}`,
-					...batch.flatMap((slot) => {
-						const idx = projected.indexOf(slot.message);
-						return messageViewLines(slot.message, mids[idx] ?? slot.message.id);
-					}),
+					...batch.flatMap((slot) => messageViewLines(slot.message, slot.message.id)),
 				].join("\n");
 				setPhase(chatId, "extracting", "chat");
 				const findings = await extract(chatId, view);
@@ -918,7 +913,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore }, {
 					messages: batch.map((slot) => slot.message),
 					foldedAt,
-					coverage: batch.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
+					coverage: batch
+						.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
+						.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
 					batchTag: batchTag(batch),
 				});
 				total.nodes += stats.nodes;

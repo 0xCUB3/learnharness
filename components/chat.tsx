@@ -1,9 +1,7 @@
 "use client";
 
 import { createContext, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useChat } from "@ai-sdk/react";
-import { lastAssistantMessageIsCompleteWithToolCalls } from "ai";
-import { createReattachingTransport } from "@/components/chat-transport";
+import { useChatSession } from "@/components/session";
 import { SetupDialog } from "@/components/setup-dialog";
 import { Hint } from "@/components/ui/hint";
 import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
@@ -26,7 +24,7 @@ import { DictationBar, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useActivity } from "@/components/activity-dock";
-import { isProviderKeyRefusal, mergeAdopted, type ChatInput, type ChatSettings, type ModelSlotName } from "@/src/core";
+import { isProviderKeyRefusal, needsContinuation, type ChatInput, type ChatSettings, type LhMessage, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
@@ -34,7 +32,8 @@ import { WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
-import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TeacherUIMessage, TurnUsage } from "@/src/core";
+import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsage } from "@/src/core";
+import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
 import { CoverageRing } from "@/components/extraction-coverage";
 import { findPendingToolCall, phaseAt3, phaseTimeline, streamingToolActivity } from "@/src/core";
@@ -141,7 +140,7 @@ function SystemLine({ children, testId }: { children: React.ReactNode; testId?: 
 	);
 }
 
-function isSubagentSteer(m: TeacherUIMessage): boolean {
+function isSubagentSteer(m: LhViewMessage): boolean {
 	return (m.metadata as { subagentResult?: unknown } | undefined)?.subagentResult != null;
 }
 
@@ -164,7 +163,7 @@ export function Chat({
 }: {
 	chatId: string;
 	title: string;
-	initialMessages: TeacherUIMessage[];
+	initialMessages: LhMessage[];
 	initialPrompt?: string;
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
@@ -174,61 +173,31 @@ export function Chat({
 	 *  only decides whether the pill rides the composer. */
 	initialConfigured?: boolean;
 }) {
-	// Reattach plumbing (background-turn runner wave): the transport holds
-	// two stable refs — the settled terminal's callback (assigned below,
-	// once syncFromServer exists) and the LIVE last-message id (the
-	// continuation seam — see chat-transport.ts). Refs, not closures, so
-	// the per-render transport recreation can never capture a stale one.
+	// Reattach plumbing (background-turn runner wave): the hook holds the
+	// settled terminal's callback — a stable ref assigned below, once
+	// syncFromServer exists (refs, not closures: no stale capture).
 	const reattachSettledRef = useRef<() => void>(() => {});
-	const reattachLastIdRef = useRef<string | undefined>(undefined);
-	// THE INPUT STASH (Wave B input-events contract, owner ruling
-	// 2026-09-26): every SDK send maps to EXACTLY ONE explicit input event —
-	// the call site stashes the event here before invoking the SDK send, and
-	// the transport consumes it when building the POST body ({chatId, input};
-	// the client transcript never rides the wire). Consumed-on-read: a send
-	// with nothing stashed fails LOUDLY in the transport (a call-site bug —
-	// it must never silently re-send the previous event).
-	const pendingInputRef = useRef<ChatInput | null>(null);
-	const stashInput = (input: ChatInput) => {
-		pendingInputRef.current = input;
-	};
-	const takeInput = () => {
-		const input = pendingInputRef.current;
-		pendingInputRef.current = null;
-		return input ?? undefined;
-	};
 
-	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop, clearError, resumeStream } =
-		useChat<TeacherUIMessage>({
-			id: chatId,
-			messages: initialMessages,
-			transport: createReattachingTransport(
-				chatId,
-				{
-					onSettled: () => reattachSettledRef.current(),
-					lastMessageId: () => reattachLastIdRef.current,
-				},
-				{ takeInput },
-			),
-			// After the learner answers (addToolOutput), automatically send the
-			// continuation request so the teacher reacts to the answer.
-			sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-		});
+	// THE SESSION HOOK (Wave D, owner-approved 2026-09-26): the app-owned
+	// replacement for useChat + the AI-SDK transport. The record is native
+	// history; the VIEW (grouped, golden-master) is derived client-side
+	// (core/view.ts projectView); sends are ONE explicit input event each
+	// ({chatId, input} — the stash indirection died with the SDK), and the
+	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
+	const { messages, nativeMessages, send, submitAnswer, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
+		useChatSession({ chatId, initialMessages, initiallyInFlight });
+
+	// The reattach settled terminal → the sync-and-continue seam (below).
+	setReattachSettled(() => reattachSettledRef.current());
 
 	// New chat with a topic: send the first message exactly once.
 	const sentInitial = useRef(false);
 	useEffect(() => {
 		if (!sentInitial.current && initialPrompt && initialMessages.length === 0) {
 			sentInitial.current = true;
-			stashInput({ type: "text", text: initialPrompt });
-			void sendMessage({ text: initialPrompt });
+			void send({ type: "text", text: initialPrompt });
 		}
-	}, [initialPrompt, initialMessages.length, sendMessage]);
-
-	// The reattach seam's live half: the transport compares the stream's
-	// start id against the transcript's CURRENT last message — the
-	// continuation rewrite keys on it (chat-transport.ts, seam 3).
-	reattachLastIdRef.current = messages.at(-1)?.id;
+	}, [initialPrompt, initialMessages.length, send]);
 
 	// Reattach on mount (stream-reattach wave): a turn that outlived its
 	// client (navigate away mid-turn, back while in flight) is re-entered
@@ -358,14 +327,8 @@ export function Chat({
 	useEffect(() => {
 		if (mountContinuation.current) return;
 		mountContinuation.current = true;
-		if (
-			!turnInFlight &&
-			status === "ready" &&
-			messages.length > 0 &&
-			lastAssistantMessageIsCompleteWithToolCalls({ messages })
-		) {
-			stashInput({ type: "continue" });
-			void sendMessage();
+		if (!turnInFlight && status === "ready" && needsContinuation(initialMessages)) {
+			void send({ type: "continue" });
 		}
 		// mount-only by design (turnInFlight read at initial value)
 	}, []);
@@ -469,7 +432,7 @@ export function Chat({
 		void (async () => {
 			const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}`);
 			if (!cancelled && res.ok) {
-				const record = (await res.json().catch(() => null)) as { messages?: TeacherUIMessage[] } | null;
+				const record = (await res.json().catch(() => null)) as { messages?: LhMessage[] } | null;
 				if (Array.isArray(record?.messages)) setMessages(record.messages);
 			}
 			if (cancelled) return;
@@ -502,22 +465,19 @@ export function Chat({
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
 		if (!res.ok) return;
-		const record = (await res.json()) as { messages?: TeacherUIMessage[]; turns?: TurnUsage[] };
+		const record = (await res.json()) as { messages?: LhMessage[]; turns?: TurnUsage[] };
 		if (Array.isArray(record.turns)) setTurns(record.turns);
 		if (!Array.isArray(record.messages)) return;
 		setMessages(record.messages);
-		// setMessages does NOT fire sendAutomaticallyWhen (the SDK only checks
-		// it inside addToolOutput) — without this the teacher would stay silent
-			// after a job result lands. sendMessage() with no args re-requests with
-			// the current list: the continuation. (contracts.ts protocol §4.)
-		if (
-			status === "ready" &&
-			lastAssistantMessageIsCompleteWithToolCalls({ messages: record.messages })
-		) {
-			stashInput({ type: "continue" });
-			void sendMessage();
+		// The continuation seam (contracts.ts protocol §4): a job result
+		// landing in the record leaves the agent owing a continuation — the
+		// record ENDS on un-consumed results, the dock owns no question, and
+		// nothing runs. The native fold (needsContinuation) is the old SDK
+		// lastAssistantMessageIsCompleteWithToolCalls check.
+		if (status === "ready" && needsContinuation(record.messages)) {
+			void send({ type: "continue" });
 		}
-	}, [chatId, setMessages, sendMessage, status]);
+	}, [chatId, setMessages, send, status]);
 
 	// The settled terminal's other half (stream-reattach wave): the
 	// transport resolved turn-settled — no turn running, the record is
@@ -536,23 +496,20 @@ export function Chat({
 	// nothing about a running turn should hide it. The full snapshot sync
 	// mid-stream is forbidden (it breaks the SDK's in-place continuation
 	// merge — the stale-snapshot lesson), so adoption here is APPEND-ONLY
-	// (core mergeAdopted): insert the record's new ids in their canonical
+	// (the session hook's adoptRecord): insert the record's new ids in their canonical
 	// order, never rewrite a local one, keep the in-flight tail last. The
 	// full syncFromServer stays the net at idle (reorder, plan blocks, turns).
-	const messagesRef = useRef(messages);
-	messagesRef.current = messages;
 	const adoptAppendOnly = useCallback(async () => {
 		try {
 			const res = await fetch(`/api/chats/${chatId}`);
 			if (!res.ok) return;
-			const record = (await res.json()) as { messages?: TeacherUIMessage[] };
+			const record = (await res.json()) as { messages?: LhMessage[] };
 			if (!Array.isArray(record.messages)) return;
-			const merged = mergeAdopted(messagesRef.current, record.messages);
-			if (merged) setMessages(merged);
+			adoptRecord(record.messages);
 		} catch {
 			/* transient — the idle full sync is the net */
 		}
-	}, [chatId, setMessages]);
+	}, [chatId, adoptRecord]);
 
 	// Turn-start window: the server inserts claimed steers right after our
 	// outgoing message, BEFORE the stream produces anything — so a bounded,
@@ -637,38 +594,14 @@ export function Chat({
 			// verdict is its own custom message — marker part ONLY, no human-
 			// authored text (the model-facing wording lives in toLlmMessages,
 			// the native convertToLlm seam; nothing fake is persisted as speech).
-			// setMessages + sendMessage() (no args) fires ONE request carrying
-			// both — the same single-turn mechanism syncFromServer already uses,
-			// so no 409 dance and no double teacher turn.
-			const stamp = Date.now().toString(36);
-			const rnd = crypto.randomUUID().slice(0, 8);
-			const appended: TeacherUIMessage[] = [];
-			if (note) {
-				appended.push({
-					id: `msg_${stamp}_${rnd}`,
-					role: "user",
-					parts: [{ type: "text", text: note }],
-				});
-			}
-			appended.push({
-				id: `verdict_${stamp}_${rnd}`,
-				role: "user",
-				parts: [
-					{
-						type: "data-verdict",
-						id: `vd_${stamp}_${rnd}`,
-						data: { accepted, at: new Date().toISOString() },
-					},
-				],
-			});
-			setMessages([...messages, ...appended]);
-			// The event (Wave B): the server appends the note (its own user
-			// message) + the verdict marker natively — the optimistic ids above
-			// are local render only; the settle sync lands the canon.
-			stashInput({ type: "verdict", accepted, note: note || undefined });
-			void sendMessage();
+			// ONE input event, ONE turn: the session hook appends the optimistic
+			// note + verdict marker (local ids — the settle sync lands the
+			// server canon) and POSTs {type:"verdict"}; the server persists the
+			// pair as its own write-ahead — the same single-turn mechanism
+			// syncFromServer uses, no 409 dance, no double teacher turn.
+			void send({ type: "verdict", accepted, note: note || undefined });
 		},
-		[text, messages, setMessages, sendMessage],
+		[text, send],
 	);
 
 	// ── Session usage (wave-4 stats bar) ──
@@ -955,16 +888,13 @@ export function Chat({
 				if (res.ok) {
 					const record = (await res.json()) as {
 						turnInFlight?: boolean;
-						messages?: TeacherUIMessage[];
+						messages?: LhMessage[];
 					};
 					// Ground rule (2026-09-15): steer content persisted by the
 					// wake shows NOW, at the wake turn's start — not at its
 					// finish. Append-only is safe here: no local stream runs
 					// under a server-side wake turn.
-					if (Array.isArray(record.messages)) {
-						const merged = mergeAdopted(messagesRef.current, record.messages);
-						if (merged) setMessages(merged);
-					}
+					if (Array.isArray(record.messages)) adoptRecord(record.messages);
 					if (!record.turnInFlight) {
 						setTurnInFlight(false);
 						// Heal a stream-death banner (the failed-attach fallback): the
@@ -991,8 +921,7 @@ export function Chat({
 		if (!t || busy || pending) return;
 		draftRef.current = t; // the refusal flow's preserve-and-replay seam
 		setText("");
-		stashInput({ type: "text", text: t });
-		void sendMessage({ text: t });
+		void send({ type: "text", text: t });
 	};
 
 	return (
@@ -1001,8 +930,7 @@ export function Chat({
 				chatId,
 				syncFromServer,
 				sendText: (t: string) => {
-					stashInput({ type: "text", text: t });
-					void sendMessage({ text: t });
+					void send({ type: "text", text: t });
 				},
 				openSetup: () => setSetupOpen(true),
 			}}
@@ -1192,7 +1120,7 @@ export function Chat({
 														return (
 															<Reasoning key={pi} isStreaming={status === "streaming" && isLastPart} className="mb-2">
 																<ReasoningTrigger />
-																<ReasoningContent>{part.text}</ReasoningContent>
+																<ReasoningContent>{part.text ?? ""}</ReasoningContent>
 															</Reasoning>
 														);
 													case "step-start":
@@ -1310,17 +1238,13 @@ export function Chat({
 					}
 					onSubmitAnswer={(output) => {
 						if (!pending) return;
-						// THE INPUT-EVENTS CONTRACT (Wave B): the answer ride order is
-						// stash-then-send — addToolOutput triggers the SDK's automatic
-						// continuation send (sendAutomaticallyWhen), and the transport
-						// consumes THIS stash to build {chatId, input}. Dismissals ride
-						// the same callback (QuestionAnswerData.dismissed).
-						stashInput({ type: "answer", toolCallId: pending.toolCallId, answer: output });
-						void addToolOutput({
-							tool: pending.tool as "quiz" | "ask_user_question",
-							toolCallId: pending.toolCallId,
-							output,
-						});
+						// THE ANSWER IS THE QUESTION CALL'S TOOL RESULT (fork 1, owner
+						// 2026-09-26): one input event, one turn — the hook appends
+						// the optimistic graded result (the AnsweredCard shows at
+						// once) and the server's write-ahead persists it before the
+						// turn; the teacher's reaction streams below it. Dismissals
+						// ride the same callback (QuestionAnswerData.dismissed).
+						submitAnswer(pending.tool, pending.toolCallId, output);
 					}}
 				/>
 				</Conversation>
@@ -1355,8 +1279,7 @@ export function Chat({
 				if (t) {
 					setText("");
 					draftRef.current = t;
-					stashInput({ type: "text", text: t });
-					void sendMessage({ text: t });
+					void send({ type: "text", text: t });
 				}
 			}}
 		/>

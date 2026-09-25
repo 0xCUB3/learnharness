@@ -282,3 +282,48 @@ export function hasProbeDone(messages: readonly LhMessage[]): boolean {
 export function answeredCallIds(messages: readonly LhMessage[]): Set<string> {
 	return resultIdsFrom(messages);
 }
+
+// ─── the continuation fold (Wave D: the SDK's
+//     lastAssistantMessageIsCompleteWithToolCalls, natively) ──────────────────
+
+/**
+ * Does the record END on un-consumed tool results — a turn that stopped
+ * after its tools ran (a job dispatch's ack, an aborted answer turn),
+ * leaving the agent owing a continuation? This is the mount/sync
+ * continuation seam's gate (chat.tsx): when true and nothing runs, the
+ * client sends {type:"continue"} and the teacher picks up from the record.
+ *
+ * The pre-Wave-D client asked the SDK's
+ * lastAssistantMessageIsCompleteWithToolCalls (last view message is
+ * assistant; its last step's tool calls all output-available or
+ * output-error; at least one). The native fold over the record: the last
+ * message is a toolResult, and the results' OWNING assistant message has
+ * at least one call, ALL of them answered (a dangling question — the
+ * dock's domain — fails the all-answered rule and never fires a turn,
+ * exactly as the SDK's every(output-available) did).
+ */
+export function needsContinuation(messages: readonly LhMessage[]): boolean {
+	const last = messages[messages.length - 1];
+	if (!last || (last as { role?: string }).role !== "toolResult") return false;
+	// The trailing results batch (contiguous by construction — the agent
+	// appends its batch; the question gate keeps a quiz call and its
+	// learner answer adjacent).
+	let start = messages.length - 1;
+	while (
+		start > 0 &&
+		(messages[start - 1] as { role?: string } | undefined)?.role === "toolResult"
+	) {
+		start--;
+	}
+	const owner = messages[start - 1];
+	if (!owner || (owner as { role?: string }).role !== "assistant") return false;
+	const content = (owner as { content?: unknown }).content;
+	if (!Array.isArray(content)) return false;
+	const answered = new Set(
+		messages.slice(start).map((m) => (m as ToolResultMessage).toolCallId),
+	);
+	const calls = (content as Array<{ type?: string; id?: string }>).filter(
+		(b) => b.type === "toolCall" && typeof b.id === "string",
+	);
+	return calls.length > 0 && calls.every((b) => answered.has(b.id!));
+}

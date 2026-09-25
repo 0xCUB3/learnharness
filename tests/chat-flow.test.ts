@@ -33,7 +33,7 @@ import { abortTurn, runningTurn, settledTurnResponse } from "../src/server/turn-
 import { chatStore } from "../src/store/chats.ts";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 import { danglingQuestionOf, newAnswerResult } from "../src/core/native-messages.ts";
-import { projectNative } from "../src/core/projection.ts";
+import { projectView } from "../src/core/view.ts";
 import type { PiEngine } from "../src/agent/models.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { PATHS } from "../config.ts";
@@ -106,6 +106,18 @@ function gradedAnswer(input: typeof QUIZ_INPUT, values: string[]) {
 		createdAt: new Date().toISOString(),
 	};
 	return buildAnswer(qd, { values });
+}
+
+/** Parse an SSE body into its wire events (verbatim pi AgentEvents +
+ *  the app-level error/turn-settled terminals). Structural beats substring:
+ *  key order never matters. */
+function eventsOf(body: string): Array<Record<string, any>> {
+	const out: Array<Record<string, any>> = [];
+	for (const line of body.split("\n")) {
+		if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+		out.push(JSON.parse(line.slice(6)));
+	}
+	return out;
 }
 
 async function drain(res: Response): Promise<string> {
@@ -213,7 +225,7 @@ describe("teacher chat flow (scripted model)", () => {
 
 		// The projection pins the client view: reasoning part + a pending
 		// (input-available) quiz part — the dock's mount state.
-		const view1 = projectNative(saved1.messages);
+		const view1 = projectView(saved1.messages);
 		const reasoningPart = view1[1]!.parts.find((p) => p.type === "reasoning");
 		assert.ok(reasoningPart && reasoningPart.type === "reasoning", "reasoning part projected");
 		const quizPart = view1[1]!.parts.find((p) => p.type === "tool-quiz");
@@ -241,7 +253,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// Native: user, assistant, answer toolResult, reaction assistant.
 		assert.equal(saved2.messages.length, 4, "the answer + reaction append natively");
 		assert.equal((saved2.messages[2] as { role?: string }).role, "toolResult", "the graded answer is the call's tool result");
-		const view2 = projectNative(saved2.messages);
+		const view2 = projectView(saved2.messages);
 		assert.equal(view2.length, 2, "the reaction continues the same assistant message (one group)");
 		const finalParts = view2[1]!.parts;
 		const textPart = finalParts.find((p) => p.type === "text");
@@ -298,20 +310,28 @@ describe("teacher chat flow (scripted model)", () => {
 		await drain(ok);
 	});
 
-	it("streams tool-input-start before tool-input-available (protocol pin for the 'Writing a question…' indicator)", async () => {
-		// The client's writing indicator keys off tool parts in state
-		// 'input-streaming', which the stream processor sets from the
-		// tool-input-start chunk. If a transport change ever stopped emitting
-		// it, the indicator would silently die — pin the protocol.
+	it("streams the toolCall partial before tool_execution_start/end (protocol pin for the 'Writing a question…' shimmer)", async () => {
+		// Wave D: the wire is VERBATIM pi AgentEvents. The client's writing
+		// indicator derives 'input-streaming' from a toolCall block seen in a
+		// message_update with no execution yet; the dock mounts on a CLEAN
+		// tool_execution_end. Pin the ordering that drives both — if the
+		// passthrough ever stopped emitting one of these, the indicator or
+		// the dock would silently die.
 		const { engine } = scriptedTeacher(defaultLesson);
 		const chat = createConfiguredChat("Test: protocol pin");
 		createdChats.push(chat.id);
 		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
-		const startIdx = body.indexOf('"type":"tool-input-start"');
-		const availIdx = body.indexOf('"type":"tool-input-available"');
-		assert.ok(startIdx !== -1, "tool-input-start chunk present in the stream");
-		assert.ok(availIdx !== -1, "tool-input-available chunk present in the stream");
-		assert.ok(startIdx < availIdx, "start precedes available");
+		const events = eventsOf(body);
+		const callSeen = events.findIndex(
+			(e) => e.type === "message_update" && JSON.stringify(e.message?.content ?? []).includes('"type":"toolCall"'),
+		);
+		const execStart = events.findIndex((e) => e.type === "tool_execution_start" && e.toolCallId === "call-1");
+		const execEnd = events.findIndex((e) => e.type === "tool_execution_end" && e.toolCallId === "call-1");
+		assert.ok(callSeen !== -1, "a message_update carries the toolCall block (the shimmer source)");
+		assert.ok(execStart !== -1, "tool_execution_start present in the stream");
+		assert.ok(execEnd !== -1, "tool_execution_end present in the stream");
+		assert.ok(callSeen < execStart && execStart < execEnd, "partial → execution start → execution end");
+		assert.equal(events[execEnd]!.isError, false, "the clean end is what mounts the dock");
 	});
 
 	it("a cancelled view NEVER aborts the turn — it runs to completion (owner ruling 2026-09-25)", async () => {
@@ -375,22 +395,17 @@ describe("teacher chat flow (scripted model)", () => {
 		createdChats.push(chat.id);
 		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
 
-		// WIRE pin (the live modal-realism crash): the invalid call must NEVER
-		// become input-available — the dock mounts on input-available parts and
-		// crashed on a malformed quiz before tool-input-error could replace it.
-		// The boundary gates this on clean tool_execution_end.
-		assert.ok(
-			!body.includes('"type":"tool-input-available","toolCallId":"call-bad"'),
-			"the invalid call never reached input-available on the wire",
-		);
-		assert.ok(
-			body.includes('"type":"tool-input-error","toolCallId":"call-bad"'),
-			"the invalid call surfaced as tool-input-error",
-		);
-		assert.ok(
-			body.includes('"type":"tool-input-available","toolCallId":"call-good"'),
-			"the valid retry DID become input-available",
-		);
+		// WIRE pin (the live modal-realism crash): the invalid call's execution
+		// end is an ERROR — the dock only mounts on a CLEAN tool_execution_end,
+		// so a malformed quiz can never reach it. The retry's end is clean.
+		const events = eventsOf(body);
+		const badEnd = events.find((e) => e.type === "tool_execution_end" && e.toolCallId === "call-bad");
+		assert.ok(badEnd, "the invalid call's execution end is on the wire");
+		assert.equal(badEnd.isError, true, "the invalid call surfaced as an error execution");
+		assert.match(String(badEnd.result?.content?.[0]?.text ?? ""), /does not match any option value/);
+		const goodEnd = events.find((e) => e.type === "tool_execution_end" && e.toolCallId === "call-good");
+		assert.ok(goodEnd, "the valid retry's execution end is on the wire");
+		assert.equal(goodEnd.isError, false, "the valid retry's end is CLEAN — the dock mounts on it");
 
 		// The model was re-prompted (the error did not end the turn)…
 		assert.equal(calls.length, 2, "the invalid call triggered a second model prompt");
@@ -405,7 +420,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// model's retry context — errored question calls DO persist), the
 		// retry as the dangling quiz. The projection renders the error part.
 		const saved = chatStore.getChat(chat.id)!;
-		const view = projectNative(saved.messages);
+		const view = projectView(saved.messages);
 		const quizParts = view[1]!.parts.filter((p) => p.type === "tool-quiz");
 		const failed = quizParts.find(
 			(p) => p.type === "tool-quiz" && (p as { state?: string }).state === "output-error",
@@ -446,17 +461,14 @@ describe("teacher chat flow (scripted model)", () => {
 		createdChats.push(chat.id);
 		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
 
-		assert.ok(
-				!body.includes('"type":"tool-input-available","toolCallId":"call-stringy"'),
-				"the structurally invalid quiz never became input-available on the wire",
-			);
-		assert.ok(
-				body.includes('"type":"tool-input-error","toolCallId":"call-stringy"'),
-				"the invalid quiz surfaced as tool-input-error",
-			);
+		const events = eventsOf(body);
+		const stringyEnd = events.find((e) => e.type === "tool_execution_end" && e.toolCallId === "call-stringy");
+		assert.ok(stringyEnd, "the invalid quiz's execution end is on the wire");
+		assert.equal(stringyEnd.isError, true, "the structural reject surfaced as an error execution");
+		assert.match(String(stringyEnd.result?.content?.[0]?.text ?? ""), /options/);
 
 		const saved = chatStore.getChat(chat.id)!;
-		const view = projectNative(saved.messages);
+		const view = projectView(saved.messages);
 		const failed = view[1]!.parts.find(
 				(p) => (p as { toolCallId?: string }).toolCallId === "call-stringy",
 			);
@@ -488,15 +500,18 @@ describe("teacher chat flow (scripted model)", () => {
 		createdChats.push(chat.id);
 		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me twice" }), agentFactory(engine)));
 
-		// (B) wire determinism: the batches' input-available chunks in call order.
-		const availA = body.indexOf('"type":"tool-input-available","toolCallId":"call-a"');
-		const availB = body.indexOf('"type":"tool-input-available","toolCallId":"call-b"');
-		assert.ok(availA !== -1 && availB !== -1, "both quizzes became available");
-		assert.ok(availA < availB, "call A's input became available before call B's (sequential execution)");
+		// (B) wire determinism: question tools execute sequentially, so the
+		// quizzes' CLEAN execution ends arrive in call order (the dock mounts
+		// on clean ends — the mount order is the wire order).
+		const events = eventsOf(body);
+		const endA = events.findIndex((e) => e.type === "tool_execution_end" && e.toolCallId === "call-a" && e.isError === false);
+		const endB = events.findIndex((e) => e.type === "tool_execution_end" && e.toolCallId === "call-b" && e.isError === false);
+		assert.ok(endA !== -1 && endB !== -1, "both quizzes' clean ends are on the wire");
+		assert.ok(endA < endB, "call A's end precedes call B's (sequential execution)");
 
 		// Saved in call order (the projection preserves the content order).
 		const saved = chatStore.getChat(chat.id)!;
-		const quizIds = projectNative(saved.messages)[1]!.parts
+		const quizIds = projectView(saved.messages)[1]!.parts
 			.filter((p) => p.type === "tool-quiz")
 			.map((p) => (p as { toolCallId: string }).toolCallId);
 		assert.deepEqual(quizIds, ["call-a", "call-b"], "parts persisted in call order");
@@ -576,7 +591,7 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		const midTurn = chatStore.getChat(chat.id)!;
 		assert.equal(midTurn.messages.length, 3, "write-ahead appended the answer tool result before finish");
 		assert.equal((midTurn.messages[2] as { role?: string }).role, "toolResult");
-		const midQuiz = projectNative(midTurn.messages)[1]!.parts.find((p) => p.type === "tool-quiz");
+		const midQuiz = projectView(midTurn.messages)[1]!.parts.find((p) => p.type === "tool-quiz");
 		assert.ok(midQuiz && midQuiz.type === "tool-quiz");
 		assert.equal((midQuiz as { state?: string }).state, "output-available", "write-ahead persisted the answer before finish");
 
@@ -585,7 +600,7 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		// Native: user, assistant, answer result, reaction — one append-only
 		// history; the projection still renders ONE assistant group.
 		assert.equal(saved2.messages.length, 4, "full turn persisted as usual at finish");
-		assert.equal(projectNative(saved2.messages).length, 2, "the projection groups the answered quiz + reaction");
+		assert.equal(projectView(saved2.messages).length, 2, "the projection groups the answered quiz + reaction");
 		assert.equal(isTurnRunning(chat.id), false, "registry cleared at finish");
 	});
 });
@@ -732,14 +747,15 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 		// Let the turn finish; both views close at settle.
 		release();
 		const text = await secondText;
-		assert.ok(text.startsWith('data: {"type":"start"'), "replay starts from the very first chunk (the start event)");
+		const replay = eventsOf(text);
+		assert.equal(replay[0]!.type, "agent_start", "replay starts from the very first event");
 		assert.ok(text.includes("Gated reply."), "replay carries the full streamed content");
 		assert.ok(text.endsWith("data: [DONE]\n\n"), "live tail ends with the SSE terminal, same dialect as POST");
-		// Wire honesty: a normal turn settles via agent_end with NO error chunk
-		// (the live smoke caught a close()-throw masked into the error path
-		// — unit asserts never looked; these pins would have).
-		assert.ok(!text.includes('"type":"error"'), "a clean turn never emits an error chunk");
-		assert.ok(text.includes('"finishReason":"stop"'), "the finish chunk carries the stop reason");
+		// Wire honesty: a normal turn settles with NO error event (the live
+		// smoke caught a close()-throw masked into the error path — unit
+		// asserts never looked; these pins would have).
+		assert.ok(!text.includes('"type":"error"'), "a clean turn never emits an error event");
+		assert.ok(replay.some((e) => e.type === "message_end" && e.message?.stopReason === "stop"), "message_end carries the stop reason");
 		// And the first view also closes cleanly (no hang, no drop): read its
 		// remaining chunks through the reader we already hold.
 		const decoder = new TextDecoder();

@@ -10,11 +10,11 @@
  */
 import assert from "node:assert";
 import test from "node:test";
-import type { UIMessage } from "ai";
+import type { LhViewMessage } from "../src/core/view.ts";
 import { phaseAt3, phaseTimeline, type Phase3 } from "../src/core/phases.ts";
 
 /** Text-only user message. */
-function user(text: string): UIMessage {
+function user(text: string): LhViewMessage {
 	return { id: `u_${text}`, role: "user", parts: [{ type: "text", text }] };
 }
 
@@ -23,7 +23,7 @@ function assistantTool(
 	name: string,
 	state: "input-available" | "output-available" | "output-error",
 	output?: unknown,
-): UIMessage {
+): LhViewMessage {
 	return {
 		id: `a_${name}_${state}_${Math.random().toString(36).slice(2, 6)}`,
 		role: "assistant",
@@ -37,7 +37,7 @@ const PLAN_OK = { ok: true, tree: { nodes: [{ id: "n1", title: "N" }], edges: []
 /** The verdict button's user message (the custom-message scheme): its own
  *  message carrying ONLY the data-verdict marker part — no human-authored
  *  text; the model-facing wording is toLlmMessages' (native-messages.ts). */
-function verdict(accepted: boolean): UIMessage {
+function verdict(accepted: boolean): LhViewMessage {
 	return {
 		id: `u_verdict_${Math.random().toString(36).slice(2, 6)}`,
 		role: "user",
@@ -48,7 +48,7 @@ function verdict(accepted: boolean): UIMessage {
 }
 
 /** The accept button's message. */
-function planAccepted(): UIMessage {
+function planAccepted(): LhViewMessage {
 	return verdict(true);
 }
 

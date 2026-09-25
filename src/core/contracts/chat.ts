@@ -3,10 +3,8 @@
  *
  * Part of the domain-split contracts (src/core/contracts/): each domain file
  * is owned outright by its stream — cross-domain schema changes go through
- * master. Pure types + protocol docs + tiny pure helpers; type-only imports
- * of "ai" (safe everywhere: server, client, tests). See docs/vision.md.
+ * master. Pure types + protocol docs + tiny pure helpers. See docs/vision.md.
  */
-import type { UIMessage } from "ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { LhMessage } from "../native-messages.ts";
 import type { Phase3 } from "../phases.ts";
@@ -20,8 +18,8 @@ import type { EmissionStats, UnderstandingLevel } from "./graph.ts";
  * agent loop's own shapes, provider/model/usage/thinkingSignature stamped
  * by pi) — the canonical session record IS the agent state; replay is
  * `state.messages = record.messages` + continue(). The client-shaped view
- * is the one-way projection (core/projection.ts) — a pending quiz is an
- * unanswered question tool call, which is exactly what makes
+ * is the client's own grouping fold (core/view.ts, Wave D) — a pending quiz
+ * is an unanswered question tool call, which is exactly what makes
  * resume-mid-question free. */
 export interface ChatRecord {
 	id: string;

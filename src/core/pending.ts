@@ -1,4 +1,18 @@
-import { isToolUIPart, type UIMessage } from "ai";
+/**
+ * Wave D: these scans read VIEW messages (core/view.ts LhViewMessage — the
+ * client's grouped transcript). The part shapes are the same vocabulary the
+ * pre-Wave-D client dialect used; a tool part is structural: `tool-` prefix +
+ * toolCallId. The server-side record scans (danglingQuestionOf over native
+ * LhMessage[]) live in native-messages.ts.
+ */
+interface UIMessage {
+	role?: string;
+	parts: Array<Record<string, unknown> & { type: string }>;
+}
+
+function isToolUIPart(part: UIMessage["parts"][number]): boolean {
+	return part.type.startsWith("tool-") && typeof part.toolCallId === "string";
+}
 
 /**
  * The pending-question gate: an unanswered QUESTION tool part (quiz/ask)
@@ -76,7 +90,7 @@ function findPending(messages: UIMessage[], names: readonly string[]): PendingTo
 			if (isToolUIPart(part) && part.state === "input-available") {
 				const tool = part.type.slice("tool-".length);
 				if (names.includes(tool)) {
-					return { toolCallId: part.toolCallId, tool, input: part.input };
+					return { toolCallId: part.toolCallId as string, tool, input: part.input };
 				}
 			}
 		}

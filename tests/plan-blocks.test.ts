@@ -13,7 +13,7 @@ import test from "node:test";
 import type { PlanTree } from "../src/core/contracts.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { planBlocksFor } from "../src/core/plan-blocks.ts";
-import { projectNative } from "../src/core/projection.ts";
+import { projectView as projectNative } from "../src/core/view.ts";
 import type { PlanBlockData } from "../src/core/contracts.ts";
 
 // 5-node fixture: a → b → c, b → d, d → e.
@@ -83,7 +83,8 @@ function resultOf(callId: string, toolName: string, details: unknown, isError = 
  *  new messages are `turn`, run over `record`. Returns the projection of
  *  the whole record after the write. */
 function projectAfter(record: LhMessage[], turn: LhMessage[], tree: PlanTree | null) {
-	const blocks = planBlocksFor(record, turn, tree, projectNative([...record, ...turn]));
+	// Wave D: the status derivation reads the NATIVE transcript.
+	const blocks = planBlocksFor(record, turn, tree, [...record, ...turn]);
 	return projectNative([...record, ...turn, ...blocks]);
 }
 
@@ -128,8 +129,8 @@ test("idempotent — a call whose block the record already carries is never re-e
 	assert.equal(blocksOf(first).length, 1);
 	// Persist replay: the same turn's messages land again over a record
 	// that already emitted the marker → no duplicate.
-	const record: LhMessage[] = [...turn, ...planBlocksFor([], turn, TREE, projectNative(turn))];
-	const blocks2 = planBlocksFor(record, turn, TREE, projectNative(record));
+	const record: LhMessage[] = [...turn, ...planBlocksFor([], turn, TREE, turn)];
+	const blocks2 = planBlocksFor(record, turn, TREE, record);
 	assert.equal(blocks2.length, 0, "no duplicate block on persist replay");
 });
 
@@ -138,7 +139,7 @@ test("a plan REWRITE (a later turn's successful plan_init) gets its own full blo
 		assistantWithCall("m1", "plan_init", { tree: TREE }),
 		resultOf("m1", "plan_init", { ok: true, tree: TREE }),
 	];
-	const record = [...first, ...planBlocksFor([], first, TREE, projectNative(first))];
+	const record = [...first, ...planBlocksFor([], first, TREE, first)];
 	const second = [
 		assistantWithCall("m2", "plan_init", { tree: TREE2 }),
 		resultOf("m2", "plan_init", { ok: true, tree: TREE2 }),

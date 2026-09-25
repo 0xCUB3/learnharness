@@ -1,15 +1,14 @@
 /**
  * Phase derivation (docs/probe-teach-split.md §4) — EXPLICIT EVENTS, never
  * occupancy. The probe→teach agent split (2026-09-11) gave every phase
- * boundary a transcript marker:
+ * boundary a transcript event:
  *
- *   probe  — until the first message containing a `tool-probe_done` part
- *            (the prober concludes; the assessment rides the tool part)
+ *   probe  — until the prober's `probe_done` call CONCLUDES (a clean
+ *            toolResult for it; the assessment rides the call's arguments)
  *   plan   — probe concluded, until the learner ACCEPTS the presented
- *            plan (a `data-verdict` part with accepted:true on the verdict
- *            button's own user message — the explicit verdict gate;
- *            plan_init itself is only the PRESENTATION and moves no
- *            phase; a declined verdict stays in plan)
+ *            plan (the verdict marker with accepted:true — the explicit
+ *            verdict gate; plan_init itself is only the PRESENTATION and
+ *            moves no phase; a declined verdict stays in plan)
  *   teach  — teaching is sanctioned
  *
  * The former derived-occupancy seam (phase-of-tree via `currentNodeId`)
@@ -17,6 +16,14 @@
  * session could never leave "plan"), and the stored tree no longer carries
  * progress fields at all. No backwards compatibility: legacy sessions
  * without probe_done simply read as probe (they are wiped data).
+ *
+ * TWO FOLDS over the same events (Wave D): `phaseAt3`/`phaseTimeline` fold
+ * VIEW messages (the client's dividers and dock — part shapes, pure and
+ * structural); `phaseAt3Lh` folds the NATIVE record (server summaries,
+ * tests) — probe→plan advances at the probe_done RESULT message, plan→teach
+ * at the verdict marker. Both are strictly sequential; the two derivations
+ * agree on every settled record (a result/marker message projects into the
+ * same view boundary).
  *
  * Pure: no imports, no runtime deps — safe on server, client, and tests.
  */
@@ -82,4 +89,41 @@ export function phaseTimeline(messages: readonly PhaseMessage[]): Phase3[] {
 		out.push(phase);
 	}
 	return out;
+}
+
+// ─── the native fold (Wave D: record-side phase over LhMessage[]) ───────────
+
+import type { LhMessage } from "./native-messages.ts";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
+
+/** The phase at `upToIndex` (inclusive; default: the last message) of a
+ *  NATIVE record. probe→plan advances at the probe_done call's clean
+ *  toolResult; plan→teach at the verdict marker (details.accepted true). */
+export function phaseAt3Lh(messages: readonly LhMessage[], upToIndex?: number): Phase3 {
+	let phase: Phase3 = "probe";
+	const last = Math.min(upToIndex ?? messages.length - 1, messages.length - 1);
+	for (let i = 0; i <= last; i++) {
+		const m = messages[i]!;
+		const role = (m as { role?: string }).role;
+		if (role === "toolResult") {
+			const result = m as ToolResultMessage;
+			if (
+				phase === "probe" &&
+				result.toolName === "probe_done" &&
+				!result.isError
+			) {
+				phase = "plan";
+			}
+		} else if (role === "custom") {
+			const marker = m as { customType?: string; details?: { accepted?: unknown } };
+			if (
+				phase === "plan" &&
+				marker.customType === "verdict" &&
+				marker.details?.accepted === true
+			) {
+				phase = "teach";
+			}
+		}
+	}
+	return phase;
 }

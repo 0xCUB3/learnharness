@@ -31,13 +31,15 @@ export * from "./phases.ts";
 export * from "./pending.ts";
 export * from "./prompt-segments.ts";
 export * from "./math-delims.ts";
-export * from "./ui-message.ts";
 // Wave B (owner-approved 2026-09-26): the native record (LhMessage), the
-// one-way client-view projection, and the input-events contract — all
+// and the input-events contract — all
 // pure logic, browser-safe.
 export * from "./native-messages.ts";
-export * from "./projection.ts";
 export * from "./input-events.ts";
+// Wave D (owner-approved 2026-09-26): the client view model — the grouping
+// canon (one continuous assistant document, step separators) ported from
+// the deleted server projection to the client side. Pure, browser-safe.
+export * from "./view.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
 export * from "./cost-summary.ts";
