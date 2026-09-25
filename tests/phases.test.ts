@@ -36,7 +36,7 @@ const PLAN_OK = { ok: true, tree: { nodes: [{ id: "n1", title: "N" }], edges: []
 
 /** The verdict button's user message (the custom-message scheme): its own
  *  message carrying ONLY the data-verdict marker part — no human-authored
- *  text; the model-facing wording is the adapter's (record-adapter.ts). */
+ *  text; the model-facing wording is toLlmMessages' (native-messages.ts). */
 function verdict(accepted: boolean): UIMessage {
 	return {
 		id: `u_verdict_${Math.random().toString(36).slice(2, 6)}`,

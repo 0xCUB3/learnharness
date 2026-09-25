@@ -4,69 +4,85 @@
  * implementing. Each takes its dependencies explicitly (storage ports, the
  * job runner) — no module here imports an adapter.
  *
- *   persistTurn        — the canonical state write (client + agent messages)
+ *   persistTurn        — the canonical state write (Wave B: native history;
+ *                        id stamping, placeholder filtering, plan-block
+ *                        emission, abort-partial persistence)
  *   triggerExtraction  — the graph write channel: fires the extraction
  *                        pipeline (the sole graph writer) once a chat
- *                        crosses the v1 quiz-answer threshold. The trigger
- *                        mechanism is a v1 placeholder — this seam is the
- *                        ONLY thing to swap when a better one lands.
+ *                        crosses the token-budget threshold.
  *
  * Logs are the minimal-observability baseline: one line per failure, tagged
  * [chat <id>] — structured logging lands behind these seams later.
  */
 
-import type { UIMessage } from "ai";
-import { withPlanBlocks } from "../core/plan-blocks.ts";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
+import type { LhMessage } from "../core/native-messages.ts";
+import { newMessageId } from "../core/native-messages.ts";
+import { QUESTION_TOOLS } from "../core/pending.ts";
+import { planBlocksFor } from "../core/plan-blocks.ts";
+import { projectNative } from "../core/projection.ts";
 import { coverageOf } from "../core/coverage.ts";
 import type { ChatStore, GraphStore } from "../core/ports.ts";
 import type { ExtractionPipeline } from "../agent/subagents/extraction.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError } from "../core/settings.ts";
 
 /**
- * The canonical state write: the client owns the message list between turns
- * (useChat); this persists client messages + the agent response. Persists
- * even when aborted — the partial transcript (including any pending
- * question part) is what makes resume work.
+ * The canonical state write (Wave B, owner-approved 2026-09-26): append the
+ * turn's own messages — the agent loop's native history, provider/model/
+ * usage/thinkingSignature stamped by pi itself. Persists even when aborted
+ * — the partial transcript (including a pending question's unanswered
+ * call) is what makes resume work.
+ *
+ * - Id stamping: pi messages carry no id; the record's identity needs one
+ *   per message (client keys, append-only adoption, the continuation
+ *   seam). Minted here, at the single canonical write.
+ * - Placeholder filtering: a cleanly-posed question's synthetic
+ *   "question posed" result is an in-memory loop device (Wave A's
+ *   terminate) — NEVER persisted (fork 1: the record ends at the
+ *   unanswered call; the learner's answer arrives as the real tool
+ *   result). Errored question calls DO persist — the model's retry
+ *   context.
+ * - Plan blocks: one frozen snapshot per successful plan_init call,
+ *   idempotent (persist replays are safe).
+ *
+ * Returns the stamped new messages (usage provenance reads them).
  */
-/**
- * The SDK assigns assistant-message ids CLIENT-side (useChat); the server's
- * onFinish synthesis leaves them EMPTY. A message persisted only server-side
- * (the last turn's, or a wake turn's — nobody re-POSTs it with a client id)
- * would otherwise land in the record with id "" — and two of those in one
- * transcript break React keys (the chat map) and steer-dedup lookups. Fill any
- * missing id here, at the single canonical write: client-authored ids are
- * NEVER touched (the client's next POST still carries them verbatim).
- */
-export function withMessageIds(messages: UIMessage[]): UIMessage[] {
-	const filled = messages.map((m) =>
-		m.id ? m : { ...m, id: `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}` },
-	);
-	// Same id twice = the SDK's continuation merge couldn't happen in place
-	// (continuation coalescing appends a user-role steer AFTER the assistant
-	// message being continued, so onFinish carries the input copy AND the
-	// extended response copy under one id). Keep the LAST occurrence — it is
-	// the SDK's final merge state (a superset of the earlier copy).
-	const seen = new Set<string>();
-	const deduped: UIMessage[] = [];
-	for (let i = filled.length - 1; i >= 0; i--) {
-		const m = filled[i]!;
-		if (seen.has(m.id)) continue;
-		seen.add(m.id);
-		deduped.unshift(m);
-	}
-	return deduped;
-}
-
-export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMessage[], isAborted: boolean): void {
+export function persistTurn(
+	chatStore: ChatStore,
+	chatId: string,
+	baseCount: number,
+	turnMessages: readonly AgentMessage[],
+	isAborted: boolean,
+): LhMessage[] {
 	try {
-		const deduped = withMessageIds(messages);
-		// Plan-block emission (wave 4): blocks are frozen transcript content —
-		// attached here, once, at the canonical state write. The tree was
-		// saved by the plan tool during the turn; snapshots derive now.
-		const tree = chatStore.getChat(chatId)?.tree;
-		chatStore.saveMessages(chatId, withPlanBlocks(deduped, tree));
+		const record = chatStore.getChat(chatId);
+		if (!record) return [];
+		const stamped: LhMessage[] = [];
+		for (const m of turnMessages.slice(baseCount)) {
+			const message = m as LhMessage;
+			// The placeholder question result: loop device, never a record fact.
+			if (
+				(message as { role?: string }).role === "toolResult" &&
+				(QUESTION_TOOLS as readonly string[]).includes((message as ToolResultMessage).toolName) &&
+				!(message as ToolResultMessage).isError
+			) {
+				continue;
+			}
+			stamped.push(message.id ? message : ({ ...message, id: newMessageId() } as LhMessage));
+		}
+		const tree = record.tree;
+		const blocks = planBlocksFor(
+			record.messages,
+			stamped,
+			tree,
+			projectNative([...record.messages, ...stamped]),
+		);
+		chatStore.saveMessages(chatId, [...record.messages, ...stamped, ...blocks]);
+		return stamped;
 	} catch (err) {
 		console.error(`[chat ${chatId}] persist failed:`, err, { isAborted });
+		return [];
 	}
 }
 
@@ -74,15 +90,11 @@ export function persistTurn(chatStore: ChatStore, chatId: string, messages: UIMe
  * The graph write channel (vision §1 construction): the extraction pipeline
  * (extractor → auditor → merger — the sole graph writer) runs ASYNC once a
  * chat's UNCOVERED transcript tokens reach the chunk budget
- * (vision-extraction-coverage.md, 2026-09-15 — replacing the old
- * every-3-quiz-answers count: content size is the honest signal, and
- * quiz-less sessions extract too). The budget is the graph section's
- * extractionChunkTokens setting (extraction-UX redesign, 2026-09-24) —
- * the composition root passes the per-turn effective read (chat-handler
- * resolves fresh per turn, same as every other gate). The pipeline
- * itself extracts only the uncovered batches. Fire-and-forget — never blocks the turn; failures are
- * logged by the pipeline and leave coverage untouched, so the next trigger
- * (or the manual extract button) re-runs what's left.
+ * (vision-extraction-coverage.md, 2026-09-15). Coverage reads through the
+ * projection (the record is native history; the extraction view stays
+ * client-shaped until Wave D). Fire-and-forget — never blocks the turn;
+ * failures are logged by the pipeline and leave coverage untouched, so the
+ * next trigger (or the manual extract button) re-runs what's left.
  *
  * Deliberately isolated in this one seam — the pipeline is
  * trigger-agnostic. Skipped under tests: scripted chats are fixtures, not
@@ -98,7 +110,7 @@ export function triggerExtraction(
 	try {
 		const record = deps.chatStore.getChat(chatId);
 		if (!record) return;
-		const covered = coverageOf(record.messages as UIMessage[], deps.graphStore.readCoverage(), chatId);
+		const covered = coverageOf(projectNative(record.messages), deps.graphStore.readCoverage(), chatId);
 		if (covered.uncoveredTokens < chunkTokens) return;
 		void extraction.runExtraction(chatId).catch((err) => {
 			// BYOK (owner, 2026-09-22) + key presence (provider-key interlude,
@@ -119,4 +131,3 @@ export function triggerExtraction(
 		console.error(`[chat ${chatId}] extraction trigger failed:`, err);
 	}
 }
-

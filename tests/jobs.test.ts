@@ -27,7 +27,6 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import type { UIMessage } from "ai";
 import { createFauxCore, fauxAssistantMessage, fauxText, fauxToolCall, type AssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import {
 	accumulateJobUsage,
@@ -41,20 +40,17 @@ import {
 	type ResearchResult,
 	type SubagentArtifactData,
 	type SteerMessage,
-	type SubagentSteerMessage,
 	type VisualResult,
 	buildProbeHandoffSteer,
-	type ProbeHandoffSteerMessage,
 } from "../src/core/contracts.ts";
-import { composeInstructions, createTeacherAgent, type TeachingAgent } from "../src/agent/teacher-agent.ts";
+import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { webTools } from "../src/agent/tools/web.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
 import { abortJob, claimSteers, deliverJobResult, recoverStaleJobs, setJobRespawn, setTurnRunner } from "../src/server/jobs.ts";
 import { registerJobAbort, unregisterJobAbort } from "../src/agent/subagents/aborts.ts";
 import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
-import { persistTurn, withMessageIds } from "../src/server/turn-service.ts";
+import { persistTurn } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { createJobRunner, pdfModelOverride, researchModelOverride } from "../src/agent/subagents/runner.ts";
@@ -62,6 +58,9 @@ import { providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts"
 import type { PiEngine } from "../src/agent/models.ts";
 import type { SearchProvider } from "../src/core/search.ts";
 import { PATHS } from "../config.ts";
+import { projectNative } from "../src/core/projection.ts";
+import type { LhMessage } from "../src/core/native-messages.ts";
+import type { SteerInput, TurnInput } from "../src/core/input-events.ts";
 
 const JOBS_DIR = path.join(PATHS.data, "jobs");
 
@@ -75,6 +74,36 @@ const createdJobs: string[] = [];
 
 function trackChat(id: string) {
 	createdChats.push(id);
+}
+
+/** Wave B native fixture: user text + an assistant tool call + its ack —
+ *  the record is agent history; the runner's transcript scan (input
+ *  resolution) reads it through the projection. */
+function nativeToolMessages(text: string, tool: string, toolCallId: string, input: unknown): LhMessage[] {
+	return [
+		{ id: "u1", role: "user", content: text, timestamp: 1 } as never,
+		{
+			id: "a1",
+			role: "assistant",
+			content: [{ type: "toolCall", id: toolCallId, name: tool, arguments: input as never }],
+			api: "openai-completions",
+			provider: "openrouter",
+			model: "test",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			stopReason: "toolUse",
+			timestamp: 1,
+		} as never,
+		{
+			id: "r1",
+			role: "toolResult",
+			toolCallId,
+			toolName: tool,
+			content: [{ type: "text", text: "Dispatched." }],
+			details: "Dispatched.",
+			isError: false,
+			timestamp: 1,
+		} as never,
+	];
 }
 
 function trackJob(id: string) {
@@ -132,11 +161,13 @@ async function drain(res: Response): Promise<string> {
 	return res.text();
 }
 
-function post(chatId: string, messages: unknown[]): Request {
+function post(chatId: string, input: unknown): Request {
 	return new Request("http://test/api/chat", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ chatId, messages }),
+		// Wave B: the input-events contract — one explicit event, never a
+		// client transcript.
+		body: JSON.stringify({ chatId, input }),
 	});
 }
 
@@ -192,19 +223,21 @@ describe("steer helpers (contracts.ts)", () => {
 	const demo: DemoResult = { title: "T", html: "<html></html>", tested: true, notes: "ok" };
 	const visual: VisualResult = { svg: "<svg/>", notes: "ok" };
 
-	it("buildSubagentSteer: user-role, metadata-marked, artifact on the data part, brief on the text part", () => {
+	it("buildSubagentSteer: a native marker — brief on the model-facing content, artifact payload in details", () => {
 		const job = { id: "job_x", kind: "research" as const, toolCallId: "call-x" };
 		const steer = buildSubagentSteer(job, research);
 		assert.equal(steer.id, "steer_job_x", "deterministic id per job — idempotent delivery");
-		assert.equal(steer.role, "user");
-		assert.deepEqual(steer.metadata, { subagentResult: { jobId: "job_x", kind: "research", toolCallId: "call-x" } });
-		const [text, data] = steer.parts;
-		assert.equal(text.type, "text");
-		assert.ok(text.type === "text" && text.text.includes("BRIEF"), "the model-facing text carries the brief");
-		assert.equal(data.type, "data-subagent-artifact");
-		assert.ok(data.type === "data-subagent-artifact");
-		assert.equal(data.data.kind, "research");
-		assert.deepEqual(data.data.result, research);
+		// Wave B: steers are LhMarkerMessage customs — role "custom", the
+		// model reads `content`, the UI reads `details` (never model-visible).
+		assert.equal(steer.role, "custom");
+		assert.equal(steer.customType, "subagent-steer");
+		assert.equal(steer.display, true);
+		assert.ok(steer.content.includes("BRIEF"), "the model-facing text carries the brief");
+		const data = steer.details as { jobId: string; kind: string; toolCallId: string; result: ResearchResult };
+		assert.equal(data.jobId, "job_x");
+		assert.equal(data.kind, "research");
+		assert.equal(data.toolCallId, "call-x");
+		assert.deepEqual(data.result, research);
 	});
 
 	it("accumulateJobUsage: sums per model call; fields NO call reported stay undefined (absent is not zero)", () => {
@@ -248,19 +281,15 @@ describe("steer helpers (contracts.ts)", () => {
 		}, "lastStep always mirrors the LATEST call, never the sums");
 	});
 
-	it("buildAbortSteer: teacher-facing text + the data-subagent-aborted marker part (the message type), same deterministic id space as the result steer", () => {
+	it("buildAbortSteer: a subagent-abort marker — teacher-facing text on content, the abort payload in details", () => {
 		const steer = buildAbortSteer({ id: "job_c", kind: "demo", toolCallId: "call-c" });
 		assert.equal(steer.id, "steer_job_c", "same id space — steerDelivered treats either as delivered");
-		assert.equal(steer.role, "user");
-		assert.equal(steer.metadata.subagentResult.aborted, true);
-		assert.equal(steer.metadata.subagentResult.jobId, "job_c");
-		assert.equal(steer.parts.length, 2);
-		assert.ok(steer.parts[0]!.type === "text" && /aborted/.test(steer.parts[0].text));
-		// The marker PART is the message type (the custom-message scheme): the
-		// UI renders the abort badge off it — metadata stays for pump mechanics.
-		const marker = steer.parts[1]!;
-		assert.equal(marker.type, "data-subagent-aborted");
-		assert.deepEqual(marker.data, { jobId: "job_c", kind: "demo", toolCallId: "call-c", aborted: true });
+		assert.equal(steer.role, "custom");
+		assert.equal(steer.customType, "subagent-abort");
+		assert.ok(/aborted/.test(steer.content), "the teacher-facing text names the abort");
+		// The marker's customType is the message type: the UI renders the
+		// abort badge off the projection (demos.test.tsx pins the card).
+		assert.deepEqual(steer.details, { jobId: "job_c", kind: "demo", toolCallId: "call-c", aborted: true });
 	});
 
 	it("isSubagentFailure: failure shapes only (empty html/svg, failure brief)", () => {
@@ -292,28 +321,26 @@ describe("steer helpers (contracts.ts)", () => {
 		const failDemo = buildSubagentSteer({ id: "j2", kind: "demo", toolCallId: "c" }, { title: "T", html: "", tested: true, notes: "FAILED: boom" });
 		const failVisual = buildSubagentSteer({ id: "j3", kind: "visual", toolCallId: "c" }, { svg: "", notes: "FAILED: boom" });
 		for (const steer of [failResearch, failDemo, failVisual]) {
-			const text = steer.parts[0];
-			assert.ok(text.type === "text" && !text.text.includes("rendered in the lesson"), "failure text never claims the artifact landed");
+			assert.ok(!steer.content.includes("rendered in the lesson"), "failure text never claims the artifact landed");
 		}
-		assert.ok(failResearch.parts[0].type === "text" && failResearch.parts[0].text.includes("flag the uncertainty"));
+		assert.ok(failResearch.content.includes("flag the uncertainty"));
 	});
 
 	it("pdf steers (sources v0): brief + page citations on success, PDF failed: shape on failure, abort wording per kind", () => {
 		const pdf: PdfResult = { path: "/tmp/doc.pdf", question: "q?", brief: "The formula is on p. 2.", pagesRead: [2], pagesConsulted: [1, 2] };
 		const ok = buildSubagentSteer({ id: "jp", kind: "pdf", toolCallId: "cp" }, pdf);
-		assert.ok(ok.parts[0].type === "text" && ok.parts[0].text.includes("page citations"), "the teacher is told to cite pages");
-		assert.ok(ok.parts[0].type === "text" && ok.parts[0].text.includes("The formula is on p. 2."));
-		assert.equal(ok.parts[1].type, "data-subagent-artifact");
-		assert.equal((ok.parts[1] as { data: SubagentArtifactData }).data.kind, "pdf");
-		assert.deepEqual((ok.parts[1] as { data: SubagentArtifactData }).data.result, pdf);
+		assert.ok(ok.content.includes("page citations"), "the teacher is told to cite pages");
+		assert.ok(ok.content.includes("The formula is on p. 2."));
+		assert.equal((ok.details as { kind: string }).kind, "pdf");
+		assert.deepEqual((ok.details as { result: unknown }).result, pdf);
 		// failure shape mirrors research
 		assert.equal(isSubagentFailure("pdf", pdf), false);
 		assert.equal(isSubagentFailure("pdf", { ...pdf, brief: "PDF failed: unreadable" }), true);
 		const fail = buildSubagentSteer({ id: "jf", kind: "pdf", toolCallId: "cf" }, { ...pdf, brief: "PDF failed: unreadable" });
-		assert.ok(fail.parts[0].type === "text" && fail.parts[0].text.includes("flag the gap"));
+		assert.ok(fail.content.includes("flag the gap"));
 		// abort wording names the PDF job
 		const aborted = buildAbortSteer({ id: "ja", kind: "pdf", toolCallId: "ca" });
-		assert.ok(aborted.parts[0].type === "text" && aborted.parts[0].text.includes("PDF reading job"));
+		assert.ok(aborted.content.includes("PDF reading job"));
 	});
 });
 
@@ -325,12 +352,12 @@ describe("steer helpers (contracts.ts)", () => {
  * exactly as it will in production after the wake turn completes.
  */
 function fakeDeliver() {
-	const steers: SubagentSteerMessage[] = [];
+	const steers: SteerMessage[] = [];
 	return {
 		steers,
-		deliver: async (steer: SubagentSteerMessage) => {
+		deliver: async (steer: SteerMessage) => {
 			steers.push(steer);
-			const jobId = steer.metadata.subagentResult.jobId;
+			const jobId = (steer.details as { jobId: string }).jobId;
 			const job = jobStore.getJob(jobId);
 			if (job && job.status === "running") {
 				const failed = job.result ? isSubagentFailure(job.kind, job.result as never) : true;
@@ -376,18 +403,21 @@ describe("dispatch (async protocol §2)", () => {
 			jobStore,
 			spawn: (job, input) => void testRunner.runJob(job.id, input),
 		});
-		const agent = (outgoing: UIMessage[]): TeachingAgent =>
-			createTeacherAgent(undefined, { engine, tools, messages: recordToPiMessages(outgoing) });
+		// The handler hands the factory the native build options — the
+		// record IS the agent state (Wave B: no adapter conversion).
+		const agent: Parameters<typeof handleChatRequest>[1] = (opts) =>
+			createTeacherAgent(undefined, { engine, tools, messages: opts.messages });
 
 		researchModelOverride.current = researcherModel();
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me graph rendering" }] };
-		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agent));
+		const body = await drain(
+			await handleChatRequest(post(chat.id, { type: "text", text: "teach me graph rendering" }), agent),
+		);
 
 		// The teacher's SAME turn carried on past the tool call.
 		assert.ok(body.includes("Back with the brief."), "the turn continued after the dispatch");
 
-		const saved = chatStore.getChat(chat.id)!;
-		const part = saved.messages[1]!.parts.find((p) => p.type === "tool-research");
+		const saved = projectNative(chatStore.getChat(chat.id)!.messages);
+		const part = saved[1]!.parts.find((p) => p.type === "tool-research");
 		assert.ok(part && part.type === "tool-research", "research tool part persisted");
 		assert.equal(part.state, "output-available", "the part resolved at dispatch time (not held pending)");
 		assert.equal(typeof (part as { output?: unknown }).output, "string", "the output is the ack, not the result");
@@ -403,12 +433,12 @@ describe("dispatch (async protocol §2)", () => {
 		assert.equal(done.status, "done");
 		assert.equal(done.activity, "delivered");
 
-		// The steer carries the brief + artifact for the (UI) renderer.
+		// The steer carries the brief on its model-facing content; the
+		// artifact payload rides details for the (UI) renderer.
 		assert.equal(delivery.steers.length, 1, "exactly one steer — one job, one result");
 		const steer = delivery.steers[0]!;
-		assert.equal(steer.metadata.subagentResult.jobId, job!.id);
-		const text = steer.parts[0];
-		assert.ok(text.type === "text" && text.text.includes("sigma.js v3 is current"), "steer text carries the brief");
+		assert.equal((steer.details as { jobId: string }).jobId, job!.id);
+		assert.ok(steer.content.includes("sigma.js v3 is current"), "steer text carries the brief");
 
 		// Search threading (2026-09-20): the researcher's web_search ran on
 		// the INJECTED port — the stub saw the scripted query, no network.
@@ -460,17 +490,7 @@ describe("research runner (async protocol §3)", () => {
 
 		// A dispatched research part in the stored chat (the input is also
 		// what the runner falls back to on a crash-recovery re-spawn).
-		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "which sigma version?" }] },
-			{
-				id: "a1",
-				role: "assistant",
-				parts: [
-					{ type: "text", text: "Checking." },
-					{ type: "tool-research", toolCallId: "call-run1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." },
-				],
-			},
-		] as never);
+		chatStore.saveMessages(chat.id, nativeToolMessages("which sigma version?", "research", "call-run1", RESEARCH_INPUT));
 
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-run1" });
 		trackJob(job.id);
@@ -503,14 +523,7 @@ describe("research runner (async protocol §3)", () => {
 	it("a failing runner still steers (the teacher learns the outcome) and the job lands error", async () => {
 		const chat = chatStore.createChat("Test: runner failure");
 		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
-			{
-				id: "a1",
-				role: "assistant",
-				parts: [{ type: "tool-research", toolCallId: "call-err1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." }],
-			},
-		] as never);
+		chatStore.saveMessages(chat.id, nativeToolMessages("hi", "research", "call-err1", RESEARCH_INPUT));
 
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-err1" });
 		trackJob(job.id);
@@ -534,24 +547,14 @@ describe("research runner (async protocol §3)", () => {
 
 		const steer = delivery.steers[0]!;
 		assert.ok(steer, "failure still delivers a steer");
-		const text = steer.parts[0];
-		assert.ok(text.type === "text" && text.text.includes("Research failed: model exploded"), "failure brief on the steer text");
-		const data = steer.parts[1];
-		assert.ok(data.type === "data-subagent-artifact");
-		assert.deepEqual((data.data.result as ResearchResult).sources, []);
+		assert.ok(steer.content.includes("Research failed: model exploded"), "failure brief on the steer text");
+		assert.deepEqual(((steer.details as { result: ResearchResult }).result).sources, []);
 	});
 
 	it("runJob resolves the input from the transcript when dispatch-time input is absent (crash recovery)", async () => {
 		const chat = chatStore.createChat("Test: transcript input fallback");
 		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "go" }] },
-			{
-				id: "a1",
-				role: "assistant",
-				parts: [{ type: "tool-research", toolCallId: "call-fb1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." }],
-			},
-		] as never);
+		chatStore.saveMessages(chat.id, nativeToolMessages("go", "research", "call-fb1", RESEARCH_INPUT));
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-fb1" });
 		trackJob(job.id);
 
@@ -595,14 +598,7 @@ describe("pdf runner (sources v0)", () => {
 	it("runJob completes a pdf job: brief + pagesConsulted land on the record, citation steer delivered", async () => {
 		const chat = chatStore.createChat("Test: pdf runner");
 		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "read this pdf" }] },
-			{
-				id: "a1",
-				role: "assistant",
-				parts: [{ type: "tool-pdf", toolCallId: "call-pdf1", state: "output-available", input: PDF_INPUT, output: "Dispatched." }],
-			},
-		] as never);
+		chatStore.saveMessages(chat.id, nativeToolMessages("read this pdf", "pdf", "call-pdf1", PDF_INPUT));
 
 		const job = jobStore.createJob({ kind: "pdf", chatId: chat.id, toolCallId: "call-pdf1" });
 		trackJob(job.id);
@@ -627,9 +623,8 @@ describe("pdf runner (sources v0)", () => {
 
 		assert.equal(delivery.steers.length, 1, "one job, one steer");
 		const steer = delivery.steers[0]!;
-		assert.equal(steer.metadata.subagentResult.kind, "pdf");
-		const text = steer.parts[0];
-		assert.ok(text.type === "text" && text.text.includes("integral rule"), "steer text carries the brief");
+		assert.equal((steer.details as { kind: string }).kind, "pdf");
+		assert.ok(steer.content.includes("integral rule"), "steer text carries the brief");
 	});
 
 	it("an unreadable source: the job lands error with the PDF failed: brief and the steer flags the gap", async () => {
@@ -656,8 +651,7 @@ describe("pdf runner (sources v0)", () => {
 		assert.deepEqual(result.pagesConsulted, []);
 
 		const steer = delivery.steers[0]!;
-		const text = steer.parts[0];
-		assert.ok(text.type === "text" && text.text.includes("flag the gap"), "the teacher learns to flag the gap");
+		assert.ok(steer.content.includes("flag the gap"), "the teacher learns to flag the gap");
 	});
 });
 
@@ -693,10 +687,10 @@ describe("researcher agent", () => {
  */
 describe("wake pipeline (src/server/jobs.ts)", () => {
 	/** A chat with a finished job ready for delivery. */
-	function setup(kind: "research" | "demo" = "research"): { chatId: string; jobId: string; steer: SubagentSteerMessage } {
+	function setup(kind: "research" | "demo" = "research"): { chatId: string; jobId: string; steer: SteerMessage } {
 		const chat = chatStore.createChat("Test: wake pipeline");
 		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] }] as never);
+		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never]);
 
 		const job = jobStore.createJob({ kind, chatId: chat.id, toolCallId: `call-${jobStore.listJobs(chat.id).length}` });
 		trackJob(job.id);
@@ -709,29 +703,22 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 	it("delivers a PROBE HANDOFF steer the same way — the teacher's wake turn", async () => {
 		const chat = chatStore.createChat("Test: probe handoff wake");
 		trackChat(chat.id);
-		// The concluded probe: a persisted probe_done part (the seam the
-		// chat-handler's construction branch keys on) and no open question.
-		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "teach me calc" }] },
-			{
-				id: "a1",
-				role: "assistant",
-				parts: [
-					{ type: "tool-probe_done", state: "output-available", output: { ok: true } },
-				],
-			},
-		] as never);
+		// The concluded probe: a persisted probe_done call + result (the
+		// native seam the chat-handler's construction branch keys on) and no
+		// open question.
+		chatStore.saveMessages(chat.id, nativeToolMessages("teach me calc", "probe_done", "call-pd", { ok: true }));
 		const handoff = buildProbeHandoffSteer(chat.id);
-		let seen: { chatId: string; lastMessage: ProbeHandoffSteerMessage } | null = null;
-		setTurnRunner(async (cid, messages) => {
-			seen = { chatId: cid, lastMessage: messages[messages.length - 1] as ProbeHandoffSteerMessage };
+		let seen: { chatId: string; steer: SteerMessage } | undefined;
+		setTurnRunner(async (cid, input) => {
+			seen = { chatId: cid, steer: (input as SteerInput).steer as SteerMessage };
 			return 200;
 		});
 
 		await deliverJobResult(handoff);
-		await waitFor(() => seen !== null, 8000, "handoff wake fired");
-		assert.equal(seen!.chatId, chat.id);
-		assert.equal(seen!.lastMessage.id, `steer_probe_${chat.id}`, "the handoff is the wake turn's final input message");
+		await waitFor(() => seen !== undefined, 8000, "handoff wake fired");
+		const firedHandoff = seen!;
+		assert.equal(firedHandoff.chatId, chat.id);
+		assert.equal(firedHandoff.steer.id, `steer_probe_${chat.id}`, "the handoff IS the wake turn's input");
 	});
 
 	it("a redelivered handoff dedupes via the transcript (idempotent by steer id)", async () => {
@@ -752,9 +739,9 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 
 	it("delivers: fires the turn runner with the record + steer, then flips the job done", async () => {
 		const { chatId, jobId, steer } = setup();
-		let seen: { chatId: string; lastMessage: unknown } | null = null;
-		setTurnRunner(async (cid, messages) => {
-			seen = { chatId: cid, lastMessage: messages[messages.length - 1] };
+		let seen: { chatId: string; steer: SteerMessage } | undefined;
+		setTurnRunner(async (cid, input) => {
+			seen = { chatId: cid, steer: (input as SteerInput).steer as SteerMessage };
 			return 200;
 		});
 
@@ -764,9 +751,8 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
 		assert.equal(jobStore.getJob(jobId)!.activity, "delivered");
 		assert.ok(seen, "the turn runner fired");
-		assert.equal((seen as { chatId: string }).chatId, chatId);
-		const last = (seen as { lastMessage: SubagentSteerMessage }).lastMessage;
-		assert.equal(last.id, steer.id, "the steer is the wake turn's final input message");
+		assert.equal(seen.chatId, chatId);
+		assert.equal(seen.steer.id, steer.id, "the steer IS the wake turn's input");
 	});
 
 	it("waits while a question part is pending, and fires once it clears", async () => {
@@ -777,16 +763,22 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 			return 200;
 		});
 
-		// An unanswered quiz part blocks the wake (provider conversion would
-		// break on an input-available tool call).
+		// A dangling question call blocks the wake (the model would reject an
+		// unanswered tool call — fork 1: the record ends at the call).
 		chatStore.saveMessages(chatId, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] },
+			{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never,
 			{
 				id: "a1",
 				role: "assistant",
-				parts: [{ type: "tool-quiz", toolCallId: "quiz-call", state: "input-available", input: { question: "q", choices: ["a", "b"] } }],
-			},
-		] as never);
+				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", choices: ["a", "b"] } as never }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+				timestamp: 1,
+			} as never,
+		]);
 
 		// The delivery promise floats while the quiz blocks — awaiting it now
 		// would deadlock the test (the pump defers until the gate opens).
@@ -796,17 +788,21 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 		assert.equal(fired, 0, "no wake while the quiz is pending");
 		assert.equal(jobStore.getJob(jobId)!.status, "running", "job stays running while blocked");
 
-		// The learner answers: the pending part clears (client adds output).
+		// The learner answers: the real tool result clears the dangling call.
 		const record = chatStore.getChat(chatId)!;
-		const answered = record.messages.map((m) =>
-			m.id === "a1"
-				? {
-						...m,
-						parts: [{ type: "tool-quiz", toolCallId: "quiz-call", state: "output-available", input: { question: "q", choices: ["a", "b"] }, output: { answer: "a", correct: true, explanation: "" } }],
-					}
-				: m,
-		);
-		chatStore.saveMessages(chatId, answered as never);
+		chatStore.saveMessages(chatId, [
+			...record.messages,
+			{
+				id: "r1",
+				role: "toolResult",
+				toolCallId: "quiz-call",
+				toolName: "quiz",
+				content: [{ type: "text", text: "answered" }],
+				details: { answer: "a", correct: true, explanation: "" },
+				isError: false,
+				timestamp: 1,
+			} as never,
+		]);
 
 		await waitFor(() => fired > 0, 8000, "wake after the quiz answer");
 		await delivery; // now it resolves — the steer was delivered
@@ -873,15 +869,20 @@ describe("claimSteers + pump duplicate-guard (continuation coalescing)", () => {
 		assert.equal(fired, 0, "the pump never fires a wake for a claimed steer");
 	});
 
-	it("finalizes already-delivered steers without returning them (a wake raced in)", async () => {
+	it("finalizes already-delivered steers; the handler's steerDelivered filter keeps one copy (a wake raced in)", async () => {
 		const { chatId, jobId, steer } = setup();
 		const record = chatStore.getChat(chatId)!;
 		chatStore.saveMessages(chatId, [...record.messages, steer] as never);
 
 		const delivery = deliverJobResult(steer);
-		await delay(100); // let the pump see it first (its top-of-loop idempotent skip)
+		await delay(100); // let the pump's top-of-loop idempotent skip run
 		const claimed = claimSteers(chatId);
-		assert.equal(claimed.length, 0, "delivered steers are not re-claimed");
+		// The pump itself finalizes already-delivered steers at the top of
+		// its loop — the queue is empty by the time a racing turn claims.
+		// (A steer that DID ride the queue gets claimed whole; the HANDLER's
+		// steerDelivered filter keeps exactly one copy at append.)
+		assert.equal(claimed.length, 0, "the pump finalized the delivered steer without firing a wake");
+		assert.ok(steerDelivered(chatStore.getChat(chatId)!.messages, steer.id), "the record already holds it");
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
 		await delivery;
 	});
@@ -890,7 +891,7 @@ describe("claimSteers + pump duplicate-guard (continuation coalescing)", () => {
 		assert.deepEqual(claimSteers("chat_never_existed"), []);
 	});
 
-	it("pump path: a steer already carried by the incoming turn body is finalized, never appended again (duplicate-key bug, 2026-09-18)", async () => {
+	it("pump path: a steer coalesced into the record mid-flight is claimed, filtered at append, never double-fired (duplicate-key bug, 2026-09-18)", async () => {
 		const { chatId, jobId, steer } = setup();
 		// Own runner: this chat's gates are OPEN, so the pump would otherwise
 		// fire whatever runner the NEXT test registers (leaked counter).
@@ -899,29 +900,29 @@ describe("claimSteers + pump duplicate-guard (continuation coalescing)", () => {
 			fired++;
 			return 200;
 		});
-		// The wake pump's request ALREADY carries the steer (it dequeues only
-		// after the turn returns), and the record does not — the exact window
-		// the chat handler claims in.
+		// The racing turn's write-ahead ALREADY landed the steer in the record
+		// while the entry is still queued — the exact window the handler
+		// claims in (the pump dequeues only after the turn returns 200).
 		const delivery = deliverJobResult(steer);
 		await delay(300); // the pump is inside waitForIdle's grace (750ms)
-		const incoming = [...(chatStore.getChat(chatId)!.messages as never[]), steer];
-		const claimed = claimSteers(chatId, incoming);
-		assert.equal(claimed.length, 0, "the already-carried steer is not re-claimed");
-		assert.equal(jobStore.getJob(jobId)!.status, "done", "job still finalizes — the turn delivers it");
+		const incoming = [...chatStore.getChat(chatId)!.messages, steer];
+		chatStore.saveMessages(chatId, incoming); // the racing turn's write-ahead persist
+		const claimed = claimSteers(chatId);
+		assert.equal(claimed.length, 1, "the queued steer is claimed — its delivery rides the turn");
+		assert.equal(jobStore.getJob(jobId)!.status, "done", "job still finalizes — the claim resolves the delivery");
 		await delivery;
 		assert.deepEqual(claimSteers(chatId), [], "queue is drained");
-		// The handler persists the outgoing write-ahead immediately after the
-		// claim — the pump's post-idle re-check reads the RECORD (not the
-		// queue), so without this the wake would double-fire at grace-end.
-		const record2 = chatStore.getChat(chatId)!;
-		chatStore.saveMessages(chatId, [...record2.messages, ...incoming] as never);
-		await delay(800); // the pump's grace elapses — the delivered steer is skipped
-		assert.equal(fired, 0, "the claimed-and-carried steer never double-fires a wake");
-		// The handler's outgoing = incoming + claimed: with claimed empty the
-		// write-ahead holds exactly ONE copy of the steer id.
-		const outgoing = [...incoming, ...claimed] as never[];
-		const ids = outgoing.map((m: { id: string }) => m.id);
+		// The handler appends only steers NOT already in the record
+		// (steerDelivered) — the write-ahead keeps exactly ONE copy of the
+		// steer id, and the pump's post-idle re-check reads the RECORD and
+		// skips the delivered id.
+		const appends = claimed.filter((c) => !steerDelivered(chatStore.getChat(chatId)!.messages, c.id));
+		assert.equal(appends.length, 0, "the already-persisted steer never appends again");
+		const outgoing = [...chatStore.getChat(chatId)!.messages, ...appends];
+		const ids = outgoing.map((m) => m.id);
 		assert.equal(ids.filter((id) => id === steer.id).length, 1, "exactly one steer copy persists");
+		await delay(800); // the pump's grace elapses — its re-check sees the delivered id
+		assert.equal(fired, 0, "the claimed-and-persisted steer never double-fires a wake");
 	});
 
 	it("pump duplicate-guard: a steer coalesced into the record while the gates were closed is never double-fired", async () => {
@@ -932,15 +933,21 @@ describe("claimSteers + pump duplicate-guard (continuation coalescing)", () => {
 			return 200;
 		});
 
-		// Gates closed: a pending quiz parks the pump in waitForIdle.
+		// Gates closed: a dangling question call parks the pump in waitForIdle.
 		chatStore.saveMessages(chatId, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] },
+			{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never,
 			{
 				id: "a1",
 				role: "assistant",
-				parts: [{ type: "tool-quiz", toolCallId: "quiz-call", state: "input-available", input: { question: "q", choices: ["a", "b"] } }],
-			},
-		] as never);
+				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", choices: ["a", "b"] } as never }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+				timestamp: 1,
+			} as never,
+		]);
 		const delivery = deliverJobResult(steer);
 		await delay(1200);
 		assert.equal(fired, 0, "parked behind the pending quiz");
@@ -953,15 +960,20 @@ describe("claimSteers + pump duplicate-guard (continuation coalescing)", () => {
 
 		// The learner answers: the gates open — the parked pump must see the
 		// delivered steer via its post-idle re-check, NOT fire a second turn.
-		const answered = chatStore.getChat(chatId)!.messages.map((m) =>
-			m.id === "a1"
-				? {
-						...m,
-						parts: [{ type: "tool-quiz", toolCallId: "quiz-call", state: "output-available", input: { question: "q", choices: ["a", "b"] }, output: { answer: "a", correct: true, explanation: "" } }],
-					}
-				: m,
-		);
-		chatStore.saveMessages(chatId, answered as never);
+		const answeredRecord = chatStore.getChat(chatId)!;
+		chatStore.saveMessages(chatId, [
+			...answeredRecord.messages,
+			{
+				id: "r1",
+				role: "toolResult",
+				toolCallId: "quiz-call",
+				toolName: "quiz",
+				content: [{ type: "text", text: "answered" }],
+				details: { answer: "a", correct: true, explanation: "" },
+				isError: false,
+				timestamp: 1,
+			} as never,
+		]);
 
 		await delivery;
 		await delay(1500);
@@ -990,57 +1002,104 @@ function delay(ms: number): Promise<void> {
 
 // ─── persist id hygiene (the duplicate-empty-key bug) ────────────────────────
 
-describe("persistTurn id hygiene", () => {
-	it("withMessageIds fills EMPTY ids (server-only synthesized messages) and preserves existing ones", () => {
-		const filled = withMessageIds([
-			{ id: "", role: "assistant", parts: [{ type: "text", text: "wake turn" }] },
-			{ id: "client-id", role: "user", parts: [{ type: "text", text: "hi" }] },
-		]);
-		assert.notEqual(filled[0]!.id, "", "empty id replaced");
-		assert.match(filled[0]!.id, /^msg_/);
-		assert.equal(filled[1]!.id, "client-id", "client-authored id untouched");
-		assert.notEqual(filled[0]!.id, filled[1]!.id);
-	});
-
-	it("persistTurn dedupes same-id continuation copies, keeping the LAST (the SDK's merged superset)", () => {
-		// The coalescing shape: a steer (user-role) rides a quiz-answer
-		// continuation AFTER the assistant message being continued, so the
-		// SDK's onFinish list carries the input copy AND the extended
-		// response copy under one id — the record must keep only the merge.
-		const chat = chatStore.createChat("Test: dedupe continuation copies");
+describe("persistTurn (native history, Wave B)", () => {
+	it("stamps EMPTY ids (pi minted no id) at the canonical write and preserves existing ones", () => {
+		const chat = chatStore.createChat("Test: persist stamps ids");
 		trackChat(chat.id);
-		const short: UIMessage = { id: "msg_dup_1", role: "assistant", parts: [{ type: "text", text: "step 1" }] };
-		const long: UIMessage = { id: "msg_dup_1", role: "assistant", parts: [{ type: "text", text: "step 1" }, { type: "text", text: "step 2 (continued)" }] };
-		persistTurn(chatStore, chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
-			short,
-			{ id: "steer_x", role: "user", parts: [{ type: "text", text: "research complete" }] },
-			long,
+		const stamped = persistTurn(chatStore, chat.id, 0, [
+			{ id: "", role: "user", content: "wake turn", timestamp: 1 } as never,
+			{
+				id: "msg_kept",
+				role: "assistant",
+				content: [{ type: "text", text: "hi" }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "stop",
+				timestamp: 1,
+			} as never,
 		], false);
+		assert.notEqual(stamped[0]!.id, "", "empty id replaced");
+		assert.match(stamped[0]!.id, /^msg_/);
+		assert.equal(stamped[1]!.id, "msg_kept", "server-authored id untouched");
 		const record = chatStore.getChat(chat.id)!;
-		assert.equal(record.messages.length, 3, "the duplicate entry is dropped");
-		assert.deepEqual(
-			record.messages.map((m) => m.id),
-			["u1", "steer_x", "msg_dup_1"],
-			"order preserved, steer before the merged assistant copy",
-		);
-		const merged = record.messages[2]!;
-		assert.equal(merged.parts.length, 2, "the KEPT copy is the extended one");
-		assert.equal((merged.parts[1] as { text: string }).text, "step 2 (continued)");
+		assert.equal(record.messages.length, 2, "both messages persisted");
+		assert.ok(record.messages.every((m) => m.id && m.id.length > 0), "no empty ids survive persist");
 	});
 
-	it("persistTurn saves every message with a unique non-empty id (wake turns never re-POSTed)", () => {
-		const chat = chatStore.createChat("Test: persist ids");
+	it("baseCount slices the turn's own messages (the agent's state is append-only across turns)", () => {
+		const chat = chatStore.createChat("Test: persist slices the turn tail");
 		trackChat(chat.id);
-		persistTurn(chatStore, chat.id, [
-			{ id: "", role: "user", parts: [{ type: "text", text: "q" }] },
-			{ id: "", role: "assistant", parts: [{ type: "text", text: "a1" }] },
-			{ id: "", role: "assistant", parts: [{ type: "text", text: "a2" }] },
+		chatStore.saveMessages(chat.id, [
+			{ id: "base_1", role: "user", content: "first", timestamp: 1 } as never,
+		]);
+		// The agent's state at onFinish: the base record + the turn's OWN new
+		// messages (Wave B: onFinish receives the full native history — the
+		// slice keeps persist append-only).
+		const state = [
+			{ id: "base_1", role: "user", content: "first", timestamp: 1 } as never,
+			{
+				id: "",
+				role: "assistant",
+				content: [{ type: "text", text: "wake turn" }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "stop",
+				timestamp: 1,
+			} as never,
+		];
+		const stamped = persistTurn(chatStore, chat.id, 1, state, false);
+		assert.equal(stamped.length, 1, "only the turn's new tail persists");
+		const record = chatStore.getChat(chat.id)!;
+		assert.equal(record.messages.length, 2, "the base record is untouched — append-only");
+		assert.match(record.messages[1]!.id, /^msg_/);
+	});
+
+	it("drops clean question placeholders, keeps errored ones (fork 1: the record ends at the unanswered call)", () => {
+		const chat = chatStore.createChat("Test: persist placeholder filtering");
+		trackChat(chat.id);
+		const stamped = persistTurn(chatStore, chat.id, 0, [
+			{
+				id: "",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "q1", name: "quiz", arguments: { question: "q?" } as never }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+				timestamp: 1,
+			} as never,
+			// The loop's synthetic "question posed" result — never a fact.
+			{
+				id: "",
+				role: "toolResult",
+				toolCallId: "q1",
+				toolName: "quiz",
+				content: [{ type: "text", text: "question posed" }],
+				details: "question posed",
+				isError: false,
+				timestamp: 1,
+			} as never,
+			// An ERRORED authoring call DOES persist — the model's retry context.
+			{
+				id: "",
+				role: "toolResult",
+				toolCallId: "q1",
+				toolName: "quiz",
+				content: [{ type: "text", text: "bad options" }],
+				details: "bad options",
+				isError: true,
+				timestamp: 1,
+			} as never,
 		], false);
-		const record = chatStore.getChat(chat.id);
-		const ids = record!.messages.map((m) => m.id);
-		assert.ok(ids.every((id) => id && id.length > 0), "no empty ids survive persist");
-		assert.equal(new Set(ids).size, ids.length, "ids unique — React keys safe");
+		assert.equal(stamped.length, 2, "the clean placeholder is filtered, the errored result stays");
+		const record = chatStore.getChat(chat.id)!;
+		assert.equal(record.messages.length, 2);
+		assert.equal((record.messages[1] as { isError: boolean }).isError, true);
 	});
 });
 
@@ -1142,17 +1201,34 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 	function newChatWithResearchJob(label: string, toolCallId: string): { chatId: string; jobId: string } {
 		const chat = chatStore.createChat(`Test: ${label}`);
 		trackChat(chat.id);
+		// Native fixture — the record is agent history (Wave B).
 		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
+			{ id: "u1", role: "user", content: "hi", timestamp: 1 } as never,
 			{
 				id: "a1",
 				role: "assistant",
-				parts: [
+				content: [
 					{ type: "text", text: "Checking." },
-					{ type: "tool-research", toolCallId, state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." },
+					{ type: "toolCall", id: toolCallId, name: "research", arguments: RESEARCH_INPUT as never },
 				],
-			},
-		] as never);
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+				timestamp: 1,
+			} as never,
+			{
+				id: "r1",
+				role: "toolResult",
+				toolCallId,
+				toolName: "research",
+				content: [{ type: "text", text: "Dispatched." }],
+				details: "Dispatched.",
+				isError: false,
+				timestamp: 1,
+			} as never,
+		]);
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId });
 		trackJob(job.id);
 		return { chatId: chat.id, jobId: job.id };
@@ -1161,8 +1237,8 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 	it("kills the running loop: error \"Aborted by learner\" immediately, loop unwinds silently, teacher gets the abort steer", async () => {
 		const { jobId } = newChatWithResearchJob("abort running job", "call-abort1");
 		const fired: SteerMessage[] = [];
-		setTurnRunner(async (_cid, messages) => {
-			fired.push(messages[messages.length - 1] as SteerMessage);
+		setTurnRunner(async (_cid, input) => {
+			fired.push((input as SteerInput).steer as SteerMessage);
 			return 200;
 		});
 		researchModelOverride.current = hangingModel();
@@ -1191,10 +1267,9 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 
 			await waitFor(() => fired.length > 0, 8000, "abort wake fired");
 			const last = fired[0]!;
-			assert.equal((last.metadata as { subagentResult: { aborted: boolean } }).subagentResult.aborted, true);
+			assert.equal((last.details as { aborted: boolean }).aborted, true);
 			assert.equal(last.id, `steer_${jobId}`);
-			assert.equal(last.parts.length, 2, "teacher-facing text + the data-subagent-aborted marker part — no artifact");
-			assert.equal(last.parts[1]!.type, "data-subagent-aborted");
+			assert.equal(last.customType, "subagent-abort", "the abort marker — no artifact");
 			// aborted is terminal: the wake completing must not flip it
 			assert.equal(jobStore.getJob(jobId)!.status, "error", "terminal after the wake");
 		} finally {
@@ -1231,7 +1306,7 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 	it("aborting a delivering job drops the queued result steer and wakes with the abort note instead", async () => {
 		const chat = chatStore.createChat("Test: abort delivering job");
 		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] }] as never);
+		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never]);
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-abort3" });
 		trackJob(job.id);
 		const result: ResearchResult = { brief: "Done: it works.", sources: [{ title: "s", url: "https://x.test" }] };
@@ -1240,8 +1315,8 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 		// Block the pump's idle gates so the result steer sits QUEUED, not in flight.
 		assert.ok(beginTurn(chat.id));
 		const fired: SteerMessage[] = [];
-		setTurnRunner(async (_cid, messages) => {
-			fired.push(messages[messages.length - 1] as SteerMessage);
+		setTurnRunner(async (_cid, input) => {
+			fired.push((input as SteerInput).steer as SteerMessage);
 			return 200;
 		});
 		void deliverJobResult(buildSubagentSteer(job, result)).catch(() => {
@@ -1257,11 +1332,7 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 		endTurn(chat.id); // gates open — whatever is left in the queue fires
 		await waitFor(() => fired.length > 0, 8000, "wake fired");
 		assert.equal(fired.length, 1, "exactly one delivery — the result steer was dropped");
-		assert.equal(
-			(fired[0]!.metadata as { subagentResult: { aborted: boolean } }).subagentResult.aborted,
-			true,
-			"the abort steer, not the result",
-		);
+		assert.equal((fired[0]!.details as { aborted: boolean }).aborted, true, "the abort steer, not the result");
 		assert.equal(jobStore.getJob(job.id)!.status, "error", "terminal after the wake");
 	});
 
@@ -1297,7 +1368,7 @@ describe("stale-job recovery sweep (liveness-gated)", () => {
 	function orphanJob(withResult?: ResearchResult): { chatId: string; jobId: string } {
 		const chat = chatStore.createChat("Test: stale sweep");
 		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] }] as never);
+		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never]);
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: `call-sweep-${createdJobs.length}` });
 		trackJob(job.id);
 		if (withResult) jobStore.updateJob(job.id, { result: withResult, activity: "delivering result" });
@@ -1360,14 +1431,7 @@ describe("BYOK job refusal (no factory floor)", () => {
 	it("runJob with NO resolvable engine lands the job as error — the envelope wording, no phantom run", async () => {
 		const chat = chatStore.createChat("Test: unconfigured spawn");
 		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
-			{
-				id: "a1",
-				role: "assistant",
-				parts: [{ type: "tool-research", toolCallId: "call-nc1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." }],
-			},
-		] as never);
+		chatStore.saveMessages(chat.id, nativeToolMessages("hi", "research", "call-nc1", RESEARCH_INPUT));
 
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-nc1" });
 		trackJob(job.id);
@@ -1388,9 +1452,8 @@ describe("BYOK job refusal (no factory floor)", () => {
 		assert.match(done.error ?? "", /No model configured/);
 		assert.match(done.error ?? "", /missing: cheap/);
 		assert.equal(delivery.steers.length, 1, "the refusal STEERED — the teacher is not stranded");
-		const text = delivery.steers[0]!.parts[0];
 		assert.ok(
-			text.type === "text" && text.text.includes("Research failed: No model configured"),
+			delivery.steers[0]!.content.includes("Research failed: No model configured"),
 			"the steer carries the kind's failure shape",
 		);
 		const result = done.result as ResearchResult;
@@ -1404,14 +1467,7 @@ describe("provider-key job refusal (key-presence interlude)", () => {
 	it("an engine whose provider key is gone refuses the spawn — envelope wording, no phantom run", async () => {
 		const chat = chatStore.createChat("Test: keyless spawn");
 		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
-			{
-				id: "a1",
-				role: "assistant",
-				parts: [{ type: "tool-research", toolCallId: "call-km1", state: "output-available", input: RESEARCH_INPUT, output: "Dispatched." }],
-			},
-		] as never);
+		chatStore.saveMessages(chat.id, nativeToolMessages("hi", "research", "call-km1", RESEARCH_INPUT));
 
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-km1" });
 		trackJob(job.id);
@@ -1441,9 +1497,8 @@ describe("provider-key job refusal (key-presence interlude)", () => {
 		assert.equal(done.error, providerKeyMissing(engine.model.provider, ["cheap"]).error, "the envelope's error line verbatim");
 		assert.deepEqual(seen, [[engine.model.provider, "cheap"]], "the check saw the engine's provider + the researcher's tier");
 		assert.equal(delivery.steers.length, 1, "the refusal STEERED — the teacher is not stranded");
-		const text = delivery.steers[0]!.parts[0];
 		assert.ok(
-			text.type === "text" && text.text.includes(`Research failed: No ${engine.model.provider} key is set`),
+			delivery.steers[0]!.content.includes(`Research failed: No ${engine.model.provider} key is set`),
 			"the steer carries the kind's failure shape",
 		);
 		const result = done.result as ResearchResult;

@@ -32,6 +32,12 @@ export * from "./pending.ts";
 export * from "./prompt-segments.ts";
 export * from "./math-delims.ts";
 export * from "./ui-message.ts";
+// Wave B (owner-approved 2026-09-26): the native record (LhMessage), the
+// one-way client-view projection, and the input-events contract — all
+// pure logic, browser-safe.
+export * from "./native-messages.ts";
+export * from "./projection.ts";
+export * from "./input-events.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
 export * from "./cost-summary.ts";

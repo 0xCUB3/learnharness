@@ -1,28 +1,31 @@
 /**
- * Chat transport with 409 merge-retry — the learner's send can race the
- * server's wake pipeline (contracts/jobs.ts "THE ASYNC PROTOCOL"): the wake
- * turn starts server-side and the client only notices via the /api/jobs poll
- * up to a second later. A send in that window gets 409'd ("a turn is already
- * running") and, before this file, surfaced as an error banner.
+ * Chat transport for the INPUT-EVENTS contract (Wave B, owner ruling
+ * 2026-09-26): the client never re-POSTs its transcript — every send
+ * carries ONE explicit input event ({text} | {answer} | {verdict} |
+ * {continue}) stashed by the call site (chat.tsx) before invoking the SDK
+ * send. The server owns the record; this transport's ONLY send-time job is
+ * to consume the stash and put it on the wire as {chatId, input}.
  *
- * Why NOT a bare retry: every 409 means the server record is AHEAD of the
- * client — the wake turn persisted the steer message (and, once it finishes,
- * its response) that the client hasn't seen. The chat handler's write-ahead
- * persist makes the request body the canonical transcript, so re-POSTing the
- * stale client list would clobber the steer + wake messages out of the
- * record (and the job already flipped done — steerDelivered makes
- * re-delivery impossible: permanent loss). The retry must therefore MERGE:
- * wait for the in-flight turn to finish, refetch the record, append the
- * client's unsent messages (by id) to the server's list, and re-POST the
- * merged transcript.
+ * 409 retry (the wake-pipeline race, contracts/jobs.ts "THE ASYNC
+ * PROTOCOL"): a send can race the server's wake turn (the client only
+ * notices it via the /api/jobs poll up to a second later) and gets
+ * 409'd. Under input events the retry is IDENTITY: the event was never
+ * persisted (the write-ahead only happens once the turn is accepted), so
+ * waiting for the in-flight turn and re-POSTing the SAME body is safe —
+ * no merge, no stale-list clobber. The old UIMessage-era merge logic is
+ * deleted with the UIMessage record (the server now owns the
+ * record; a lost race means "try again later", not "merge transcripts").
  *
- * Client-side gap after a merged retry: useChat's local list still lacks the
- * steer/wake messages until the next syncFromServer (job settle, remount, or
- * a future "server-ahead" heal in the poller). Rare path; self-heals.
+ * The send path is LOUD about a missing stash: every SDK send must map to
+ * exactly one event — a send with nothing stashed is a call-site bug
+ * (it would otherwise silently re-send the previous event), so the
+ * transport throws instead of guessing.
  */
+
 import { DefaultChatTransport } from "ai";
 import type { UIMessageChunk } from "ai";
 import type { ChatTransport } from "ai";
+import type { ChatInput } from "@/src/core";
 import type { TeacherUIMessage } from "@/src/core";
 
 /** How often to poll turnInFlight while the racing turn runs. */
@@ -56,21 +59,10 @@ async function turnInFlight(chatId: string): Promise<boolean | null> {
 	}
 }
 
-async function serverMessages(chatId: string): Promise<TeacherUIMessage[] | null> {
-	try {
-		const res = await fetch(`/api/chats/${encodeURIComponent(chatId)}`);
-		if (!res.ok) return null;
-		const record = (await res.json()) as { messages?: TeacherUIMessage[] };
-		return Array.isArray(record.messages) ? record.messages : null;
-	} catch {
-		return null;
-	}
-}
-
 /**
- * A fetch that turns a 409 on POST /api/chat into: wait for the running turn,
- * merge the outgoing messages onto the fresh server record, re-POST. Non-409
- * responses pass through untouched.
+ * A fetch that turns a 409 on POST /api/chat into: wait for the running
+ * turn, re-POST the SAME event body. Non-409 responses pass through
+ * untouched.
  */
 /** Exported for tests. */
 export function retryingFetch(chatId: string, opts: RetryFetchOptions = {}): typeof globalThis.fetch {
@@ -90,34 +82,13 @@ export function retryingFetch(chatId: string, opts: RetryFetchOptions = {}): typ
 			if (init?.signal?.aborted) return response;
 			if ((await turnInFlight(chatId)) !== false) continue;
 
-			// Turn finished: merge onto the fresh record, then re-POST.
-			const record = await serverMessages(chatId);
-			if (!record || typeof init?.body !== "string") return response;
-			const serverIds = new Set(record.map((m) => m.id));
-			const body = JSON.parse(init.body) as { messages?: TeacherUIMessage[] };
-			if (!Array.isArray(body.messages)) return response;
-			const outgoing = body.messages.filter((m) => m.id && !serverIds.has(m.id));
-			const merged = JSON.stringify({ ...body, messages: [...record, ...outgoing] });
-
-			response = await fetch(input, { ...init, body: merged }); // may 409 again → loop
+			// Turn finished: re-POST the same input event — nothing merged,
+			// nothing lost (the event was never persisted pre-acceptance).
+			response = await fetch(input, init); // may 409 again → loop
 		}
 
 		return response;
 	};
-}
-
-/**
- * The plain transport (no reattach adapters): sends keep the 409
- * merge-retry. chat.tsx uses createReattachingTransport below — a
- * superset of this — but the plain form stays exported for surfaces
- * that only ever send (never resume onto a running turn).
- */
-export function createChatTransport(chatId: string): DefaultChatTransport<TeacherUIMessage> {
-	return new DefaultChatTransport<TeacherUIMessage>({
-		api: "/api/chat",
-		body: { chatId },
-		fetch: retryingFetch(chatId),
-	});
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -166,6 +137,14 @@ export interface ReattachOptions {
 	lastMessageId?: () => string | undefined;
 }
 
+/** The input-events half (Wave B): consume the call site's stashed event.
+ *  Exactly one event per SDK send — the ref is cleared on read, so a
+ *  send with nothing stashed fails LOUDLY rather than re-sending the
+ *  previous event. */
+export interface InputEventOptions {
+	takeInput: () => ChatInput | undefined;
+}
+
 /** Concatenate byte payloads (the head stream's event + read-past remainder). */
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
 	const out = new Uint8Array(a.length + b.length);
@@ -179,7 +158,7 @@ function freshMessageId(): string {
 	return `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
 }
 
-/** One parsed SSE event off the wire (data: <json>\\n\\n framing). */
+/** One parsed SSE event off the wire (data: <json>\n\n framing). */
 interface SseEvent {
 	/** The raw bytes of this event, re-injectable into the head stream. */
 	raw: Uint8Array;
@@ -193,7 +172,7 @@ interface SseEvent {
 /**
  * Read the FIRST complete SSE event off a live body (the settled terminal
  * and the start chunk are both single small events; a long-lived turn's
- * log replays after). Resolves as soon as one \\n\\n boundary is seen — the
+ * log replays after). Resolves as soon as one \n\n boundary is seen — the
  * caller re-injects the raw bytes (plus any read-past remainder) ahead of
  * the unconsumed tail, so nothing is lost or reordered.
  */
@@ -217,16 +196,17 @@ async function readFirstEvent(reader: ReadableStreamDefaultReader<Uint8Array>): 
 	}
 }
 
-/** The reattach transport: DefaultChatTransport for sends, our seam for resumes. */
+/** The reattach transport: the input-event POST for sends, our seam for resumes. */
 class ReattachingChatTransport extends DefaultChatTransport<TeacherUIMessage> {
 	constructor(
 		private readonly reattach: ReattachOptions,
+		private readonly inputEvent: InputEventOptions,
 		init: ConstructorParameters<typeof DefaultChatTransport<TeacherUIMessage>>[0],
 	) {
 		super(init);
 	}
 
-		override async reconnectToStream(
+	override async reconnectToStream(
 		options: Parameters<ChatTransport<TeacherUIMessage>["reconnectToStream"]>[0],
 	): Promise<ReadableStream<UIMessageChunk> | null> {
 		const res = await fetch(`/api/chats/${encodeURIComponent(options.chatId)}/stream`, {
@@ -300,15 +280,31 @@ class ReattachingChatTransport extends DefaultChatTransport<TeacherUIMessage> {
 
 /**
  * The chat.tsx wiring: `transport: createReattachingTransport(chatId, refs)`.
- * Sends keep the 409 merge-retry fetch; resumes take the adapters above.
+ * Sends POST the stashed input event with the 409 identity-retry fetch;
+ * resumes take the adapters above.
  */
 export function createReattachingTransport(
 	chatId: string,
 	reattach: ReattachOptions,
+	inputEvent: InputEventOptions,
 ): DefaultChatTransport<TeacherUIMessage> {
-	return new ReattachingChatTransport(reattach, {
+	return new ReattachingChatTransport(reattach, inputEvent, {
 		api: "/api/chat",
 		body: { chatId },
 		fetch: retryingFetch(chatId),
+		// THE INPUT-EVENTS CONTRACT (Wave B): replace the SDK's full-transcript
+		// body with {chatId, input}. The stash is consumed HERE — exactly once
+		// per SDK send (the 409 retry re-POSTs the built body, not the stash);
+		// a send with nothing stashed fails LOUDLY (a call-site bug — it must
+		// never silently re-send the previous event).
+		prepareSendMessagesRequest: () => {
+			const input = inputEvent.takeInput();
+			if (!input) {
+				throw new Error(
+					"Send without a stashed input event — every send call site must set pendingInput before invoking the SDK send (Wave B input-events contract).",
+				);
+			}
+			return { body: { chatId, input } };
+		},
 	});
 }

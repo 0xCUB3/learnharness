@@ -17,9 +17,10 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
-import type { UIMessage } from "ai";
 import type { AuditResult } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
+import type { LhMessage } from "../src/core/native-messages.ts";
+import { projectNative } from "../src/core/projection.ts";
 import { getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
 import { coverageSlots } from "../src/core/coverage.ts";
 import { graphStore } from "../src/store/graph.ts";
@@ -32,9 +33,12 @@ const graphDeps = { chatStore, graphStore } as const satisfies GraphDeps;
 /** The session merge source for a chat — what the pipeline passes: the live
  *  transcript + its updatedAt checkpoint stamp. (Notes imports pass
  *  messages: null — see the notes-merger test below.) */
-function sessionSource(chatId: string): { messages: UIMessage[]; foldedAt: string } {
+function sessionSource(chatId: string): { messages: ReturnType<typeof projectNative>; foldedAt: string } {
+	// Wave B: the record is native history — the merger's transcript view
+	// reads through the one-way projection (same shape the extraction
+	// pipeline passes: its batch slots are projected messages).
 	const record = chatStore.getChat(chatId)!;
-	return { messages: record.messages as UIMessage[], foldedAt: record.updatedAt };
+	return { messages: projectNative(record.messages), foldedAt: record.updatedAt };
 }
 
 // ─── ledger isolation (backup-and-clear of data/graph/*.jsonl) ──────────────
@@ -72,20 +76,65 @@ after(() => {
 
 // ─── fixture builders ────────────────────────────────────────────────────────
 
-function assistant(id: string, parts: unknown[]): UIMessage {
-	return { id, role: "assistant", parts } as unknown as UIMessage;
+// Native fixture builders (Wave B): the record holds pi-native history —
+// an assistant message carrying tool calls + one tool result per call. The
+// projection reproduces the old part shapes (state output-available, input
+// = arguments, output = result details).
+interface NativeCall {
+	name: string;
+	toolCallId: string;
+	input: Record<string, unknown>;
+	output: QuestionAnswerData;
 }
 
-function user(id: string, text: string): UIMessage {
-	return { id, role: "user", parts: [{ type: "text", text }] } as unknown as UIMessage;
+function user(id: string, text: string): LhMessage[] {
+	return [{ id, role: "user", content: text, timestamp: Date.now() } as never];
+}
+
+function assistant(id: string, calls: NativeCall[]): LhMessage[] {
+	const content = calls.map((c) => ({ type: "toolCall", id: c.toolCallId, name: c.name, arguments: c.input as never }));
+	const out: LhMessage[] = [
+		{
+			id,
+			role: "assistant",
+			content,
+			api: "openai-completions",
+			provider: "openrouter",
+			model: "test",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			stopReason: "stop",
+			timestamp: Date.now(),
+		} as never,
+	];
+	for (const c of calls) {
+		out.push({
+			id: `r_${c.toolCallId}`,
+			role: "toolResult",
+			toolCallId: c.toolCallId,
+			toolName: c.name,
+			content: [{ type: "text", text: "ok" }],
+			details: c.output,
+			isError: false,
+			timestamp: Date.now(),
+		} as never);
+	}
+	return out;
 }
 
 function quizPart(
 	toolCallId: string,
 	input: Record<string, unknown>,
 	output: QuestionAnswerData,
-): unknown {
-	return { type: "tool-quiz", toolCallId, state: "output-available", input, output };
+): NativeCall {
+	return { name: "quiz", toolCallId, input, output };
+}
+
+function askPart(
+	toolCallId: string,
+	input: Record<string, unknown>,
+	output: QuestionAnswerData,
+): NativeCall {
+	return { name: "ask_user_question", toolCallId, input, output };
 }
 
 function answer(over: Partial<QuestionAnswerData>): QuestionAnswerData {
@@ -102,7 +151,7 @@ function answer(over: Partial<QuestionAnswerData>): QuestionAnswerData {
 
 /** Create a chat in the real store with messages; returns the record.
  *  Tree-blind world: the plan tree is irrelevant to the merger — no tree. */
-function fixtureChat(title: string, messages: UIMessage[]) {
+function fixtureChat(title: string, messages: LhMessage[]) {
 	const chat = chatStore.createChat(title);
 	createdChats.push(chat.id);
 	chatStore.saveMessages(chat.id, messages);
@@ -110,7 +159,7 @@ function fixtureChat(title: string, messages: UIMessage[]) {
 }
 
 /** The full fixture transcript: five graded quizzes + a dismissed one + an ask. */
-function fixtureMessages(): UIMessage[] {
+function fixtureMessages(): LhMessage[] {
 	return [
 		user("u1", "teach me the fixture topic"),
 		assistant("a1", [
@@ -157,15 +206,13 @@ function fixtureMessages(): UIMessage[] {
 				{ question: "Q6", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
 				answer({ questionId: "call-6", questionText: "Q6 text", dismissed: true }),
 			),
-			{
-				type: "tool-ask_user_question",
-				toolCallId: "call-7",
-				state: "output-available",
-				input: { question: "free text?" },
-				output: answer({ questionId: "call-7", kind: "ask", questionText: "free text?", text: "because" }),
-			},
+			askPart(
+				"call-7",
+				{ question: "free text?" },
+				answer({ questionId: "call-7", kind: "ask", questionText: "free text?", text: "because" }),
+			),
 		]),
-	];
+	].flat();
 }
 
 /** The auditor's verdict for the fixture chat: three verified propositions
@@ -332,7 +379,7 @@ describe("the merger (mergeFindings)", () => {
 					answer({ questionId: "call-9", questionText: "Q9 text", correct: true, answeredAt: "2026-08-22T03:00:00.000Z" }),
 				),
 			]),
-		]);
+		].flat());
 		chat2Id = chat2.id;
 
 		// The auditor's identity verdict: this proposition IS the alpha node.
@@ -473,7 +520,7 @@ describe("the merger (mergeFindings)", () => {
 	});
 
 	it("never string-matches without a verdict — an identical statement without linkTo is a NEW node", () => {
-		const chat3 = fixtureChat("Graph fixture 3", [user("u1", "third")]);
+		const chat3 = fixtureChat("Graph fixture 3", [user("u1", "third")].flat());
 		chat3Id = chat3.id;
 		const stats = mergeFindings(
 			chat3.id,
@@ -623,7 +670,7 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 					answer({ questionId: "d-call-1", questionText: "DQ1 text", correct: true, answeredAt: "2026-09-23T00:00:00.000Z" }),
 				),
 			]),
-		]);
+		].flat());
 		const auditA: AuditResult = {
 			propositions: [
 				{ id: "p1", name: "Shared core", statement: "Shared core statement", aliases: ["shared feel"], messages: ["du1"], evidence: ["e"], understanding: "solid" },
@@ -651,7 +698,7 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 					answer({ questionId: "e-call-1", questionText: "EQ1 text", correct: false, answeredAt: "2026-09-23T00:01:00.000Z" }),
 				),
 			]),
-		]);
+		].flat());
 		const auditB: AuditResult = {
 			propositions: [
 				{ id: "q1", name: "Shared again", statement: "Shared core, rephrased", aliases: ["B phrasing"], messages: ["eu1"], evidence: ["e"], linkTo: xId, understanding: "shaky" },
@@ -976,7 +1023,7 @@ describe("session coverage read (extraction-UX redesign, 2026-09-24)", () => {
 			user("cov_u1", "tell me about coverage reads"),
 			user("cov_u2", "and about per-session blocks"),
 			user("cov_u3", "a third distinct message"),
-		]);
+		].flat());
 		const empty = sessionCoverage(chat.id)!;
 		assert.ok(empty);
 		assert.equal(empty.totalMessages, 3);
@@ -989,7 +1036,7 @@ describe("session coverage read (extraction-UX redesign, 2026-09-24)", () => {
 
 		// Fold the first two messages: the read derives the split + the
 		// newest fold timestamp from the ledger rows.
-		const slots = coverageSlots(chatStore.getChat(chat.id)!.messages as UIMessage[]);
+		const slots = coverageSlots(projectNative(chatStore.getChat(chat.id)!.messages));
 		graphStore.appendCoverage({ chatId: chat.id, fp: slots[0]!.fp, tokens: slots[0]!.tokens, foldedAt: "2026-09-24T10:00:00.000Z" });
 		graphStore.appendCoverage({ chatId: chat.id, fp: slots[1]!.fp, tokens: slots[1]!.tokens, foldedAt: "2026-09-24T11:30:00.000Z" });
 		// Another session's row must not leak into this read.
@@ -1005,7 +1052,7 @@ describe("session coverage read (extraction-UX redesign, 2026-09-24)", () => {
 	});
 
 	it("running: true only for THIS session's chat-kind run (the registry pin)", () => {
-		const chat = fixtureChat("coverage running", [user("cov_r1", "running pin")]);
+		const chat = fixtureChat("coverage running", [user("cov_r1", "running pin")].flat());
 		const g = globalThis as { __lhExtractionRuns?: unknown };
 		const realRuns = g.__lhExtractionRuns;
 		try {

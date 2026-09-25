@@ -18,6 +18,10 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { createReattachingTransport } from "../components/chat-transport.ts";
+import type { ChatInput } from "../src/core/input-events.ts";
+
+/** A no-op input-events stash (the reattach tests never send). */
+const NO_INPUT = { takeInput: () => undefined };
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -67,7 +71,7 @@ describe("reattach transport (reconnectToStream)", () => {
 			urls.push(String(input));
 			return dripped(sse({ type: "start", messageId: "msg_run_1" }), 8);
 		}) as typeof globalThis.fetch;
-		const transport = createReattachingTransport("chat_x", {});
+		const transport = createReattachingTransport("chat_x", {}, NO_INPUT);
 		await collect((await transport.reconnectToStream(RECONNECT_OPTS))!);
 		assert.deepEqual(urls, ["/api/chats/chat_x/stream"]);
 	});
@@ -76,7 +80,7 @@ describe("reattach transport (reconnectToStream)", () => {
 		globalThis.fetch = (async () =>
 			dripped(sse({ type: "turn-settled" }, "[DONE]"), 8)) as typeof globalThis.fetch;
 		let settled = 0;
-		const transport = createReattachingTransport("chat_x", { onSettled: () => settled++ });
+		const transport = createReattachingTransport("chat_x", { onSettled: () => settled++ }, NO_INPUT);
 		const stream = await transport.reconnectToStream(RECONNECT_OPTS);
 		assert.equal(stream, null);
 		assert.equal(settled, 1);
@@ -86,7 +90,7 @@ describe("reattach transport (reconnectToStream)", () => {
 
 	it("204 (the SDK's native no-stream signal) resolves null untouched", async () => {
 		globalThis.fetch = (async () => new Response(null, { status: 204 })) as typeof globalThis.fetch;
-		const transport = createReattachingTransport("chat_x", {});
+		const transport = createReattachingTransport("chat_x", {}, NO_INPUT);
 		assert.equal(await transport.reconnectToStream(RECONNECT_OPTS), null);
 	});
 
@@ -102,7 +106,7 @@ describe("reattach transport (reconnectToStream)", () => {
 				),
 				13,
 			)) as typeof globalThis.fetch;
-		const transport = createReattachingTransport("chat_x", {});
+		const transport = createReattachingTransport("chat_x", {}, NO_INPUT);
 		const chunks = (await collect((await transport.reconnectToStream(RECONNECT_OPTS))!)) as Array<
 			Record<string, unknown>
 		>;
@@ -120,7 +124,7 @@ describe("reattach transport (reconnectToStream)", () => {
 			)) as typeof globalThis.fetch;
 		const transport = createReattachingTransport("chat_x", {
 			lastMessageId: () => "msg_seed",
-		});
+		}, NO_INPUT);
 		const chunks = (await collect((await transport.reconnectToStream(RECONNECT_OPTS))!)) as Array<
 			Record<string, unknown>
 		>;
@@ -134,7 +138,7 @@ describe("reattach transport (reconnectToStream)", () => {
 	it("survives a body split byte-by-byte across reads", async () => {
 		globalThis.fetch = (async () =>
 			dripped(sse({ type: "start", messageId: "msg_run_1" }, { type: "finish", finishReason: "stop" }), 1)) as typeof globalThis.fetch;
-		const transport = createReattachingTransport("chat_x", {});
+		const transport = createReattachingTransport("chat_x", {}, NO_INPUT);
 		const chunks = (await collect((await transport.reconnectToStream(RECONNECT_OPTS))!)) as Array<
 			Record<string, unknown>
 		>;
@@ -147,7 +151,7 @@ describe("reattach transport (reconnectToStream)", () => {
 
 	it("an unhappy endpoint throws (the SDK surfaces the error banner)", async () => {
 		globalThis.fetch = (async () => new Response("boom", { status: 500 })) as typeof globalThis.fetch;
-		const transport = createReattachingTransport("chat_x", {});
+		const transport = createReattachingTransport("chat_x", {}, NO_INPUT);
 		await assert.rejects(() => transport.reconnectToStream(RECONNECT_OPTS), /boom/);
 	});
 });

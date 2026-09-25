@@ -12,9 +12,10 @@ import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import type { ChatStore } from "../core/ports.ts";
 import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
-import type { UIMessage } from "ai";
+import type { LhMessage } from "../core/native-messages.ts";
 import { findPendingToolCall } from "../core/pending.ts";
 import { phaseAt3 } from "../core/phases.ts";
+import { projectNative } from "../core/projection.ts";
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
@@ -51,28 +52,43 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, turns, extractions, ...summary }) => ({
-				// turns and extractions stay out of the list payload (list =
-				// summaries; usage aggregates ride the full record, the picker
-				// never needs them).
-				...summary,
-				messageCount: messages.length,
-				// Record-derived status for the session picker: phase from the
-				// transcript's explicit markers (probe_done / plan_init — the
-				// event-driven phases, docs/probe-teach-split.md §4), pending
-				// question from the last unanswered quiz/ask part. Liveness (busy)
-				// is NOT record-derived — the API route merges it (ChatListItem).
-				phase: phaseAt3(messages),
-				pendingQuestion: findPendingToolCall(messages) !== null,
-			}))
+			.map(({ messages, tree, turns, extractions, ...summary }) => {
+				// Per-record isolation (Wave B): a record whose messages fail the
+				// projection (e.g. pre-Wave-B UIMessage-format scratch — the
+				// zero-back-compat wipe makes these "corrupt") must not blank the
+				// whole sidebar — same isolation getChat's per-file catch gives.
+				try {
+					const projected = projectNative(messages);
+					return {
+						// turns and extractions stay out of the list payload (list =
+						// summaries; usage aggregates ride the full record, the picker
+						// never needs them).
+						...summary,
+						messageCount: messages.length,
+						// Record-derived status for the session picker: phase from the
+						// transcript's explicit markers (probe_done / plan_init — the
+						// event-driven phases, docs/probe-teach-split.md §4), pending
+						// question from the last unanswered quiz/ask part — both read
+						// through the one-way projection. Liveness (busy) is NOT
+						// record-derived — the API route merges it (ChatListItem).
+						phase: phaseAt3(projected),
+						pendingQuestion: findPendingToolCall(projected) !== null,
+					};
+				} catch (err) {
+					console.error(`[chat ${summary.id}] summary projection failed:`, err);
+					return null;
+				}
+			})
+			.filter((s): s is ChatSummary => s !== null)
 			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	} catch {
 		return [];
 	}
 }
 
-/** Persist the full message list (client state + new response) after a turn. */
-function saveMessages(id: string, messages: UIMessage[]): void {
+/** Persist the full native message list (the record IS the agent state —
+ *  Wave B: replay is state.messages = record.messages). */
+function saveMessages(id: string, messages: LhMessage[]): void {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
 	record.messages = messages;

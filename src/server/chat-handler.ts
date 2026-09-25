@@ -1,4 +1,3 @@
-import type { UIMessage } from "ai";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createProberAgent, createTeacherAgent, type AgentBuildOptions, type TeachingAgent } from "../agent/teacher-agent.ts";
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
@@ -6,7 +5,6 @@ import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import type { ModelRole } from "../../config.ts";
 import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
-import { recordToPiMessages } from "./pi/record-adapter.ts";
 import { piTurnResponse, runPiTurn } from "./pi/ui-stream.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
@@ -20,26 +18,35 @@ import {
 import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope, type ProviderKeyMissing } from "../core/settings.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { registerTurn, unregisterTurn } from "./turn-runs.ts";
-import { persistTurn, triggerExtraction, withMessageIds } from "./turn-service.ts";
+import { persistTurn, triggerExtraction } from "./turn-service.ts";
+import { hasProbeDone } from "../core/native-messages.ts";
+import { asAgentMessages } from "../core/native-messages.ts";
+import {
+	ChatInputError,
+	inputAppends,
+	parseChatInput,
+	type TurnInput,
+} from "../core/input-events.ts";
+import { steerDelivered } from "../core/contracts.ts";
 import type { CallUsage } from "../core/contracts.ts";
 
 /**
- * One chat turn: run the teaching agent over the client's message list and
- * stream the UI message stream back. Framework-free (plain Request/Response)
- * so tests can drive it directly with a scripted faux engine — the Next route
- * handler in app/api/chat is a one-line wrapper.
+ * One chat turn over the server-owned native record. Framework-free (plain
+ * Request/Response) so tests can drive it directly with a scripted faux
+ * engine — the Next route handler in app/api/chat is a one-line wrapper.
  *
- * This module is the TURN COMPOSITION ROOT: it wires the storage ports, the
- * job runner + wake pipeline, the teacher tools, and the turn services
- * (turn-service.ts) together — all actual work lives behind those seams.
+ * THE INPUT-EVENTS CONTRACT (Wave B, owner ruling 2026-09-26): POST /api/chat
+ * carries {chatId, input} — one explicit event (text / answer / verdict /
+ * continue), never a client transcript. The server owns the record; this
+ * module is the TURN COMPOSITION ROOT: it turns the event into native
+ * record appends (core/input-events.ts), builds the agent from the record
+ * (the record IS the agent state — state.messages = record.messages,
+ * continue()), and runs the turn as a background object (pi/ui-stream.ts).
+ * Wake-pipeline steers ride the same composition (TurnInput's steer kind).
+ *
  * THE SAME COMPOSITION serves both entry points: client requests and the
  * wake pipeline's server-side steers (src/server/jobs.ts) — one code path
  * for write-ahead persistence, turn liveness, and the turn services.
- *
- * Engine note (docs/pi-engine-swap.md): the agent is STATELESS per turn —
- * built fresh from the persisted record (recordToPiMessages), run by the
- * bridge (pi/ui-stream.ts), discarded at turn end. The record is the only
- * source of truth.
  */
 
 const jobRunner = createJobRunner({
@@ -82,18 +89,12 @@ export const extraction = createExtractionPipeline({
 		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
 });
 
-
 // Wake-pipeline wiring (contracts.ts "THE ASYNC PROTOCOL" §4): the pipeline
-// fires its server-side teacher turns through THIS composition root, and
-// crash recovery re-spawns orphaned sub-agent loops through THIS runner.
-setTurnRunner(async (chatId, messages) => {
-	const res = await handleChatRequest(
-		new Request("http://localhost/api/chat", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ chatId, messages }),
-		}),
-	);
+// delivers its steers through THIS composition root (one event: the steer
+// marker, appended natively under the turn claim), and crash recovery
+// re-spawns orphaned sub-agent loops through THIS runner.
+setTurnRunner(async (chatId, input) => {
+	const res = await handleChatInput(chatId, input);
 	// Drive the stream to completion server-side — nobody else will read it,
 	// and onFinish (persist, extraction, endTurn) only runs when it drains.
 	await res.arrayBuffer().catch(() => undefined);
@@ -110,39 +111,44 @@ function resolveEngine(role: ModelRole): PiEngine | undefined {
 
 setJobRespawn((jobId) => void jobRunner.runJob(jobId));
 
-/** The message-shape gate the SDK's UIMessageValidator owned: a malformed
- *  body must fail BEFORE the stream exists — the path where no onFinish will
- *  ever run (the catch clears the turn registry so the chat never locks). */
-function assertValidUiMessages(messages: UIMessage[]): void {
-	for (const m of messages) {
-		if (m.role !== "user" && m.role !== "assistant" && m.role !== "system") {
-			throw new Error(`invalid message role: ${String((m as { role?: unknown }).role)}`);
-		}
-		if (!Array.isArray(m.parts)) throw new Error("message has no parts array");
-		for (const p of m.parts) {
-			if (p.type === "text" && typeof (p as { text?: unknown }).text !== "string") {
-				throw new Error("text part has no text");
-			}
-		}
-	}
-}
-
+/** The route-facing entry: parse {chatId, input} and run one turn. */
 export async function handleChatRequest(
 	req: Request,
-	buildAgent?: (outgoing: UIMessage[]) => TeachingAgent,
+	buildAgent?: (opts: AgentBuildOptions & { teaching: boolean }) => TeachingAgent,
 ): Promise<Response> {
-	let body: { chatId?: unknown; messages?: unknown };
+	let body: { chatId?: unknown; input?: unknown };
 	try {
 		body = await req.json();
 	} catch {
 		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
 	}
 	const chatId = typeof body.chatId === "string" ? body.chatId : "";
-	if (!chatId || !stores.chatStore.getChat(chatId)) {
-		return Response.json({ error: "Unknown chat" }, { status: 404 });
+	if (!chatId) return Response.json({ error: "Unknown chat" }, { status: 404 });
+	let input: TurnInput;
+	try {
+		input = parseChatInput(body.input);
+	} catch (err) {
+		if (err instanceof ChatInputError) {
+			return Response.json({ error: err.message }, { status: 400 });
+		}
+		throw err;
 	}
-	if (!Array.isArray(body.messages)) {
-		return Response.json({ error: "messages must be an array" }, { status: 400 });
+	return handleChatInput(chatId, input, buildAgent);
+}
+
+/**
+ * The turn composition: one input event → native record appends → one
+ * agent turn as a background object. Also the wake pipeline's entry
+ * (TurnInput's steer kind appends the marker under the same claim).
+ */
+export async function handleChatInput(
+	chatId: string,
+	input: TurnInput,
+	buildAgent?: (opts: AgentBuildOptions & { teaching: boolean }) => TeachingAgent,
+): Promise<Response> {
+	const record = stores.chatStore.getChat(chatId);
+	if (!record) {
+		return Response.json({ error: "Unknown chat" }, { status: 404 });
 	}
 
 	// THE UNIVERSAL TURN GATE (BYOK, owner, 2026-09-22): a turn needs the
@@ -154,10 +160,7 @@ export async function handleChatRequest(
 	// write-ahead persist (nothing durable changes), and every downstream
 	// resolution (jobs/extraction gate per-need on their own tiers).
 	const effective = effectiveSettings();
-	const conversation = resolveConversationSpec(
-		stores.chatStore.getChat(chatId)?.settings,
-		effective.models.strong,
-	);
+	const conversation = resolveConversationSpec(record.settings, effective.models.strong);
 	if (!conversation) {
 		const envelope = modelsNotConfigured(["strong"]);
 		console.info(`[chat ${chatId}] turn refused — ${JSON.stringify(envelope)}`);
@@ -179,10 +182,27 @@ export async function handleChatRequest(
 		return Response.json(envelope, { status: 503 });
 	}
 
+	// The input's native appends (pure; the honest 400 for an answer with no
+	// pending question call). Computed BEFORE beginTurn so a refused input
+	// leaves no liveness effects; read against the CURRENT record.
+	let appends;
+	try {
+		appends =
+			input.type === "steer"
+				? steerDelivered(record.messages, input.steer.id)
+					? []
+					: [input.steer]
+				: inputAppends(record, input);
+	} catch (err) {
+		if (err instanceof ChatInputError) {
+			return Response.json({ error: err.message }, { status: 400 });
+		}
+		throw err;
+	}
+
 	// One turn per chat, ever. A second request while a turn runs means a
-	// stale/remounted client raced a live one — its message list is outdated,
-	// and letting it through would double-run the teacher and clobber the
-	// first turn's persist (saveMessages is last-writer-wins).
+	// stale/remounted client raced a live one — letting it through would
+	// double-run the teacher and clobber the first turn's persist.
 	if (!beginTurn(chatId)) {
 		console.info(`[chat ${chatId}] turn already in flight — request rejected`);
 		return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
@@ -190,40 +210,27 @@ export async function handleChatRequest(
 
 	// CONTINUATION COALESCING (async protocol §4, the delivery-starvation fix):
 	// steers finished while a quiz chain held the wake gates ride THIS turn —
-	// appended after the learner's answer (conversion-safe: the answer carries
-	// its output). Claiming happens after beginTurn, so this turn owns the
-	// registry and the write-ahead persist below makes the claim durable.
-	// The incoming body is passed too: a pump-fired wake turn ALREADY CARRIES
-	// its steer, so claimSteers finalizes that entry instead of appending a
-	// second copy (duplicate-key bug, 2026-09-18).
-	const steers = claimSteers(chatId, body.messages as UIMessage[]);
-	const outgoing = (
-		steers.length > 0 ? [...(body.messages as UIMessage[]), ...steers] : body.messages
-	) as UIMessage[];
+	// appended after the learner's answer (conversion-safe: the answer is the
+	// question call's tool result now). Claiming happens after beginTurn, so
+	// this turn owns the registry and the write-ahead persist below makes the
+	// claim durable. Steers already in the transcript (a wake raced in) are
+	// finalized by the claim itself — the append filter keeps exactly one copy.
+	const steers = claimSteers(chatId).filter((s) => !steerDelivered(record.messages, s.id));
 
-	// THE SETTINGS VIEW (settings-storage wave, 2026-09-19): resolved fresh
-	// per turn (the gate above owns the read) — graph gates, tool toggles,
-	// and the record's chat defaults all read from ONE small file.
-
-	// Write-ahead persistence: the request body IS the client's canonical
-	// state, so it goes on disk BEFORE the stream starts. The learner's answer
-	// is durable the instant the request arrives — any remount, second tab, or
-	// server crash sees truth instead of the pre-answer record. (A client that
-	// returns mid-turn reads turnInFlight from the registry and re-attaches by
-	// polling instead of resurrecting the stale transcript.)
+	// Write-ahead persistence: the input's native appends go on disk BEFORE
+	// the turn starts — the learner's answer is durable the instant the
+	// request arrives, and any remount, second tab, or server crash reads
+	// truth instead of the pre-answer record.
+	const merged = [...record.messages, ...appends, ...steers];
 	try {
-		stores.chatStore.saveMessages(chatId, outgoing);
+		stores.chatStore.saveMessages(chatId, merged);
 	} catch (err) {
 		console.error(`[chat ${chatId}] write-ahead persist failed:`, err);
 	}
 
-
-
 	// MONEY CHANNEL (wave 4): one collector per request, fed by the agent's
 	// message_end events. Every model call's usage lands in the chat record's
-	// append-only turns log at onFinish — idempotent per turn id, so a
-	// replayed persist appends once while continuation turns (which share a
-	// response message id) each keep their usage.
+	// append-only turns log at onFinish — idempotent per turn id.
 	const turnUsageId = crypto.randomUUID();
 	const steps: CallUsage[] = [];
 	const collectUsage = (usage: Usage) => {
@@ -238,13 +245,12 @@ export async function handleChatRequest(
 	};
 
 	// AGENT CONSTRUCTION BRANCH (docs/probe-teach-split.md §2): the transcript
-	// is the seam — a probe_done tool part (any state) means the probe is
+	// is the seam — a probe_done call in the record means the probe is
 	// concluded: build the TEACHER (planning + the full toolset). Otherwise
 	// the session is still probing: build the PROBER (quiz/ask + probe_done).
 	// Both share this whole composition (write-ahead persist, liveness,
 	// steers, usage, extraction) — only the agent differs.
-	const teaching = outgoing.some((m) => m.parts.some((p) => p.type === "tool-probe_done"));
-	const role: ModelRole = teaching ? "teacher" : "prober";
+	const teaching = hasProbeDone(merged);
 	// BYOK (owner, 2026-09-22): the conversation chain was resolved by the
 	// turn gate above (chat.model override → strong slot → refused) — the
 	// engine build is pure from here; thinking levels clamp natively.
@@ -252,19 +258,18 @@ export async function handleChatRequest(
 	// Provider-qualified stamp (model slots wave): matches the price table's
 	// provider:id keys.
 	const modelId = `${engine.model.provider}:${engine.model.id}`;
-	// Tests inject a factory: the agent is stateless per turn (docs/
-	// pi-engine-swap.md §2), so each request builds a fresh one off the
-	// transcript — the factory mirrors that seam exactly.
+	// Tests inject a factory: the agent is stateless per turn, so each
+	// request builds a fresh one off the record — the factory mirrors that
+	// seam exactly. Wave B: the record IS the agent state (native messages;
+	// the record's id field strips at the wire in toLlmMessages).
 	// CROSS-STREAM SEAM (P2 reconciliation, 2026-09-19): `toolToggles`
 	// rides the build opts as the user-level DELTA map (absent key =
 	// enabled). The definitive toggleable set is TOGGLEABLE_TOOLS — the
 	// sub-agent JOB tools (research/demo/visual/pdf; adjudicated with the
-	// user: quiz/ask/fs/plan/probe_done are always-on). First-class on
-	// AgentBuildOptions; the factories drop anything explicitly false and
-	// the settings write side rejects unknown keys.
+	// user: quiz/ask/fs/plan/probe_done are always-on).
 	const agentOpts: AgentBuildOptions = {
 		engine,
-		messages: recordToPiMessages(outgoing),
+		messages: asAgentMessages(merged),
 		onUsage: collectUsage,
 		toolToggles: effective.agent.tools,
 		// The prompt-override switches (P2, 2026-09-19): same resolution
@@ -273,7 +278,7 @@ export async function handleChatRequest(
 		promptSwitches: effective.agent.prompts,
 	};
 	const constructed: TeachingAgent = buildAgent
-		? buildAgent(outgoing)
+		? buildAgent({ ...agentOpts, teaching })
 		: teaching
 			? createTeacherAgent(
 					{
@@ -310,7 +315,6 @@ export async function handleChatRequest(
 	// transcript, not the money channel); when it's ours, usage flows through
 	// the factory's subscription (wired above via onUsage).
 	try {
-		assertValidUiMessages(outgoing);
 		// THE TURN AS A BACKGROUND OBJECT (owner ruling, 2026-09-25):
 		// runPiTurn executes decoupled from this response — the POST stream
 		// is just the FIRST subscriber (a view). A client disconnect can no
@@ -318,7 +322,7 @@ export async function handleChatRequest(
 		// late views reattach via GET /api/chats/[id]/stream.
 		const handle = runPiTurn({
 			agent: constructed,
-			uiMessages: outgoing,
+			base: merged,
 			// Stream-level failures are provider/transport internals — masked,
 			// like the SDK defaults. Tool-input validation messages never
 			// route through here: they ride the error-result path and reach the
@@ -327,14 +331,14 @@ export async function handleChatRequest(
 				console.error(`[chat ${chatId}] turn error:`, error);
 				return "An error occurred.";
 			},
-			onFinish: (messages, isAborted) => {
-				persistTurn(stores.chatStore, chatId, messages as UIMessage[], isAborted);
+			onFinish: (turnMessages, isAborted) => {
+				// Wave B: the record write is the agent's own final state —
+				// the new messages are the slice past the merged base.
+				const stamped = persistTurn(stores.chatStore, chatId, merged.length, turnMessages, isAborted);
 				// usage log append (idempotent per turn id) — the stats bar
-				// refolds this on the client after the turn settles. messageId
-				// comes from the id-FILLED list: the bridge's response message
-				// already carries its id; the re-fill here is idempotent.
-				const filled = withMessageIds(messages as UIMessage[]);
-				const response = [...filled].reverse().find((m) => m.role === "assistant");
+				// refolds this on the client after the turn settles. The
+				// provenance message is the turn's FIRST new assistant message.
+				const response = stamped.find((m) => (m as { role?: string }).role === "assistant");
 				if (response && steps.length > 0) {
 					stores.chatStore.appendTurnUsage(chatId, {
 						id: turnUsageId,
@@ -345,9 +349,7 @@ export async function handleChatRequest(
 					});
 				}
 				// GRAPH GATE (settings-storage wave, 2026-09-19): the write channel —
-				// extraction, its auditor — dies with the master switch. (The deeper
-				// pipeline knobs — embedding/clustering/labeling — gate inside the
-				// pipeline and its consumers, later waves, via the same resolved view.)
+				// extraction, its auditor — dies with the master switch.
 				if (extractionEnabled(effective.graph)) {
 					// Fresh per-turn read of the graph section's chunk budget
 					// (extraction-UX redesign, 2026-09-24): the trigger compares

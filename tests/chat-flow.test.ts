@@ -2,13 +2,15 @@
  * Scripted integration test — the full teacher loop with zero tokens:
  *
  *   learner opens chat → faux model calls `quiz` → server streams + persists
- *   → client grades and sends the answer back as the tool output
+ *   → client grades and sends the ANSWER EVENT back
  *   → faux model reacts → transcript persisted.
  *
  * Drives handleChatRequest directly (plain Request/Response — no Next server
  * needed) with a scripted pi engine (pi-ai's faux provider, docs/
- * pi-engine-swap.md §7): the quiz bridge is gone, the tool part IS the
- * pending state, and the persisted transcript is the resume record.
+ * pi-engine-swap.md §7). Wave B: POSTs carry ONE INPUT EVENT (never a client
+ * transcript), the record is pi-native agent history (read through the
+ * projection where a part shape is pinned), and the answer arrives as the
+ * question call's real tool result (fork 1, owner 2026-09-26).
  */
 
 import assert from "node:assert/strict";
@@ -28,13 +30,12 @@ import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { effectiveSettings } from "../src/server/stores.ts";
 import { isTurnRunning } from "../src/server/turn-liveness.ts";
 import { abortTurn, runningTurn, settledTurnResponse } from "../src/server/turn-runs.ts";
-import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
-import { findPendingToolCall } from "../src/core/pending.ts";
+import { danglingQuestionOf, newAnswerResult } from "../src/core/native-messages.ts";
+import { projectNative } from "../src/core/projection.ts";
 import type { PiEngine } from "../src/agent/models.ts";
-import type { TeachingAgent } from "../src/agent/teacher-agent.ts";
-import type { UIMessage } from "ai";
+import type { LhMessage } from "../src/core/native-messages.ts";
 import { PATHS } from "../config.ts";
 
 // The key-presence turn gate (provider-key interlude, 2026-09-25): scripted
@@ -84,10 +85,27 @@ function defaultLesson(calls: string[][]): FauxResponseStep[] {
 }
 
 /** The handler seam (stateless per turn): each request builds a fresh agent
- *  off the transcript it is about to run — the factory tests inject. */
-function agentFactory(engine: PiEngine) {
-	return (outgoing: UIMessage[]): TeachingAgent =>
-		createTeacherAgent(undefined, { engine, messages: recordToPiMessages(outgoing) });
+ *  off the record it is about to run — the factory tests inject. Wave B: the
+ *  handler hands the factory the NATIVE build options (the record IS the
+ *  agent state — no adapter conversion). */
+function agentFactory(engine: PiEngine): Parameters<typeof handleChatRequest>[1] {
+	return (opts) => createTeacherAgent(undefined, { engine, messages: opts.messages });
+}
+
+/** The graded answer a client sends for a quiz (the shared grading seam). */
+function gradedAnswer(input: typeof QUIZ_INPUT, values: string[]) {
+	const options = normalizeOptions(input.options);
+	const qd: QuestionData = {
+		id: "call-1",
+		kind: "quiz",
+		question: input.question,
+		mode: "single-select",
+		options,
+		correctIndices: resolveCorrect(coerceCorrectAnswer(input.correctAnswer), options).indices,
+		explanation: input.explanation,
+		createdAt: new Date().toISOString(),
+	};
+	return buildAnswer(qd, { values });
 }
 
 async function drain(res: Response): Promise<string> {
@@ -137,14 +155,15 @@ function abortableTeacher(): PiEngine {
 	return { model: faux.getModel(), streamFn: faux.streamSimple };
 }
 
-function post(chatId: string, messages: unknown[]): Request {
+function post(chatId: string, input: unknown): Request {
 	return new Request("http://test/api/chat", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ chatId, messages }),
+		// Wave B: the input-events contract — one explicit event per POST,
+		// never a client transcript.
+		body: JSON.stringify({ chatId, input }),
 	});
 }
-
 
 /** BYOK turn gate (owner, 2026-09-22): no factory floor — a chat needs a
  *  conversation model before any turn streams. The scripted tests give
@@ -174,68 +193,69 @@ describe("teacher chat flow (scripted model)", () => {
 		createdChats.push(chat.id);
 
 		// ── Turn 1: learner opens with a topic; teacher probes with a quiz ──
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
-		await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)));
 
 		const saved1 = chatStore.getChat(chat.id)!;
+		// Native record: user + assistant (fork 1 — the clean question's
+		// placeholder result never persists, so the record ends at the call).
 		assert.equal(saved1.messages.length, 2, "user message + assistant response persisted");
 		const assistantMsg = saved1.messages[1]!;
 		assert.equal(assistantMsg.role, "assistant");
 
-		const reasoningPart = assistantMsg.parts.find((p) => p.type === "reasoning");
-		assert.ok(reasoningPart && reasoningPart.type === "reasoning", "reasoning part streamed + persisted");
-		assert.match((reasoningPart as { text?: string }).text!, /Probe the basics/);
+		const thinking = assistantMsg.content.find((b) => b.type === "thinking");
+		assert.ok(thinking && thinking.type === "thinking", "thinking block streamed + persisted");
+		assert.match((thinking as { thinking?: string }).thinking!, /Probe the basics/);
 
-		const quizPart = assistantMsg.parts.find((p) => p.type === "tool-quiz");
-		assert.ok(quizPart && quizPart.type === "tool-quiz", "quiz tool part persisted");
+		const quizCall = assistantMsg.content.find((b) => b.type === "toolCall" && b.name === "quiz");
+		assert.ok(quizCall && quizCall.type === "toolCall", "quiz tool call persisted");
+		assert.equal((quizCall as { id?: string }).id, "call-1");
+		assert.deepEqual((quizCall as { arguments?: unknown }).arguments, QUIZ_INPUT);
+
+		// The projection pins the client view: reasoning part + a pending
+		// (input-available) quiz part — the dock's mount state.
+		const view1 = projectNative(saved1.messages);
+		const reasoningPart = view1[1]!.parts.find((p) => p.type === "reasoning");
+		assert.ok(reasoningPart && reasoningPart.type === "reasoning", "reasoning part projected");
+		const quizPart = view1[1]!.parts.find((p) => p.type === "tool-quiz");
+		assert.ok(quizPart && quizPart.type === "tool-quiz", "quiz tool part projected");
 		assert.equal((quizPart as { state?: string }).state, "input-available", "unanswered quiz = pending state (resume record)");
 		assert.deepEqual((quizPart as { input?: unknown }).input, QUIZ_INPUT);
 
-		// The pending-question gate sees it.
-		const pending = findPendingToolCall(saved1.messages);
+		// The pending-question gate sees it (the native seam).
+		const pending = danglingQuestionOf(saved1.messages);
 		assert.equal(pending?.toolCallId, "call-1");
 		assert.equal(pending?.tool, "quiz");
 		assert.deepEqual(pending?.input, QUIZ_INPUT);
 
-		// ── The learner answers: client grades, output goes back on the part ──
-		const options = normalizeOptions(QUIZ_INPUT.options);
-		const qd: QuestionData = {
-			id: "call-1",
-			kind: "quiz",
-			question: QUIZ_INPUT.question,
-			mode: "single-select",
-			options,
-			correctIndices: resolveCorrect(coerceCorrectAnswer(QUIZ_INPUT.correctAnswer), options).indices,
-			explanation: QUIZ_INPUT.explanation,
-			createdAt: new Date().toISOString(),
-		};
-		const answer = buildAnswer(qd, { values: ["Mercury"] });
+		// ── The learner answers: the client grades and posts the ANSWER
+		// EVENT — the answer lands as the call's real tool result. ──
+		const answer = gradedAnswer(QUIZ_INPUT, ["Mercury"]);
 		assert.equal(answer.correct, true);
+		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), agentFactory(engine)));
 
-		const messages2 = saved1.messages.map((m) =>
-			m.id === assistantMsg.id
-				? {
-						...m,
-						parts: m.parts.map((p) =>
-							p.type === "tool-quiz" ? { ...p, state: "output-available" as const, output: answer } : p,
-						),
-					}
-				: m,
-		);
-		await drain(await handleChatRequest(post(chat.id, messages2), agentFactory(engine)));
-
-		// ── The teacher reacts — as a CONTINUATION of the same assistant message
-		// (the last client message is the assistant message carrying the tool
-		// output, so the new text appends to that message's parts). ──
+		// ── The teacher reacts — the projection groups the reaction into the
+		// SAME assistant view message as the answered quiz (the native
+		// grouping canon: consecutive assistant/toolResult messages bounded
+		// by user messages form one group). ──
 		const saved2 = chatStore.getChat(chat.id)!;
-		assert.equal(saved2.messages.length, 2, "the reaction continues the same assistant message");
-		const finalParts = saved2.messages[1]!.parts;
+		// Native: user, assistant, answer toolResult, reaction assistant.
+		assert.equal(saved2.messages.length, 4, "the answer + reaction append natively");
+		assert.equal((saved2.messages[2] as { role?: string }).role, "toolResult", "the graded answer is the call's tool result");
+		const view2 = projectNative(saved2.messages);
+		assert.equal(view2.length, 2, "the reaction continues the same assistant message (one group)");
+		const finalParts = view2[1]!.parts;
 		const textPart = finalParts.find((p) => p.type === "text");
 		assert.ok(textPart && textPart.type === "text", "reaction text appended after the tool part");
 		assert.match((textPart as { text?: string }).text!, /Mercury it is/);
 		// The answered quiz part is still there, now with its output.
 		const answeredQuiz = finalParts.find((p) => p.type === "tool-quiz");
 		assert.ok(answeredQuiz && answeredQuiz.type === "tool-quiz" && (answeredQuiz as { state?: string }).state === "output-available");
+		// The graded answer rode the record as the call's tool result and
+		// round-trips through JSON (undefined keys drop) — compare its
+		// SUBSTANCE, not key-for-key against the in-memory build.
+		const out = (answeredQuiz as { output?: { questionId?: string; correct?: boolean } }).output!;
+		assert.equal(out.questionId, "call-1");
+		assert.equal(out.correct, true);
 
 		// The model actually received the graded answer as a tool result.
 		assert.equal(calls.length, 2, "model saw exactly two prompts");
@@ -243,12 +263,39 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.ok(toolResultSent, "continuation prompt carries the tool result to the model");
 
 		// No pending question remains.
-		assert.equal(findPendingToolCall(saved2.messages), null);
+		assert.equal(danglingQuestionOf(saved2.messages), null);
 	});
 
 	it("rejects unknown chats", async () => {
-		const res = await handleChatRequest(post("chat_nonexistent", []));
+		const res = await handleChatRequest(post("chat_nonexistent", { type: "text", text: "hi" }));
 		assert.equal(res.status, 404);
+	});
+
+	it("refuses malformed inputs with a clean 400 — no liveness effects, no lockout", async () => {
+		const chat = createConfiguredChat("Test: malformed input");
+		createdChats.push(chat.id);
+
+		// A text event with no text: refused at the parse boundary.
+		const res = await handleChatRequest(post(chat.id, { type: "text" }), agentFactory(scriptedTeacher(defaultLesson).engine));
+		assert.equal(res.status, 400, "malformed input is a clean 400");
+		assert.equal(isTurnRunning(chat.id), false, "the refusal never registered a turn");
+
+		// An ANSWER with no dangling question call: the orphan-400 discipline
+		// (the server owns the record — it validates the target call).
+		const res2 = await handleChatRequest(
+			post(chat.id, { type: "answer", toolCallId: "call-none", answer: { correct: true } }),
+			agentFactory(scriptedTeacher(defaultLesson).engine),
+		);
+		assert.equal(res2.status, 400, "an answer with no pending question call is refused");
+		assert.equal(isTurnRunning(chat.id), false);
+
+		// And the chat is NOT locked: the next (valid) turn is accepted.
+		const ok = await handleChatRequest(
+			post(chat.id, { type: "text", text: "teach me" }),
+			agentFactory(scriptedTeacher(defaultLesson).engine),
+		);
+		assert.equal(ok.status, 200);
+		await drain(ok);
 	});
 
 	it("streams tool-input-start before tool-input-available (protocol pin for the 'Writing a question…' indicator)", async () => {
@@ -259,8 +306,7 @@ describe("teacher chat flow (scripted model)", () => {
 		const { engine } = scriptedTeacher(defaultLesson);
 		const chat = createConfiguredChat("Test: protocol pin");
 		createdChats.push(chat.id);
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
-		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
 		const startIdx = body.indexOf('"type":"tool-input-start"');
 		const availIdx = body.indexOf('"type":"tool-input-available"');
 		assert.ok(startIdx !== -1, "tool-input-start chunk present in the stream");
@@ -275,8 +321,7 @@ describe("teacher chat flow (scripted model)", () => {
 		const chat = createConfiguredChat("Test: view cancel");
 		createdChats.push(chat.id);
 
-		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hold my turn" }] }]);
-		const res = await handleChatRequest(req, agentFactory(engine));
+		const res = await handleChatRequest(post(chat.id, { type: "text", text: "hold my turn" }), agentFactory(engine));
 		assert.equal(res.status, 200);
 		// Read one chunk then cancel — the browser view leaves mid-stream.
 		const reader = res.body!.getReader();
@@ -297,7 +342,7 @@ describe("teacher chat flow (scripted model)", () => {
 	it("an ungradeable quiz is rejected at the call boundary, the error reaches the model, and the model retries", async () => {
 		// The authoring contract (question-core superRefine): a quiz whose
 		// correctAnswer matches no option value must NEVER reach the dock —
-		// toPiTool re-runs the zod schema at the call boundary, marks the
+		// the boundary re-runs the schema at the call boundary, marks the
 		// call invalid, and returns the validation error to the teacher as
 		// a tool result. The loop re-prompts the model, which retries in the
 		// same turn. This pins that whole mechanism (the live Nietzsche bug).
@@ -328,14 +373,12 @@ describe("teacher chat flow (scripted model)", () => {
 
 		const chat = createConfiguredChat("Test: bad quiz retry");
 		createdChats.push(chat.id);
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
-		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
 
 		// WIRE pin (the live modal-realism crash): the invalid call must NEVER
 		// become input-available — the dock mounts on input-available parts and
 		// crashed on a malformed quiz before tool-input-error could replace it.
-		// The SDK gated this with InvalidToolInputError; the bridge gates it on
-		// clean tool_execution_end.
+		// The boundary gates this on clean tool_execution_end.
 		assert.ok(
 			!body.includes('"type":"tool-input-available","toolCallId":"call-bad"'),
 			"the invalid call never reached input-available on the wire",
@@ -358,11 +401,12 @@ describe("teacher chat flow (scripted model)", () => {
 			"the validation error reached the model",
 		);
 
-		// The transcript: the failed call persisted as an error part (renders
-		// nothing client-side), the retry as the pending quiz.
+		// The transcript: the failed call persisted as an ERROR RESULT (the
+		// model's retry context — errored question calls DO persist), the
+		// retry as the dangling quiz. The projection renders the error part.
 		const saved = chatStore.getChat(chat.id)!;
-		const assistantMsg = saved.messages[1]!;
-		const quizParts = assistantMsg.parts.filter((p) => p.type === "tool-quiz");
+		const view = projectNative(saved.messages);
+		const quizParts = view[1]!.parts.filter((p) => p.type === "tool-quiz");
 		const failed = quizParts.find(
 			(p) => p.type === "tool-quiz" && (p as { state?: string }).state === "output-error",
 		);
@@ -371,7 +415,7 @@ describe("teacher chat flow (scripted model)", () => {
 			String((failed as { errorText?: string }).errorText),
 			/does not match any option value/,
 		);
-		const pending = findPendingToolCall(saved.messages);
+		const pending = danglingQuestionOf(saved.messages);
 		assert.equal(pending?.toolCallId, "call-good", "the RETRIED quiz is the pending one");
 		assert.deepEqual(pending?.input, QUIZ_INPUT);
 	});
@@ -400,8 +444,7 @@ describe("teacher chat flow (scripted model)", () => {
 
 		const chat = createConfiguredChat("Test: string options");
 		createdChats.push(chat.id);
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] };
-		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
 
 		assert.ok(
 				!body.includes('"type":"tool-input-available","toolCallId":"call-stringy"'),
@@ -413,12 +456,13 @@ describe("teacher chat flow (scripted model)", () => {
 			);
 
 		const saved = chatStore.getChat(chat.id)!;
-		const failed = saved.messages[1]!.parts.find(
+		const view = projectNative(saved.messages);
+		const failed = view[1]!.parts.find(
 				(p) => (p as { toolCallId?: string }).toolCallId === "call-stringy",
 			);
 		assert.equal((failed as { state?: string }).state, "output-error", "persisted as an error part");
 		assert.match(String((failed as { errorText?: string }).errorText), /options/);
-		const pending = findPendingToolCall(saved.messages);
+		const pending = danglingQuestionOf(saved.messages);
 		assert.equal(pending?.toolCallId, "call-clean", "the retried quiz is the pending one");
 	});
 
@@ -426,8 +470,8 @@ describe("teacher chat flow (scripted model)", () => {
 		// The live modal-realism observation: the teacher batched two quizzes
 		// in one turn, and the dock showed the SECOND one first (the backward
 		// part scan), so the interaction order was reversed vs the record.
-		// Pins: (A) findPendingToolCall picks the FIRST unanswered question in
-		// part order; (B) question tools execute sequentially, so their
+		// Pins: (A) danglingQuestionOf picks the FIRST unanswered question in
+		// call order; (B) question tools execute sequentially, so their
 		// tool-input-available chunks arrive in call order on the wire.
 		const QUIZ_A = { ...QUIZ_INPUT, question: "Quiz A: which planet is closest to the sun?" };
 		const QUIZ_B = { ...QUIZ_INPUT, question: "Quiz B: which planet is largest?" };
@@ -442,8 +486,7 @@ describe("teacher chat flow (scripted model)", () => {
 
 		const chat = createConfiguredChat("Test: parallel quizzes");
 		createdChats.push(chat.id);
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "quiz me twice" }] };
-		const body = await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
+		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me twice" }), agentFactory(engine)));
 
 		// (B) wire determinism: the batches' input-available chunks in call order.
 		const availA = body.indexOf('"type":"tool-input-available","toolCallId":"call-a"');
@@ -451,30 +494,20 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.ok(availA !== -1 && availB !== -1, "both quizzes became available");
 		assert.ok(availA < availB, "call A's input became available before call B's (sequential execution)");
 
-		// Saved in call order.
+		// Saved in call order (the projection preserves the content order).
 		const saved = chatStore.getChat(chat.id)!;
-		const quizIds = saved.messages[1]!.parts
+		const quizIds = projectNative(saved.messages)[1]!.parts
 			.filter((p) => p.type === "tool-quiz")
 			.map((p) => (p as { toolCallId: string }).toolCallId);
 		assert.deepEqual(quizIds, ["call-a", "call-b"], "parts persisted in call order");
 
 		// (A) the dock serializes answering in the same order: A first, then B.
-		const pending = findPendingToolCall(saved.messages);
+		const pending = danglingQuestionOf(saved.messages);
 		assert.equal(pending?.toolCallId, "call-a", "the FIRST asked question is the dock subject");
-		// …the learner answers A (client-side grading seam — state flip only here)…
-		const answered = saved.messages.map((m) =>
-			(m as { id?: string }).id === saved.messages[1]!.id
-				? {
-						...m,
-						parts: (m as { parts: unknown[] }).parts.map((p) =>
-							(p as { toolCallId?: string }).toolCallId === "call-a"
-								? { ...(p as object), state: "output-available", output: { correct: true } }
-								: p,
-						),
-					}
-					: m,
-		);
-		const next = findPendingToolCall(answered as UIMessage[]);
+		// …the learner answers A: the answer lands as call-a's tool result —
+		// the SECOND question becomes the dock subject only after that.
+		const answered = [...saved.messages, newAnswerResult("call-a", "quiz", gradedAnswer(QUIZ_A, ["Mercury"]))];
+		const next = danglingQuestionOf(answered);
 		assert.equal(next?.toolCallId, "call-b", "the SECOND question becomes the dock subject only after the first is answered");
 	});
 });
@@ -483,7 +516,7 @@ describe("chat store", () => {
 	it("round-trips and lists chats", async () => {
 		const chat = chatStore.createChat("Store test");
 		createdChats.push(chat.id);
-		chatStore.saveMessages(chat.id, [{ id: "m1", role: "user", parts: [{ type: "text", text: "hi" }] }]);
+		chatStore.saveMessages(chat.id, [{ id: "m1", role: "user", content: "hi", timestamp: 1 } as never]);
 		const loaded = chatStore.getChat(chat.id)!;
 		assert.equal(loaded.messages.length, 1);
 		assert.equal(loaded.title, "Store test");
@@ -510,18 +543,17 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		const chat = createConfiguredChat("Test: turn guard");
 		createdChats.push(chat.id);
 
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
-		const res1 = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)); // NOT drained → in flight
+		const res1 = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)); // NOT drained → in flight
 		assert.equal(isTurnRunning(chat.id), true, "turn registered as in flight");
 
 		// A stale client (remount racing a live turn) tries to start a second turn.
-		const res2 = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine));
+		const res2 = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine));
 		assert.equal(res2.status, 409, "concurrent turn rejected — last-writer-wins persist would clobber it");
 
 		await drain(res1); // finish → onFinish → endTurn
 		assert.equal(isTurnRunning(chat.id), false, "registry cleared at finish");
 
-		const res3 = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine));
+		const res3 = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine));
 		assert.equal(res3.status, 200, "the next turn is accepted after the previous finished");
 		await drain(res3);
 	});
@@ -531,68 +563,30 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		const chat = createConfiguredChat("Test: write-ahead");
 		createdChats.push(chat.id);
 
-		// Turn 1: the teacher asks the quiz (pending part in the record).
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
-		await drain(await handleChatRequest(post(chat.id, [firstUser]), agentFactory(engine)));
-		const saved1 = chatStore.getChat(chat.id)!;
-		const assistantMsg = saved1.messages[1]!;
+		// Turn 1: the teacher asks the quiz (dangling call in the record).
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)));
 
-		// The learner answers; the client posts the graded transcript back.
-		const options = normalizeOptions(QUIZ_INPUT.options);
-		const qd: QuestionData = {
-			id: "call-1",
-			kind: "quiz",
-			question: QUIZ_INPUT.question,
-			mode: "single-select",
-			options,
-			correctIndices: resolveCorrect(coerceCorrectAnswer(QUIZ_INPUT.correctAnswer), options).indices,
-			explanation: QUIZ_INPUT.explanation,
-			createdAt: new Date().toISOString(),
-		};
-		const answer = buildAnswer(qd, { values: ["Mercury"] });
-		const messages2 = saved1.messages.map((m) =>
-			m.id === assistantMsg.id
-				? {
-						...m,
-						parts: m.parts.map((p) =>
-							p.type === "tool-quiz" ? { ...p, state: "output-available" as const, output: answer } : p,
-						),
-					}
-				: m,
-		);
+		// The learner answers; the client posts the ANSWER EVENT.
+		const answer = gradedAnswer(QUIZ_INPUT, ["Mercury"]);
 
 		// NOT drained: the teacher turn is streaming, but the answer is already
 		// on disk — a remount (or crash) mid-turn sees the answered quiz, never
 		// the stale pre-answer question.
-		const res = await handleChatRequest(post(chat.id, messages2), agentFactory(engine));
+		const res = await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), agentFactory(engine));
 		const midTurn = chatStore.getChat(chat.id)!;
-		const midQuiz = midTurn.messages[1]!.parts.find((p) => p.type === "tool-quiz");
+		assert.equal(midTurn.messages.length, 3, "write-ahead appended the answer tool result before finish");
+		assert.equal((midTurn.messages[2] as { role?: string }).role, "toolResult");
+		const midQuiz = projectNative(midTurn.messages)[1]!.parts.find((p) => p.type === "tool-quiz");
 		assert.ok(midQuiz && midQuiz.type === "tool-quiz");
 		assert.equal((midQuiz as { state?: string }).state, "output-available", "write-ahead persisted the answer before finish");
 
 		await drain(res); // finish → persist the full turn → endTurn
 		const saved2 = chatStore.getChat(chat.id)!;
-		assert.equal(saved2.messages.length, 2, "full turn persisted as usual at finish");
+		// Native: user, assistant, answer result, reaction — one append-only
+		// history; the projection still renders ONE assistant group.
+		assert.equal(saved2.messages.length, 4, "full turn persisted as usual at finish");
+		assert.equal(projectNative(saved2.messages).length, 2, "the projection groups the answered quiz + reaction");
 		assert.equal(isTurnRunning(chat.id), false, "registry cleared at finish");
-	});
-
-	it("a turn that fails to start (malformed messages) clears the registry — no lockout", async () => {
-		const chat = createConfiguredChat("Test: turn failed to start");
-		createdChats.push(chat.id);
-		// A text part with no text: fails message validation before the stream
-		// exists — the path where no onFinish will ever run.
-		const bad = [{ id: "m1", role: "user", parts: [{ type: "text" }] }];
-		const res = await handleChatRequest(post(chat.id, bad), agentFactory(scriptedTeacher(defaultLesson).engine));
-		assert.equal(res.status, 500, "turn-start failure is a 500, not a hang");
-		assert.equal(isTurnRunning(chat.id), false, "registry cleared when the stream never started");
-
-		// And the chat is NOT locked: the next (valid) turn is accepted.
-		const ok = await handleChatRequest(
-			post(chat.id, [{ id: "m1", role: "user", parts: [{ type: "text", text: "teach me" }] }]),
-			agentFactory(scriptedTeacher(defaultLesson).engine),
-		);
-		assert.equal(ok.status, 200);
-		await drain(ok);
 	});
 });
 
@@ -635,8 +629,7 @@ describe("the BYOK turn gate (no factory floor — owner, 2026-09-22)", () => {
 		// slot legitimately opens the gate (the chain is honest both ways).
 		const expectRefusal = effectiveSettings().models.strong === null;
 
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
-		const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
+		const res = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(scriptedTeacher(defaultLesson).engine));
 
 		if (expectRefusal) {
 			assert.equal(res.status, 503, "the universal turn gate refuses before beginTurn");
@@ -660,8 +653,7 @@ describe("the BYOK turn gate (no factory floor — owner, 2026-09-22)", () => {
 	it("a per-chat model alone opens the gate (the setup flow's exact write)", async () => {
 		const chat = createConfiguredChat("Test: per-chat pin only");
 		createdChats.push(chat.id);
-		const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me the solar system" }] };
-		const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
+		const res = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(scriptedTeacher(defaultLesson).engine));
 		assert.equal(res.status, 200, "chat.settings.model satisfies the chain without any record slot");
 		await drain(res);
 	});
@@ -683,8 +675,7 @@ describe("the key-presence turn gate (provider-key interlude, 2026-09-25)", () =
 			// chain the strong slot rides. The gate fires BEFORE the engine
 			// build, so the fake model id never hits the catalog.
 			chatStore.saveSettings(chat.id, { model: { provider: "together", id: "no-such-model" } });
-			const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me something" }] };
-			const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
+			const res = await handleChatRequest(post(chat.id, { type: "text", text: "teach me something" }), agentFactory(scriptedTeacher(defaultLesson).engine));
 
 			assert.equal(res.status, 503, "the key-presence gate refuses before beginTurn");
 			const body = (await res.json()) as { error: string; code: string; provider: string; slots: string[] };
@@ -708,8 +699,7 @@ describe("the key-presence turn gate (provider-key interlude, 2026-09-25)", () =
 			// A REAL catalog model: the engine build AFTER the gate must
 			// resolve — the injected agent replaces the loop, not the build.
 			chatStore.saveSettings(chat.id, { model: { provider: "openai", id: "gpt-4" } });
-			const firstUser = { id: "u1", role: "user", parts: [{ type: "text", text: "teach me something" }] };
-			const res = await handleChatRequest(post(chat.id, [firstUser]), agentFactory(scriptedTeacher(defaultLesson).engine));
+			const res = await handleChatRequest(post(chat.id, { type: "text", text: "teach me something" }), agentFactory(scriptedTeacher(defaultLesson).engine));
 
 			assert.equal(res.status, 200, "the env-shadowed key counts as present — the turn runs");
 			await drain(res);
@@ -728,8 +718,7 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 		const chat = createConfiguredChat("Test: reattach replay");
 		createdChats.push(chat.id);
 
-		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hold my turn" }] }]);
-		const first = await handleChatRequest(req, agentFactory(engine));
+		const first = await handleChatRequest(post(chat.id, { type: "text", text: "hold my turn" }), agentFactory(engine));
 		assert.equal(first.status, 200);
 		// Consume the first view a little (the start chunk is out).
 		const reader = first.body!.getReader();
@@ -768,8 +757,7 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 		const chat = createConfiguredChat("Test: remote abort");
 		createdChats.push(chat.id);
 
-		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "wait forever" }] }]);
-		const res = await handleChatRequest(req, agentFactory(engine));
+		const res = await handleChatRequest(post(chat.id, { type: "text", text: "wait forever" }), agentFactory(engine));
 		assert.equal(res.status, 200);
 		assert.ok(runningTurn(chat.id), "turn registered while in flight");
 		const viewText = res.text(); // the first view, reading to settle
@@ -802,8 +790,7 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 
 		// And after a settled turn, the registry is empty — the GET would
 		// serve the same terminal, not a stale handle.
-		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] }]);
-		await drain(await handleChatRequest(req, agentFactory(engine)));
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
 		assert.equal(runningTurn(chat.id), undefined, "no handle survives settle");
 	});
 
@@ -819,8 +806,7 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 
 		const views = new Map<string, Promise<string>>();
 		for (const { chat, engine } of chats) {
-			const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hold my turn" }] }]);
-			const res = await handleChatRequest(req, agentFactory(engine));
+			const res = await handleChatRequest(post(chat.id, { type: "text", text: "hold my turn" }), agentFactory(engine));
 			assert.equal(res.status, 200);
 			const handle = runningTurn(chat.id)!;
 			assert.ok(handle, `chat ${chat.id} has its own handle`);

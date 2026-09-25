@@ -1,6 +1,8 @@
-import type { Agent, AgentEvent } from "@earendil-works/pi-agent-core";
+import type { Agent, AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { UIMessage } from "ai";
 import { QUESTION_TOOLS } from "../../core/pending.ts";
+import type { LhMessage } from "../../core/native-messages.ts";
+import { projectNative } from "../../core/projection.ts";
 
 /**
  * The UI-stream bridge (docs/pi-engine-swap.md §5): runs one agent turn and
@@ -23,9 +25,10 @@ import { QUESTION_TOOLS } from "../../core/pending.ts";
  *   tool-input-error instead and NEVER becomes input-available, so a
  *   malformed question can never mount the dock (the live modal-realism
  *   crash: GLM double-encoded `options` as a JSON string).
- * - The persisted message is assembled from the SAME parts the client
- *   assembles (the processUIMessageStream shapes), so every downstream
- *   consumer (phases, plan blocks, pending, extraction) is unchanged.
+ * - The WIRE assembly (below) is the client view only (Wave B): the
+ *   record write is the agent's own native final state — the projection
+ *   (core/projection.ts) reproduces the client's part shapes for every
+ *   consumer (phases, plan blocks, pending, extraction) until Wave D.
  *
  * BACKGROUND-TURN RUNNER (owner ruling, 2026-09-25): a turn executes as a
  * server-side background object decoupled from any single HTTP response —
@@ -42,12 +45,17 @@ type Chunk = Record<string, unknown> & { type: string };
 export interface PiTurnSpec {
 	/** The per-turn agent (stateless engine — built from the record). */
 	agent: Agent;
-	/** The outgoing request messages (write-ahead persisted already). */
-	uiMessages: UIMessage[];
+	/** The turn's base: the native record + this turn's appends
+	 *  (write-ahead persisted already). Wave B: the agent's context and
+	 *  the record share one shape; onFinish receives the full agent state
+	 *  and the caller persists the slice past base.length. */
+	base: LhMessage[];
 	/** The handler's error-unmasking policy (validation messages stay readable). */
 	onError?: (error: unknown) => string;
-	/** The canonical end-of-turn seam: persist + usage + extraction + endTurn. */
-	onFinish: (messages: UIMessage[], isAborted: boolean) => void;
+	/** The canonical end-of-turn seam: persist + usage + extraction + endTurn.
+	 *  Receives the agent's FULL final state (native messages) — the turn's
+	 *  new messages are the slice past base.length. */
+	onFinish: (messages: AgentMessage[], isAborted: boolean) => void;
 }
 
 /** One view onto a running turn: push() replays/streams a chunk, done()
@@ -117,15 +125,22 @@ interface ToolPart {
 }
 
 export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
-	const { agent, uiMessages, onFinish } = spec;
+	const { agent, base, onFinish } = spec;
 
 	// The streaming target: continuation (same id, parts appended to a copy
-	// of the existing message) or a fresh assistant message.
-	const last = uiMessages[uiMessages.length - 1];
-	const continuing = last?.role === "assistant";
+	// of the existing message) or a fresh assistant message. The continuation
+	// rule is the CLIENT's: it keys on the last UIMessage's id — read through
+	// the projection (the record is native; a turn after an answer continues
+	// the group that carries the answered quiz, which is the projection's
+	// last message).
+	const projected = projectNative(base);
+	const last = projected[projected.length - 1] as
+		| { id?: string; role?: string; parts?: UIMessage["parts"] }
+		| undefined;
+	const continuing = last?.role === "assistant" && typeof last.id === "string";
 	const messageId =
 		(continuing && last.id) || `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
-	const baseParts: UIMessage["parts"] = continuing ? [...last.parts] : [];
+	const baseParts: UIMessage["parts"] = continuing && last.parts ? [...last.parts] : [];
 	const parts: UIMessage["parts"] = [...baseParts];
 
 	// Stable, collision-free part ids across continuation runs (reasoning
@@ -174,11 +189,11 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 	send({ type: "start", messageId });
 
 	const settleWith = () => {
-		const assembled: UIMessage = { id: messageId, role: "assistant", parts };
-		// The SDK's onFinish shape: the input copy stays, the extended
-		// response copy appends (persistTurn's withMessageIds dedupe
-		// keeps the last occurrence).
-		onFinish([...uiMessages, assembled], sawAbort);
+		// Wave B: the record write is the agent's OWN final state (native
+		// history — signatures, usage, provider stamps all real); the wire
+		// assembly above served the client view only. Copy the array: the
+		// agent may outlive this call's read.
+		onFinish([...agent.state.messages], sawAbort);
 	};
 
 	const handle = (event: AgentEvent) => {

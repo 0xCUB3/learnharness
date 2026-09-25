@@ -8,22 +8,27 @@
  */
 import type { UIMessage } from "ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { LhMessage } from "../native-messages.ts";
 import type { Phase3 } from "../phases.ts";
 import type { PlanNodeStatus, PlanTree } from "./plan.ts";
 import type { EmissionStats, UnderstandingLevel } from "./graph.ts";
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────
 
-/** One persisted session: data/chats/<id>.json. The stored messages are full
- * AI SDK UIMessages (parts included) — the canonical session record: a
- * pending quiz is a tool part in `input-available` state, which is exactly
- * what makes resume-mid-question free. */
+/** One persisted session: data/chats/<id>.json. Wave B (owner-approved
+ * 2026-09-26): the stored messages are pi-NATIVE history (LhMessage — the
+ * agent loop's own shapes, provider/model/usage/thinkingSignature stamped
+ * by pi) — the canonical session record IS the agent state; replay is
+ * `state.messages = record.messages` + continue(). The client-shaped view
+ * is the one-way projection (core/projection.ts) — a pending quiz is an
+ * unanswered question tool call, which is exactly what makes
+ * resume-mid-question free. */
 export interface ChatRecord {
 	id: string;
 	title: string;
 	createdAt: string;
 	updatedAt: string;
-	messages: UIMessage[];
+	messages: LhMessage[];
 	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
 	tree?: PlanTree;
 	/** Append-only usage log (observability, 2026-09): one entry per model
@@ -152,8 +157,8 @@ export interface TurnUsage {
  *  both verdicts are real transcript events: accept sanctions teaching,
  *  decline asks for revision. The part is the message TYPE (the "custom
  *  message" scheme, 2026-09-12): the message carries no human-authored text,
- *  the model-facing wording is owned by the adapter (record-adapter.ts
- *  flattens it to VERDICT_TEXT below), and the UI renders the verdict
+ *  the model-facing wording is owned by toLlmMessages (native-messages.ts
+ *  flattens it to verdictText below), and the UI renders the verdict
  *  marker — never a user bubble. A learner who also typed a note sends the
  *  note as its own real user message first; the verdict message follows. */
 export interface PlanVerdictData {

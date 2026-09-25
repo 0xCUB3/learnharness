@@ -23,8 +23,10 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
-import type { UIMessage } from "ai";
 import type { PiEngine } from "../src/agent/models.ts";
+import type { LhMessage } from "../src/core/native-messages.ts";
+import { newPlanBlockMessage } from "../src/core/native-messages.ts";
+import { projectNative } from "../src/core/projection.ts";
 import type {
 	AuditResult,
 	CoverageEntry,
@@ -116,26 +118,67 @@ function memoryLedgers() {
 	} satisfies GraphStore;
 }
 
-function assistant(id: string, parts: unknown[]): UIMessage {
-	return { id, role: "assistant", parts } as unknown as UIMessage;
+// Native fixture builders (Wave B): the record holds pi-native history —
+// an assistant message with its tool calls + one result message per call;
+// the projection reproduces the part shapes these view tests pin.
+interface NativeCallDesc {
+	name: string;
+	toolCallId: string;
+	input: Record<string, unknown>;
+	output: unknown;
 }
 
-function user(id: string, text: string): UIMessage {
-	return { id, role: "user", parts: [{ type: "text", text }] } as unknown as UIMessage;
+function user(id: string, text: string): LhMessage {
+	return { id, role: "user", content: text, timestamp: Date.now() } as never;
 }
 
-function quizPart(toolCallId: string, input: Record<string, unknown>, output: Record<string, unknown>): unknown {
-	return { type: "tool-quiz", toolCallId, state: "output-available", input, output };
+function assistant(id: string, items: unknown[]): LhMessage[] {
+	const content: unknown[] = [];
+	const calls: NativeCallDesc[] = [];
+	for (const item of items) {
+		const it = item as { type?: string; text?: string };
+		if (it && it.type === "text") {
+			content.push({ type: "text", text: it.text });
+		} else {
+			const call = item as NativeCallDesc;
+			calls.push(call);
+			content.push({ type: "toolCall", id: call.toolCallId, name: call.name, arguments: call.input as never });
+		}
+	}
+	const out: LhMessage[] = [
+		{
+			id,
+			role: "assistant",
+			content,
+			api: "openai-completions",
+			provider: "openrouter",
+			model: "test",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			stopReason: "stop",
+			timestamp: Date.now(),
+		} as never,
+	];
+	for (const call of calls) {
+		out.push({
+			id: `r_${call.toolCallId}`,
+			role: "toolResult",
+			toolCallId: call.toolCallId,
+			toolName: call.name,
+			content: [{ type: "text", text: "ok" }],
+			details: call.output,
+			isError: false,
+			timestamp: Date.now(),
+		} as never);
+	}
+	return out;
 }
 
-function planPart(toolCallId: string, name: string, input: Record<string, unknown>, tree: unknown): unknown {
-	return {
-		type: `tool-${name}`,
-		toolCallId,
-		state: "output-available",
-		input,
-		output: { ok: true, tree },
-	};
+function quizPart(toolCallId: string, input: Record<string, unknown>, output: Record<string, unknown>): NativeCallDesc {
+	return { name: "quiz", toolCallId, input, output };
+}
+
+function planPart(toolCallId: string, name: string, input: Record<string, unknown>, tree: unknown): NativeCallDesc {
+	return { name, toolCallId, input, output: { ok: true, tree } };
 }
 
 /** A session-shaped fixture chat: probe → teaching text → check. Tree-blind
@@ -145,23 +188,28 @@ function fixtureChat() {
 	createdChats.push(chat.id);
 	chatStore.saveMessages(chat.id, [
 		user("u1", "teach me the chain rule"),
-		assistant("a1", [
+		...assistant("a1", [
 			quizPart("probe-1", { question: "What is a derivative, roughly?" }, {
 				questionId: "probe-1", kind: "quiz", questionText: "What is a derivative, roughly?",
 				correct: false, dontKnow: false, answeredAt: "2026-08-22T01:00:00.000Z",
 			}),
 		]),
-		assistant("a2", [
+		// Distinct TURNS: the native grouping canon merges consecutive
+		// assistant messages into one view group, so the fixture separates
+		// its turns with learner messages (the real record's shape).
+		user("u2", "go on"),
+		...assistant("a2", [
 			{ type: "text", text: "The derivative measures how fast a function changes." },
 			planPart("p1", "plan_init", { nodes: [], edges: [] }, { nodes: [], edges: [], currentNodeId: null, doneNodeIds: [], version: 1 }),
 		]),
-		assistant("a3", [
+		user("u3", "check me"),
+		...assistant("a3", [
 			quizPart("check-1", { question: "Check" }, {
 				questionId: "check-1", kind: "quiz", questionText: "Check", correct: true, dontKnow: false,
 				answeredAt: "2026-08-22T02:00:00.000Z",
 			}),
 		]),
-	]);
+	].flat());
 	return { chatId: chat.id, record: chatStore.getChat(chat.id)! };
 }
 
@@ -282,17 +330,16 @@ describe("transcriptView (pure)", () => {
 		createdChats.push(chat.id);
 		chatStore.saveMessages(chat.id, [
 			user("u1", "go"),
-			assistant("a1", [
+			...assistant("a1", [
 				{
-					type: "tool-research",
+					name: "research",
 					toolCallId: "r1",
-					state: "output-available",
 					input: { question: "q" },
 					output: { brief: "long brief", sources: [] },
 				},
 				{ type: "text", text: "   " },
 			]),
-		]);
+		].flat());
 		const view = transcriptView(chatStore.getChat(chat.id)!);
 		assert.match(view, /\(research tool result delivered\)/);
 		assert.doesNotMatch(view, /long brief/);
@@ -352,7 +399,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// a new event (vision-extraction-coverage.md).
 		const events = ledgers.readEvents();
 		const record = chatStore.getChat(chatId)!;
-		const expectedTag = batchTag(coverageSlots(record.messages as UIMessage[]));
+		const expectedTag = batchTag(coverageSlots(projectNative(record.messages)));
 		assert.deepEqual(
 			events.map((e) => [e.kind, e.ref, e.nodeId]),
 			[
@@ -368,12 +415,12 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// one entry per transcript message, fingerprinted content each —
 		// the same turns are never extracted twice.
 		const covered = ledgers.readCoverage();
-		assert.equal(covered.length, record.messages.length);
+		assert.equal(covered.length, projectNative(record.messages).length);
 		assert.ok(covered.every((c) => c.chatId === chatId && c.fp.length === 64 && c.tokens > 0));
 		assert.equal(ledgers.readCheckpoints().length, 0, "the chat path writes coverage, not the legacy checkpoint");
 
 		assert.equal(
-			coverageOf(record.messages as UIMessage[], covered, chatId).uncoveredCount,
+			coverageOf(projectNative(record.messages), covered, chatId).uncoveredCount,
 			0,
 			"every message is now covered",
 		);
@@ -973,9 +1020,9 @@ describe("the chunked pipeline (extraction coverage)", () => {
 
 		// Per-batch coverage: every message checkpointed, nothing legacy.
 		const coverage = ledgers.readCoverage();
-		assert.equal(coverage.length, record.messages.length);
+		assert.equal(coverage.length, projectNative(record.messages).length);
 		assert.equal(ledgers.readCheckpoints().length, 0);
-		assert.equal(coverageOf(record.messages as UIMessage[], coverage, chatId).uncoveredCount, 0);
+		assert.equal(coverageOf(projectNative(record.messages), coverage, chatId).uncoveredCount, 0);
 
 		// A second run is a NO-OP: nothing uncovered → no model calls, no
 		// new usage entry (no money spent on covered ground).
@@ -1028,7 +1075,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		// Batch 1's emissions are kept and its messages stay covered.
 		assert.deepEqual(stats, { nodes: 1, edges: 0, events: 1 });
 		assert.equal(ledgers.readCoverage().length, 3, "batch 1 checkpointed its three messages");
-		const cov = coverageOf(record.messages as UIMessage[], ledgers.readCoverage(), chatId);
+		const cov = coverageOf(projectNative(record.messages), ledgers.readCoverage(), chatId);
 		assert.equal(cov.uncoveredCount, 2, "the in-flight batch's messages stay uncovered");
 
 		// The re-run — the manual extract button — picks up ONLY the
@@ -1062,25 +1109,30 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
 		await pipeline.runExtraction(chatId);
-		const messages = () => chatStore.getChat(chatId)!.messages as UIMessage[];
+		// Wave B: the record is native — coverage reads the projection.
+		const record = () => chatStore.getChat(chatId)!.messages;
+		const messages = () => projectNative(record());
 		assert.equal(coverageOf(messages(), ledgers.readCoverage(), chatId).uncoveredCount, 0);
 
-		// Data parts are invisible to the extraction view — plan-block
-		// attach does NOT re-open a covered message.
-		const withDataPart = messages().map((m) =>
-			m.id === "u2"
-				? { ...m, parts: [...m.parts, { type: "data-plan-blocks", planBlocks: [] } as unknown as UIMessage["parts"][number]] }
-				: m,
-		);
-		chatStore.saveMessages(chatId, withDataPart);
+		// Data parts are invisible to the extraction view — a plan-block
+		// marker append (whose data part splices into the projected view)
+		// does NOT re-open a covered message.
+		chatStore.saveMessages(chatId, [
+			...record(),
+			newPlanBlockMessage("call_s2", { kind: "full", at: "2026-09-26T00:00:00.000Z", current: null, nodes: [], edges: [] }),
+		]);
 		const afterAttach = coverageOf(messages(), ledgers.readCoverage(), chatId);
 		assert.equal(afterAttach.uncoveredCount, 0, "data parts don't change the fingerprint");
 
 		// A quiz answer merging into an ASKING message changes its view →
 		// exactly that message re-opens, and the next run extracts it alone.
-		const mutated = messages().map((m) =>
-			m.id === "s1" ? { ...m, parts: [...m.parts, { type: "text", text: "the answer merged in late" }] } : m,
-		) as unknown as UIMessage[];
+		// (Native: the answer arrives as the call's tool result — the
+		// projected group gains the answer line.)
+		const mutated = record().map((m) =>
+			(m as { id?: string }).id === "s1"
+				? ({ ...m, content: [...(m as { content: unknown[] }).content, { type: "text", text: "the answer merged in late" }] } as never)
+				: m,
+		);
 		chatStore.saveMessages(chatId, mutated);
 		const afterMerge = coverageOf(messages(), ledgers.readCoverage(), chatId);
 		assert.equal(afterMerge.uncoveredCount, 1, "only the mutated message re-opens");

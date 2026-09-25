@@ -31,7 +31,6 @@
  * be a different object in each).
  */
 
-import type { UIMessage } from "ai";
 import {
 	buildAbortSteer,
 	buildSubagentSteer,
@@ -40,13 +39,16 @@ import {
 	type JobRecord,
 	type SteerMessage,
 } from "../core/contracts.ts";
-import { findPendingToolCall } from "../core/pending.ts";
+import type { TurnInput } from "../core/input-events.ts";
+import { danglingQuestionOf } from "../core/native-messages.ts";
 import { fireJobAbort, isJobLive } from "../agent/subagents/aborts.ts";
 import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
 
-/** Fires one server-side teacher turn: (chatId, messages) → HTTP-ish status. */
-export type TurnRunner = (chatId: string, messages: UIMessage[]) => Promise<number>;
+/** Fires one server-side teacher turn: (chatId, input) → HTTP-ish status.
+ *  Wave B: the input is the STEER EVENT — the handler appends the marker
+ *  natively under its own turn claim (one composition for every turn). */
+export type TurnRunner = (chatId: string, input: TurnInput) => Promise<number>;
 
 /** Re-runs a job's sub-agent loop (crash recovery for orphaned jobs). */
 export type JobRespawn = (jobId: string) => void;
@@ -110,10 +112,11 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** The job a steer belongs to, if it is a job steer (result/abort/context);
+/** The job a steer belongs to, if it is a job steer (result/abort);
  *  probe-handoff steers have no job — null. */
 function jobIdOf(steer: SteerMessage): string | null {
-	return (steer.metadata as { subagentResult?: { jobId: string } }).subagentResult?.jobId ?? null;
+	const details = steer.details as { jobId?: string } | undefined;
+	return typeof details?.jobId === "string" ? details.jobId : null;
 }
 
 /** Finalize a delivered steer's job bookkeeping — job steers only. */
@@ -167,32 +170,22 @@ export function deliverJobResult(steer: SteerMessage): Promise<void> {
  * copies of the same steer id (a live React duplicate-key warning the
  * owner hit 2026-09-18; withMessageIds only heals it at onFinish).
  */
-export function claimSteers(
-	chatId: string,
-	incoming?: ReadonlyArray<UIMessage>,
-): SteerMessage[] {
+export function claimSteers(chatId: string): SteerMessage[] {
 	const s = state();
 	const queue = s.queues.get(chatId);
 	if (!queue || queue.length === 0) return [];
-	const record = stores.chatStore.getChat(chatId);
-	if (!record) return []; // the handler validated the chat; defensive only
-	const claimed: SteerMessage[] = [];
+	s.queues.delete(chatId);
+	// The caller holds the turn registry (chat-handler claims after
+	// beginTurn), so the write-ahead persist is imminent and durable:
+	// every queued steer is claimed — its delivery is THIS turn's job.
+	// Steers already in the transcript (a wake raced in) still finalize
+	// here; the handler's append filter (steerDelivered) keeps exactly
+	// one copy in the record.
+	const claimed = queue.map((entry) => entry.steer);
 	for (const entry of queue) {
-		if (
-			steerDelivered(record.messages, entry.steer.id) ||
-			incoming?.some((m) => m.id === entry.steer.id)
-		) {
-			// A wake already landed it — or this turn's own request already
-			// carries it (the pump path): the delivery is done either way,
-			// just finish the bookkeeping. NEVER append twice.
-			finalizeSteer(entry.steer);
-		} else {
-			claimed.push(entry.steer);
-			finalizeSteer(entry.steer); // delivery is now the client turn's job
-		}
+		finalizeSteer(entry.steer);
 		entry.resolve();
 	}
-	s.queues.delete(chatId);
 	return claimed;
 }
 
@@ -256,12 +249,13 @@ export function abortJob(jobId: string): AbortOutcome {
 }
 
 function chatIdOf(steer: SteerMessage): string {
-	// The probe handoff carries its chat directly (the job record would
-	// say it too, but the metadata is the cheap path).
-	const handoff = (steer.metadata as { probeHandoff?: { chatId: string } }).probeHandoff;
-	if (handoff) return handoff.chatId;
-	// The chat is resolvable from the job record; the steer's metadata
-	// carries jobId, which indexes the store.
+	// The probe handoff carries its chat directly in the marker details (the
+	// job record would say it too, but the details are the cheap path).
+	if (steer.customType === "probe-handoff") {
+		return (steer.details as { chatId: string }).chatId;
+	}
+	// The chat is resolvable from the job record; the steer's details
+	// carry jobId, which indexes the store.
 	const jobId = jobIdOf(steer);
 	const job = jobId ? stores.jobStore.getJob(jobId) : undefined;
 	return job?.chatId ?? "";
@@ -334,9 +328,11 @@ async function pump(chatId: string): Promise<void> {
 				continue;
 			}
 
-			// Fire the server-side teacher turn. A 409 = a client turn raced
-			// in between idle and firing — back off and retry the same steer.
-			const status = await s.turnRunner(chatId, [...fresh.messages, entry.steer]).catch((err: unknown) => {
+			// Fire the server-side teacher turn (the steer EVENT: the handler
+			// appends the marker natively under its own turn claim). A 409 = a
+			// client turn raced in between idle and firing — back off and
+			// retry the same steer.
+			const status = await s.turnRunner(chatId, { type: "steer", steer: entry.steer }).catch((err: unknown) => {
 				console.error(`[steer ${steerId}] wake turn crashed:`, err);
 				return -1;
 			});
@@ -387,22 +383,23 @@ function failJob(jobId: string, err: Error): void {
 
 /**
  * Wait until the chat can take a wake turn: no turn in flight AND no
- * unanswered question part (provider conversion would break). Poll; the
- * learner may take arbitrarily long to answer, and that is correct — the
- * steer fires right after their continuation completes.
+ * unanswered question call (the record's dangling question — the answer
+ * arrives as its tool result, and no turn may run in the window). Poll;
+ * the learner may take arbitrarily long to answer, and that is correct —
+ * the steer fires right after their answer turn completes.
  */
 async function waitForIdle(chatId: string): Promise<void> {
 	for (;;) {
 		const record = stores.chatStore.getChat(chatId);
 		if (!record) return;
-		const blocked = isTurnRunning(chatId) || findPendingToolCall(record.messages) !== null;
+		const blocked = isTurnRunning(chatId) || danglingQuestionOf(record.messages) !== null;
 		if (!blocked) {
 			await delay(GRACE_MS);
 			const recheck = stores.chatStore.getChat(chatId);
 			if (
 				!isTurnRunning(chatId) &&
 				recheck &&
-				findPendingToolCall(recheck.messages) === null
+				danglingQuestionOf(recheck.messages) === null
 			) {
 				return;
 			}

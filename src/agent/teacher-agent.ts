@@ -15,6 +15,7 @@ import {
 } from "./tools.ts";
 import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
 import { QUESTION_TOOLS, type EnabledTools } from "../core/pending.ts";
+import { toLlmMessages } from "../core/native-messages.ts";
 
 /**
  * The two teaching-side agents (docs/probe-teach-split.md): the PROBER and
@@ -89,7 +90,7 @@ export type StepUsageCollector = (usage: Usage) => void;
 export interface AgentBuildOptions {
 	/** Model + stream function — tests inject a scripted faux engine. */
 	engine?: PiEngine;
-	/** The initial transcript, as pi messages (recordToPiMessages). */
+	/** The initial transcript, as pi messages (the record IS agent state). */
 	messages?: AgentMessage[];
 	/** Money channel: one call per model request. */
 	onUsage?: StepUsageCollector;
@@ -164,6 +165,13 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		},
 		streamFn: engine.streamFn,
 		shouldStopAfterTurn: stopper,
+		// Wave B (owner-approved 2026-09-26): the model-facing conversion is
+		// THE app seam — markers flatten to their canonical user text
+		// (verdictText / HANDOFF_TEXT / steer text, all single-sourced),
+		// UI-only markers (plan-block) drop, the app's id fields strip, and
+		// an abort's dangling question call gets its INTERRUPTED result. It
+		// must never throw (pi's convertToLlm contract).
+		convertToLlm: toLlmMessages,
 	});
 	if (opts.onUsage) {
 		agent.subscribe((event: AgentEvent) => {

@@ -221,8 +221,11 @@ test("appendTurnUsage: appends, idempotent per turn id, continuation turns (same
 	let reread = chatStore.getChat(record.id);
 	assert.equal(reread?.turns?.length, 2);
 
-	// saveMessages must not clobber the log (read-mutate-write record)
-	chatStore.saveMessages(record.id, [{ id: "msg_a", role: "user", parts: [] }]);
+	// saveMessages must not clobber the log (read-mutate-write record) —
+	// Wave B: a NATIVE message list (the record holds agent history).
+	chatStore.saveMessages(record.id, [
+		{ id: "msg_a", role: "user", content: "native", timestamp: Date.now() } as never,
+	]);
 	reread = chatStore.getChat(record.id);
 	assert.equal(reread?.turns?.length, 2);
 

@@ -26,7 +26,7 @@ import { DictationBar, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useActivity } from "@/components/activity-dock";
-import { isProviderKeyRefusal, mergeAdopted, type ChatSettings, type ModelSlotName } from "@/src/core";
+import { isProviderKeyRefusal, mergeAdopted, type ChatInput, type ChatSettings, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
@@ -181,15 +181,35 @@ export function Chat({
 	// the per-render transport recreation can never capture a stale one.
 	const reattachSettledRef = useRef<() => void>(() => {});
 	const reattachLastIdRef = useRef<string | undefined>(undefined);
+	// THE INPUT STASH (Wave B input-events contract, owner ruling
+	// 2026-09-26): every SDK send maps to EXACTLY ONE explicit input event —
+	// the call site stashes the event here before invoking the SDK send, and
+	// the transport consumes it when building the POST body ({chatId, input};
+	// the client transcript never rides the wire). Consumed-on-read: a send
+	// with nothing stashed fails LOUDLY in the transport (a call-site bug —
+	// it must never silently re-send the previous event).
+	const pendingInputRef = useRef<ChatInput | null>(null);
+	const stashInput = (input: ChatInput) => {
+		pendingInputRef.current = input;
+	};
+	const takeInput = () => {
+		const input = pendingInputRef.current;
+		pendingInputRef.current = null;
+		return input ?? undefined;
+	};
 
 	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop, clearError, resumeStream } =
 		useChat<TeacherUIMessage>({
 			id: chatId,
 			messages: initialMessages,
-			transport: createReattachingTransport(chatId, {
-				onSettled: () => reattachSettledRef.current(),
-				lastMessageId: () => reattachLastIdRef.current,
-			}),
+			transport: createReattachingTransport(
+				chatId,
+				{
+					onSettled: () => reattachSettledRef.current(),
+					lastMessageId: () => reattachLastIdRef.current,
+				},
+				{ takeInput },
+			),
 			// After the learner answers (addToolOutput), automatically send the
 			// continuation request so the teacher reacts to the answer.
 			sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
@@ -200,6 +220,7 @@ export function Chat({
 	useEffect(() => {
 		if (!sentInitial.current && initialPrompt && initialMessages.length === 0) {
 			sentInitial.current = true;
+			stashInput({ type: "text", text: initialPrompt });
 			void sendMessage({ text: initialPrompt });
 		}
 	}, [initialPrompt, initialMessages.length, sendMessage]);
@@ -343,6 +364,7 @@ export function Chat({
 			messages.length > 0 &&
 			lastAssistantMessageIsCompleteWithToolCalls({ messages })
 		) {
+			stashInput({ type: "continue" });
 			void sendMessage();
 		}
 		// mount-only by design (turnInFlight read at initial value)
@@ -492,6 +514,7 @@ export function Chat({
 			status === "ready" &&
 			lastAssistantMessageIsCompleteWithToolCalls({ messages: record.messages })
 		) {
+			stashInput({ type: "continue" });
 			void sendMessage();
 		}
 	}, [chatId, setMessages, sendMessage, status]);
@@ -612,8 +635,8 @@ export function Chat({
 			// TWO REAL MESSAGES, ONE TURN (the custom-message scheme, user-decided
 			// 2026-09-12): a typed note is the learner's own user message, and the
 			// verdict is its own custom message — marker part ONLY, no human-
-			// authored text (the model-facing wording lives in the adapter:
-			// record-adapter flattens it; nothing fake is persisted as speech).
+			// authored text (the model-facing wording lives in toLlmMessages,
+			// the native convertToLlm seam; nothing fake is persisted as speech).
 			// setMessages + sendMessage() (no args) fires ONE request carrying
 			// both — the same single-turn mechanism syncFromServer already uses,
 			// so no 409 dance and no double teacher turn.
@@ -639,6 +662,10 @@ export function Chat({
 				],
 			});
 			setMessages([...messages, ...appended]);
+			// The event (Wave B): the server appends the note (its own user
+			// message) + the verdict marker natively — the optimistic ids above
+			// are local render only; the settle sync lands the canon.
+			stashInput({ type: "verdict", accepted, note: note || undefined });
 			void sendMessage();
 		},
 		[text, messages, setMessages, sendMessage],
@@ -964,6 +991,7 @@ export function Chat({
 		if (!t || busy || pending) return;
 		draftRef.current = t; // the refusal flow's preserve-and-replay seam
 		setText("");
+		stashInput({ type: "text", text: t });
 		void sendMessage({ text: t });
 	};
 
@@ -972,7 +1000,10 @@ export function Chat({
 			value={{
 				chatId,
 				syncFromServer,
-				sendText: (t: string) => void sendMessage({ text: t }),
+				sendText: (t: string) => {
+					stashInput({ type: "text", text: t });
+					void sendMessage({ text: t });
+				},
 				openSetup: () => setSetupOpen(true),
 			}}
 		>
@@ -1318,6 +1349,7 @@ export function Chat({
 				if (t) {
 					setText("");
 					draftRef.current = t;
+					stashInput({ type: "text", text: t });
 					void sendMessage({ text: t });
 				}
 			}}

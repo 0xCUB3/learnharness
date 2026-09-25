@@ -1,4 +1,5 @@
 import { deleteChatSession, getChat, isTurnRunning, sessionCoverage, stores, type ChatDeleteMode } from "@/src/server";
+import { projectNative } from "@/src/core";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
@@ -10,7 +11,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 	// meter + sidebar block — THE coverage surface (the all-sessions GET
 	// route died with the redesign; the Extract POST stays). getChat
 	// already 404'd, so the block exists.
-	return Response.json({ ...chat, turnInFlight: isTurnRunning(id), coverage: sessionCoverage(id) });
+	// Wave B (owner-approved 2026-09-26): the record's messages are native
+	// agent history — clients receive the one-way projection (the AI-SDK
+	// UIMessage view) until Wave D. turnInFlight lets a returning client
+	// re-attach to a running turn; coverage is the chat view's ring meter.
+	return Response.json({
+		...chat,
+		messages: projectNative(chat.messages),
+		turnInFlight: isTurnRunning(id),
+		coverage: sessionCoverage(id),
+	});
 }
 
 /**

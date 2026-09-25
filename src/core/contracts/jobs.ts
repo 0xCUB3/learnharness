@@ -6,8 +6,9 @@
  * master. Pure types + protocol docs + tiny pure helpers; type-only imports
  * of "ai" (safe everywhere: server, client, tests). See docs/vision.md.
  */
-import type { UIMessage } from "ai";
 import type { CallUsage } from "./chat.ts";
+import type { LhMessage, LhMarkerMessage } from "../native-messages.ts";
+import { newHandoffMessage } from "../native-messages.ts";
 
 // ─── Async sub-agent jobs (vision §2.5; plan.md Wave 0 protocol) ────────────
 
@@ -141,7 +142,7 @@ export function accumulateJobUsage(
  *
  *  3. On completion the runner builds a STEER MESSAGE (buildSubagentSteer)
  *     and hands it to the wake pipeline (src/server/jobs.ts): a user-role
- *     UIMessage carrying the result — a text part with what the MODEL needs
+ *     result-carrying native marker — the content is what the MODEL needs
  *     (the research brief, the builder's notes), plus a data-subagent-artifact
  *     part with what the UI renders (the full result: brief + sources /
  *     SVG / demo HTML). Provider conversion drops data parts, so artifact
@@ -245,6 +246,14 @@ export interface PdfResult {
 }
 
 // ─── Sub-agent steer messages (THE ASYNC PROTOCOL §3–4) ─────────────────────
+//
+// Wave B (owner-approved 2026-09-26): steers are NATIVE record messages —
+// LhMarkerMessage customs (role "custom"), the custom-message taxonomy's
+// wake members. The model-facing text rides `content` (single-sourced
+// below); the UI payload (the artifact, the abort badge) rides `details`
+// and never reaches the model (toLlmMessages maps the marker to a user
+// message carrying `content` only). The deterministic id (`steer_<jobId>`)
+// IS the idempotency key — steerDelivered matches on it.
 
 /** Message metadata marking a sub-agent steer (contracts.ts §3). */
 export interface SubagentResultMeta {
@@ -264,40 +273,14 @@ export interface SubagentArtifactData {
 	result: ResearchResult | DemoResult | VisualResult | PdfResult;
 }
 
-/**
- * The steer message: user-role on the wire (UIMessage roles are fixed), but
- * NEVER a learner interjection — metadata.subagentResult is the marker the
- * UI branches on, and the artifact rides the data part (stripped by provider
- * conversion, so the model sees only the text part).
- */
-export interface SubagentSteerMessage extends UIMessage {
-	role: "user";
-	metadata: { subagentResult: SubagentResultMeta };
-	parts: [
-		{ type: "text"; text: string },
-		{ type: "data-subagent-artifact"; data: SubagentArtifactData },
-	];
+/** A result steer's marker details: the UI's meta + artifact in one
+ *  payload (the projection splits it into metadata + data part). */
+export interface SteerDetails extends SubagentResultMeta {
+	result: ResearchResult | DemoResult | VisualResult | PdfResult;
 }
 
-/** The abort steer: user-role like any steer, but NO artifact part —
- * there is no result to render, only the teacher-facing text. Shares the
- * result steer's deterministic id space (`steer_${jobId}`): steerDelivered
- * matches on metadata jobId, so an abort and a (racing) result steer
- * can never BOTH deliver — exactly one wakes the teacher. */
-export interface AbortSteerMessage extends UIMessage {
-	role: "user";
-	metadata: { subagentResult: SubagentResultMeta & { aborted: true } };
-	parts: [
-		{ type: "text"; text: string },
-		{ type: "data-subagent-aborted"; data: SubagentResultMeta & { aborted: true } },
-	];
-}
-
-/** Anything the wake pipeline may queue and deliver. */
-export type SteerMessage =
-	| SubagentSteerMessage
-	| AbortSteerMessage
-	| ProbeHandoffSteerMessage;
+/** Anything the wake pipeline may queue and deliver — a native marker. */
+export type SteerMessage = LhMarkerMessage;
 
 /** Whether a result is the failure shape (html/svg empty, failure brief). */
 export function isSubagentFailure(
@@ -354,35 +337,38 @@ function steerText(kind: JobKind, result: ResearchResult | DemoResult | VisualRe
 export function buildSubagentSteer(
 	job: Pick<JobRecord, "id" | "kind" | "toolCallId">,
 	result: ResearchResult | DemoResult | VisualResult | PdfResult,
-): SubagentSteerMessage {
+): SteerMessage {
 	return {
 		id: `steer_${job.id}`,
-		role: "user",
-		metadata: { subagentResult: { jobId: job.id, kind: job.kind, toolCallId: job.toolCallId } },
-		parts: [
-			{ type: "text", text: steerText(job.kind, result) },
-			{ type: "data-subagent-artifact", data: { kind: job.kind, result } },
-		],
+		role: "custom",
+		customType: "subagent-steer",
+		content: steerText(job.kind, result),
+		display: true,
+		details: {
+			jobId: job.id,
+			kind: job.kind,
+			toolCallId: job.toolCallId,
+			result,
+		},
+		timestamp: Date.now(),
 	};
 }
 
 /** Build the abort steer for an aborted job (pure — shared by the
  * abort path in src/server/jobs.ts and tests). Same id space as the result
- * steer; see AbortSteerMessage. */
+ * steer (same id space — exactly one delivers). */
 export function buildAbortSteer(
 	job: Pick<JobRecord, "id" | "kind" | "toolCallId">,
-): AbortSteerMessage {
+): SteerMessage {
 	const meta = { jobId: job.id, kind: job.kind, toolCallId: job.toolCallId, aborted: true } as const;
 	return {
 		id: `steer_${job.id}`,
-		role: "user",
-		metadata: { subagentResult: meta },
-		parts: [
-			{ type: "text", text: abortText(job.kind) },
-			// The message-type marker (the custom-message scheme): the UI
-			// renders the abort badge off this part, not off metadata.
-			{ type: "data-subagent-aborted", data: meta },
-		],
+		role: "custom",
+		customType: "subagent-abort",
+		content: abortText(job.kind),
+		display: true,
+		details: meta,
+		timestamp: Date.now(),
 	};
 }
 
@@ -403,34 +389,19 @@ function abortText(kind: JobKind): string {
 // probe_done's execute queues this through the same wake pipeline; the
 // pump fires it once the prober's turn ends (gates + grace). It carries no
 // artifact — the assessment it references is durable in the transcript as
-// the probe_done tool part. Deterministic id per chat: exactly one
-// handoff, idempotent re-delivery.
+// the probe_done tool result. Deterministic id per chat: exactly one
+// handoff, idempotent re-delivery. The marker's content is HANDOFF_TEXT
+// (core/contracts/chat.ts — single source); the UI renders the quiet
+// system line off the customType. Nothing human-looking is persisted, ever.
 
-export interface ProbeHandoffSteerMessage extends UIMessage {
-	id: `steer_probe_${string}`;
-	role: "user";
-	metadata: { probeHandoff: { chatId: string } };
-	/** The custom-message scheme (2026-09-12): NO text part — the wake is
-	 *  scaffolding, not speech. The model-facing instruction is owned by the
-	 *  adapter (record-adapter.ts flattens this part to HANDOFF_TEXT in
-	 *  core/contracts/chat.ts); the UI renders the quiet system line off the
-	 *  part. Nothing human-looking is persisted, ever. */
-	parts: [{ type: "data-probe-handoff"; data: { chatId: string } }];
-}
-
-export function buildProbeHandoffSteer(chatId: string): ProbeHandoffSteerMessage {
-	return {
-		id: `steer_probe_${chatId}`,
-		role: "user",
-		metadata: { probeHandoff: { chatId } },
-		parts: [{ type: "data-probe-handoff", data: { chatId } }],
-	};
+export function buildProbeHandoffSteer(chatId: string): SteerMessage {
+	return newHandoffMessage(chatId);
 }
 
 /** True when the transcript already carries this steer — idempotent
  *  delivery for ANY steer kind: every steer id is deterministic per its
  *  event (steer_<jobId> for jobs, steer_probe_<chatId> for the handoff). */
-export function steerDelivered(messages: UIMessage[], steerId: string): boolean {
+export function steerDelivered(messages: LhMessage[], steerId: string): boolean {
 	return messages.some((m) => m.id === steerId);
 }
 

@@ -1,10 +1,9 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
 import { probeDoneInputSchema, type ProbeDoneResult } from "../../core/contracts.ts";
-import type { UIMessage } from "ai";
-import { findPendingToolCall } from "../../core/pending.ts";
+import { danglingQuestionOf, hasProbeDone, type LhMessage } from "../../core/native-messages.ts";
 import type { ChatStore } from "../../core/ports.ts";
-import { buildProbeHandoffSteer, type ProbeHandoffSteerMessage } from "../../core/contracts.ts";
+import { buildProbeHandoffSteer, type SteerMessage } from "../../core/contracts.ts";
 
 /** What the probe_done tool closes over. */
 export interface ProbeDoneContext {
@@ -13,15 +12,14 @@ export interface ProbeDoneContext {
 	chatStore: ChatStore;
 	/** Queue the handoff steer (the wake pipeline — src/server/jobs.ts).
 	 *  Injected so this module never imports the server seam. */
-	deliver: (steer: ProbeHandoffSteerMessage) => void;
+	deliver: (steer: SteerMessage) => void;
 }
 
-/** Does the transcript already carry a concluded probe (any state)? */
-function probeConcluded(messages: UIMessage[]): boolean {
-	for (const m of messages) {
-		if (m.parts.some((p) => p.type === "tool-probe_done")) return true;
-	}
-	return false;
+/** Does the transcript already carry a concluded probe (any state)?
+ *  Wave B: the native scan (any probe_done tool call, any state) — same
+ *  semantics the UIMessage part scan had. */
+function probeConcluded(messages: readonly LhMessage[]): boolean {
+	return hasProbeDone(messages);
 }
 
 /**
@@ -64,7 +62,7 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, AgentTool<a
 				const record = ctx.chatStore.getChat(ctx.chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
 
-				if (findPendingToolCall(record.messages) !== null) {
+				if (danglingQuestionOf(record.messages) !== null) {
 					return {
 						ok: false,
 						error:

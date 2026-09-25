@@ -50,16 +50,15 @@ import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
 import { createJobRunner, demoModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
 import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
-import { buildAbortSteer, buildSubagentSteer, isSubagentFailure, type SubagentSteerMessage } from "../src/core/contracts.ts";
+import { buildAbortSteer, buildSubagentSteer, isSubagentFailure, type SteerMessage } from "../src/core/contracts.ts";
 import type { JobRecord } from "../src/core/contracts.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { createTeacherAgent, type TeachingAgent } from "../src/agent/teacher-agent.ts";
-import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
+import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
+import { projectNative } from "../src/core/projection.ts";
 import type { PiEngine } from "../src/agent/models.ts";
-import type { UIMessage } from "ai";
 
 /**
  * A fake deliver seam + a runner wired like the chat-handler's, per test:
@@ -67,13 +66,13 @@ import type { UIMessage } from "ai";
  * record reads exactly as production does after the wake turn completes.
  */
 function testRunner() {
-	const steers: SubagentSteerMessage[] = [];
+	const steers: SteerMessage[] = [];
 	const runner = createJobRunner({
 		chatStore,
 		jobStore,
 		deliver: async (steer) => {
 			steers.push(steer);
-			const jobId = steer.metadata.subagentResult.jobId;
+			const jobId = (steer.details as { jobId: string }).jobId;
 			const job = jobStore.getJob(jobId);
 			if (job && job.status === "running") {
 				const failed = job.result ? isSubagentFailure(job.kind, job.result as never) : true;
@@ -349,7 +348,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 			{ id: "jd", kind: "demo", toolCallId: "cd" },
 			{ title: "Damped oscillator", html: DEMO_HTML, tested: true },
 		);
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.match(html, /sandbox="allow-scripts"/);
 		assert.ok(!html.includes("allow-same-origin"), "never allow-same-origin");
 		assert.match(html, /demo-resize/);
@@ -365,7 +364,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 			{ id: "jd", kind: "demo", toolCallId: "cd" },
 			{ title: "T", html: "", tested: true, notes: "FAILED: never passed verification" },
 		);
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.match(html, /FAILED: never passed verification/);
 		assert.ok(!html.includes("<iframe"), "no iframe for a failed build");
 	});
@@ -376,7 +375,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 			{ id: "jv", kind: "visual", toolCallId: "cv" },
 			{ svg, notes: "Looking at the render, the diagram is clean and accurate." },
 		);
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.ok(html.includes("circle"), "svg content rendered inline");
 		assert.match(html, /Figure/);
 		assert.match(html, /svg\]:w-full/, "svg scales to the display area's full width");
@@ -385,16 +384,19 @@ describe("steer card rendering (the delivered artifact)", () => {
 
 	it("renders the abort chip for an aborted job's steer (2026-09 dock semantics; the message type is the marker PART)", () => {
 		const steer = buildAbortSteer({ id: "jc", kind: "research", toolCallId: "cc" });
-		assert.equal(steer.metadata.subagentResult.aborted, true);
-		assert.equal(steer.parts.length, 2, "text (teacher-facing) + the data-subagent-aborted marker part");
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		// Wave B: the steer is a native marker — the card renders its
+		// PROJECTION (the same view the transcript renderer hands it).
+		const view = projectNative([steer])[0]!;
+		assert.equal((steer.details as { aborted: boolean }).aborted, true);
+		assert.equal(view.parts.length, 2, "text (teacher-facing) + the data-subagent-aborted marker part");
+		const html = renderToStaticMarkup(<SubagentSteerCard message={view as never} />);
 		assert.match(html, /job-aborted-badge/);
 		assert.match(html, /research/, "the job's kind, lower-cased like the complete-badge idiom");
 		assert.match(html, /aborted by the learner/);
 		// the teacher-facing protocol text never renders for the learner
 		assert.ok(!html.includes("no brief is coming"), "no protocol glue in the chip");
 		// the badge renders off the PART, not metadata (the custom-message scheme)
-		const noMeta = { ...steer, metadata: {} } as typeof steer;
+		const noMeta = { ...view, metadata: {} };
 		const htmlNoMeta = renderToStaticMarkup(<SubagentSteerCard message={noMeta as never} />);
 		assert.match(htmlNoMeta, /job-aborted-badge/, "metadata is pump mechanics, never the render seam");
 	});
@@ -410,7 +412,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 				],
 			},
 		);
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.match(html, /Research/);
 		assert.match(html, /complete/);
 		assert.match(html, /2 sources/);
@@ -435,7 +437,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 				pagesConsulted: [1, 2],
 			},
 		);
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.match(html, /PDF/);
 		assert.match(html, /reading complete/);
 		assert.match(html, /read 1 page/, "the badge counts READ pages, not search hits");
@@ -451,7 +453,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 			{ id: "jpf2", kind: "pdf", toolCallId: "cpf2" },
 			{ path: "/tmp/doc.pdf", question: "q", brief: "PDF failed: the file could not be opened", pagesRead: [], pagesConsulted: [] },
 		);
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.match(html, /pdf-brief-card/);
 		assert.match(html, /failed/);
 		assert.match(html, /could not be opened/);
@@ -460,7 +462,7 @@ describe("steer card rendering (the delivered artifact)", () => {
 
 	it("renders the visual failure note with no svg when the build FAILED", () => {
 		const steer = buildSubagentSteer({ id: "jv", kind: "visual", toolCallId: "cv" }, { svg: "", notes: "FAILED: iteration limit" });
-		const html = renderToStaticMarkup(<SubagentSteerCard message={steer as never} />);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.match(html, /FAILED: iteration limit/);
 		assert.ok(!html.includes("circle") && !html.includes("<svg"), "no svg for a failed build");
 	});
@@ -675,14 +677,32 @@ describe("demo/visual job runners", () => {
 	it("runJob completes a demo: result on the job, steer via deliver, ack stays on the part", async () => {
 		const chat = chatStore.createChat("Test: demo runner");
 		createdChats.push(chat.id);
+		// Wave B: a NATIVE fixture (the record holds agent history) — the
+		// runner's transcript scan reads it through the projection.
 		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "show me compounding" }] },
+			{ id: "u1", role: "user", content: "show me compounding", timestamp: 1 } as never,
 			{
 				id: "a1",
 				role: "assistant",
-				parts: [{ type: "tool-demo", toolCallId: "call-d1", state: "output-available", input: DEMO_INPUT, output: "Dispatched." }],
-			},
-		] as never);
+				content: [{ type: "toolCall", id: "call-d1", name: "demo", arguments: DEMO_INPUT as never }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "stop",
+				timestamp: 1,
+			} as never,
+			{
+				id: "r1",
+				role: "toolResult",
+				toolCallId: "call-d1",
+				toolName: "demo",
+				content: [{ type: "text", text: "Dispatched." }],
+				details: "Dispatched.",
+				isError: false,
+				timestamp: 1,
+			} as never,
+		]);
 
 		const job = jobStore.createJob({ kind: "demo", chatId: chat.id, toolCallId: "call-d1" });
 		createdJobs.push(job.id);
@@ -712,15 +732,14 @@ describe("demo/visual job runners", () => {
 
 		// The steer carries the artifact for the renderer.
 		assert.equal(steers.length, 1, "exactly one steer");
-		const data = steers[0]!.parts[1];
-		assert.ok(data.type === "data-subagent-artifact");
-		assert.equal(data.data.kind, "demo");
-		assert.deepEqual(data.data.result, result);
+		const data = steers[0]!.details as { kind: string; result: unknown };
+		assert.equal(data.kind, "demo");
+		assert.deepEqual(data.result, result);
 
 		// The tool part keeps the DISPATCH ACK forever — the result never
 		// rewrites it (the teacher gets the result once, via the steer).
-		const saved = chatStore.getChat(chat.id)!;
-		const part = saved.messages[1]!.parts.find((p) => p.type === "tool-demo");
+		const saved = projectNative(chatStore.getChat(chat.id)!.messages);
+		const part = saved[1]!.parts.find((p) => p.type === "tool-demo");
 		assert.ok(part && part.type === "tool-demo", "demo tool part persisted");
 		assert.equal(typeof (part as { output?: unknown }).output, "string", "part output is the ack, not the result");
 	});
@@ -729,13 +748,29 @@ describe("demo/visual job runners", () => {
 		const chat = chatStore.createChat("Test: visual runner failure");
 		createdChats.push(chat.id);
 		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", parts: [{ type: "text", text: "draw it" }] },
+			{ id: "u1", role: "user", content: "draw it", timestamp: 1 } as never,
 			{
 				id: "a1",
 				role: "assistant",
-				parts: [{ type: "tool-visual", toolCallId: "call-v1", state: "output-available", input: { brief: "b" }, output: "Dispatched." }],
-			},
-		] as never);
+				content: [{ type: "toolCall", id: "call-v1", name: "visual", arguments: { brief: "b" } as never }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "stop",
+				timestamp: 1,
+			} as never,
+			{
+				id: "r1",
+				role: "toolResult",
+				toolCallId: "call-v1",
+				toolName: "visual",
+				content: [{ type: "text", text: "Dispatched." }],
+				details: "Dispatched.",
+				isError: false,
+				timestamp: 1,
+			} as never,
+		]);
 
 		const job = jobStore.createJob({ kind: "visual", chatId: chat.id, toolCallId: "call-v1" });
 		createdJobs.push(job.id);
@@ -753,9 +788,7 @@ describe("demo/visual job runners", () => {
 		assert.match(errored.error ?? "", /never wrote an SVG/);
 
 		assert.ok(steers[0], "failure still delivers a steer — the teacher learns the outcome");
-		const data = steers[0]!.parts[1];
-		assert.ok(data.type === "data-subagent-artifact");
-		const result = data.data.result as { svg: string; notes?: string };
+		const result = (steers[0]!.details as { result: unknown }).result as { svg: string; notes?: string };
 		assert.equal(result.svg, "");
 		assert.match(result.notes ?? "", /^FAILED:/);
 	});
@@ -791,13 +824,18 @@ describe("demo/visual job runners", () => {
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
 							chatId: chat.id,
-							messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "teach me compounding" }] }],
+							// Wave B: the input-events contract — one event,
+							// never a client transcript.
+							input: { type: "text", text: "teach me compounding" },
 						}),
 					}),
-					(outgoing: UIMessage[]): TeachingAgent =>
+					// The handler hands the factory the native build options
+					// (messages are the merged record; the record IS the agent
+					// state — no adapter conversion).
+					(opts) =>
 						createTeacherAgent(undefined, {
 							engine: teacher,
-							messages: recordToPiMessages(outgoing),
+							messages: opts.messages,
 							tools: createTeacherTools({
 								chatId: chat.id,
 								chatStore,
@@ -818,14 +856,14 @@ describe("demo/visual job runners", () => {
 			const done = jobStore.getJob(job!.id)!;
 			assert.equal(done.status, "done");
 
-			const saved = chatStore.getChat(chat.id)!;
-			const part = saved.messages[1]!.parts.find((p) => p.type === "tool-demo");
+			const saved = projectNative(chatStore.getChat(chat.id)!.messages);
+			const part = saved[1]!.parts.find((p) => p.type === "tool-demo");
 			assert.ok(part && part.type === "tool-demo", "demo tool part persisted");
 			assert.equal(part.state, "output-available", "the part resolved with the ack at dispatch time");
 			assert.match(String((part as { output?: unknown }).output), /fire-and-forget/);
 
 			assert.equal(steers.length, 1, "one job, one steer");
-			assert.equal(steers[0]!.metadata.subagentResult.jobId, job!.id);
+			assert.equal((steers[0]!.details as { jobId: string }).jobId, job!.id);
 
 			// Idempotency: dispatch dedupes by toolCallId — no second job.
 			assert.equal(jobStore.listJobs(chat.id).length, 1, "no duplicate job for the same tool part");

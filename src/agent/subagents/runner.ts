@@ -1,4 +1,4 @@
-import { isToolUIPart, type UIMessage } from "ai";
+import { isToolUIPart } from "ai";
 import type { PiEngine } from "../models.ts";
 import type { SearchProvider } from "../../core/search.ts";
 import {
@@ -14,7 +14,7 @@ import {
 	type PdfToolInput,
 	type ResearchResult,
 	type ResearchToolInput,
-	type SubagentSteerMessage,
+	type SteerMessage,
 	type UsageStepLike,
 	type VisualResult,
 	type VisualToolInput,
@@ -23,6 +23,8 @@ import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
 import type { ModelRole } from "../../../config.ts";
 import { ROLE_SLOT, modelsNotConfigured, type ModelSlotName, type ProviderKeyMissing } from "../../core/settings.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
+import { projectNative } from "../../core/projection.ts";
+import type { UIMessage } from "ai";
 import { runDemoBuilder } from "./demo-builder.ts";
 import { runPdfReaderAgent } from "./pdf-reader.ts";
 import { runResearcherAgent } from "./researcher.ts";
@@ -69,7 +71,7 @@ export interface JobRunnerDeps {
 	 * steer is delivered (the wake turn completed and the job status
 	 * flipped); rejects when delivery fails unrecoverably.
 	 */
-	deliver: (steer: SubagentSteerMessage) => Promise<void>;
+	deliver: (steer: SteerMessage) => Promise<void>;
 	/** Settings-resolved engine per role (model slots wave, 2026-09-20):
 	 *  the role-override → slot chain, read FRESH per job (the server
 	 *  wiring passes effectiveSettings-based resolution). Test overrides
@@ -274,7 +276,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		if (input) return input;
 		const chat = chatStore.getChat(job.chatId);
 		if (!chat) return undefined;
-		return (findToolPart(chat.messages, job.toolCallId)?.input ?? undefined) as JobToolInput | undefined;
+		// Wave B: the record is native history — the transcript scan reads
+		// through the projection (same shape the old record held).
+		return (findToolPart(projectNative(chat.messages), job.toolCallId)?.input ?? undefined) as
+			| JobToolInput
+			| undefined;
 	}
 
 	// ─── shared plumbing ────────────────────────────────────────────────────

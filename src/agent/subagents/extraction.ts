@@ -28,6 +28,7 @@ import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../
 import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/coverage.ts";
+import { projectNative } from "../../core/projection.ts";
 
 /**
  * The extraction pipeline (vision §1 construction, 2026-09-02 redesign) — the
@@ -92,10 +93,12 @@ import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/co
 export function transcriptView(record: ChatRecord): string {
 	// The shared seam (core/coverage.ts messageViewLines): the LLM's prompt
 	// view and the coverage fingerprint use ONE line builder, so "covered"
-	// means — exactly — what the extractor saw.
+	// means — exactly — what the extractor saw. Wave B: the record is native
+	// history — the extraction view reads through the one-way projection.
 	const lines = [`SESSION: ${record.title}`];
-	record.messages.forEach((message, index) => {
-		lines.push(...messageViewLines(message as UIMessage, (message as UIMessage).id || `m${index}`));
+	const projected = projectNative(record.messages);
+	projected.forEach((message, index) => {
+		lines.push(...messageViewLines(message, message.id || `m${index}`));
 	});
 	return lines.join("\n");
 }
@@ -868,7 +871,8 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// engines AND their providers' keys; a refusal lands BEFORE any
 			// stage runs (typed — the trigger skips, routes surface 503).
 			refuseIfStagesUnready();
-			const covered = coverageOf(record.messages as UIMessage[], graphStore.readCoverage(), chatId);
+			const projected = projectNative(record.messages);
+			const covered = coverageOf(projected, graphStore.readCoverage(), chatId);
 			if (covered.uncovered.length === 0) {
 				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
 				return { nodes: 0, edges: 0, events: 0 };
@@ -883,11 +887,11 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				// The batch's prompt view: SESSION header + the batch's lines,
 				// same provenance [id] tags the fingerprints used (coverage
 				// and prompt share ONE line builder — core/coverage.ts).
-				const mids = record.messages.map((m, i) => ((m as UIMessage).id || `m${i}`) as string);
+				const mids = projected.map((m, i) => (m.id || `m${i}`) as string);
 				const view = [
 					`SESSION: ${record.title}`,
 					...batch.flatMap((slot) => {
-						const idx = record.messages.indexOf(slot.message);
+						const idx = projected.indexOf(slot.message);
 						return messageViewLines(slot.message, mids[idx] ?? slot.message.id);
 					}),
 				].join("\n");
