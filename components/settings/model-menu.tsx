@@ -296,12 +296,23 @@ export function fontMenuResults(query: string, families: string[]): Array<string
 	return scored;
 }
 
-/** The reading-font dropdown body — search + list + the custom-family
- *  escape (the old free-text input lives here as the last resort: any
- *  family name the enumeration didn't surface). `families ===
- *  undefined` is the enumerating state (desktop's queryLocalFonts); the
- *  curated fallback list arrives as plain families with a footer that
- *  says so honestly. */
+/** The custom-family action row's decision (pure, 2026-09-26): a typed
+ *  query that matches NO family becomes the "Use '<query>'" custom pick —
+ *  a matching family is the better pick, so the action row only exists
+ *  when there is nothing else to pick. Exported for tests. */
+export function customFamilyFor(query: string, families: string[]): string | null {
+	const trimmed = query.trim();
+	if (trimmed === "") return null;
+	return fontMenuResults(query, families).length === 0 ? trimmed : null;
+}
+
+/** The reading-font dropdown body — ONE search field (owner ask
+ *  2026-09-26: "why two?"): the fuzzy machine filters the families, and
+ *  when nothing matches, a "Use '<query>'" action row commits the typed
+ *  text as a custom family — the old separate custom input is gone, the
+ *  search field absorbed its job. `families === undefined` is the
+ *  enumerating state; the curated fallback arrives as plain families with
+ *  a footer that says so honestly. */
 export function FontMenuList({
 	families,
 	effectiveFamily,
@@ -320,7 +331,6 @@ export function FontMenuList({
 }) {
 	const [query, setQuery] = useState("");
 	const [menuIdx, setMenuIdx] = useState<number | null>(null);
-	const [custom, setCustom] = useState("");
 	const searchRef = useRef<HTMLInputElement>(null);
 	const listRef = useRef<HTMLUListElement>(null);
 
@@ -334,12 +344,10 @@ export function FontMenuList({
 	}, [menuIdx]);
 
 	const results = fontMenuResults(query, families ?? []);
-
-	const commitCustom = () => {
-		const value = custom.trim();
-		if (value === "") return;
-		onPick(value);
-	};
+	// The custom-family action row: only when a typed query matches
+	// nothing (a matching family is the better pick). Enter picks it.
+	const customFamily = customFamilyFor(query, families ?? []);
+	const walkable: Array<string | null> = customFamily !== null ? ["__custom__"] : results;
 
 	return (
 		<>
@@ -355,18 +363,18 @@ export function FontMenuList({
 					if (e.key === "ArrowDown" || e.key === "ArrowUp") {
 						e.preventDefault();
 						e.stopPropagation();
-						if (results.length === 0) return;
+						if (walkable.length === 0) return;
 						setMenuIdx((i) =>
 							e.key === "ArrowDown"
-								? Math.min((i ?? -1) + 1, results.length - 1)
-								: Math.max((i ?? results.length) - 1, 0),
+								? Math.min((i ?? -1) + 1, walkable.length - 1)
+								: Math.max((i ?? walkable.length) - 1, 0),
 						);
 					} else if (e.key === "Enter") {
-						const chosen = results[menuIdx ?? 0];
+						const chosen = walkable[menuIdx ?? 0];
 						if (chosen !== undefined) {
 							e.preventDefault();
 							e.stopPropagation();
-							onPick(chosen);
+							onPick(chosen === "__custom__" ? customFamily : chosen);
 						}
 					}
 				}}
@@ -374,9 +382,6 @@ export function FontMenuList({
 				className="lh-input mb-1.5 w-full rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
 			/>
 			{!families && <div className="px-2 py-3 text-center text-muted-foreground">Loading fonts…</div>}
-			{families && results.length === 0 && (
-				<div className="px-2 py-3 text-center text-muted-foreground">No fonts match — type a family below.</div>
-			)}
 			<ul ref={listRef} data-testid="font-list" className="flex max-h-72 flex-col overflow-y-auto px-1">
 				{families &&
 					results.map((family, i) => {
@@ -399,40 +404,23 @@ export function FontMenuList({
 							</li>
 						);
 					})}
+				{families && customFamily !== null && (
+					<li>
+						<button
+							type="button"
+							data-testid="font-option-custom"
+							data-idx={0}
+							onClick={() => onPick(customFamily)}
+							className={`flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted ${
+								menuIdx === 0 ? "bg-accent/40 ring-1 ring-inset ring-border" : ""
+							}`}
+						>
+							<span className="truncate text-card-foreground">Use “{customFamily}”</span>
+							<span className="shrink-0 text-muted-foreground">custom</span>
+						</button>
+					</li>
+				)}
 			</ul>
-			{/* The manual escape path — the old free-text input, living
-			    inside the dropdown as its last row. Any family name the
-			    enumeration didn't surface commits verbatim. */}
-			<div className="mt-1 flex items-center gap-1.5 border-t px-1 pt-1.5">
-				<input
-					data-testid="font-custom-input"
-					value={custom}
-					onChange={(e) => setCustom(e.target.value)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") {
-							e.preventDefault();
-							e.stopPropagation();
-							commitCustom();
-						}
-					}}
-					placeholder="Type a family name…"
-					aria-label="Custom font family"
-					className="lh-input min-w-0 flex-1 rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
-				/>
-				<button
-					type="button"
-					data-testid="font-custom-set"
-					onClick={commitCustom}
-					disabled={custom.trim() === ""}
-					className={`shrink-0 rounded-lg px-2 py-1.5 text-xs underline-offset-2 ${
-						custom.trim() === ""
-							? "cursor-not-allowed text-muted-foreground/40"
-							: "text-foreground hover:underline"
-					}`}
-				>
-					Set
-				</button>
-			</div>
 			{footer && <div className="px-2 pt-1.5 text-xs text-muted-foreground">{footer}</div>}
 		</>
 	);

@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
-import { FontMenuList, fontMenuResults } from "../components/settings/model-menu";
+import { FontMenuList, customFamilyFor, fontMenuResults } from "../components/settings/model-menu";
 import {
 	CURATED_FALLBACK_FONTS,
 	DEFAULT_READING_FONT,
@@ -77,8 +77,12 @@ describe("FontMenuList (thin SSR)", () => {
 		assert.ok(html.includes('data-testid="font-option-Georgia"'), "a family row");
 		assert.ok(html.includes('data-testid="font-option-Menlo"'), "another family row");
 		assert.ok(html.includes('data-testid="font-search"'), "the search field");
-		assert.ok(html.includes('data-testid="font-custom-input"'), "the custom-family escape");
-		assert.ok(html.includes('data-testid="font-custom-set"'), "the Set button");
+		// ONE field (owner ask 2026-09-26: "why two?") — the custom-family
+		// input is gone; the search field absorbed its job via the
+		// "Use '<query>'" action row.
+		assert.ok(!html.includes('data-testid="font-custom-input"'), "no separate custom input");
+		assert.ok(!html.includes('data-testid="font-custom-set"'), "no Set button");
+		assert.ok(!html.includes("Type a family name"), "no second field placeholder");
 		assert.ok(html.includes("Search fonts…"), "the search placeholder");
 	});
 
@@ -147,5 +151,25 @@ describe("the emphasis-ink factory ruling (globals.css)", () => {
 		assert.equal((html.match(/Empty = same as text/g) ?? []).length, 2, "bold + italic rows");
 		assert.ok(!html.includes("#ee928c"));
 		assert.ok(!html.includes("#6fa9d6"));
+	});
+});
+
+describe("customFamilyFor — the single-field custom escape (2026-09-26)", () => {
+	const families = ["Arial", "CMU Serif", "Georgia", "Menlo"];
+
+	it("a query matching nothing becomes the custom pick", () => {
+		assert.equal(customFamilyFor("Baskerville", families), "Baskerville");
+		assert.equal(customFamilyFor("  zzz  ", families), "zzz");
+	});
+
+	it("a matching family is the better pick — no action row", () => {
+		assert.equal(customFamilyFor("georgia", families), null);
+		// the default row matches too — "source"/"sans"/"default" queries pick it
+		assert.equal(customFamilyFor("source", families), null);
+	});
+
+	it("an empty query is never a custom pick", () => {
+		assert.equal(customFamilyFor("", families), null);
+		assert.equal(customFamilyFor("   ", families), null);
 	});
 });
