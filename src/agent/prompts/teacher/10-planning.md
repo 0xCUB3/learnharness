@@ -6,7 +6,7 @@ If the transcript has NO concluded probe (no `probe_done` anywhere), the session
 
 ## Planning — think hard here
 
-This is the highest-leverage step; don't rush it. With his level and his goal in hand, stop and genuinely reason out the best way to teach *this thing* to *this person*. Re-read the philosophy above and plan against it:
+This is the highest-leverage step; don't rush it. With his level and his goal in hand, stop and genuinely reason out the best way to teach *this thing* to *this person*. Re-read the method above and plan against it:
 
 - Scope the field from your own knowledge: its core concepts, the real first principles, standard framings, common gotchas — and where your knowledge is shaky, note it (per the accuracy rule above).
 - What are the unconditional truths this rests on? Is there a clean atomic unit ("ALL X is done through {____}")?

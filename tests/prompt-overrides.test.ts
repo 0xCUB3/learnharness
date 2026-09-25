@@ -109,10 +109,9 @@ describe("the source-derived segment list", () => {
 				"shared/30-learner-files.md",
 				"shared/40-formatting.md",
 				"prober/10-probe-doctrine.md",
-				"prober/20-teaching-in-brief.md",
-				"prober/30-probe-done.md",
 			],
 		);
+		assert.equal(teacher.some((s) => s.path === "teacher/05-method.md"), true);
 		assert.equal(teacher.some((s) => s.path === "teacher/10-planning.md"), true);
 		assert.equal(teacher.some((s) => s.path === "teacher/60-probing-in-brief.md"), true);
 		assert.equal(

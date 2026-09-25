@@ -2,7 +2,7 @@
 
 System prompts are composed at agent construction (src/agent/teacher-agent.ts), one composition per agent — the probe/teach split (docs/probe-teach-split.md):
 
-1. `src/agent/system-prompt.md` — the SHARED base: the philosophy (why the system exists), the two principles, accuracy. Owned by the master seam; do not edit from a worker.
+1. `src/agent/system-prompt.md` — the SHARED base: the philosophy (why the system exists) and the accuracy rule. Owned by the master seam; do not edit from a worker. The teaching method (Principle i / Principle ii, the click, the arc, the hedge) lives in `teacher/05-method.md` — teacher-only since the prober never teaches.
 2. Every numeric-prefix `*.md` fragment in the agent's directory (`prober/` or `teacher/`), in **sorted filename order**, joined with `---` separators. The loader enforces the numeric prefix (`\d*-*.md`) — other files (like this README) never enter the model's prompt.
 
 Rules for adding a fragment:
