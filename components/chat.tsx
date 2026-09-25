@@ -3,7 +3,7 @@
 import { createContext, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { lastAssistantMessageIsCompleteWithToolCalls } from "ai";
-import { createChatTransport } from "@/components/chat-transport";
+import { createReattachingTransport } from "@/components/chat-transport";
 import { SetupDialog } from "@/components/setup-dialog";
 import { Hint } from "@/components/ui/hint";
 import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
@@ -174,11 +174,22 @@ export function Chat({
 	 *  only decides whether the pill rides the composer. */
 	initialConfigured?: boolean;
 }) {
-	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop, clearError } =
+	// Reattach plumbing (background-turn runner wave): the transport holds
+	// two stable refs — the settled terminal's callback (assigned below,
+	// once syncFromServer exists) and the LIVE last-message id (the
+	// continuation seam — see chat-transport.ts). Refs, not closures, so
+	// the per-render transport recreation can never capture a stale one.
+	const reattachSettledRef = useRef<() => void>(() => {});
+	const reattachLastIdRef = useRef<string | undefined>(undefined);
+
+	const { messages, sendMessage, addToolOutput, setMessages, status, error, stop, clearError, resumeStream } =
 		useChat<TeacherUIMessage>({
 			id: chatId,
 			messages: initialMessages,
-			transport: createChatTransport(chatId),
+			transport: createReattachingTransport(chatId, {
+				onSettled: () => reattachSettledRef.current(),
+				lastMessageId: () => reattachLastIdRef.current,
+			}),
 			// After the learner answers (addToolOutput), automatically send the
 			// continuation request so the teacher reacts to the answer.
 			sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
@@ -193,10 +204,30 @@ export function Chat({
 		}
 	}, [initialPrompt, initialMessages.length, sendMessage]);
 
-	// A turn running server-side but attached to no client of ours (navigated
-	// away mid-turn, returned while in flight): the record is write-ahead
-	// persisted (answer included), but the teacher's reaction only lands when
-	// the orphaned turn finishes — poll for that, don't resurrect.
+	// The reattach seam's live half: the transport compares the stream's
+	// start id against the transcript's CURRENT last message — the
+	// continuation rewrite keys on it (chat-transport.ts, seam 3).
+	reattachLastIdRef.current = messages.at(-1)?.id;
+
+	// Reattach on mount (stream-reattach wave): a turn that outlived its
+	// client (navigate away mid-turn, back while in flight) is re-entered
+	// through the SAME rendering path as a live one — resumeStream() feeds
+	// the replay burst (instant catch-up) then the live deltas into the
+	// SDK's own chunk pipeline. Raced settle is the transport's turn-settled
+	// terminal: onSettled refetches the record. No once-ref guard: every
+	// mount resumes (the deps are stable — this fires once per mount), and
+	// React StrictMode's dev double-mount ABORTS the first attempt at
+	// dispose — the retry must be allowed to run.
+	useEffect(() => {
+		if (initiallyInFlight) void resumeStream();
+	}, [resumeStream, initiallyInFlight]);
+
+	// A turn running server-side, attached to no live view of ours (navigate
+	// away mid-turn, or a wake turn discovered mid-session): the reattach
+	// stream is the primary channel (resumeStream — the same rendering path
+	// as a live turn); this flag is the FALLBACK liveness source — it gates
+	// the composer, shows the pre-first-chunk shimmer, and drives the 1500ms
+	// record poll that adopts at settle if the stream can't attach.
 	const [turnInFlight, setTurnInFlight] = useState(initiallyInFlight ?? false);
 
 	// Session title: click-to-rename (owner, 2026-09-17). Clicking the header
@@ -269,17 +300,32 @@ export function Chat({
 		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
 	}, [chatId]);
 
-	// The Esc chain's last link: abort the turn. Honest scope (the composer's
-	// Stop has the same rule): only a LOCAL stream has a client request to
-	// stop — a server-side wake turn aborts nothing (the stop would be a
-	// no-op lie), so Esc is simply inert while one runs.
+	// The Esc chain's last link: abort the turn. The background runner
+	// decoupled turns from views, so the abort is ALWAYS the remote kill
+	// (POST /api/activity/abort — any in-flight turn dies server-side, our
+	// view renders the aborted-partial close when the finish arrives). A
+	// LOCAL view also detaches first — stop() settles the client instantly
+	// and keeps the partial; the server-side partial persists via the
+	// abort's own onFinish. Inert when nothing runs (busyRef gate).
+	const abortInFlightTurn = useCallback(() => {
+		if (localStreamRef.current) stop();
+		void fetch("/api/activity/abort", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ kind: "turn", id: chatId }),
+		}).catch(() => {
+			/* transient — the turn settles on its own; the record poll adopts */
+		});
+		// 409 not_running is the benign raced-settle: the stream's finish
+			// already settled the view (or the poll fallback adopts) — nothing owed.
+	}, [chatId, stop]);
 	useEffect(() => {
 		const onAbort = () => {
-			if (localStreamRef.current) stop();
+			if (busyRef.current) abortInFlightTurn();
 		};
 		window.addEventListener("lh:kbd-abort-turn", onAbort);
 		return () => window.removeEventListener("lh:kbd-abort-turn", onAbort);
-	}, [stop]);
+	}, [abortInFlightTurn]);
 	// Mount continuation: if the stored transcript ends with a fulfilled tool
 	// (a job result landed while no client was open), resume the lesson — the
 	// SDK's sendAutomaticallyWhen only fires inside addToolOutput, so reloads
@@ -305,6 +351,31 @@ export function Chat({
 	const pending = findPendingToolCall(messages);
 	const localStream = status === "submitted" || status === "streaming";
 	const busy = localStream || turnInFlight;
+	const busyRef = useRef(busy);
+	busyRef.current = busy;
+
+	// The attach handoff (stream-reattach wave): the moment a resumed
+	// stream takes over the rendering — the SDK left "ready", so
+	// submitted/streaming means chunks are flowing — localStream covers
+	// busy/shimmer/gates on its own. Keeping turnInFlight set would only
+	// double-render the shimmer and keep the 1500ms fallback poll fighting
+	// the live stream it was a fallback FOR.
+	useEffect(() => {
+		if (turnInFlight && (status === "submitted" || status === "streaming")) setTurnInFlight(false);
+	}, [status, turnInFlight]);
+
+	// Mid-session discovery (jobs poll, handoff watch): a server-side turn
+	// exists that none of our views holds — attach to it through the same
+	// resume path as mount reattach (live rendering, instant catch-up). The
+	// flag stays as the fallback until the stream attaches (watcher above);
+	// concurrent resume calls are SDK-guarded (a newer one aborts the older
+	// request), so discovery ticks re-firing this are harmless.
+	const turnInFlightRef = useRef(turnInFlight);
+	turnInFlightRef.current = turnInFlight;
+	const attachToRunningTurn = useCallback(() => {
+		setTurnInFlight(true);
+		void resumeStream();
+	}, [resumeStream]);
 
 	// Teach-phase check (W5, vision §2): a pending question that lands once a
 	// plan node is OCCUPIED (phaseAt3 "teach") starts collapsed behind a
@@ -424,6 +495,16 @@ export function Chat({
 			void sendMessage();
 		}
 	}, [chatId, setMessages, sendMessage, status]);
+
+	// The settled terminal's other half (stream-reattach wave): the
+	// transport resolved turn-settled — no turn running, the record is
+	// current. Drop the fallback busy state and adopt the record (its
+	// continuation check fires the owed next turn, exactly as the poll's
+	// settle branch always did).
+	reattachSettledRef.current = () => {
+		setTurnInFlight(false);
+		void syncFromServer();
+	};
 
 	// ── Append-only record adoption (owner ground rules, 2026-09-15) ──
 	// Content delivered into the record server-side — sub-agent
@@ -641,7 +722,10 @@ export function Chat({
 							}
 						} else if (record.turnInFlight === true) {
 							// phase 2 (the watch): a wake turn started — the handoff.
-							setTurnInFlight(true); // → the wake-adoption poll takes over
+							// Attach to it live (stream-reattach wave): the same
+							// resume path as mount reattach; the record poll is
+							// the fallback while it connects.
+							attachToRunningTurn();
 							return;
 						}
 					}
@@ -658,7 +742,35 @@ export function Chat({
 			};
 		}
 		prevStatusRef.current = status;
-	}, [status, chatId, syncFromServer, syncTurns, refreshActivity]);
+	}, [status, chatId, syncFromServer, syncTurns, refreshActivity, attachToRunningTurn]);
+
+	// A stream that died MID-FLIGHT (network): the runner decoupled the turn
+	// from its view, so the server turn runs ON behind the error banner —
+	// re-enter the in-flight watch (the 1500ms fallback poll adopts at
+	// settle) instead of leaving the session blind until the next send's
+	// 409 merge-retry heals it. One record check per error transition.
+	const prevErrorStatusRef = useRef(status);
+	useEffect(() => {
+		const was = prevErrorStatusRef.current;
+		prevErrorStatusRef.current = status;
+		if (was === "error" || status !== "error") return;
+		let cancelled = false;
+		void (async () => {
+			try {
+				const res = await fetch(`/api/chats/${chatId}`);
+				if (!res.ok || cancelled) return;
+				const record = (await res.json()) as { turnInFlight?: boolean };
+				if (cancelled) return;
+				if (record.turnInFlight === true) setTurnInFlight(true);
+				else void syncFromServer();
+			} catch {
+				/* transient — the banner stands; the next send's merge-retry heals */
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [status, chatId, syncFromServer]);
 
 	// ── Central job observability (contracts.ts "THE ASYNC PROTOCOL" §4) ──
 	// ONE poll of /api/jobs drives every job surface (transcript dispatch
@@ -781,9 +893,10 @@ export function Chat({
 				setJobs(list);
 				if (nudgeActivity) refreshActivity();
 				// Wake-turn adoption: a server-side teacher turn with no client request
-				// of ours (sub-agent delivery) — the same machinery as returning
-				// mid-turn: busy state + record poll to completion.
-				if (data.turnInFlight === true && !localStreamRef.current) setTurnInFlight(true);
+				// of ours (sub-agent delivery) — attach to it LIVE through the same
+					// reattach path (instant catch-up + deltas); while we hold a local
+					// stream the turn is already ours — nothing to attach to.
+				if (data.turnInFlight === true && !localStreamRef.current) attachToRunningTurn();
 			} catch {
 				/* transient fetch failure — keep polling */
 			}
@@ -794,13 +907,16 @@ export function Chat({
 			cancelled = true;
 			clearInterval(timer);
 		};
-	}, [pollMs, jobPartCount, chatId, syncFromServer, adoptAppendOnly, refreshActivity]);
+	}, [pollMs, jobPartCount, chatId, syncFromServer, adoptAppendOnly, refreshActivity, attachToRunningTurn]);
 
-	// Re-attach after mid-turn navigation (the key fix): poll the record until
-	// the orphaned turn finishes (turnInFlight flips false server-side in
-	// onFinish, AFTER persist), then adopt the completed transcript — the
-	// syncFromServer above already runs the job-continuation check. Until then
-	// the session reads as busy: thinking shimmer, composer gated.
+	// The FALLBACK liveness poll (stream-reattach wave): runs only while the
+	// reattach stream couldn't take over — the pre-attach window, a failed
+	// resume, or a resumed stream that died mid-flight. Polls the record
+	// until the orphaned turn finishes (turnInFlight flips false server-side
+	// in onFinish, AFTER persist), then adopts the completed transcript —
+	// the syncFromServer above already runs the job-continuation check.
+	// Until then the session reads as busy: pre-first-chunk shimmer,
+	// composer gated. Steer content shows NOW via append-only adoption.
 	useEffect(() => {
 		if (!turnInFlight) return;
 		let cancelled = false;
@@ -824,6 +940,9 @@ export function Chat({
 					}
 					if (!record.turnInFlight) {
 						setTurnInFlight(false);
+						// Heal a stream-death banner (the failed-attach fallback): the
+						// record is the truth and the truth just landed.
+						if (status === "error") clearError();
 						void syncFromServer();
 						return;
 					}
@@ -838,7 +957,7 @@ export function Chat({
 			cancelled = true;
 			if (timer) clearTimeout(timer);
 		};
-	}, [turnInFlight, chatId, syncFromServer]);
+	}, [turnInFlight, chatId, syncFromServer, status, clearError]);
 
 	const onSend = () => {
 		const t = text.trim();
@@ -1137,13 +1256,15 @@ export function Chat({
 					}
 					composer={
 						<Composer
-							// Stop applies only to a LOCAL stream: a server-side turn has no
-							// client request to abort (stop() would be a no-op lie).
-							busy={localStream}
+							// Stop aborts ANY in-flight turn (stream-reattach wave): the
+							// square renders while a reattached/wake turn runs too — the
+							// abort channel kills it server-side; stop() alone would
+							// only detach our view.
+							busy={busy}
 							value={text}
 							onChange={setText}
 							onSend={onSend}
-							onStop={() => stop()}
+							onStop={abortInFlightTurn}
 							canSend={canSend}
 							onEscape={dictation.active ? dictation.cancel : undefined}
 							verdict={
