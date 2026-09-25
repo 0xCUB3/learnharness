@@ -297,3 +297,159 @@ internal path), client send call sites (composer, onSubmitAnswer, verdict,
 dismissal — chat-transport send half). useChat's RECEIVE half and all part
 renderers untouched (Wave D). Agent band untouched (Wave A's). Wave C
 (steer() consolidation) stays deferred.
+
+---
+
+# Wave D planning — the native wire + client rewrite (2026-09-26 recon, post-Wave-B)
+
+Wave B landed the native record (LhMessage[], input events, projection,
+record-adapter death). Wave D = seam 6 + the client half — the wire becomes a
+verbatim passthrough of pi's own AgentEvents, the Vercel AI SDK leaves the
+codebase entirely, and every projection consumer reads native. Wave C (stateful
+agents) stays optional and deferred (owner, 2026-09-26).
+
+## What Wave D replaces (the seam, precisely)
+
+- `ui-stream.ts`'s translation switch (~250 lines): the AgentEvent →
+  UIMessageChunk remap (text/reasoning part assembly + id minting,
+  toolInputs/newToolParts bookkeeping, input-available validation gating,
+  question-output suppression, finishReason mapping, the start/messageId
+  continuation rule). The log/subscriber/abort/settle machinery STAYS.
+- The Vercel SDK client: `ai` + `@ai-sdk/react` packages — `useChat`
+  (messages/status/sendMessage/addToolOutput/setMessages/error/stop/
+  clearError/resumeStream), the `DefaultChatTransport` subclass
+  (chat-transport.ts: send-half prepareSendMessagesRequest, receive-half
+  reconnectToStream adapters — settled terminal, continuation-seam id
+  rewrite, SSE head re-injection), `lastAssistantMessageIsCompleteWithToolCalls`.
+- `core/projection.ts` + `core/ui-message.ts` (TeacherUIMessage,
+  mergeAdopted): deleted. The grouping canon moves CLIENT-SIDE (fork 1).
+- The projection's readers go native-read: phases, pending, coverage,
+  graph toolParts, plan-blocks snapshot, extraction view, store summaries,
+  GET /api/chats/[id], app/chat/[id]/page.tsx.
+
+## Forks — ALL RESOLVED (owner rulings, 2026-09-26)
+
+1. **The client's view state — today's exact look is the golden master.**
+   Everything the agent produces renders as ONE continuous document per run:
+   step separators exactly as now, artifact/answered cards inline, the
+   teacher's reaction continuing below an answered quiz. Implemented by a
+   pure client-side grouping function (the projection's canon, app-owned,
+   zero `ai` types) over (record + live turn events). Raw per-native-message
+   block rendering was rejected (visible layout change).
+2. **Question tools on the wire — forward everything.** No server-side
+   suppression: the quiz's closing `tool_execution_end` (the in-memory
+   "Question posed" bookkeeping result) flows to the client, which ignores
+   it (question tools are client-owned — the rule lives where the dock
+   lives). The server is a pure passthrough with zero special cases. The
+   placeholder still never persists, never reaches the model, never renders.
+3. **Extraction unit — the message, with one inseparability rule.** The
+   coverage/fingerprint unit is the native message; the batcher's one rule:
+   a toolCall message and its toolResult message(s) are ALWAYS grouped into
+   the same chunk (covered together, read together). A fresh answer's
+   result pulls its asking assistant message into the chunk as context.
+   Fingerprints reset to the new unit once (scratch data, accepted).
+
+## The design
+
+### Server: verbatim AgentEvent passthrough (ui-stream.ts rewrite)
+
+- The per-turn log stores AgentEvents verbatim; `data: {…}\n\n` lines, one
+  JSON event each, `data: [DONE]\n\n` terminal. Every pi event type forwards
+  as-is: agent_start, message_start/update/end, tool_execution_start/update/
+  end, turn_start, turn_end, agent_end. `message_update` carries the FULL
+  partial message (`partial: AssistantMessage` on every AssistantMessageEvent)
+  — the client REPLACES the streaming assistant message; no delta assembly.
+- App-level events kept (our protocol, not pi's): the reattach terminal
+  `{type:"turn-settled"}` and a loop-level error event (agent.continue()
+  throws outside the event stream; mapped through the handler's onError
+  unmasking policy). Question suppression: NONE (fork 2).
+- The start/messageId continuation seam DIES — the client's grouping canon
+  handles continuation (an answered-quiz continuation turn appends into the
+  same group by construction).
+- piTurnResponse headers, POST /api/chat response, GET stream route: all
+  unchanged (same subscriber shape, same terminals).
+
+### Client: the session hook + the view model (the SDK dies)
+
+- **View model** (new client-safe pure module): the grouping canon verbatim
+  from projection.ts — consecutive assistant+toolResult messages bounded by
+  user/marker messages form one assistant view unit (step separators at
+  turn boundaries); toolResults attach to their call's block (backward
+  toolCallId search — answered cards, error cards, artifact outputs);
+  marker customs (verdict, probe-handoff, steer cards) project to their
+  current render shapes; plan-block markers splice after the last successful
+  plan_init result. Input: (record base + live turn messages). Golden
+  master: today's UI, byte-for-byte.
+- **Session hook** (new, replaces useChat): owns view messages, status
+  (ready/submitted/streaming vocabulary KEPT — chat.tsx's busy/poll gates
+  transplant mechanically), error, and the channels:
+  - `send(input: ChatInput)` — POST {chatId, input} with the 409 identity
+    retry (retryingFetch survives chat-transport's death); the pendingInput
+    stash + loud-throw contract stays, enforced in the hook.
+  - `answer(toolCallId, answer)` — optimistic local result append + send
+    (the addToolOutput replacement; same UX: instant graded card).
+  - `attach()` — GET /api/chats/[id]/stream → the same SSE event parser;
+    turn-settled → syncFromServer (the settled terminal's contract).
+  - abort channel unchanged (POST /api/activity/abort); cancel detaches
+    the view only (the background-turn ruling is untouched).
+- **SSE parser**: data lines → view updates (message_update replaces the
+  streaming assistant; message_end finalizes; turn_end appends results;
+  agent_end → settle → syncFromServer; error event → the banner).
+- **Mid-turn record adoption** (the mergeAdopted lesson, native): steers/
+  artifacts persist into the record while a turn runs; on the jobs-poll
+  nudge the hook re-reads the record and rebases the view when it is
+  append-only below the live tail (else defers to full sync at idle).
+- **Renderers**: chat.tsx's switch moves from UIMessage part types to view
+  blocks (text/reasoning/toolCall-with-result) — visually identical.
+  ai-elements' `import type { UIMessage}` swaps to view types; streamdown
+  stays (independent library).
+
+### Scanners go native (projection deleted)
+
+- phases: probe→plan on a concluded probe_done (native: probe_done toolCall
+  WITH a clean result); plan→teach on the verdict marker (accepted:true).
+- pending: `danglingQuestionOf` (+ input) is THE dock seam;
+  streamingToolActivity reads the live streaming message's open toolCalls.
+- coverage: unit = native message (fork 3) with the call+result chunk rule;
+  messageViewLines goes native (same one-line vocabulary); the ledger
+  resets to the new units once.
+- graph toolParts: native pairing (assistant toolCall + result lookup).
+- extraction transcriptView: native lines.
+- plan-blocks: derivePlanStatuses over the native transcript.
+- GET /api/chats/[id] serves record.messages verbatim; page.tsx seeds the
+  client view model; store summaries read native scans.
+
+## Files
+
+New: client session module (hook + SSE parser + adoption), client view
+model module (pure). Rewrite: ui-stream.ts (passthrough), coverage.ts,
+phases.ts, pending.ts, graph.ts toolParts, extraction view, store/chats,
+chat.tsx (mechanics transplant), ai-elements type swaps. Delete:
+projection.ts, ui-message.ts, chat-transport.ts (retryingFetch moves into
+the session module), `ai` + `@ai-sdk/react` from package.json. Routes:
+unchanged. Agent band (src/agent): untouched.
+
+## Test strategy
+
+- Wire pin: scripted turn → SSE data lines are verbatim AgentEvents;
+  subscribe() replay = the same log; [DONE] terminal; turn-settled
+  unchanged; no suppression of question results (fork 2 pinned).
+- View-model golden tests: the projection suite's expectations (grouping,
+  card attachment, splice, separators) become the view model's tests.
+- Scanner natives: phases/pending/coverage (incl. the chunk rule)/graph/
+  plan-blocks.
+- Hook tests: attach/replay/settle, mid-turn adoption, optimistic answer,
+  error banner, 409 identity retry.
+- chat-flow rewrite: SSE assertions switch to AgentEvents; the answer path
+  drives the hook (closing the Wave B coverage gap that let the missing
+  stash ship).
+- Live smoke: real turn + answer + reattach + remote abort on PORT=3004.
+
+## Implementation order
+
+1. Server passthrough (ui-stream + log type) — the wire changes here.
+2. View model (pure) + scanner native rewrites + coverage chunk rule.
+3. GET/page serve native; store summaries.
+4. Session hook + chat.tsx transplant + renderer switch + ai-elements.
+5. Deletes (projection, ui-message, chat-transport, deps) + gates.
+6. Test migration + live smoke.
