@@ -14,11 +14,74 @@
  * Graph graying (owner, 2026-09-20) follows the graph viewer's render-panel
  * convention: the whole row dims when a parent is off (stored values
  * persist but resolve inert — the switch shows stored, the dim effective).
+ *
+ * Reading font (appearance wave, 2026-09-26, owner ruling): a searchable
+ * dropdown of the user's INSTALLED fonts (FontMenuList over model-menu's
+ * machine) fed by window.queryLocalFonts() in the desktop shell — the
+ * enumeration is click-bound (the API requires user activation), deduped
+ * to unique families, the factory family excluded (the DEFAULT row is
+ * it). In a plain dev browser the API is absent → a small curated list
+ * + a footer that says exactly that — never a fabricated system list.
+ * The custom-family input inside the menu is the manual escape path.
+ * Empty/unset keeps meaning Source Sans 3.
+ *
+ * Emphasis inks (same wave): the factory tokens default to the regular
+ * text color now (globals.css); the rows' empty-state labels say "same
+ * as text".
  */
 
+import { useEffect, useRef, useState } from "react";
 import type { AppearanceSettings, GraphSettings } from "@/src/core";
+import { MenuShell } from "@/components/menu-shell";
+import { Hint } from "@/components/ui/hint";
 import { useAppearance } from "./appearance.tsx";
+import { FontMenuList } from "./model-menu";
 import { CommitInput, SettingsRow, ThinSelect, Toggle } from "./controls.tsx";
+
+/** The factory reading family — the DEFAULT row's identity (unset =
+ *  this). Exported for tests. */
+export const DEFAULT_READING_FONT = "Source Sans 3";
+
+/** The dev-browser fallback list (queryLocalFonts is absent there):
+ *  the app's own knowns plus a handful of ubiquitous macOS families,
+ *  honestly LABELED as common — never presented as the system's real
+ *  list. The factory family is absent: the DEFAULT row is it. Exported
+ *  for tests. */
+export const CURATED_FALLBACK_FONTS: readonly string[] = [
+	"Arial",
+	"CMU Serif",
+	"Courier New",
+	"Georgia",
+	"Helvetica",
+	"Helvetica Neue",
+	"Menlo",
+	"Times New Roman",
+	"Trebuchet MS",
+	"Verdana",
+];
+
+/** window.queryLocalFonts' shape as this section consumes it (family is
+ *  the only field used; the API returns one FontData per FACE — the
+ *  caller dedupes). */
+type LocalFontsApi = () => Promise<Array<{ family: string }>>;
+
+/** The Local Font Access seam — read lazily (SSR has no window, and
+ *  render-time access would evaluate the API on the server). */
+function localFontsApi(): LocalFontsApi | null {
+	if (typeof window === "undefined") return null;
+	return (window as unknown as { queryLocalFonts?: LocalFontsApi }).queryLocalFonts ?? null;
+}
+
+/** Compose the reading-font pick: null (or blank) = the factory
+ *  Source Sans 3; otherwise the family verbatim (trimmed — the
+ *  sanitizer trims again server-side). Pure — exported for tests. */
+export function composeFontFamily(
+	appearance: AppearanceSettings | undefined,
+	family: string | null,
+): AppearanceSettings {
+	const value = family?.trim() ?? "";
+	return { ...appearance, fontFamily: value === "" ? null : value };
+}
 
 export function AppearanceSection({
 	appearance,
@@ -31,6 +94,73 @@ export function AppearanceSection({
 }) {
 	const { appearance: resolved } = useAppearance();
 	const md = appearance?.mdRendering;
+
+	// The font dropdown's open state + its enumeration cache. undefined =
+	// not enumerated yet (desktop: click-bound queryLocalFonts pending);
+	// null = the API is absent (dev browser → the curated fallback, footed
+	// honestly); a list = the deduped families.
+	const [fontMenuOpen, setFontMenuOpen] = useState(false);
+	const [localFonts, setLocalFonts] = useState<string[] | null | undefined>(undefined);
+	const menuAnchorRef = useRef<HTMLSpanElement>(null);
+
+	// The enumeration runs INSIDE the trigger click — queryLocalFonts
+	// requires user activation, so it cannot be a mount effect. First
+	// open only: the families are cached for the section's life (font
+	// installs mid-dialog are not a case); a failed enumeration falls
+	// back to the curated list rather than an empty picker.
+	const openFontMenu = () => {
+		setFontMenuOpen((open) => {
+			if (!open && localFonts === undefined) {
+				const api = localFontsApi();
+				if (api === null) {
+					setLocalFonts(null);
+				} else {
+					void api()
+						.then((fonts) => {
+							const families = [...new Set(fonts.map((f) => f.family))]
+								.filter((f) => f !== DEFAULT_READING_FONT)
+								.sort((a, b) => a.localeCompare(b));
+							setLocalFonts(families);
+						})
+						.catch(() => setLocalFonts(null));
+				}
+			}
+			return !open;
+		});
+	};
+
+	const pickFont = (family: string | null) => {
+		setFontMenuOpen(false);
+		onSectionChange(composeFontFamily(appearance, family));
+	};
+
+	// The dropdown contract (agent-section's, mirrored): any click
+	// outside the open menu — or an Esc — closes it. Esc is CLAIMED with
+	// stopPropagation so the settings dialog behind does NOT also close.
+	useEffect(() => {
+		if (!fontMenuOpen) return;
+		const onPointerDown = (e: PointerEvent) => {
+			const target = e.target as Node;
+			if (menuAnchorRef.current?.contains(target)) return;
+			if (target instanceof Element && target.closest("[data-lh-menu]")) return;
+			if (target instanceof Element && target.closest('[role="dialog"]')) {
+				setFontMenuOpen(false);
+			}
+			// else: outside the dialog — the dialog's own close handles it.
+		};
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				e.stopPropagation();
+				setFontMenuOpen(false);
+			}
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", onPointerDown);
+			document.removeEventListener("keydown", onKeyDown);
+		};
+	}, [fontMenuOpen]);
 
 	return (
 		<>
@@ -54,16 +184,51 @@ export function AppearanceSection({
 			</SettingsRow>
 			<SettingsRow
 				label="Reading font"
-				hint="Empty = Source Sans 3"
+				hint={`Empty = ${DEFAULT_READING_FONT}`}
 				testid="row-font"
 			>
-				<CommitInput
-					value={appearance?.fontFamily ?? ""}
-					placeholder="Source Sans 3"
-					ariaLabel="font family"
-					testid="input-font"
-					onCommit={(v) => onSectionChange({ ...appearance, fontFamily: v === "" ? null : v })}
-				/>
+				<Hint label="Choose from your installed fonts" side="left">
+					<span ref={fontMenuOpen ? menuAnchorRef : undefined} className="relative flex items-center gap-2">
+						{/* The MenuTrigger look (agent-section's collapsed
+						    select — it lives unexported there, so the
+						    classes ride inline; the searchable machine is
+						    the shared part). */}
+						<button
+							type="button"
+							aria-label="Reading font"
+							aria-expanded={fontMenuOpen}
+							data-testid="font-trigger"
+							onClick={openFontMenu}
+							className="flex h-7 min-w-20 items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+						>
+							<span className="min-w-0 flex-1 truncate">{appearance?.fontFamily || DEFAULT_READING_FONT}</span>
+							<span aria-hidden className="text-muted-foreground">
+								▾
+							</span>
+						</button>
+						{fontMenuOpen && (
+							<MenuShell
+								preferredSide="down"
+								anchorTestid="font-trigger"
+								testid="font-menu"
+								menuClass="flex w-[18rem] flex-col gap-0.5 rounded-xl border border-border bg-card p-2 text-xs shadow-xl"
+							>
+								<FontMenuList
+									families={localFonts === undefined ? undefined : (localFonts ?? [...CURATED_FALLBACK_FONTS])}
+									effectiveFamily={appearance?.fontFamily ?? null}
+									onPick={pickFont}
+									footer={
+										localFonts === undefined
+											? undefined
+											: localFonts === null
+												? "Common families — your installed list needs the desktop app"
+												: "Your installed fonts"
+									}
+								/>
+							</MenuShell>
+						)}
+					</span>
+				</Hint>
 			</SettingsRow>
 			<SettingsRow label="Reading font size" hint={`${resolved.proseFontSize}px`} testid="row-prose-size">
 				<CommitInput
@@ -116,19 +281,22 @@ export function AppearanceSection({
 					}}
 				/>
 			</SettingsRow>
-			<SettingsRow label="Bold color" hint="Empty = #ee928c" testid="row-bold-color">
+			{/* The emphasis inks default to the REGULAR TEXT COLOR now
+			    (appearance wave, 2026-09-26) — the empty-state labels say
+			    so; explicit hex overrides ride unchanged. */}
+			<SettingsRow label="Bold color" hint="Empty = same as text" testid="row-bold-color">
 				<CommitInput
 					value={md?.boldColor ?? ""}
-					placeholder="#ee928c"
+					placeholder="same as text"
 					ariaLabel="bold color"
 					testid="input-bold-color"
 					onCommit={(v) => onSectionChange({ ...appearance, mdRendering: { ...md, boldColor: v === "" ? null : v } })}
 				/>
 			</SettingsRow>
-			<SettingsRow label="Italic color" hint="Empty = #6fa9d6" testid="row-italic-color">
+			<SettingsRow label="Italic color" hint="Empty = same as text" testid="row-italic-color">
 				<CommitInput
 					value={md?.italicColor ?? ""}
-					placeholder="#6fa9d6"
+					placeholder="same as text"
 					ariaLabel="italic color"
 					testid="input-italic-color"
 					onCommit={(v) => onSectionChange({ ...appearance, mdRendering: { ...md, italicColor: v === "" ? null : v } })}

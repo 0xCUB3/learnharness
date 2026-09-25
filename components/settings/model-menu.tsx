@@ -8,6 +8,10 @@
  * opens UP from the bottom bar, the settings rows open DOWN inside the
  * dialog).
  *
+ * The appearance wave (2026-09-26) added the reading-font picker over the
+ * same machine: FontMenuList (families instead of models, plus the
+ * always-offerable DEFAULT row and a custom-family escape input).
+ *
  * Keyboard machine (owner polish, 2026-09-17): focus STAYS in the search
  * field — ↑/↓ walk the filtered results (clamped, no wrap), Enter picks
  * the walked row (or the first result when nothing is walked).
@@ -268,6 +272,168 @@ export function ProviderMenuList({
 					</li>
 				))}
 			</ul>
+		</>
+	);
+}
+
+/** The reading-font dropdown's row set — the SAME fuzzy + arrow-walk +
+ *  Enter machine over font families (appearance wave, 2026-09-26). The
+ *  DEFAULT row (null) is a candidate like any family: it matches empty
+ *  and "source"/"sans"/"default" queries, so an unfiltered list opens
+ *  with the default first and a searched list drops it honestly — Enter
+ *  can never pick a row that isn't on screen. Pure — exported for
+ *  tests. */
+export function fontMenuResults(query: string, families: string[]): Array<string | null> {
+	const scored = families
+		.map((f) => ({ f, s: fuzzyScore(query, f) }))
+		.filter((r) => r.s !== null)
+		.sort((a, b) => b.s! - a.s! || a.f.localeCompare(b.f))
+		.map((r) => r.f);
+	// The default row's searchable identity: the factory family + the
+	// word "default" (the suffix it renders with).
+	const defaultScore = fuzzyScore(query, "Source Sans 3", "default");
+	if (query.trim() === "" || defaultScore !== null) return [null, ...scored];
+	return scored;
+}
+
+/** The reading-font dropdown body — search + list + the custom-family
+ *  escape (the old free-text input lives here as the last resort: any
+ *  family name the enumeration didn't surface). `families ===
+ *  undefined` is the enumerating state (desktop's queryLocalFonts); the
+ *  curated fallback list arrives as plain families with a footer that
+ *  says so honestly. */
+export function FontMenuList({
+	families,
+	effectiveFamily,
+	onPick,
+	footer,
+}: {
+	/** Enumerated font families (already deduped/sorted by the caller);
+	 *  undefined while the enumeration runs. */
+	families: string[] | undefined;
+	/** The stored override (null = the factory Source Sans 3). */
+	effectiveFamily: string | null;
+	/** Receives the pick: a family string, or null for the default. */
+	onPick: (family: string | null) => void;
+	/** Quiet footer note under the list. */
+	footer?: string;
+}) {
+	const [query, setQuery] = useState("");
+	const [menuIdx, setMenuIdx] = useState<number | null>(null);
+	const [custom, setCustom] = useState("");
+	const searchRef = useRef<HTMLInputElement>(null);
+	const listRef = useRef<HTMLUListElement>(null);
+
+	useEffect(() => {
+		searchRef.current?.focus();
+	}, []);
+
+	useEffect(() => {
+		if (menuIdx === null) return;
+		listRef.current?.querySelector(`[data-idx="${menuIdx}"]`)?.scrollIntoView({ block: "nearest" });
+	}, [menuIdx]);
+
+	const results = fontMenuResults(query, families ?? []);
+
+	const commitCustom = () => {
+		const value = custom.trim();
+		if (value === "") return;
+		onPick(value);
+	};
+
+	return (
+		<>
+			<input
+				ref={searchRef}
+				data-testid="font-search"
+				value={query}
+				onChange={(e) => {
+					setQuery(e.target.value);
+					setMenuIdx(null); // new query → the walk restarts on Enter/↓
+				}}
+				onKeyDown={(e) => {
+					if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+						e.preventDefault();
+						e.stopPropagation();
+						if (results.length === 0) return;
+						setMenuIdx((i) =>
+							e.key === "ArrowDown"
+								? Math.min((i ?? -1) + 1, results.length - 1)
+								: Math.max((i ?? results.length) - 1, 0),
+						);
+					} else if (e.key === "Enter") {
+						const chosen = results[menuIdx ?? 0];
+						if (chosen !== undefined) {
+							e.preventDefault();
+							e.stopPropagation();
+							onPick(chosen);
+						}
+					}
+				}}
+				placeholder="Search fonts…"
+				className="lh-input mb-1.5 w-full rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
+			/>
+			{!families && <div className="px-2 py-3 text-center text-muted-foreground">Loading fonts…</div>}
+			{families && results.length === 0 && (
+				<div className="px-2 py-3 text-center text-muted-foreground">No fonts match — type a family below.</div>
+			)}
+			<ul ref={listRef} data-testid="font-list" className="flex max-h-72 flex-col overflow-y-auto px-1">
+				{families &&
+					results.map((family, i) => {
+						const isDefault = family === null;
+						const effective = isDefault ? effectiveFamily === null : family === effectiveFamily;
+						return (
+							<li key={family ?? "__default"}>
+								<button
+									type="button"
+									data-testid={isDefault ? "font-option-default" : `font-option-${family.replace(/[^a-z0-9-]/gi, "_")}`}
+									data-idx={i}
+									onClick={() => onPick(family)}
+									className={`flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted ${
+										i === menuIdx ? "bg-accent/40 ring-1 ring-inset ring-border" : ""
+									}${effective && i !== menuIdx ? " bg-muted/60" : ""}`}
+								>
+									<span className="truncate text-card-foreground">{family ?? "Source Sans 3"}</span>
+									<span className="shrink-0 text-muted-foreground">{isDefault ? "default" : effective && <span aria-hidden>✓</span>}</span>
+								</button>
+							</li>
+						);
+					})}
+			</ul>
+			{/* The manual escape path — the old free-text input, living
+			    inside the dropdown as its last row. Any family name the
+			    enumeration didn't surface commits verbatim. */}
+			<div className="mt-1 flex items-center gap-1.5 border-t px-1 pt-1.5">
+				<input
+					data-testid="font-custom-input"
+					value={custom}
+					onChange={(e) => setCustom(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							e.stopPropagation();
+							commitCustom();
+						}
+					}}
+					placeholder="Type a family name…"
+					aria-label="Custom font family"
+					className="lh-input min-w-0 flex-1 rounded-lg border bg-background px-2 py-1.5 text-foreground outline-none focus:ring-1 focus:ring-ring"
+				/>
+				<button
+					type="button"
+					data-testid="font-custom-set"
+					onClick={commitCustom}
+					disabled={custom.trim() === ""}
+					className={`shrink-0 rounded-lg px-2 py-1.5 text-xs underline-offset-2 ${
+						custom.trim() === ""
+							? "cursor-not-allowed text-muted-foreground/40"
+							: "text-foreground hover:underline"
+					}`}
+				>
+					Set
+				</button>
+			</div>
+			{footer && <div className="px-2 pt-1.5 text-xs text-muted-foreground">{footer}</div>}
 		</>
 	);
 }

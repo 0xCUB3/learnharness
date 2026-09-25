@@ -38,9 +38,12 @@
 	--border: #434343;
 	--input: #434343;
 	--ring: #8d8d8d;
-	/* Emphasis coloring in teaching prose — ready for the settings UI. */
-	--lh-ink-strong: #ee928c;
-	--lh-ink-italic: #6fa9d6;
+	/* Emphasis inks default to the REGULAR TEXT COLOR (owner ruling,
+	   appearance wave 2026-09-26 — the old #ee928c/#6fa9d6 factory
+	   emphasis colors are gone). Explicit overrides land via the
+	   appearance settings vars. */
+	--lh-ink-strong: var(--foreground);
+	--lh-ink-italic: var(--foreground);
 	/* THE READING SIZE = the ladder's 16px rung (--text-lg). Can't be
 	   var()-linked: @theme inline inlines literals into utilities without
 	   emitting runtime vars — so this is the one documented duplication:
@@ -73,8 +76,9 @@
 	--border: #434343;
 	--input: #434343;
 	--ring: #8d8d8d;
-	--lh-ink-strong: #ee928c;
-	--lh-ink-italic: #6fa9d6;
+	/* Same emphasis ruling as the block above: unset = text color. */
+	--lh-ink-strong: var(--foreground);
+	--lh-ink-italic: var(--foreground);
 	/* THE READING SIZE = the ladder's 16px rung (--text-lg). Can't be
 	   var()-linked: @theme inline inlines literals into utilities without
 	   emitting runtime vars — so this is the one documented duplication:
