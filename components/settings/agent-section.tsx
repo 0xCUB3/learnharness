@@ -170,11 +170,13 @@ export function composeSearchEngine(
 	return { ...agent, search: { engine } };
 }
 
-/** The indicator under a row that HAS an override file (owner ruling
- *  2026-09-26: the empty state carries NO description line; the
- *  indicator exists only when the user's version is on disk). Exported
- *  for the pin. */
-export const PROMPT_SAVED_HINT = "Your version is saved";
+/** The indicator under a row whose override IS the version in use (owner
+ *  ruling, refined 2026-09-26: the small text states WHICH VERSION IS
+ *  IN USE — "Your version is in use" when the switch is on, and NOTHING
+ *  when the default composes, even if a saved override sits on disk
+ *  unused. The switch's meaning becomes legible: it visibly controls
+ *  this line). Exported for the pin. */
+export const PROMPT_IN_USE_HINT = "Your version is in use";
 
 /** One section of the prompt view — the owner's ruled order: Teacher,
  *  Prober, then Shared last. */
@@ -411,7 +413,8 @@ export function AgentSection({
 		};
 	}, [openMenu]);
 
-	async function saveSegment(path: string, text: string) {		setSegmentStatus(null);
+	async function saveSegment(path: string, text: string) {
+		setSegmentStatus(null);
 		const res = await fetch(`/api/settings/prompts/${path}`, {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
@@ -421,9 +424,18 @@ export function AgentSection({
 			setSegmentStatus(`Save failed: ${(await res.json().catch(() => ({}))).error ?? res.status}`);
 			return;
 		}
-		// Refetch: file presence gates the switch, so the view must track it.
 		readPrompts();
-		setSegmentStatus(`Saved ${path}`);
+		setSegmentStatus("Saved");
+		// Auto-on (owner ruling, refined 2026-09-26): writing an override and
+		// putting it to work are ONE action — a save with the switch off was
+		// the "did something, changed nothing" trap (the composed prompt
+		// stayed the default). The file exists now, so the ON switch the
+		// agent-section validation requires is legal; the order (file, then
+		// switch) is the safe one. Saving an edit while already on rides
+		// through — the switch write is idempotent at the record level.
+		if (agent?.prompts?.[path] !== true) {
+			onSectionChange(composePromptSwitch(agent, path, true));
+		}
 	}
 
 	async function deleteSegment(path: string) {
@@ -433,7 +445,16 @@ export function AgentSection({
 			setSegmentStatus(`Delete failed: ${res.status}`);
 			return;
 		}
+		// Auto-off — the mirror of save's auto-on: deleting the file while
+		// the switch is on would orphan an ON record switch (the agent-section
+		// validation 400s every later write while the UI's toggle can no
+		// longer reach the OFF escape hatch — the trap found in live verify
+		// 2026-09-26). Composing the OFF here keeps the record clean.
+		if (agent?.prompts?.[path] === true) {
+			onSectionChange(composePromptSwitch(agent, path, false));
+		}
 		readPrompts();
+		setSegmentStatus("Deleted");
 	}
 
 		/** The search-engine menu row — label + the quiet live-key mark. */
@@ -463,15 +484,24 @@ export function AgentSection({
 	const segmentRow = (info: SegmentInfo) => {
 		const fileExists = info.overrideText !== null;
 		const open = openSegment === info.path;
+		// The Save affordance (owner ruling, refined 2026-09-26): clickable
+		// only when there's something to save — the draft differs from
+		// what's on disk. An unchanged editor shows a grayed, inert Save
+		// (the always-active button was the "doesn't feel like it does
+		// anything" half of the report).
+		const draft = segmentDraft[info.path] ?? info.overrideText ?? "";
+		const dirty = draft !== (info.overrideText ?? "");
 		return (
 			<div key={info.path} data-testid={`prompt-segment-${info.path}`}>
 				<SettingsRow
 					label={info.path}
-					// Overhaul rulings (2026-09-26): NO description when
-					// there's no override (the empty state is clean —
-					// toggle + name); the indicator appears ONLY when the
-					// user's version is on disk.
-					hint={fileExists ? PROMPT_SAVED_HINT : undefined}
+					// Overhaul rulings (2026-09-26, refined): the small text
+					// states WHICH VERSION IS IN USE — nothing when the
+					// default composes (even with a saved override sitting
+					// on disk unused), "Your version is in use" when the
+					// switch is on. The switch's meaning becomes legible
+					// through this line.
+					hint={info.enabled ? PROMPT_IN_USE_HINT : undefined}
 					testid={`prompt-row-${info.path}`}
 				>
 					{/* Graying ruling: ONLY the toggle dims without an
@@ -520,8 +550,13 @@ export function AgentSection({
 						<div className="flex items-center gap-3">
 							<button
 								type="button"
+								disabled={!dirty}
 								onClick={() => void saveSegment(info.path, segmentDraft[info.path] ?? "")}
-								className="text-xs text-foreground underline-offset-2 hover:underline"
+								className={
+									dirty
+										? "text-xs text-foreground underline-offset-2 hover:underline"
+										: "cursor-not-allowed text-xs text-muted-foreground/40 underline-offset-2"
+								}
 							>
 								Save
 							</button>
@@ -533,6 +568,17 @@ export function AgentSection({
 								>
 									Delete
 								</button>
+							)}
+							{/* The quiet inline confirmation — next to the
+							    action, not the old path-echoing line at the
+							    section's bottom (production-copy: no file
+							    paths in user-facing status). One editor is
+							    open at a time (openSegment), so one shared
+							    status reads unambiguously. */}
+							{segmentStatus && (
+								<p className="text-xs text-muted-foreground/70" data-testid="segment-status">
+									{segmentStatus}
+								</p>
 							)}
 						</div>
 					</div>
@@ -770,7 +816,6 @@ export function AgentSection({
 								</div>
 							</div>
 						))}
-						{segmentStatus && <p className="text-xs text-muted-foreground/70">{segmentStatus}</p>}
 					</div>
 				)}
 			</SettingsGroup>

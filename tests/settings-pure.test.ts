@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { appearanceVars, derivedPalette, resolveAppearance, staleVarNames } from "../components/settings/appearance.tsx";
 import {
-	PROMPT_SAVED_HINT,
+	PROMPT_IN_USE_HINT,
 	composePromptSwitch,
 	composeSearchEngine,
 	composeSlotModel,
@@ -384,7 +384,7 @@ describe("sectionedSegments — the prompts overhaul (2026-09-26)", () => {
 		assert.equal(teacher.hint, undefined);
 	});
 
-	it("the indicator copy is pinned (override present = the row earns its line)", () => {
-		assert.equal(PROMPT_SAVED_HINT, "Your version is saved");
+	it("the indicator copy is pinned — it states WHICH VERSION IS IN USE (refined 2026-09-26)", () => {
+		assert.equal(PROMPT_IN_USE_HINT, "Your version is in use");
 	});
 });
