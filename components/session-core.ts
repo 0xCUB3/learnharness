@@ -181,6 +181,8 @@ export class SessionModel {
 	// The live turn's execution layer (view model mid-turn states):
 	private executions = new Map<string, LiveExecution>();
 	private streamingIds = new Set<string>();
+	/** The in-flight assistant message's client id (see applyWireEvent). */
+	private streamingMessageId: string | null = null;
 	private statusValue: SessionStatus = "ready";
 	private errorValue: { message: string } | null = null;
 	// The single live consume (POST response or reattach stream): a newer
@@ -289,9 +291,22 @@ export class SessionModel {
 					id?: string;
 				};
 				if ((message as { role?: string }).role !== "assistant") return;
-				const id = message.id ?? localId();
+				// pi streams AssistantMessages with NO id — the id exists only
+				// once the server's persistTurn stamps the record (the live
+				// streaming bug, 2026-09-26: minting a fresh id per event made
+				// every message_update APPEND a full copy — a divider + thinking
+				// block per chunk, cleaned up only by the settle sync). The
+				// in-flight message is tracked by SLOT instead: message_start
+				// mints and remembers the id; updates and the end REPLACE that
+				// same tail entry. Exactly one assistant message streams at a
+				// time (pi's strict start → updates → end ordering per step; the
+				// reattach replay replays the same sequence), so the slot is
+				// unambiguous. An explicit message.id (if one ever appears on
+				// the wire) still wins.
+				const id = message.id ?? this.streamingMessageId ?? localId();
 				const withId = { ...message, id } as LhMessage;
 				if (agent.type === "message_start") {
+					this.streamingMessageId = id;
 					this.streamingIds.add(id);
 					this.mutate(() => {
 						this.tail = [...this.tail, withId];
@@ -303,6 +318,7 @@ export class SessionModel {
 					});
 				}
 				if (agent.type === "message_end") {
+					this.streamingMessageId = null; // slot done — next start mints fresh
 					const stop = (message as { stopReason?: string }).stopReason;
 					if (stop === "error") {
 						// Provider error, verbatim (owner ruling) — the record
@@ -479,6 +495,7 @@ export class SessionModel {
 		this.consumeAbort?.abort();
 		this.consumeAbort = null;
 		this.streamingIds = new Set();
+		this.streamingMessageId = null;
 		this.executions = new Map();
 		this.setStatus("ready");
 	}
@@ -488,6 +505,7 @@ export class SessionModel {
 		this.mutate(() => {
 			this.base = record;
 			this.tail = [];
+			this.streamingMessageId = null; // the tail (and its slot) is gone
 		});
 	}
 

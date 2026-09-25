@@ -68,12 +68,13 @@ function assistantMsg(id: string, text: string): LhMessage {
 	} as unknown as LhMessage;
 }
 
-/** A streaming assistant partial (pi events carry the FULL partial). */
-function partial(id: string, blocks: unknown[], stopReason?: string): Record<string, unknown> {
+/** A streaming assistant partial (pi events carry the FULL partial — and
+ * NO message.id: the id exists only once the server's persistTurn stamps
+ * the record; the client tracks the in-flight message by slot). */
+function partial(blocks: unknown[], stopReason?: string): Record<string, unknown> {
 	return {
 		type: "message_update",
 		message: {
-			id,
 			role: "assistant",
 			content: blocks,
 			...(stopReason ? { stopReason } : {}),
@@ -205,9 +206,9 @@ describe("send (one input event, verbatim consumption)", () => {
 				posts.push(init.body as string);
 				return sseResponse(
 					{ type: "agent_start" },
-					{ type: "message_start", message: { role: "assistant", id: "a1", content: [] } },
-					partial("a1", [{ type: "text", text: "hello there" }]),
-					{ type: "message_end", message: { role: "assistant", id: "a1", content: [{ type: "text", text: "hello there" }], stopReason: "stop" } },
+					{ type: "message_start", message: { role: "assistant", content: [] } },
+					partial([{ type: "text", text: "hello there" }]),
+					{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hello there" }], stopReason: "stop" } },
 					{ type: "agent_end", messages: [] },
 					"[DONE]",
 				);
@@ -228,6 +229,51 @@ describe("send (one input event, verbatim consumption)", () => {
 		const view = m.getState().messages;
 		assert.equal(view.at(-1)!.role, "assistant");
 		assert.equal(view.at(-1)!.parts.at(-1)!.text, "hello there");
+	});
+
+	it("N id-less updates replace the SAME tail slot (the per-chunk divider bug pin)", async () => {
+		// pi's wire (captured live, 2026-09-26): message_start/update/end carry
+		// AssistantMessages with NO id. The bug: minting a fresh id per event
+		// made every message_update APPEND a full copy — the tail grew one
+		// message per chunk, and projectView's step separators + thinking
+		// blocks made the transcript fill with dividers mid-stream (cleaned up
+		// only by the settle sync). The fix: the in-flight message is tracked
+		// by slot; updates REPLACE it.
+		let push: (e: unknown) => void = () => {};
+		const enc = new TextEncoder();
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				push = (e) => controller.enqueue(enc.encode(e === "[DONE]" ? "data: [DONE]\n\n" : `data: ${JSON.stringify(e)}\n\n`));
+			},
+		});
+		globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof globalThis.fetch;
+		const m = model();
+		const done = m.send({ type: "text", text: "go" });
+		const settle = () => new Promise((r) => setTimeout(r, 0));
+
+		push({ type: "message_start", message: { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }] } });
+		for (const text of ["Hel", "Hello", "Hello wor", "Hello world"]) {
+			push(partial([{ type: "thinking", thinking: "hmm" }, { type: "text", text }]));
+			await settle();
+		}
+		// MID-STREAM: exactly ONE assistant message in the tail — never one
+		// per chunk — carrying the LATEST partial (full snapshot, not deltas).
+		const assistants = m.getState().nativeMessages.filter((x) => (x as { role?: string }).role === "assistant");
+		assert.equal(assistants.length, 1, "one streaming message, replaced in place");
+		assert.equal(m.getState().messages.at(-1)!.parts.filter((p) => p.type === "text").length, 1);
+		assert.equal(m.getState().messages.at(-1)!.parts.at(-1)!.text, "Hello world");
+		// Stable id across updates → stable view-part keys (no per-chunk
+		// remount of the whole transcript, mermaid included).
+		const idMid = (assistants[0] as { id?: string }).id;
+		assert.match(idMid ?? "", /^c_/, "client-minted slot id");
+
+		push({ type: "message_end", message: { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Hello world" }], stopReason: "stop" } });
+		push({ type: "agent_end", messages: [] });
+		push("[DONE]");
+		await done;
+		const final = m.getState().nativeMessages.filter((x) => (x as { role?: string }).role === "assistant");
+		assert.equal(final.length, 1);
+		assert.equal((final[0] as { id?: string }).id, idMid, "same slot through message_end");
 	});
 
 	it("a 503 refusal surfaces the RAW body text (parseModelsRefusal's contract)", async () => {
@@ -305,7 +351,6 @@ describe("send (one input event, verbatim consumption)", () => {
 			type: "message_start",
 			message: {
 				role: "assistant",
-				id: "a1",
 				content: [
 					{ type: "toolCall", id: "q1", name: "quiz", arguments: {} },
 					{ type: "toolCall", id: "bad1", name: "quiz", arguments: {} },
@@ -327,7 +372,7 @@ describe("send (one input event, verbatim consumption)", () => {
 		// null and crash the whole render (the live crash, 2026-09-26).
 		push({
 			type: "turn_end",
-			message: { role: "assistant", id: "a1", content: [{ type: "text", text: "" }], stopReason: "toolUse" },
+			message: { role: "assistant", content: [{ type: "text", text: "" }], stopReason: "toolUse" },
 			toolResults: [
 				{
 				id: "tr_q1",
@@ -352,8 +397,8 @@ describe("send (one input event, verbatim consumption)", () => {
 	it("a provider error rides VERBATIM (owner ruling) — no masking anywhere", async () => {
 		globalThis.fetch = (async () =>
 			sseResponse(
-				partial("a1", [{ type: "text", text: "" }]),
-				{ type: "message_end", message: { role: "assistant", id: "a1", content: [{ type: "text", text: "" }], stopReason: "error", errorMessage: "OpenRouter 429: rate limited" } },
+				partial([{ type: "text", text: "" }]),
+				{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "" }], stopReason: "error", errorMessage: "OpenRouter 429: rate limited" } },
 				{ type: "agent_end", messages: [] },
 				"[DONE]",
 			)) as typeof globalThis.fetch;
@@ -374,7 +419,7 @@ describe("resumeStream (the reattach path)", () => {
 			urls.push(url);
 			if (url === "/api/chats/chat_x") return Response.json({ messages: [] });
 			if (url === "/api/chats/chat_x/stream")
-				return dripped(sse({ type: "message_start", message: { role: "assistant", id: "a1", content: [{ type: "text", text: "hi" }] } }, "[DONE]"), 8);
+				return dripped(sse({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }, "[DONE]"), 8);
 			throw new Error(`unexpected fetch: ${url}`);
 		}) as typeof globalThis.fetch;
 		const m = model();
@@ -408,8 +453,8 @@ describe("resumeStream (the reattach path)", () => {
 			if (url === "/api/chats/chat_x") return Response.json({ messages: [assistantMsg("seed", "the question")] });
 			if (url === "/api/chats/chat_x/stream")
 				return sseResponse(
-					{ type: "message_start", message: { role: "assistant", id: "run1", content: [{ type: "text", text: "the reaction" }] } },
-					{ type: "message_end", message: { role: "assistant", id: "run1", content: [{ type: "text", text: "the reaction" }], stopReason: "stop" } },
+					{ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "the reaction" }] } },
+					{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "the reaction" }], stopReason: "stop" } },
 					{ type: "agent_end", messages: [] },
 					"[DONE]",
 				);
@@ -433,9 +478,9 @@ describe("resumeStream (the reattach path)", () => {
 			if (url === "/api/chats/chat_x/stream")
 				return dripped(
 					sse(
-						{ type: "message_start", message: { role: "assistant", id: "a1", content: [] } },
-						partial("a1", [{ type: "text", text: "hi" }]),
-						{ type: "message_end", message: { role: "assistant", id: "a1", content: [{ type: "text", text: "hi" }], stopReason: "stop" } },
+						{ type: "message_start", message: { role: "assistant", content: [] } },
+						partial([{ type: "text", text: "hi" }]),
+						{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hi" }], stopReason: "stop" } },
 					) + sse("[DONE]"),
 					1,
 				);
@@ -470,15 +515,13 @@ function userText(id: string, text: string): LhMessage {
 describe("adoptRecord — append-only adoption", () => {
 	it("splices a server-added steer between the record and the live tail", () => {
 		const m = model({ initialMessages: [userText("u1", "topic")] });
-		m.applyWireEvent({ type: "message_start", message: { role: "assistant", id: "a_live", content: [{ type: "text", text: "streaming" }] } });
+		m.applyWireEvent({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "streaming" }] } });
 		const steer = { ...newUserMessage("steered content"), id: "steer_1" } as LhMessage & { role: "user" };
 		const record = [userText("u1", "topic"), steer];
 		m.adoptRecord(record);
-		assert.deepEqual(
-			m.getState().nativeMessages.map((x) => x.id),
-			["u1", "steer_1", "a_live"],
-			"the steer shows NOW, the live tail stays last",
-		);
+		const ids = m.getState().nativeMessages.map((x) => x.id);
+		assert.deepEqual(ids.slice(0, 2), ["u1", "steer_1"], "the steer shows NOW");
+		assert.match(ids[2] ?? "", /^c_/, "the live streaming tail stays last (client slot id)");
 	});
 
 	it("a missing base id (record rewrite) bails — the idle full sync is the net", () => {
