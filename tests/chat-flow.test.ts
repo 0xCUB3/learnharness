@@ -27,6 +27,7 @@ import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { effectiveSettings } from "../src/server/stores.ts";
 import { isTurnRunning } from "../src/server/turn-liveness.ts";
+import { abortTurn, runningTurn, settledTurnResponse } from "../src/server/turn-runs.ts";
 import { recordToPiMessages } from "../src/server/pi/record-adapter.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
@@ -94,6 +95,46 @@ async function drain(res: Response): Promise<string> {
 		assert.fail(`expected 200, got ${res.status}: ${await res.text()}`);
 	}
 	return res.text(); // consumes the SSE stream to completion (fires onFinish)
+}
+
+function waitFor(cond: () => boolean, timeoutMs = 8000, what = "condition"): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const started = Date.now();
+		const tick = () => {
+			if (cond()) return resolve();
+			if (Date.now() - started > timeoutMs) return reject(new Error(`timeout waiting for ${what}`));
+			setTimeout(tick, 25);
+		};
+		tick();
+	});
+}
+
+/** A teacher whose step 1 blocks on an external gate — a turn held mid-run
+ *  so view-cancel / reattach / abort timing is deterministic. */
+function gatedTeacher(gate: Promise<void>): PiEngine {
+	const faux = createFauxCore({});
+	faux.setResponses([
+		async () => {
+			await gate;
+			return fauxAssistantMessage([fauxText("Gated reply.")]);
+		},
+	]);
+	return { model: faux.getModel(), streamFn: faux.streamSimple };
+}
+
+/** A teacher that NEVER resolves except on abort (the jobs abortableFactory
+ *  pattern): the only way this turn can end is the remote kill. */
+function abortableTeacher(): PiEngine {
+	const faux = createFauxCore({});
+	faux.setResponses([
+		((_ctx: unknown, opts: { signal?: AbortSignal } | undefined) =>
+			new Promise((resolve) => {
+				const sig = opts?.signal;
+				if (sig?.aborted) return resolve(fauxAssistantMessage("late"));
+				sig?.addEventListener("abort", () => resolve(fauxAssistantMessage("late")), { once: true });
+			})) as unknown as FauxResponseStep,
+	]);
+	return { model: faux.getModel(), streamFn: faux.streamSimple };
 }
 
 function post(chatId: string, messages: unknown[]): Request {
@@ -227,22 +268,30 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.ok(startIdx < availIdx, "start precedes available");
 	});
 
-	it("persists even when the stream is aborted (resume keeps partial state)", async () => {
-		const { engine } = scriptedTeacher(defaultLesson);
-		const chat = createConfiguredChat("Test: abort");
+	it("a cancelled view NEVER aborts the turn — it runs to completion (owner ruling 2026-09-25)", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const engine = gatedTeacher(gate);
+		const chat = createConfiguredChat("Test: view cancel");
 		createdChats.push(chat.id);
 
-		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] }]);
+		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hold my turn" }] }]);
 		const res = await handleChatRequest(req, agentFactory(engine));
 		assert.equal(res.status, 200);
-		// Read one chunk then cancel — simulates the browser closing mid-stream.
+		// Read one chunk then cancel — the browser view leaves mid-stream.
 		const reader = res.body!.getReader();
 		await reader.read();
 		await reader.cancel();
-		// Give the aborted run a tick to settle (agent_end → onFinish).
-		await new Promise((r) => setTimeout(r, 200));
+		// The turn is STILL a running background object — no view killed it.
+		assert.equal(isTurnRunning(chat.id), true, "cancel detached the view only — the turn runs on");
+		assert.ok(runningTurn(chat.id), "the running-turn registry still holds the handle");
+
+		// It runs to FULL completion with nobody watching, then settles alone.
+		release();
+		await waitFor(() => !isTurnRunning(chat.id), 8000, "turn settle after view cancel");
 		const saved = chatStore.getChat(chat.id)!;
-		assert.ok(saved.messages.length >= 1, "partial transcript persisted");
+		assert.equal(saved.messages.length, 2, "complete turn persisted — not a partial");
+		assert.equal(runningTurn(chat.id), undefined, "handle unregistered at settle");
 	});
 
 	it("an ungradeable quiz is rejected at the call boundary, the error reaches the model, and the model retries", async () => {
@@ -667,6 +716,128 @@ describe("the key-presence turn gate (provider-key interlude, 2026-09-25)", () =
 		} finally {
 			if (saved !== undefined) process.env.OPENAI_API_KEY = saved;
 			else delete process.env.OPENAI_API_KEY;
+		}
+	});
+});
+
+describe("background-turn runner (owner ruling 2026-09-25: every turn is a server-side process, clients are views)", () => {
+	it("subscribe mid-turn: a second view gets the FULL replay, then live, same dialect", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const engine = gatedTeacher(gate);
+		const chat = createConfiguredChat("Test: reattach replay");
+		createdChats.push(chat.id);
+
+		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hold my turn" }] }]);
+		const first = await handleChatRequest(req, agentFactory(engine));
+		assert.equal(first.status, 200);
+		// Consume the first view a little (the start chunk is out).
+		const reader = first.body!.getReader();
+		await reader.read();
+
+		// A SECOND view attaches mid-turn — a remount, another device.
+		const handle = runningTurn(chat.id)!;
+		assert.ok(handle, "the registry resolves the live turn");
+		const secondText = new Response(handle.subscribe()).text();
+
+		// Let the turn finish; both views close at settle.
+		release();
+		const text = await secondText;
+		assert.ok(text.startsWith('data: {"type":"start"'), "replay starts from the very first chunk (the start event)");
+		assert.ok(text.includes("Gated reply."), "replay carries the full streamed content");
+		assert.ok(text.endsWith("data: [DONE]\n\n"), "live tail ends with the SSE terminal, same dialect as POST");
+		// Wire honesty: a normal turn settles via agent_end with NO error chunk
+		// (the live smoke caught a close()-throw masked into the error path
+		// — unit asserts never looked; these pins would have).
+		assert.ok(!text.includes('"type":"error"'), "a clean turn never emits an error chunk");
+		assert.ok(text.includes('"finishReason":"stop"'), "the finish chunk carries the stop reason");
+		// And the first view also closes cleanly (no hang, no drop): read its
+		// remaining chunks through the reader we already hold.
+		const decoder = new TextDecoder();
+		let firstTail = "";
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			firstTail += decoder.decode(value, { stream: true });
+		}
+		assert.ok(firstTail.endsWith("data: [DONE]\n\n"), "first view closes cleanly at settle, unaffected by the reattach");
+	});
+
+	it("remote abort: any client can stop a running turn; the partial persists; subscribers close cleanly", async () => {
+		const engine = abortableTeacher();
+		const chat = createConfiguredChat("Test: remote abort");
+		createdChats.push(chat.id);
+
+		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "wait forever" }] }]);
+		const res = await handleChatRequest(req, agentFactory(engine));
+		assert.equal(res.status, 200);
+		assert.ok(runningTurn(chat.id), "turn registered while in flight");
+		const viewText = res.text(); // the first view, reading to settle
+
+		// The remote kill from a DIFFERENT view (the dock's abort).
+		const outcome = abortTurn(chat.id);
+		assert.deepEqual(outcome, { ok: true }, "abort resolves ok on a live turn");
+
+		const text = await viewText;
+		assert.ok(text.endsWith("data: [DONE]\n\n"), "subscriber closes cleanly at the aborted settle");
+
+		await waitFor(() => !isTurnRunning(chat.id), 8000, "aborted turn settle");
+		const saved = chatStore.getChat(chat.id)!;
+		assert.ok(saved.messages.length >= 2, "the partial transcript persisted via the usual settle path");
+		assert.equal(runningTurn(chat.id), undefined, "handle unregistered after the aborted settle");
+
+		// Honest 409 semantics: there is nothing left to abort.
+		assert.deepEqual(abortTurn(chat.id), { ok: false, reason: "not_running" }, "second abort is not_running");
+	});
+
+	it("subscribe after settle: the cheap terminal tells the client the record is current", async () => {
+		const { engine } = scriptedTeacher(defaultLesson);
+		const chat = createConfiguredChat("Test: settled terminal");
+		createdChats.push(chat.id);
+
+		// A quiet chat: no turn ever ran — the stream is the same terminal.
+		const term = settledTurnResponse();
+		assert.equal(await term.text(), 'data: {"type":"turn-settled"}\n\ndata: [DONE]\n\n', "terminal is one event + [DONE]");
+		assert.equal(runningTurn(chat.id), undefined);
+
+		// And after a settled turn, the registry is empty — the GET would
+		// serve the same terminal, not a stale handle.
+		const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "quiz me" }] }]);
+		await drain(await handleChatRequest(req, agentFactory(engine)));
+		assert.equal(runningTurn(chat.id), undefined, "no handle survives settle");
+	});
+
+	it("concurrent two-chat reattach: two turns in flight, two views, both settle independently", async () => {
+		const releaseFns: Array<() => void> = [];
+		const chats = [1, 2].map((n) => {
+			const gate = new Promise<void>((r) => (releaseFns.push(r)));
+			const engine = gatedTeacher(gate);
+			const chat = createConfiguredChat(`Test: two-chat ${n}`);
+			createdChats.push(chat.id);
+			return { n, engine, chat };
+		});
+
+		const views = new Map<string, Promise<string>>();
+		for (const { chat, engine } of chats) {
+			const req = post(chat.id, [{ id: "u1", role: "user", parts: [{ type: "text", text: "hold my turn" }] }]);
+			const res = await handleChatRequest(req, agentFactory(engine));
+			assert.equal(res.status, 200);
+			const handle = runningTurn(chat.id)!;
+			assert.ok(handle, `chat ${chat.id} has its own handle`);
+			views.set(chat.id, new Response(handle.subscribe()).text());
+			// The other chat's handle must not be this one (per-chat keying).
+			const others = chats.filter((c) => c.chat.id !== chat.id).map((c) => runningTurn(c.chat.id));
+			assert.ok(!others.includes(handle), "per-chat handles are distinct objects");
+		}
+
+		// Release both; both settle independently.
+		for (const release of releaseFns) release();
+		for (const { chat } of chats) {
+			const text = await views.get(chat.id)!;
+			assert.ok(text.includes("Gated reply."), `chat ${chat.id} view replayed its own turn`);
+			assert.ok(text.endsWith("data: [DONE]\n\n"), `chat ${chat.id} view closed at settle`);
+			await waitFor(() => !isTurnRunning(chat.id), 8000, `chat ${chat.id} settle`);
+			assert.equal(chatStore.getChat(chat.id)!.messages.length, 2, `chat ${chat.id} persisted its full turn`);
 		}
 	});
 });

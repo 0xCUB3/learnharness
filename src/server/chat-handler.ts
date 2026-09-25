@@ -7,7 +7,7 @@ import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import type { ModelRole } from "../../config.ts";
 import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
 import { recordToPiMessages } from "./pi/record-adapter.ts";
-import { createPiTurnResponse } from "./pi/ui-stream.ts";
+import { piTurnResponse, runPiTurn } from "./pi/ui-stream.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { providerKeyPresent } from "./keys.ts";
@@ -19,6 +19,7 @@ import {
 } from "../core/settings-resolution.ts";
 import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope, type ProviderKeyMissing } from "../core/settings.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
+import { registerTurn, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn, triggerExtraction, withMessageIds } from "./turn-service.ts";
 import type { CallUsage } from "../core/contracts.ts";
 
@@ -310,10 +311,14 @@ export async function handleChatRequest(
 	// the factory's subscription (wired above via onUsage).
 	try {
 		assertValidUiMessages(outgoing);
-		return createPiTurnResponse({
+		// THE TURN AS A BACKGROUND OBJECT (owner ruling, 2026-09-25):
+		// runPiTurn executes decoupled from this response — the POST stream
+		// is just the FIRST subscriber (a view). A client disconnect can no
+		// longer abort the turn; the remote kill is the abort channel, and
+		// late views reattach via GET /api/chats/[id]/stream.
+		const handle = runPiTurn({
 			agent: constructed,
 			uiMessages: outgoing,
-			signal: req.signal,
 			// Stream-level failures are provider/transport internals — masked,
 			// like the SDK defaults. Tool-input validation messages never
 			// route through here: they ride the error-result path and reach the
@@ -352,8 +357,22 @@ export async function handleChatRequest(
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.
 				endTurn(chatId);
+				// And only then does the turn stop being a running object
+				// (background-turn wave, 2026-09-25): a reattach that finds
+				// nothing must find the persisted record current — the same
+				// ordering rule as endTurn.
+				unregisterTurn(chatId);
 			},
 		});
+		// The turn is now a live background object: register it so any view
+		// can reattach (GET /api/chats/[id]/stream) or remotely abort it
+		// (POST /api/activity/abort, kind "turn"). Registration after the
+		// runPiTurn call is race-free: the agent loop only ticks in later
+		// microtasks, so settle (and thus unregister) cannot beat us here.
+		registerTurn(chatId, handle);
+		// The POST response: just this caller's view onto the running turn —
+		// identical wire dialect to the reattach stream.
+		return piTurnResponse(handle);
 	} catch (err) {
 		// The stream never started, so no onFinish will fire — clear the registry
 		// or a malformed request would lock the chat until the TTL eviction.
