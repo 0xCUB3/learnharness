@@ -46,7 +46,8 @@ export const askUserQuestionTool: LhTool<any, any> = {
 	description:
 		"Ask the learner a single question and pause until they answer. NOT graded — there is no correct answer. " +
 		"Use when requirements are ambiguous, preferences are needed, a decision would materially affect the lesson, " +
-		"or you need an open-ended response. Ask exactly one question per tool call; after calling, end your turn and wait.",
+		"or you need an open-ended response. ONE question per turn: call a single ask_user_question, then end your " +
+		"turn — his answer determines the next.",
 	schema: askInputSchema,
 };
 
@@ -64,8 +65,8 @@ export const probeQuizTool: LhTool<any, any> = {
 		"Options-only: single-select or multi-select, plus an automatic 'I don't know' choice so the learner can " +
 		"signal a genuine gap instead of guessing. An always-present optional note field lets the learner attach a " +
 		"free-text note to ANY answer; it reaches you only when non-empty. No free-text answers — for non-graded " +
-		"questions use ask_user_question instead. Ask exactly one question per tool call; after calling, end your " +
-		"turn and wait for the graded result.",
+		"questions use ask_user_question instead. ONE question per turn: call a single quiz, then end your turn — " +
+		"his answer determines the next question to ask.",
 	schema: probeQuizInputSchema,
 };
 
@@ -185,7 +186,7 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 			"plus an automatic 'I don't know' choice so the learner can signal a genuine gap instead of guessing. " +
 			"An always-present optional note field lets the learner attach a free-text note to ANY answer; it reaches you " +
 			"only when non-empty. No free-text answers — for non-graded questions use ask_user_question instead. " +
-			"Ask exactly one question per tool call; after calling, end your turn and wait for the graded result.",
+			"ONE question per turn: call a single quiz, then end your turn — his answer determines the next.",
 		schema: inputSchema,
 	});
 }

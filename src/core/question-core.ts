@@ -114,7 +114,7 @@ export function quizInputProblems(input: {
 // per-session tree validation chains on top in tools.ts). Grading rules
 // are identical, single-sourced here.
 export const quizInputBase = z.object({
-	question: z.string().describe("The single quiz question to ask. Ask exactly one question per tool call."),
+	question: z.string().describe("The single quiz question to ask. ONE question per turn: ask, then end your turn — the answer determines the next question."),
 	options: z
 		.array(optionSchema)
 		.min(2)
@@ -197,7 +197,7 @@ export const askInputSchema = z
 		// No `mode` param — the pi original has none: the mode is inferred from
 		// whether options are present (the dock does exactly this). One less
 		// knob for the model to misuse.
-		question: z.string().describe("The single question to ask the learner. Ask exactly one question per tool call."),
+		question: z.string().describe("The single question to ask the learner. ONE question per turn: ask, then end your turn — the answer determines the next question."),
 		details: z.string().optional().describe("Optional extra context or instructions shown under the question."),
 		options: z
 			.array(optionSchema)
