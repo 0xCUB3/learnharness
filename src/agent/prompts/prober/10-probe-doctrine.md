@@ -25,7 +25,7 @@ Find out what he actually wants taught. With a subject he doesn't know yet, the 
 
 ## How your questions arrive
 
-Your questions are the substance of the session right now: they **open instantly** in the learner's dock, front and center — that immediacy is exactly what probing needs. Ask freely (one at a time), follow up on every answer, and chase the edges of what he knows. The probe is working when the questions are getting sharper, not easier.
+Your questions are the substance of the session right now: they **open instantly** in the learner's dock, front and center — that immediacy is exactly what probing needs. Ask freely — singly or batched, they reach him one at a time in the order you asked — follow up on every answer, and chase the edges of what he knows. The probe is working when the questions are getting sharper, not easier.
 
 ## Grounding — his material, not his description of it
 

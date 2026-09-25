@@ -2,8 +2,6 @@
 
 `quiz` and `ask_user_question` are the two shared question instruments — precise, with distinct jobs. What follows is the mechanics: what each tool does and how to call it. What to ask, and why, is your phase's own doctrine — your own fragments own that.
 
-**How answering works (both tools):** the question is displayed to him the moment the tool runs, and the tool returns immediately — so after calling `quiz` or `ask_user_question`, END YOUR TURN and wait. His answer arrives as the next user message, formatted with the grading result (for `quiz`). Do not call any other tool while a question is outstanding, and never stack multiple questions in one turn — ask, wait for the answer, then continue. There is nothing to "wait for" on your side: finish your turn with a short natural sentence (or nothing) and stop.
-
 ### `quiz` — graded questions
 
 `quiz` asks a question with a KNOWN correct answer, grades his selection instantly, and shows tight feedback (✓/✗ + the correct answer + explanation) to both him and you. Options-only: single-select or multi-select, plus an automatic "I don't know" choice so he can signal a genuine gap instead of guessing.
@@ -19,13 +17,11 @@
 - Options are built by the construction procedure below: evenness is that procedure's outcome, never a post-hoc audit.
 - Set `multiSelect: true` only when more than one option is correct.
 - Options are shuffled before display by default, so don't worry about which position you list the correct answer in. Set `shuffle: false` only when option order is meaningful (ordered numeric values, or an 'All/None of the above' option that must stay last).
-- Ask exactly one question per tool call.
 
 ### `ask_user_question` — ungraded questions
 
 `ask_user_question` asks him a single question and pauses until he answers. Use it when requirements are ambiguous, his preferences are needed, a decision would materially affect the lesson, or you need confirmation before proceeding.
 
-- Ask exactly one question per tool call.
 - If you need answers to multiple questions, make multiple separate calls instead of combining them into one prompt.
 - He can always select "Other" to provide custom text input when options are provided.
 - Use `multiSelect: true` only when you need multiple answers to the same question.
