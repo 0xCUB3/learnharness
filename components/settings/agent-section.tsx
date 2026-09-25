@@ -35,10 +35,20 @@
  * Absent key = enabled in the schema; the UI writes explicit booleans for
  * all four (simpler to reason about, sanitize-equivalent).
  *
- * Prompts: GET /api/settings/prompts segments; the switch requires an
- * override FILE (route-enforced), so a file-less row dims whole-row
- * (graph-view graying) until one is written. Switch state lives in this
- * section's PUT; text writes through the segment route.
+ * Prompts: GET /api/settings/prompts segments — THREE SECTIONS in the
+ * owner's ruled order (2026-09-26 overhaul): Teacher first, Prober, then
+ * Shared LAST. The server returns per-agent lists that each INCLUDE the
+ * shared segments; sectionedSegments deduplicates them (shared chunks
+ * once, in prompt-assembly order). The row rulings: only the TOGGLE
+ * grays when there's no override file (the file name is always
+ * full-contrast); NO description line when there's no override (the empty
+ * state is clean — toggle + name); the indicator ("Your version is
+ * saved") appears ONLY when an override exists. The switch requires an
+ * override FILE (route-enforced), so a file-less toggle is disabled.
+ * The segments view re-reads on the 'lh:settings-saved' signal for the
+ * agent section — the view's enabled flags derive from the record's
+ * switches, and the 2026-09-26 state-echo bug was exactly this reader
+ * missing (the toggle painted its old state until a remount re-fetched).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -160,6 +170,45 @@ export function composeSearchEngine(
 	return { ...agent, search: { engine } };
 }
 
+/** The indicator under a row that HAS an override file (owner ruling
+ *  2026-09-26: the empty state carries NO description line; the
+ *  indicator exists only when the user's version is on disk). Exported
+ *  for the pin. */
+export const PROMPT_SAVED_HINT = "Your version is saved";
+
+/** One section of the prompt view — the owner's ruled order: Teacher,
+ *  Prober, then Shared last. */
+export interface PromptSection {
+	id: "teacher" | "prober" | "shared";
+	label: string;
+	/** The one header that earns a hint: "Shared" alone is not
+	 *  self-evident. Teacher/Prober are. */
+	hint?: string;
+	segments: SegmentInfo[];
+}
+
+/** Split the server's per-agent segment lists into the owner's three
+ *  sections. The server contract returns the shared segments in BOTH
+ *  lists (same paths, same content) — the shared chunks are listed ONCE
+ *  here (taken from the teacher list; identical by construction), in
+ *  assembly order: the base file, then the shared fragments sorted. The
+ *  agents' own chunks keep their lists' order — which IS the prompt
+ *  assembly order (numeric-prefix filename sort). Pure — exported for
+ *  tests. */
+export function sectionedSegments(view: { prober: SegmentInfo[]; teacher: SegmentInfo[] }): PromptSection[] {
+	const own = (who: "prober" | "teacher") => view[who].filter((s) => !s.shared);
+	return [
+		{ id: "teacher", label: "Teacher", segments: own("teacher") },
+		{ id: "prober", label: "Prober", segments: own("prober") },
+		{
+			id: "shared",
+			label: "Shared",
+			hint: "Used by both agents",
+			segments: view.teacher.filter((s) => s.shared),
+		},
+	];
+}
+
 /** Compose: one prompt switch. on = explicit true; off = key REMOVED
  *  (absent = off is the schema's resting state; explicit false is the
  *  same thing but noisier). Pure — tests. */
@@ -267,6 +316,20 @@ export function AgentSection({
 			.then((body: { available: boolean; engine: string | null; reason: string }) => setSearch(body))
 			.catch(() => setSearch(null));
 
+	/** Re-read the prompt-segment view — the signal seam for the
+	 *  2026-09-26 state-echo fix: the view's `enabled` flags DERIVE from
+	 *  the settings record's agent switches (the toggle's truth lives
+	 *  here, not in the `agent` prop), so an agent-section write must
+	 *  re-read it or the toggle keeps painting its pre-write state until
+	 *  a remount. Keeps the last-good view on a failed re-read (the
+	 *  initial mount fetch below owns the loading/null state). */
+	const readPrompts = useCallback(() => {
+		fetch("/api/settings/prompts")
+			.then((r) => r.json())
+			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body))
+			.catch(() => {});
+	}, []);
+
 	// The catalog (federated: keyed providers only), the resolved slots,
 	// the prompt segments, and the search engines' key presence — one
 	// fetch each per section mount. The models read ALSO re-runs on the
@@ -284,6 +347,11 @@ export function AgentSection({
 
 	useSettingsSaved((section) => {
 		if (section === "models") readModels();
+		// THE state-echo root cause: the prompt switches write through the
+		// agent section, but this view (the toggles' truth) never re-read —
+		// the settings-saved law (every reader re-reads) was missing this
+		// one reader.
+		if (section === "agent") readPrompts();
 	});
 
 	useEffect(() => {
@@ -354,9 +422,7 @@ export function AgentSection({
 			return;
 		}
 		// Refetch: file presence gates the switch, so the view must track it.
-		fetch("/api/settings/prompts")
-			.then((r) => r.json())
-			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body));
+		readPrompts();
 		setSegmentStatus(`Saved ${path}`);
 	}
 
@@ -367,9 +433,7 @@ export function AgentSection({
 			setSegmentStatus(`Delete failed: ${res.status}`);
 			return;
 		}
-		fetch("/api/settings/prompts")
-			.then((r) => r.json())
-			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body));
+		readPrompts();
 	}
 
 		/** The search-engine menu row — label + the quiet live-key mark. */
@@ -403,16 +467,24 @@ export function AgentSection({
 			<div key={info.path} data-testid={`prompt-segment-${info.path}`}>
 				<SettingsRow
 					label={info.path}
-					hint={fileExists ? undefined : "No changes yet — add yours below"}
+					// Overhaul rulings (2026-09-26): NO description when
+					// there's no override (the empty state is clean —
+					// toggle + name); the indicator appears ONLY when the
+					// user's version is on disk.
+					hint={fileExists ? PROMPT_SAVED_HINT : undefined}
 					testid={`prompt-row-${info.path}`}
-					dimmed={!fileExists}
 				>
-					<Toggle
-						checked={info.enabled && fileExists}
-						disabled={!fileExists}
-						label={`prompt ${info.path}`}
-						onChange={(on) => onSectionChange(composePromptSwitch(agent, info.path, on))}
-					/>
+					{/* Graying ruling: ONLY the toggle dims without an
+					    override file — the file name above stays
+					    full-contrast (the whole-row dim is dead). */}
+					<span className={fileExists ? undefined : "opacity-40"}>
+						<Toggle
+							checked={info.enabled}
+							disabled={!fileExists}
+							label={`prompt ${info.path}`}
+							onChange={(on) => onSectionChange(composePromptSwitch(agent, info.path, on))}
+						/>
+					</span>
 				</SettingsRow>
 				<button
 					type="button"
@@ -426,9 +498,6 @@ export function AgentSection({
 				</button>
 				{open && (
 					<div className="mt-1 flex flex-col gap-2">
-						{info.shared && (
-							<p className="text-xs text-muted-foreground/70">Shared base — appears in both agents.</p>
-						)}
 						<div>
 							<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">Source</p>
 							<textarea
@@ -684,11 +753,20 @@ export function AgentSection({
 					<p className="text-xs text-muted-foreground/70">Loading prompt segments…</p>
 				) : (
 					<div className="flex flex-col gap-4">
-						{(["prober", "teacher"] as const).map((who) => (
-							<div key={who}>
-								<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">{who}</p>
+						{/* The owner's ruled order (2026-09-26): Teacher first,
+						    then Prober, then Shared LAST — shared chunks once
+						    (deduplicated), each section in prompt-assembly
+						    order. */}
+						{sectionedSegments(prompts).map((section) => (
+							<div key={section.id} data-testid={`prompt-section-${section.id}`}>
+								<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">
+									{section.label}
+								</p>
+								{section.hint && (
+									<p className="mb-1 text-xs text-muted-foreground/60">{section.hint}</p>
+								)}
 								<div className="flex flex-col gap-2">
-									{prompts[who].map((info) => segmentRow(info))}
+									{section.segments.map((info) => segmentRow(info))}
 								</div>
 							</div>
 						))}

@@ -9,11 +9,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { appearanceVars, derivedPalette, resolveAppearance, staleVarNames } from "../components/settings/appearance.tsx";
 import {
+	PROMPT_SAVED_HINT,
 	composePromptSwitch,
 	composeSearchEngine,
 	composeSlotModel,
 	composeTool,
 	researchToolUnavailable,
+	sectionedSegments,
 } from "../components/settings/agent-section.tsx";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
 import { classifyKeys, keyStatusLine, type ProviderKeyInfo } from "../components/settings/keys-section.tsx";
@@ -337,5 +339,52 @@ describe("researchToolUnavailable — the row grays on the registry's own signal
 		for (const id of ["demo", "visual", "pdf"]) {
 			assert.equal(researchToolUnavailable(id, { available: false }), false);
 		}
+	});
+});
+
+describe("sectionedSegments — the prompts overhaul (2026-09-26)", () => {
+	// The server contract: BOTH per-agent lists include the shared
+	// segments (same paths) — the view must list them ONCE.
+	const view = {
+		prober: [
+			{ path: "system-prompt.md", sourceText: "b", overrideText: null, enabled: false, shared: true },
+			{ path: "shared/10-personality.md", sourceText: "s1", overrideText: "custom", enabled: true, shared: true },
+			{ path: "prober/10-probe-doctrine.md", sourceText: "p1", overrideText: null, enabled: false, shared: false },
+		],
+		teacher: [
+			{ path: "system-prompt.md", sourceText: "b", overrideText: null, enabled: false, shared: true },
+			{ path: "shared/10-personality.md", sourceText: "s1", overrideText: "custom", enabled: true, shared: true },
+			{ path: "teacher/05-method.md", sourceText: "t1", overrideText: null, enabled: false, shared: false },
+			{ path: "teacher/10-planning.md", sourceText: "t2", overrideText: null, enabled: false, shared: false },
+		],
+	};
+
+	it("the owner's ruled order: Teacher, Prober, Shared — Shared last", () => {
+		const ids = sectionedSegments(view).map((s) => s.id);
+		assert.deepEqual(ids, ["teacher", "prober", "shared"]);
+	});
+
+	it("shared chunks appear exactly ONCE across all sections (no duplication)", () => {
+		const all = sectionedSegments(view).flatMap((s) => s.segments.map((seg) => seg.path));
+		assert.equal(all.filter((p) => p === "system-prompt.md").length, 1);
+		assert.equal(all.filter((p) => p === "shared/10-personality.md").length, 1);
+		// every path unique — no chunk listed twice
+		assert.equal(new Set(all).size, all.length);
+	});
+
+	it("the Shared section holds the shared chunks in assembly order; the agents' sections hold their own", () => {
+		const [teacher, prober, shared] = sectionedSegments(view);
+		assert.ok(teacher && prober && shared, "all three sections present");
+		assert.deepEqual(teacher.segments.map((s) => s.path), ["teacher/05-method.md", "teacher/10-planning.md"]);
+		assert.deepEqual(prober.segments.map((s) => s.path), ["prober/10-probe-doctrine.md"]);
+		// assembly order: the base file first, then the shared fragments
+		assert.deepEqual(shared.segments.map((s) => s.path), ["system-prompt.md", "shared/10-personality.md"]);
+		// the Shared header carries the one hint that earns its place
+		assert.equal(shared.hint, "Used by both agents");
+		assert.equal(teacher.hint, undefined);
+	});
+
+	it("the indicator copy is pinned (override present = the row earns its line)", () => {
+		assert.equal(PROMPT_SAVED_HINT, "Your version is saved");
 	});
 });
