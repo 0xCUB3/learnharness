@@ -127,6 +127,17 @@ export const quizInputBase = z.object({
 		.boolean()
 		.optional()
 		.describe("Set to true when more than one option is correct and the learner must select all of them."),
+	// Argument-order ruling (owner, 2026-09-25): the explanation is REASONING,
+	// and reasoning happens BEFORE the answer is chosen — models emit tool
+	// args in schema order, so explanation sits immediately BEFORE correctAnswer.
+	// (All consumers read by key; the order is authoring guidance, nothing else.)
+	explanation: z
+		.string()
+		.describe(
+			"REQUIRED. Explanation revealed AFTER the learner answers (shown whether they got it right or wrong). " +
+				"Use it to reinforce why the correct answer is correct. It is written BEFORE correctAnswer by design: " +
+				"reason it out first, then commit the answer the reasoning supports.",
+		),
 	correctAnswer: z
 		.union([z.string(), z.array(z.string())])
 		.describe(
@@ -135,12 +146,6 @@ export const quizInputBase = z.object({
 				"the learner is only correct if their selection matches this set exactly. " +
 				"Always pass the value, not a position number — this is self-checking and prevents miscounting. " +
 				"A value that matches no option fails validation and the call is returned to you to fix.",
-		),
-	explanation: z
-		.string()
-		.describe(
-			"REQUIRED. Explanation revealed AFTER the learner answers (shown whether they got it right or wrong). " +
-				"Use it to reinforce why the correct answer is correct.",
 		),
 	details: z.string().optional().describe("Optional extra context or instructions shown under the question."),
 });

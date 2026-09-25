@@ -11,7 +11,7 @@
 - `quiz` is GRADED; `ask_user_question` is not. If the question has a correct answer, use `quiz`. If you just need a preference, decision, or open-ended input, use `ask_user_question`.
 - `correctAnswer` is REQUIRED and is the option value, not a position number. Single-select: one string (e.g. "mercury"). Multi-select: an array of strings (e.g. ["belize", "niue"]).
 - Always pass the option's `value` string as `correctAnswer` — it is self-checking and prevents miscounting positions. A value that matches no option is a hard error.
-- `explanation` is REQUIRED — always say why the correct answer is correct.
+- `explanation` is REQUIRED — always say why the correct answer is correct. It comes BEFORE `correctAnswer` in the call by design: reason it out first, then commit the answer the reasoning supports.
 - Multi-select is graded as an exact-set match: he is correct only if he selects every correct option and no incorrect ones.
 - There is no free-text mode. An "I don't know" choice is ALWAYS added automatically — provide ONLY the real, gradable options (at least two). Never add your own uncertainty/opt-out option like "I don't know", "I'm not sure", or "Not sure"; that is handled for you and a manual one would be redundant or gradable-as-wrong.
 - If a result comes back as dontKnow, he honestly did not know and did NOT guess — treat it as a genuine knowledge gap, not as a wrong answer.

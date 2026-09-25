@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { z } from "zod";
 import {
 	askInputSchema,
 	askOptionProblems,
@@ -18,6 +19,7 @@ import {
 	QUESTION_ENTRY,
 	quizInputProblems,
 	quizInputSchema,
+	probeQuizInputSchema,
 	resolveCorrect,
 	toggleOption,
 	toggleOther,
@@ -31,6 +33,36 @@ import {
 // Schema-valid ⇔ gradeable: a quiz whose correctAnswer can't be resolved
 // dies at the tool-call boundary, and the SDK returns the error to the
 // teacher to retry — it must never reach the learner's dock.
+
+describe("the schema's argument order (reasoning before the pick)", () => {
+	// Argument-order ruling (owner, 2026-09-25): the explanation is
+	// reasoning, and reasoning happens BEFORE the answer is chosen — models
+	// emit tool args in schema order, so explanation sits immediately before
+	// correctAnswer. z.toJSONSchema preserves zod's declaration order into
+	// the model-facing properties, so this pin guards the emission end to
+	// end. All consumers read by key — the order is authoring guidance.
+	it("emits explanation immediately before correctAnswer (both agents' schemas)", () => {
+		for (const schema of [quizInputSchema, probeQuizInputSchema]) {
+			const json = z.toJSONSchema(schema as z.ZodType, { io: "input" }) as {
+				properties: Record<string, unknown>;
+			};
+			const keys = Object.keys(json.properties);
+			assert.ok(
+				keys.indexOf("explanation") < keys.indexOf("correctAnswer"),
+				`explanation must precede correctAnswer in the emitted schema (got: ${keys.join(", ")})`,
+			);
+			assert.deepEqual(keys, [
+				"question",
+				"options",
+				"multiSelect",
+				"explanation",
+				"correctAnswer",
+				"details",
+				...(keys.includes("nodeId") ? ["nodeId"] : []),
+			]);
+		}
+	});
+});
 
 describe("quizInputSchema / quizInputProblems (the authoring contract)", () => {
 	const valid = {
