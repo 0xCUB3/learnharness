@@ -1228,6 +1228,18 @@ export function Chat({
  * stays MOUNTED while collapsed (hidden, not unmounted) so a half-made
  * selection survives.
  */
+/**
+ * How a teach-phase question arrives (owner ruling, 2026-09-25): collapsed
+ * behind the reveal button when it follows the composer — the learner
+ * reads the teaching first — but OPEN when it follows another question
+ * (a queued parallel check): the reading already happened, so there is
+ * nothing left to wait for and the scroll height it already had is the
+ * honest height.
+ */
+export function revealArrival(wasQuestion: boolean): { expanded: boolean; revealed: boolean } {
+	return wasQuestion ? { expanded: true, revealed: true } : { expanded: false, revealed: false };
+}
+
 function DockOverlay({
 	pending,
 	requiresReveal,
@@ -1286,18 +1298,34 @@ function DockOverlay({
 	const pendingId = pending?.toolCallId ?? null;
 	const initialPendingRef = useRef(pendingId);
 
+	// Teach-question ARRIVAL state, applied during render — BEFORE the
+	// first paint (owner, scroll-honesty round 2026-09-25). Until now the
+	// stale expanded=true left by the previous question painted one frame
+	// of the OPEN question: the dock measured itself tall, permanently
+	// reserved that height, and the collapse after the paint could never
+	// give it back (fold immunity) — so a collapsed teach question scrolled
+	// the transcript as if it had opened. Resetting here means the paint
+	// measures the bar, the reserve keeps the composer's height, and the
+	// only motion is the teaching text itself.
+	const prevPendingIdRef = useRef(pendingId);
+	if (pendingId !== prevPendingIdRef.current) {
+		const wasQuestion = prevPendingIdRef.current !== null;
+		prevPendingIdRef.current = pendingId;
+		if (pendingId && requiresReveal) {
+			const arrival = revealArrival(wasQuestion);
+			setExpanded(arrival.expanded);
+			setRevealed(arrival.revealed);
+		}
+	}
+
 	// New question MID-SESSION: open expanded if the learner is following at
 	// the bottom (scroll to reveal it); reading history → arrive as the bar.
-	// Teach-phase checks ALWAYS arrive collapsed behind the reveal button,
-	// even at the bottom. On session mount the dock simply starts in its
-	// initial state (expanded for probe, invitation for teach) — no scroll, no
-	// morph.
+	// Teach-phase arrivals are handled above, during render. On session
+	// mount the dock simply starts in its initial state (expanded for
+	// probe, invitation for teach) — no scroll, no morph.
 	useEffect(() => {
 		if (!pendingId || pendingId === initialPendingRef.current) return;
-		if (requiresReveal) {
-			setRevealed(false);
-			setExpanded(false);
-		} else {
+		if (!requiresReveal) {
 			setExpanded(isAtBottom);
 			if (isAtBottom) void scrollToBottom();
 		}
