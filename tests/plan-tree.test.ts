@@ -101,7 +101,7 @@ after(() => {
 async function exec(tools: ReturnType<typeof planTools>, name: string, input: unknown): Promise<PlanToolResult> {
 	const t = tools[name]!;
 	assert.ok(typeof t.execute === "function", `${name} must be a server-side tool with execute`);
-	return t.execute(input as never, { toolCallId: "test", messages: [] } as never) as Promise<PlanToolResult>;
+	return t.execute("test", input).then((r) => r.details as PlanToolResult);
 }
 
 function newChat(title: string): string {

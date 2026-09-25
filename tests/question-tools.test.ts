@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
+import { Value } from "typebox/value";
 import { createProberTools, createTeacherTools, teachQuizToolFor, type TeacherToolContext } from "../src/agent/tools.ts";
 import { TOGGLEABLE_TOOLS } from "../src/core/pending.ts";
 import { jobStore } from "../src/store/jobs.ts";
@@ -51,15 +52,33 @@ const validQuiz = {
 	explanation: "Arithmetic.",
 };
 
-interface QuizToolSpec {
-	schema: { safeParse: (v: unknown) => { success: boolean; error?: { issues: Array<{ message: string }> } } };
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { ToolInputError } from "../src/agent/tool-execute.ts";
+
+/** The Wave A boundary predicate (2026-09-26): pi's loop structurally
+ *  validates against the TypeBox parameters, then execute re-runs the
+ *  authoring refinements (the old superRefine) and throws ToolInputError
+ *  on problems — the model sees both as retryable input errors. This
+ *  helper replicates the old safeParse seam end to end. */
+async function boundaryParse(
+	// `input: never` param: contravariance lets any AgentTool's execute slot in.
+	tool: { parameters: any; execute: (id: string, input: never) => Promise<unknown> },
+	input: unknown,
+): Promise<{ success: boolean; error?: ToolInputError }> {
+	if (!Value.Check(tool.parameters, input)) return { success: false };
+	try {
+		await tool.execute("tc", input as never);
+		return { success: true };
+	} catch (e) {
+		assert.ok(e instanceof ToolInputError, `expected ToolInputError, got: ${e}`);
+		return { success: false, error: e };
+	}
 }
-/** teachQuizToolFor returns the single quiz tool; createProberTools a registry. */
-const schemaOf = (toolLike: unknown) => (toolLike as QuizToolSpec).schema;
-const quizSchemaOf = (tools: Record<string, unknown>) => schemaOf(tools.quiz);
+const problemLines = (e?: ToolInputError): string[] =>
+	(e?.message.split("\n") ?? []).filter((l) => l.startsWith("- "));
 
 describe("teachQuizToolFor: the dynamic plan-nodeId validation (position signal)", () => {
-	it("accepts a nodeId that matches a node of the session's tree", () => {
+	it("accepts a nodeId that matches a node of the session's tree", async () => {
 		const chatId = newChat("NodeId: valid");
 		chatStore.saveTree(chatId, {
 			nodes: [
@@ -69,46 +88,46 @@ describe("teachQuizToolFor: the dynamic plan-nodeId validation (position signal)
 			edges: [{ from: "arith", to: "expressions" }],
 			version: 1,
 		});
-		const res = schemaOf(teachQuizToolFor({ chatId, chatStore })).safeParse({
+		const res = await boundaryParse(teachQuizToolFor({ chatId, chatStore }), {
 			...validQuiz,
 			nodeId: "expressions",
 		});
 		assert.equal(res.success, true);
 	});
 
-	it("rejects a nodeId that matches no node — with a message listing the slugs", () => {
+	it("rejects a nodeId that matches no node — with a message listing the slugs", async () => {
 		const chatId = newChat("NodeId: typo");
 		chatStore.saveTree(chatId, {
 			nodes: [{ id: "arith", title: "Arithmetic" }],
 			edges: [],
 			version: 1,
 		});
-		const res = schemaOf(teachQuizToolFor({ chatId, chatStore })).safeParse({
+		const res = await boundaryParse(teachQuizToolFor({ chatId, chatStore }), {
 			...validQuiz,
 			nodeId: "arithmetic", // the typo — slug is 'arith'
 		});
 		assert.equal(res.success, false);
-		const msg = res.error!.issues.map((i) => i.message).join("\n");
+		const msg = problemLines(res.error).join("\n");
 		assert.match(msg, /matches no node/);
 		assert.match(msg, /arith/);
 	});
 
-	it("no tree yet: ANY nodeId is rejected — omit it for ad-hoc checks", () => {
+	it("no tree yet: ANY nodeId is rejected — omit it for ad-hoc checks", async () => {
 		const chatId = newChat("NodeId: no tree");
-		const schema = schemaOf(teachQuizToolFor({ chatId, chatStore }));
-		const res = schema.safeParse({ ...validQuiz, nodeId: "anything" });
+		const tool = teachQuizToolFor({ chatId, chatStore });
+		const res = await boundaryParse(tool, { ...validQuiz, nodeId: "anything" });
 		assert.equal(res.success, false);
-		assert.match(res.error!.issues.at(-1)!.message, /No plan map exists yet/);
+		assert.match(problemLines(res.error).at(-1)!, /No plan map exists yet/);
 		// …while an untagged ad-hoc check is fine
-		const plain = schema.safeParse(validQuiz);
+		const plain = await boundaryParse(tool, validQuiz);
 		assert.equal(plain.success, true);
 	});
 
-	it("reads the LIVE record — a plan_init mutation mid-turn is honored immediately", () => {
+	it("reads the LIVE record — a plan_init mutation mid-turn is honored immediately", async () => {
 		const chatId = newChat("NodeId: live record");
-		const schema = schemaOf(teachQuizToolFor({ chatId, chatStore }));
+		const tool = teachQuizToolFor({ chatId, chatStore });
 
-		const before = schema.safeParse({ ...validQuiz, nodeId: "fresh-node" });
+		const before = await boundaryParse(tool, { ...validQuiz, nodeId: "fresh-node" });
 		assert.equal(before.success, false, "no tree yet → rejected");
 
 		chatStore.saveTree(chatId, {
@@ -116,31 +135,36 @@ describe("teachQuizToolFor: the dynamic plan-nodeId validation (position signal)
 			edges: [],
 			version: 1,
 		});
-		const after = schema.safeParse({ ...validQuiz, nodeId: "fresh-node" });
+		const after = await boundaryParse(tool, { ...validQuiz, nodeId: "fresh-node" });
 		assert.equal(after.success, true, "the same id validates once the tree exists — same turn");
 	});
 
-	it("the shared grading rules still chain FIRST (schema-valid ⇔ gradeable)", () => {
+	it("the shared grading rules still chain FIRST (schema-valid ⇔ gradeable)", async () => {
 		const chatId = newChat("NodeId: grading rules intact");
-		const res = schemaOf(teachQuizToolFor({ chatId, chatStore })).safeParse({
+		const res = await boundaryParse(teachQuizToolFor({ chatId, chatStore }), {
 			...validQuiz,
 			correctAnswer: "42", // matches no option — question-core's rule
 			nodeId: "ghost", // also bad — BOTH problems surface
 		});
 		assert.equal(res.success, false);
-		const msgs = res.error!.issues.map((i) => i.message).join("\n");
+		const msgs = problemLines(res.error).join("\n");
 		assert.match(msgs, /correctAnswer/);
 		assert.match(msgs, /matches no node/);
 	});
 });
 
 describe("the prober's quiz: no nodeId field at all", () => {
-	it("the probe schema accepts a plain quiz and STRIPS a smuggled nodeId", () => {
-		const plain = probeQuizInputSchema.safeParse(validQuiz);
-		assert.equal(plain.success, true);
-		const smuggled = probeQuizInputSchema.safeParse({ ...validQuiz, nodeId: "anything" });
-		assert.equal(smuggled.success, true, "the field doesn't exist — zod strips it");
-		assert.equal("nodeId" in smuggled.data, false, "stripped, not tolerated");
+	it("the probe schema accepts a plain quiz; a smuggled nodeId is NOT in the wire schema", () => {
+		assert.ok(Value.Check(probeQuizInputSchema, validQuiz));
+		// Wave A delta (2026-09-26): pi's TypeBox validation tolerates unknown
+		// keys rather than stripping them — but the probe schema's wire
+		// properties carry no nodeId at all, and the display parse seam
+		// (tool-parts parseQuizInput, Value.Clean) strips it before the dock.
+		const smuggled = { ...validQuiz, nodeId: "anything" };
+		assert.ok(Value.Check(probeQuizInputSchema, smuggled));
+		const wireKeys = Object.keys((probeQuizInputSchema as { properties: Record<string, unknown> }).properties);
+		assert.ok(!wireKeys.includes("nodeId"), "no session check to fail — the field isn't the prober's to set");
+		assert.equal("nodeId" in (Value.Clean(probeQuizInputSchema, smuggled) as object), false, "the dock parse strips it");
 	});
 
 	it("the prober's tool registry carries the nodeId-less quiz, probe_done, and the learner-filesystem set", () => {
@@ -151,8 +175,8 @@ describe("the prober's quiz: no nodeId field at all", () => {
 		assert.deepEqual(Object.keys(tools).sort(), [
 			"ask_user_question", "find", "grep", "ls", "pdf", "probe_done", "quiz", "read", "research",
 		]);
-		const schema = quizSchemaOf(tools);
-		assert.equal(schema.safeParse({ ...validQuiz, nodeId: "anything" }).success, true, "no session check to fail");
+		const quiz = tools.quiz as AgentTool<any>;
+		assert.equal(Value.Check(quiz.parameters, { ...validQuiz, nodeId: "anything" }), true, "no session check to fail");
 	});
 });
 // ─── tool availability (2026-09 settings seam) ───────────────────────────────

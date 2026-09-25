@@ -10,6 +10,8 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { quizInputProblems } from "../src/core/question-core.ts";
+import { Value } from "typebox/value";
 import {
 	parseAskInput,
 	parseProbeDoneInput,
@@ -59,20 +61,52 @@ describe("parseQuizInput", () => {
 	});
 
 	it("boundary parity: anything the TEACH schema accepts, the display parse accepts", () => {
-		const boundary = quizInputSchema.safeParse(TEACHER_QUIZ);
-		assert.ok(boundary.success, "fixture must be boundary-valid for this pin to mean anything");
-		assert.ok(parseQuizInput(boundary.data));
+		assert.ok(Value.Check(quizInputSchema, TEACHER_QUIZ), "fixture must be boundary-valid for this pin to mean anything");
+		assert.ok(parseQuizInput(TEACHER_QUIZ));
 	});
 
 	it("boundary parity: anything the PROBE schema accepts, the display parse accepts", () => {
-		const boundary = probeQuizInputSchema.safeParse(PROBER_QUIZ);
-		assert.ok(boundary.success);
-		assert.ok(parseQuizInput(boundary.data));
+		assert.ok(Value.Check(probeQuizInputSchema, PROBER_QUIZ));
+		assert.ok(parseQuizInput(PROBER_QUIZ));
 	});
 
 	it("the live crash shape — options as a JSON string — does not parse", () => {
 		const stringified = { ...PROBER_QUIZ, options: JSON.stringify(PROBER_QUIZ.options) };
 		assert.equal(parseQuizInput(stringified), undefined);
+	});
+
+	it("boundary parity under Value.Convert: a NUMERIC correctAnswer parses (live-smoke lockout fix, 2026-09-26)", () => {
+		// The live smoke's model emitted correctAnswer: 17 (number). pi's
+		// boundary runs Value.Convert before Value.Check, so the quiz posed
+		// — but the record keeps the RAW args. A parse seam without Convert
+		// would reject exactly what the boundary accepted: the pending quiz
+		// renders nowhere while the turn has ended = learner lockout.
+		// Dock-visible parity case: the smoke's real emission — options whose
+		// values ARE the numbers, correctAnswer numeric. Convert → "17",
+		// refinement passes (it matches an option), the quiz parses.
+		const numeric = {
+			question: "What is 5 + 3 × 4?",
+			options: [
+				{ label: "17", value: "17" },
+				{ label: "27", value: "27" },
+				{ label: "9", value: "9" },
+			],
+			explanation: "Multiplication first.",
+			correctAnswer: 17,
+		};
+		const parsed = parseQuizInput(numeric);
+		assert.ok(parsed);
+		assert.equal(parsed.correctAnswer, "17", "converted to the string the boundary saw");
+		const numericArray = { ...numeric, multiSelect: true, correctAnswer: [17, "27"] };
+		const parsedArray = parseQuizInput(numericArray);
+		assert.ok(parsedArray);
+		assert.deepEqual(parsedArray.correctAnswer, ["17", "27"]);
+		// Non-convertible garbage still never parses (structure owns it)…
+		assert.equal(parseQuizInput({ ...PROBER_QUIZ, correctAnswer: { bad: true } }), undefined);
+		// …and Convert's widening (undefined → "") is caught by the refinement
+		// chain the boundary itself uses — garbage renders as a quiet fallback.
+		const widened = { ...PROBER_QUIZ, correctAnswer: undefined };
+		assert.equal(parseQuizInput(widened), undefined, "the refinement owns the reject");
 	});
 
 	it("garbage never parses: non-object, missing question, missing correctAnswer", () => {
@@ -102,9 +136,8 @@ describe("parseProbeDoneInput", () => {
 	});
 
 	it("boundary parity: anything the tool schema accepts, the display parse accepts", () => {
-		const boundary = probeDoneInputSchema.safeParse(VALID_ASSESSMENT);
-		assert.ok(boundary.success);
-		assert.ok(parseProbeDoneInput(boundary.data));
+		assert.ok(Value.Check(probeDoneInputSchema, VALID_ASSESSMENT));
+		assert.ok(parseProbeDoneInput(VALID_ASSESSMENT));
 	});
 
 	it("the live crash shape — assessment STRINGIFIED — does not parse", () => {

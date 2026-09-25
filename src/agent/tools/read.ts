@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { z } from "zod";
-import { lhTool, type LhToolImageResult } from "../lh-tool.ts";
+import { Type } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { serverExecute, type ImageFileResult } from "../tool-execute.ts";
 import { resolveSourcePath } from "./fs-shared.ts";
 
 /**
@@ -17,8 +18,8 @@ import { resolveSourcePath } from "./fs-shared.ts";
  *   continuation notices — a huge file never silently floods the context.
  * - image files (jpg/png/gif/webp/bmp): returned as native image content
  *   parts so the vision-capable model actually SEES them (teacher's
- *   glm-5.3-flash accepts image input per pi's zai catalog; the converter
- *   in lh-tool.ts maps LhToolImageResult to pi's ImageContent).
+ *   glm-5.3-flash accepts image input per pi's zai catalog; tool-execute's
+ *   toToolResult maps ImageFileResult to pi's ImageContent).
  * - unreadable/missing files throw — pi turns that into an error tool
  *   result the model sees and recovers from.
  *
@@ -41,10 +42,10 @@ const IMAGE_MIME: Record<string, string> = {
 	".bmp": "image/bmp",
 };
 
-const readInputSchema = z.object({
-	path: z.string().min(1).describe("Path to the file to read (relative or absolute)"),
-	offset: z.number().int().positive().optional().describe("Line number to start reading from (1-indexed)"),
-	limit: z.number().int().positive().optional().describe("Maximum number of lines to read"),
+const readInput = Type.Object({
+	path: Type.String({ minLength: 1, description: "Path to the file to read (relative or absolute)" }),
+	offset: Type.Optional(Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of lines to read" })),
 });
 
 function formatSize(bytes: number): string {
@@ -94,11 +95,12 @@ function readTextSlice(text: string, offset: number | undefined, limit: number |
  * fragment (prompts/shared/). Relative paths resolve against the
  * learner's home (fs-shared.ts), the harness's anchor.
  */
-export const readTool = lhTool({
+export const readTool: AgentTool<typeof readInput> = {
 	name: "read",
+	label: "read",
 	description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50.0KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
-	schema: readInputSchema,
-	execute: async ({ path: rawPath, offset, limit }): Promise<string | LhToolImageResult> => {
+	parameters: readInput,
+	execute: serverExecute("read", readInput, async ({ path: rawPath, offset, limit }): Promise<string | ImageFileResult> => {
 		const absolute = resolveSourcePath(rawPath);
 		const ext = path.extname(absolute).toLowerCase();
 		const mime = IMAGE_MIME[ext];
@@ -114,5 +116,5 @@ export const readTool = lhTool({
 		}
 		const text = buffer.toString("utf-8");
 		return readTextSlice(text, offset, limit);
-	},
-});
+	}),
+};

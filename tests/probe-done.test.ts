@@ -43,10 +43,7 @@ const ASSESSMENT = {
 async function execute(tools: ReturnType<typeof probeDoneTool>, input: unknown) {
 	const t = tools.probe_done!;
 	assert.ok(typeof t.execute === "function");
-	return t.execute(input as never, { toolCallId: "test", messages: [] } as never) as Promise<{
-		ok: boolean;
-		error?: string;
-	}>;
+	return t.execute("test", input).then((r) => r.details as { ok: boolean; error?: string });
 }
 
 describe("probe_done: the probe→planning seam", () => {

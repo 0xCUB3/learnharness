@@ -1,6 +1,7 @@
-import { z } from "zod";
+import { Type } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
-import { lhTool, toPiTools, type LhTool } from "../lh-tool.ts";
+import { serverExecute } from "../tool-execute.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import type { DemoResult } from "../../core/contracts.ts";
@@ -77,39 +78,48 @@ interface BuilderState {
 	lastResult: DemoRunResult | null;
 }
 
+const writeDemoInput = Type.Object({
+	html: Type.String({ description: "The complete HTML document: <!doctype html>…</html>, all JS inline." }),
+});
+
+const runDemoInput = Type.Object({
+	probe: Type.Optional(
+		Type.String({
+			description:
+				"Optional JS expression evaluated in the page after settling, e.g. \"document.querySelectorAll('input').length\".",
+
+		}),
+	),
+});
+
 export function createDemoBuilderTools(
 	state: BuilderState,
 	headless: HeadlessApi,
 	onActivity?: (line: string) => void,
-): Record<string, LhTool<any, any>> {
+): Record<string, AgentTool<any>> {
 	return {
-		write_demo: lhTool({
+		write_demo: {
 			name: "write_demo",
+			label: "write_demo",
 			description:
 				"Write the complete self-contained HTML document for the demo (overwrites any previous version). " +
 				"Always follow with run_demo to test it headlessly.",
-			schema: z.object({
-				html: z.string().describe("The complete HTML document: <!doctype html>…</html>, all JS inline."),
-			}),
-			execute: async ({ html }) => {
+			parameters: writeDemoInput,
+			execute: serverExecute("write_demo", writeDemoInput, async ({ html }) => {
 				if (!html || html.trim().length === 0) return "ERROR: empty document — write the full HTML.";
 				state.html = html;
 				onActivity?.(`write_demo: ${(html.length / 1024).toFixed(1)} KB`);
 				return `Saved (${html.length} bytes). Now call run_demo to test it — never deliver untested.`;
-			},
-		}),
-		run_demo: lhTool({
+			}),
+		},
+		run_demo: {
 			name: "run_demo",
+			label: "run_demo",
 			description:
 				"Headlessly execute the current demo in Chrome and report console errors, uncaught errors, and failed requests. " +
 				"Optionally pass a probe expression to assert on page state.",
-			schema: z.object({
-				probe: z
-					.string()
-					.optional()
-					.describe("Optional JS expression evaluated in the page after settling, e.g. \"document.querySelectorAll('input').length\"."),
-			}),
-			execute: async ({ probe }) => {
+			parameters: runDemoInput,
+			execute: serverExecute("run_demo", runDemoInput, async ({ probe }) => {
 				if (!state.html) return "ERROR: nothing to run — call write_demo first.";
 				const reason = headless.unavailableReason();
 				if (reason) return `HEADLESS UNAVAILABLE: ${reason}`;
@@ -127,8 +137,8 @@ export function createDemoBuilderTools(
 					result.ok ? "run_demo: clean" : `run_demo: ${summarizeCounts(result)}`,
 				);
 				return formatRunResult(result);
-			},
-		}),
+			}),
+		},
 	};
 }
 
@@ -190,7 +200,7 @@ export async function runDemoBuilder(input: DemoBuilderInput, opts: DemoBuilderO
 
 	let finalText = "";
 	try {
-		const result = await runSubagent(toPiTools(createDemoBuilderTools(state, headless, opts.onActivity)), {
+		const result = await runSubagent(Object.values(createDemoBuilderTools(state, headless, opts.onActivity)), {
 			role: "demoBuilder",
 			engine: opts.engine,
 			systemPrompt: INSTRUCTIONS,

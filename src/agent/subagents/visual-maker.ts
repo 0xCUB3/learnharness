@@ -1,6 +1,5 @@
-import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
-import { z } from "zod";
-import { lhTool, piToolDeclarations, type LhTool } from "../lh-tool.ts";
+import type { AssistantMessage, Message, Tool, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { piEngineFor, type PiEngine, type ThinkingLevel } from "../models.ts";
 import type { VisualResult } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
@@ -88,29 +87,32 @@ Your FINAL message: 1-2 sentences of notes for the teacher (what the figure show
 NEVER the SVG source itself. If you genuinely cannot make a correct picture of the brief, say exactly
 that in your final message and why.`;
 
-export function createVisualTools(): Record<string, LhTool<any, any>> {
+/** The wire declarations (pi-ai Tool, TypeBox parameters): this loop owns
+ *  execution itself — write/edit dispatch inline below, render feeds the
+ *  image-in-the-loop message — so the declarations carry no execute. */
+export function createVisualTools(): Record<string, Tool> {
 	return {
-		write_svg: lhTool({
+		write_svg: {
 			name: "write_svg",
 			description: "Write the complete SVG source for the figure (overwrites any previous version).",
-			schema: z.object({
-				svg: z.string().describe('Complete <svg xmlns="…">…</svg> markup.'),
+			parameters: Type.Object({
+				svg: Type.String({ description: 'Complete <svg xmlns="…">…</svg> markup.' }),
 			}),
-		}),
-		edit_svg: lhTool({
+		},
+		edit_svg: {
 			name: "edit_svg",
 			description:
 				"Replace one exact spot in the current SVG: old_text must appear EXACTLY ONCE and is replaced by new_text. Call write_svg first. For larger changes, write_svg the whole document.",
-			schema: z.object({
-				old_text: z.string().describe("The exact text to replace — must match exactly once in the current SVG."),
-				new_text: z.string().describe("The replacement text."),
+			parameters: Type.Object({
+				old_text: Type.String({ description: "The exact text to replace — must match exactly once in the current SVG." }),
+				new_text: Type.String({ description: "The replacement text." }),
 			}),
-		}),
-		render_svg: lhTool({
+		},
+		render_svg: {
 			name: "render_svg",
 			description: "Render the current SVG to a PNG and show it to you for inspection. No arguments.",
-			schema: z.object({}),
-		}),
+			parameters: Type.Object({}),
+		},
 	};
 }
 
@@ -130,7 +132,7 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 	}
 
 	const tools = createVisualTools();
-	const toolDeclarations = piToolDeclarations(tools);
+	const toolDeclarations = Object.values(tools);
 	const engine = opts.engine ?? piEngineFor("visualMaker");
 	// BYOK (owner, 2026-09-22): the level rides the injected engine — no
 	// factory pin to consult (engine.level is the resolved/clamped value).
@@ -301,7 +303,7 @@ async function streamOnce(
 	engine: PiEngine,
 	systemPrompt: string,
 	messages: Message[],
-	tools: ReturnType<typeof piToolDeclarations>,
+	tools: Tool[],
 	reasoning: ThinkingLevel | undefined,
 	abortSignal?: AbortSignal,
 ): Promise<AssistantMessage> {

@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { z } from "zod";
-import { lhTool } from "../lh-tool.ts";
+import { Type } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { serverExecute } from "../tool-execute.ts";
 import {
 	capOutput,
 	formatSize,
@@ -29,24 +30,28 @@ import {
 const DEFAULT_LIMIT = 100;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
-const grepInputSchema = z.object({
-	pattern: z.string().min(1).describe("Search pattern (regex or literal string)"),
-	path: z
-		.string()
-		.optional()
-		.describe("Directory or file to search (default: the learner's home directory)"),
-	glob: z.string().optional().describe("Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'"),
-	ignoreCase: z.boolean().optional().describe("Case-insensitive search (default: false)"),
-	literal: z.boolean().optional().describe("Treat pattern as literal string instead of regex (default: false)"),
-	context: z.number().int().nonnegative().optional().describe("Number of lines to show before and after each match (default: 0)"),
-	limit: z.number().int().positive().optional().describe("Maximum number of matches to return (default: 100)"),
+const grepInput = Type.Object({
+	pattern: Type.String({ minLength: 1, description: "Search pattern (regex or literal string)" }),
+	path: Type.Optional(
+		Type.String({ description: "Directory or file to search (default: the learner's home directory)" }),
+	),
+	glob: Type.Optional(Type.String({ description: "Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'" })),
+	ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search (default: false)" })),
+	literal: Type.Optional(
+		Type.Boolean({ description: "Treat pattern as literal string instead of regex (default: false)" }),
+	),
+	context: Type.Optional(
+		Type.Integer({ minimum: 0, description: "Number of lines to show before and after each match (default: 0)" }),
+	),
+	limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of matches to return (default: 100)" })),
 });
 
-export const grepTool = lhTool({
+export const grepTool: AgentTool<typeof grepInput> = {
 	name: "grep",
+	label: "grep",
 	description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Ignores node_modules, .git, and Library directories. Output is truncated to ${DEFAULT_LIMIT} matches or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
-	schema: grepInputSchema,
-	async execute(input, ctx) {
+	parameters: grepInput,
+	execute: serverExecute("grep", grepInput, async (input, ctx) => {
 		if (ctx?.signal?.aborted) return "Operation aborted";
 		const searchPath = resolveSourcePath(input.path);
 
@@ -169,5 +174,5 @@ export const grepTool = lhTool({
 		if (truncated) notices.push(`${formatSize(MAX_OUTPUT_BYTES)} limit reached`);
 		if (timedOut || scanTimedOut) notices.push("search timed out after 10s — partial results, narrow the directory");
 		return notices.length > 0 ? `${content}\n\n[${notices.join(". ")}]` : content;
-	},
-});
+	}),
+};

@@ -3,9 +3,9 @@
  * live crashes).
  *
  * WHY THIS EXISTS. Validation IS first at the model-facing boundary — pi
- * validates arguments before execute, and our zod re-run adds the
- * refinements; a failure returns to the model as an error tool result,
- * same turn. But the same bytes have two other consumers, and there they
+ * validates arguments against the tool's TypeBox schema before execute,
+ * and the authoring refinements run in the execute seam; a failure
+ * returns to the model as an error tool result, same turn. But the same bytes have two other consumers, and there they
  * exist UNVALIDATED BY DESIGN:
  *
  *   - the live wire streams raw tool-input deltas while the model is still
@@ -20,49 +20,72 @@
  * lie the checker believes, with no runtime check behind it.
  *
  * THE RULE (mechanical, not vigilance): model-authored INPUT is consumed
- * only through these parsers, each running the SAME zod schema the model
+ * only through these parsers, each running the SAME TypeBox schema the model
  * faced — boundary-valid ⇔ consumer-parseable, structurally. Server- and
  * learner-authored OUTPUT stays trusted (our own code authors it: the
  * execute acks, the learner's buildAnswer). A parse failure renders the
  * quiet fallback, never a crash.
  */
 
-import { z } from "zod";
-import { quizInputBase, askInputSchema, type AskToolInput, type QuizToolInput } from "./question-core.ts";
+import { Value } from "typebox/value";
+import type { TSchema } from "typebox";
+import { quizInputBase, askInputSchema, askOptionProblems, quizInputProblems, type AskToolInput, type QuizToolInput } from "./question-core.ts";
 import { probeDoneInputSchema, type ProbeDoneInput } from "./contracts/probe.ts";
+
+/** The pi-boundary parse step, mirrored here (live-smoke fix, 2026-09-26):
+ *  pi-ai's validateToolArguments runs TypeBox's Value.Convert on the model's
+ *  raw arguments before Value.Check — a correctAnswer sent as the NUMBER 17
+ *  (what the live smoke's model actually emitted) converts to "17" at the
+ *  boundary, so the tool poses the quiz fine. But the persisted record keeps
+ *  the RAW arguments, so a parse seam that skips Convert would reject the
+ *  exact input the boundary accepted — an invisible pending quiz and a
+ *  learner lockout. Every display parse converts first, exactly like the
+ *  boundary; Convert mutates, so the input is cloned before touching. */
+function boundaryParse<T>(schema: TSchema, input: unknown): T | undefined {
+	if (typeof input !== "object" || input === null) return undefined;
+	const converted = structuredClone(input);
+	Value.Convert(schema, converted);
+	if (!Value.Check(schema, converted)) return undefined;
+	return Value.Clean(schema, converted) as T;
+}
 
 /**
  * Quiz parse for DISPLAY: the shared authoring base, pre-refinement.
- * Both boundary schemas (the prober's probeQuizInputSchema over the bare
- * base, the teacher's quizInputSchema over base + optional nodeId) refine
- * THE SAME quizInputBase, so anything that passed either boundary parses
- * here: refinements don't weaken on re-run, and the teacher-only `nodeId`
- * is an unknown key the base strips. This is deliberately the LENIENT
- * common core — the strict per-agent refinements are the boundary's job.
+ * Both boundaries (the prober's quizInputBase, the teacher's quizInputObject
+ * over base + optional nodeId) share THE SAME quizInputBase fields, so
+ * anything that passed either boundary parses here; the teacher-only
+ * `nodeId` is an unknown key Value.Clean strips (zod's old strip behavior,
+ * kept so the display shape stays exactly what the dock always saw). This
+ * is deliberately the LENIENT common core — the strict per-agent authoring
+ * checks are the boundary's job — but it runs the shared grading
+ * refinement (quizInputProblems) after Convert, mirroring the boundary's
+ * full chain: pi accepts `correctAnswer: 17` structurally (Convert →
+ * "17") and execute's refinement is what makes it a posed-or-rejected
+ * call. The display parse follows the same order so an input that could
+ * never have been posed (e.g. `correctAnswer: undefined`, which Convert
+ * widens to "") renders as a quiet fallback, not a broken quiz.
  */
 export function parseQuizInput(input: unknown): QuizToolInput | undefined {
-	const parsed = quizInputBase.safeParse(input);
-	return parsed.success ? (parsed.data as QuizToolInput) : undefined;
+	const cleaned = boundaryParse<QuizToolInput>(quizInputBase, input);
+	if (!cleaned) return undefined;
+	if (quizInputProblems(cleaned).length > 0) return undefined;
+	return cleaned;
 }
 
 /**
  * Ask parse for DISPLAY: the full ask schema (options optional — free-text
- * mode is the options-less shape). The only refinement is option sanity
- * (distinct values), which the boundary already enforced.
+ * mode is the options-less shape), plus the option-sanity refinement the
+ * boundary enforced (askOptionProblems — duplicate values break the dock's
+ * keying, so they parse to undefined exactly like the zod seam did).
  */
 export function parseAskInput(input: unknown): AskToolInput | undefined {
-	const parsed = askInputSchema.safeParse(input);
-	return parsed.success ? parsed.data : undefined;
+	const cleaned = boundaryParse<AskToolInput>(askInputSchema, input);
+	if (!cleaned) return undefined;
+	if (askOptionProblems(cleaned.options ?? []).length > 0) return undefined;
+	return cleaned;
 }
 
 /** probe_done parse — the core-owned schema the tool itself declares. */
 export function parseProbeDoneInput(input: unknown): ProbeDoneInput | undefined {
-	const parsed = probeDoneInputSchema.safeParse(input);
-	return parsed.success ? parsed.data : undefined;
-}
-
-/** Parse helper for schemas this seam doesn't own (kept for future cards). */
-export function parseWith<T>(schema: z.ZodType<T>, input: unknown): T | undefined {
-	const parsed = schema.safeParse(input);
-	return parsed.success ? parsed.data : undefined;
+	return boundaryParse<ProbeDoneInput>(probeDoneInputSchema, input);
 }

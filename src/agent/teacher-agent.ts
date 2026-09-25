@@ -1,5 +1,6 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import { questionResult, ToolInputError } from "./tool-execute.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
 import { piEngineFor, type PiEngine } from "./models.ts";
@@ -12,7 +13,6 @@ import {
 	type ProberToolContext,
 	type TeacherToolContext,
 } from "./tools.ts";
-import { toPiTools, type LhTool } from "./lh-tool.ts";
 import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
 import { QUESTION_TOOLS, type EnabledTools } from "../core/pending.ts";
 
@@ -93,11 +93,9 @@ export interface AgentBuildOptions {
 	messages?: AgentMessage[];
 	/** Money channel: one call per model request. */
 	onUsage?: StepUsageCollector;
-	/** Safety net (the old stepCountIs). Default 20 turns. */
-	maxTurns?: number;
 	/** Tests may pass a bare tool registry to drive deterministic flows.
 	 *  An explicit registry is NEVER toggle-filtered — the caller owns it. */
-	tools?: Record<string, LhTool<any, any>>;
+	tools?: Record<string, AgentTool<any>>;
 	/** The resolved per-user tool toggles (core/pending EnabledTools — the
 	 *  2026-09-19 P2 bridge: Platform's chat-handler passes
 	 *  effective.agent.tools; the factories drop any tool explicitly false.
@@ -113,22 +111,29 @@ export interface AgentBuildOptions {
 }
 
 /**
- * The turn's stop rule (docs/pi-engine-swap.md §2):
- * - a question tool call (quiz / ask_user_question) that RESOLVED — its
- *   synthetic "question posed" result is not an error — ends the run: the
- *   learner's answer arrives as the next POST. A call that FAILED authoring
- *   validation (error result) must NOT stop the run — the model retries
- *   within the same turn, exactly the InvalidToolInputError semantics.
- * - the maxTurns safety net replaces stepCountIs(20).
+ * The turn's question-stop rule (docs/pi-engine-swap.md §2; Wave A
+ * 2026-09-26, owner Option A): a question tool call (quiz /
+ * ask_user_question) that RESOLVED — its synthetic "question posed" result
+ * is not an error — ends the run: the learner's answer arrives as the next
+ * POST. A call that FAILED authoring validation (error result) must NOT
+ * stop the run — the model retries within the same turn, exactly the old
+ * InvalidToolInputError semantics.
+ *
+ * Question results also carry terminate: true (tool-execute's
+ * questionResult), so single-question batches stop natively at the pi
+ * loop's own batch check; this shouldStopAfterTurn hook is the
+ * belt-and-suspenders HALF for the mixed batch (a question + other calls
+ * in one message) that terminate-only semantics would let run on — the
+ * learner cannot answer while a turn is in flight (per-chat 409), so a
+ * cleanly-posed question MUST always end the turn. maxTurns is gone
+ * (owner ruling 2026-09-25: no maximum-agent-turns net on the teaching
+ * turn).
  */
-function makeStopper(maxTurns: number) {
-	let turns = 0;
+function makeQuestionStopper() {
 	return (context: {
 		message: { content: Array<{ type: string; id?: string; name?: string }> };
 		toolResults: Array<{ toolCallId: string; isError?: boolean }>;
 	}): boolean => {
-		turns++;
-		if (turns >= maxTurns) return true;
 		const called = new Set(
 			context.message.content
 				.filter((c) => c.type === "toolCall" && c.name !== undefined && (QUESTION_TOOLS as readonly string[]).includes(c.name!))
@@ -145,7 +150,7 @@ function makeStopper(maxTurns: number) {
 
 function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: AgentTool<any, any>[]) {
 	const engine = opts.engine ?? piEngineFor(kind);
-	const stopper = makeStopper(opts.maxTurns ?? 20);
+	const stopper = makeQuestionStopper();
 	const systemPrompt = opts.promptSwitches
 		? composeInstructions(kind, opts.promptSwitches)
 		: composedInstructions[kind]!;
@@ -181,7 +186,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
  * handler keys teacher construction on.
  */
 export function createProberAgent(ctx: ProberToolContext, opts: AgentBuildOptions = {}) {
-	return baseAgentOptions("prober", opts, toPiTools(createProberTools(ctx, opts.toolToggles)));
+	return baseAgentOptions("prober", opts, Object.values(createProberTools(ctx, opts.toolToggles)));
 }
 
 /**
@@ -197,26 +202,33 @@ export function createTeacherAgent(
 	ctx?: TeacherToolContext,
 	opts: AgentBuildOptions = {},
 ) {
-	const tools =
-		opts.tools ?? (ctx ? createTeacherTools(ctx, opts.toolToggles) : bareQuestionTools());
-	return baseAgentOptions("teacher", opts, toPiTools(tools));
+	const tools = opts.tools ?? (ctx ? createTeacherTools(ctx, opts.toolToggles) : bareQuestionTools());
+	return baseAgentOptions("teacher", opts, Object.values(tools));
 }
 
-/** The validation-free teach question set (tests, bare agents): quiz with
- *  the shared authoring refinement but NO per-session nodeId check (no
- *  record to read), plus ask. */
-export function bareQuestionTools(): Record<string, LhTool<any, any>> {
-	return {
-		quiz: {
-			name: "quiz",
-			description: "Ask the learner a graded question.",
-			clientQuestion: true,
-			schema: quizInputObject.superRefine((input, add) => {
-				for (const problem of quizInputProblems(input)) {
-					add.addIssue({ code: "custom", message: problem });
-				}
-			}),
+/** The bare teach question set (tests, bare agents): quiz with the shared
+ *  authoring refinement (quizInputProblems, run in execute — throws
+ *  ToolInputError, which pi's loop converts to the error tool result the
+ *  model retries on) but NO per-session nodeId check (no record to read),
+ *  plus ask. */
+export function bareQuestionTools(): Record<string, AgentTool<any>> {
+	// A typed const (not an inline literal): the specific AgentTool typing
+	// gives execute its precise Static input; heterogeneous records take
+	// AgentTool<any>, whose loose Static would smudge it to unknown.
+	const quiz: AgentTool<typeof quizInputObject> = {
+		name: "quiz",
+		label: "quiz",
+		description: "Ask the learner a graded question.",
+		parameters: quizInputObject,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			const problems = quizInputProblems(input);
+			if (problems.length > 0) throw new ToolInputError("quiz", problems);
+			return questionResult();
 		},
+	};
+	return {
+		quiz,
 		ask_user_question: askUserQuestionTool,
 	};
 }

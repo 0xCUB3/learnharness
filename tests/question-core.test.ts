@@ -4,7 +4,8 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { z } from "zod";
+import { Value } from "typebox/value";
+import type { TSchema } from "typebox";
 import {
 	askInputSchema,
 	askOptionProblems,
@@ -29,24 +30,25 @@ import {
 	toClientQuestion,
 } from "../src/core/question-core.ts";
 
-// ─── the authoring contract (tool-schema refinements) ───────────────────
+// ─── the authoring contract (TypeBox schemas + execute-time refinements) ──
 // Schema-valid ⇔ gradeable: a quiz whose correctAnswer can't be resolved
-// dies at the tool-call boundary, and the SDK returns the error to the
-// teacher to retry — it must never reach the learner's dock.
+// dies at the tool-call boundary (structural TypeBox check in pi's loop +
+// the refinement problems in the tool's execute — a ToolInputError the
+// model retries on), and never reaches the learner's dock. The boundary
+// predicate is BOTH: structural check AND zero authoring problems.
+const boundaryOk = (schema: TSchema, input: unknown, problems: string[]): boolean =>
+	Value.Check(schema, input) && problems.length === 0;
 
 describe("the schema's argument order (reasoning before the pick)", () => {
 	// Argument-order ruling (owner, 2026-09-25): the explanation is
 	// reasoning, and reasoning happens BEFORE the answer is chosen — models
 	// emit tool args in schema order, so explanation sits immediately before
-	// correctAnswer. z.toJSONSchema preserves zod's declaration order into
-	// the model-facing properties, so this pin guards the emission end to
-	// end. All consumers read by key — the order is authoring guidance.
+	// correctAnswer. The TypeBox authoring order IS the model-facing JSON
+	// Schema property order, so this pin guards the emission end to end.
+	// All consumers read by key — the order is authoring guidance.
 	it("emits explanation immediately before correctAnswer (both agents' schemas)", () => {
 		for (const schema of [quizInputSchema, probeQuizInputSchema]) {
-			const json = z.toJSONSchema(schema as z.ZodType, { io: "input" }) as {
-				properties: Record<string, unknown>;
-			};
-			const keys = Object.keys(json.properties);
+			const keys = Object.keys((schema as { properties: Record<string, unknown> }).properties);
 			assert.ok(
 				keys.indexOf("explanation") < keys.indexOf("correctAnswer"),
 				`explanation must precede correctAnswer in the emitted schema (got: ${keys.join(", ")})`,
@@ -73,8 +75,7 @@ describe("quizInputSchema / quizInputProblems (the authoring contract)", () => {
 	};
 
 	it("accepts a valid single-select quiz (label as correctAnswer)", () => {
-		const parsed = quizInputSchema.safeParse(valid);
-		assert.equal(parsed.success, true);
+		assert.equal(boundaryOk(quizInputSchema, valid, quizInputProblems(valid)), true);
 		assert.deepEqual(quizInputProblems(valid), []);
 	});
 
@@ -89,10 +90,10 @@ describe("quizInputSchema / quizInputProblems (the authoring contract)", () => {
 			correctAnswer: ["a", "b"],
 			multiSelect: true,
 		};
-		assert.equal(quizInputSchema.safeParse(multi).success, true);
+		assert.equal(boundaryOk(quizInputSchema, multi, quizInputProblems(multi)), true);
 		// The union lists String first, so providers sometimes stringify arrays.
 		const stringified = { ...multi, correctAnswer: JSON.stringify(multi.correctAnswer) };
-		assert.equal(quizInputSchema.safeParse(stringified).success, true);
+		assert.equal(boundaryOk(quizInputSchema, stringified, quizInputProblems(stringified)), true);
 		assert.deepEqual(quizInputProblems(stringified), []);
 	});
 
@@ -108,20 +109,16 @@ describe("quizInputSchema / quizInputProblems (the authoring contract)", () => {
 			correctAnswer: "cultural-diagnosis",
 			explanation: "...",
 		};
-		const parsed = quizInputSchema.safeParse(bad);
-		assert.equal(parsed.success, false);
+		assert.equal(boundaryOk(quizInputSchema, bad, quizInputProblems(bad)), false);
 		const problems = quizInputProblems(bad);
 		assert.equal(problems.length, 1);
 		assert.match(problems[0]!, /does not match any option value/);
 		assert.match(problems[0]!, /"A cultural diagnosis"/); // the valid values are listed for the retry
-		// The schema's error message carries the problems (the SDK returns them to the teacher).
-		const msg = JSON.stringify(parsed.error?.issues);
-		assert.match(msg, /does not match any option value/);
 	});
 
 	it("rejects multiple correct answers without multiSelect (ungradeable single-select)", () => {
 		const bad = { ...valid, correctAnswer: ["Venus", "Mercury"] };
-		assert.equal(quizInputSchema.safeParse(bad).success, false);
+		assert.equal(boundaryOk(quizInputSchema, bad, quizInputProblems(bad)), false);
 		assert.match(quizInputProblems(bad).join(" "), /multiSelect/);
 	});
 
@@ -133,38 +130,38 @@ describe("quizInputSchema / quizInputProblems (the authoring contract)", () => {
 				{ label: "Venus", value: "same" },
 			],
 		};
-		assert.equal(quizInputSchema.safeParse(bad).success, false);
+		assert.equal(boundaryOk(quizInputSchema, bad, quizInputProblems(bad)), false);
 		assert.match(quizInputProblems(bad).join(" "), /same value/);
 	});
 
 	it("rejects an empty option label", () => {
 		const bad = { ...valid, options: [{ label: "  " }, { label: "Mercury" }, { label: "Mars" }] };
-		assert.equal(quizInputSchema.safeParse(bad).success, false);
+		assert.equal(boundaryOk(quizInputSchema, bad, quizInputProblems(bad)), false);
 		assert.match(quizInputProblems(bad).join(" "), /label is empty/);
 	});
 
 	it("requires a resolvable correctAnswer", () => {
-		assert.equal(quizInputSchema.safeParse({ ...valid, correctAnswer: "" }).success, false);
-		assert.equal(quizInputSchema.safeParse({ ...valid, correctAnswer: "[]" }).success, false);
+		assert.equal(boundaryOk(quizInputSchema, { ...valid, correctAnswer: "" }, quizInputProblems({ ...valid, correctAnswer: "" })), false);
+		assert.equal(boundaryOk(quizInputSchema, { ...valid, correctAnswer: "[]" }, quizInputProblems({ ...valid, correctAnswer: "[]" })), false);
 		assert.match(quizInputProblems({ ...valid, correctAnswer: "" }).join(" "), /required/);
 	});
 });
 
 describe("askInputSchema / askOptionProblems", () => {
 	it("accepts a valid ask", () => {
-		const parsed = askInputSchema.safeParse({
+		const ask = {
 			question: "Which topic first?",
 			options: [{ label: "Limits" }, { label: "Chain rule" }],
-		});
-		assert.equal(parsed.success, true);
+		};
+		assert.equal(boundaryOk(askInputSchema, ask, askOptionProblems(ask.options ?? [])), true);
 	});
 
 	it("rejects duplicate option values and empty labels (they break the dock's keying)", () => {
 		const bad = { question: "?", options: [{ label: "A", value: "x" }, { label: "B", value: "x" }] };
-		assert.equal(askInputSchema.safeParse(bad).success, false);
+		assert.equal(boundaryOk(askInputSchema, bad, askOptionProblems(bad.options ?? [])), false);
 		assert.match(askOptionProblems(bad.options).join(" "), /same value/);
 		const emptyLabel = { question: "?", options: [{ label: "" }, { label: "B" }] };
-		assert.equal(askInputSchema.safeParse(emptyLabel).success, false);
+		assert.equal(boundaryOk(askInputSchema, emptyLabel, askOptionProblems(emptyLabel.options ?? [])), false);
 		assert.match(askOptionProblems(emptyLabel.options).join(" "), /label is empty/);
 	});
 });

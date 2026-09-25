@@ -31,9 +31,9 @@ function stubProvider(hits: SearchHit[] = [{ title: "t", url: "https://e.com/", 
 describe("web_search on the injected port (web.ts)", () => {
 	it("null provider → the honest unavailability string, never a crash", async () => {
 		const { web_search } = createWebTools(() => null);
-		const out = await web_search.execute!({ query: "anything" }, { toolCallId: "c1" });
-		assert.match(String(out), /not available: no search engine is configured/);
-		assert.match(String(out), /Tavily or Brave/);
+		const out = await web_search!.execute!("c1", { query: "anything" });
+		assert.match(String(out.details), /not available: no search engine is configured/);
+		assert.match(String(out.details), /Tavily or Brave/);
 	});
 
 	it("a live provider returns its hits (count defaults to 5)", async () => {
@@ -46,9 +46,9 @@ describe("web_search on the injected port (web.ts)", () => {
 			},
 		};
 		const { web_search } = createWebTools(() => provider);
-		const out = await web_search.execute!({ query: "sigma.js latest version" }, { toolCallId: "c1" });
+		const out = await web_search!.execute!("c1", { query: "sigma.js latest version" });
 		assert.deepEqual(seen, [{ query: "sigma.js latest version", count: 5 }]);
-		assert.deepEqual(out, [{ title: "sigma.js", url: "https://www.sigmajs.org/", snippet: "v3 released" }]);
+		assert.deepEqual(out.details, [{ title: "sigma.js", url: "https://www.sigmajs.org/", snippet: "v3 released" }]);
 	});
 
 	it("provider errors surface as error strings, never thrown", async () => {
@@ -59,26 +59,26 @@ describe("web_search on the injected port (web.ts)", () => {
 			},
 		};
 		const { web_search } = createWebTools(() => provider);
-		const out = await web_search.execute!({ query: "q" }, { toolCallId: "c1" });
-		assert.match(String(out), /web_search failed: Brave search API 429: rate limited/);
+		const out = await web_search!.execute!("c1", { query: "q" });
+		assert.match(String(out.details), /web_search failed: Brave search API 429: rate limited/);
 	});
 
 	it("the resolution is FRESH per call — a key appearing mid-session takes effect", async () => {
 		let provider: SearchProvider | null = null;
 		const { web_search } = createWebTools(() => provider);
-		const first = await web_search.execute!({ query: "q" }, { toolCallId: "c1" });
-		assert.match(String(first), /not available/);
+		const first = await web_search!.execute!("c1", { query: "q" });
+		assert.match(String(first.details), /not available/);
 		provider = stubProvider();
-		const second = await web_search.execute!({ query: "q" }, { toolCallId: "c2" });
-		assert.ok(Array.isArray(second), "the live provider answered on the very next call");
+		const second = await web_search!.execute!("c2", { query: "q" });
+		assert.ok(Array.isArray(second.details), "the live provider answered on the very next call");
 	});
 
 	it("web_fetch needs no search engine — it stays independent", async () => {
 		const { web_fetch } = createWebTools(() => null);
 		assert.ok(web_fetch, "web_fetch present with no provider");
 		// (Full fetch behavior is out of scope here — no network in tests.)
-		const out = await web_fetch.execute!({ url: "not a url" }, { toolCallId: "c1" });
-		assert.match(String(out), /web_fetch failed: invalid URL/);
+		const out = await web_fetch!.execute!("c1", { url: "not a url" });
+		assert.match(String(out.details), /web_fetch failed: invalid URL/);
 	});
 });
 

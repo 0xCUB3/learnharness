@@ -1,5 +1,6 @@
-import { lhTool, type LhTool } from "../lh-tool.ts";
-import { probeDoneInputSchema, type ProbeDoneInput, type ProbeDoneResult } from "../../core/contracts.ts";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { serverExecute } from "../tool-execute.ts";
+import { probeDoneInputSchema, type ProbeDoneResult } from "../../core/contracts.ts";
 import type { UIMessage } from "ai";
 import { findPendingToolCall } from "../../core/pending.ts";
 import type { ChatStore } from "../../core/ports.ts";
@@ -43,10 +44,11 @@ function probeConcluded(messages: UIMessage[]): boolean {
  * The first probe_done in the transcript is also the construction seam:
  * from that message on, every request builds the TEACHER agent.
  */
-export function probeDoneTool(ctx: ProbeDoneContext): Record<string, LhTool<any, any>> {
+export function probeDoneTool(ctx: ProbeDoneContext): Record<string, AgentTool<any>> {
 	return {
-		probe_done: lhTool({
+		probe_done: {
 			name: "probe_done",
+			label: "probe_done",
 			description:
 				"Conclude the probing phase and hand off to the teaching phase. Call this ONCE, when the probe is " +
 				"complete: every strand the lesson depends on is bracketed (a floor he reliably gets right AND a " +
@@ -57,8 +59,8 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, LhTool<any,
 				"the probe is already concluded. After it succeeds, say your closing sentence and end your turn.",
 			// The core-owned schema (contracts/probe.ts) — the SAME schema the UI
 			// parse seam (tool-parts.ts) runs, so boundary-valid ⇔ consumer-parseable.
-			schema: probeDoneInputSchema,
-			execute: async (input): Promise<ProbeDoneResult> => {
+			parameters: probeDoneInputSchema,
+			execute: serverExecute("probe_done", probeDoneInputSchema, async (input): Promise<ProbeDoneResult> => {
 				const record = ctx.chatStore.getChat(ctx.chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
 
@@ -82,7 +84,7 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, LhTool<any,
 					// assessment anyway; the wake is an optimization, not a gate.
 				}
 				return { ok: true, assessment: input.assessment };
-			},
-		}),
+			}),
+		},
 	};
 }

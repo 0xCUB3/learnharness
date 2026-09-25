@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { z } from "zod";
-import { lhTool } from "../lh-tool.ts";
+import { Type } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { serverExecute } from "../tool-execute.ts";
 import {
 	capOutput,
 	formatSize,
@@ -23,20 +24,21 @@ import {
 
 const DEFAULT_LIMIT = 1000;
 
-const findInputSchema = z.object({
-	pattern: z
-		.string()
-		.min(1)
-		.describe("Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'"),
-	path: z.string().optional().describe("Directory to search in (default: the learner's home directory)"),
-	limit: z.number().int().positive().optional().describe("Maximum number of results (default: 1000)"),
+const findInput = Type.Object({
+	pattern: Type.String({
+		minLength: 1,
+		description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
+	}),
+	path: Type.Optional(Type.String({ description: "Directory to search in (default: the learner's home directory)" })),
+	limit: Type.Optional(Type.Integer({ description: "Maximum number of results (default: 1000)" })),
 });
 
-export const findTool = lhTool({
+export const findTool: AgentTool<typeof findInput> = {
 	name: "find",
+	label: "find",
 	description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Ignores node_modules, .git, and Library directories. Output is truncated to ${DEFAULT_LIMIT} results or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first).`,
-	schema: findInputSchema,
-	async execute(input, ctx) {
+	parameters: findInput,
+	execute: serverExecute("find", findInput, async (input, ctx) => {
 		if (ctx?.signal?.aborted) return "Operation aborted";
 		const searchPath = resolveSourcePath(input.path);
 		let stat;
@@ -81,5 +83,5 @@ export const findTool = lhTool({
 		if (truncated) notices.push(`${formatSize(MAX_OUTPUT_BYTES)} limit reached`);
 		if (timedOut) notices.push("search timed out after 10s — partial results, narrow the directory");
 		return notices.length > 0 ? `${content}\n\n[${notices.join(". ")}]` : content;
-	},
-});
+	}),
+};

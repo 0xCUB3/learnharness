@@ -1,17 +1,25 @@
 /**
- * The abort-cascade fix (2026-09-19): pi passes every run's AbortSignal to
- * tool execute — the bridge used to drop it, so agent.abort() only landed
- * at the NEXT step boundary and a long-running local tool (the grep that
- * outlived its turn by minutes) held the turn hostage until the dev
- * server's memory restart killed the run mid-tool, freezing the record at
- * its write-ahead state. toPiTool now threads the signal and races every
- * execute against the system-level timeout; the fs tools honor it with
- * partial results (fs-tools.test.ts covers their side).
+ * The abort-cascade fix (2026-09-19), pinned against the pi-native seams
+ * (Wave A, 2026-09-26): serverExecute (tool-execute.ts) races every tool
+ * body against the run's AbortSignal and the system-level per-call timeout
+ * — aborting the run kills a running tool, the timeout is the net so no
+ * tool can hold a turn hostage (the 2.7-minute grep lesson). Question
+ * tools bypass the guard entirely (questionResult is instant and carries
+ * terminate). The fs tools honor the signal with partial results
+ * (fs-tools.test.ts covers their side).
  */
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { z } from "zod";
-import { lhTool, toPiTool, toolTimeoutMs, ToolInputError } from "../src/agent/lh-tool.ts";
+import { Type } from "typebox";
+import {
+	questionResult,
+	serverExecute,
+	toolTimeoutMs,
+	ToolInputError,
+	toToolResult,
+	type ToolExecuteContext,
+} from "../src/agent/tool-execute.ts";
+import { askUserQuestionTool } from "../src/agent/tools.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -19,34 +27,37 @@ afterEach(() => {
 	toolTimeoutMs.current = DEFAULT_TIMEOUT_MS;
 });
 
-/** A tool that captures ctx.signal, then either hangs or resolves `value`. */
+const probeSchema = Type.Object({});
+
+/** A native tool whose execute captures ctx.signal, then hangs or resolves. */
 function probeTool(captured: { signal?: AbortSignal }, opts: { hang?: boolean; value?: string } = {}) {
-	return lhTool({
+	return {
 		name: "probe",
+		label: "probe",
 		description: "test probe",
-		schema: z.object({}),
-		execute: (_input, ctx) => {
-			captured.signal = ctx?.signal;
+		parameters: probeSchema,
+		execute: serverExecute("probe", probeSchema, (_input: unknown, ctx: ToolExecuteContext) => {
+			captured.signal = ctx.signal;
 			if (opts.hang) return new Promise<string>(() => {}); // never settles, no timer
 			return opts.value ?? "ok";
-		},
-	});
+		}),
+	};
 }
 
-describe("toPiTool abort + timeout guard", () => {
+describe("serverExecute abort + timeout guard", () => {
 	it("forwards a live abort signal to the tool's ctx", async () => {
 		// Even with no parent signal, the tool still gets the guard's combined
 		// signal (parent+timeout) — a stable reference tools can poll.
 		const captured: { signal?: AbortSignal } = {};
-		const pi = toPiTool(probeTool(captured));
-		await pi.execute("c1", {}, undefined as never);
+		const pi = probeTool(captured);
+		await pi.execute("c1", {});
 		assert.ok(captured.signal, "the tool received a signal");
 		assert.equal(captured.signal!.aborted, false);
 		// The forwarded signal is the guard's COMBINED one — aborting the
 		// parent flips it, which is what long-running tools poll.
 		const ac = new AbortController();
 		const captured2: { signal?: AbortSignal } = {};
-		const pi2 = toPiTool(probeTool(captured2, { value: "done" }));
+		const pi2 = probeTool(captured2, { value: "done" });
 		const pending = pi2.execute("c1b", {}, ac.signal);
 		ac.abort();
 		await pending;
@@ -56,7 +67,7 @@ describe("toPiTool abort + timeout guard", () => {
 	it("a signal-wired tool observes the run's abort", async () => {
 		const ac = new AbortController();
 		const captured: { signal?: AbortSignal } = {};
-		const pi = toPiTool(probeTool(captured, { hang: true }));
+		const pi = probeTool(captured, { hang: true });
 		const pending = pi.execute("c2", {}, ac.signal).catch((e: Error) => e.message);
 		ac.abort();
 		assert.match((await pending) as string, /Operation aborted/);
@@ -65,68 +76,87 @@ describe("toPiTool abort + timeout guard", () => {
 
 	it("rejects a hanging tool at the system-level timeout", async () => {
 		toolTimeoutMs.current = 50;
-		const pi = toPiTool(probeTool({}, { hang: true }));
-		await assert.rejects(pi.execute("c3", {}, undefined as never), /timed out/);
+		const pi = probeTool({}, { hang: true });
+		await assert.rejects(pi.execute("c3", {}), /timed out/);
 	});
 
 	it("a pre-aborted run rejects immediately with pi's wording", async () => {
 		const ac = new AbortController();
 		ac.abort();
-		const pi = toPiTool(probeTool({}, { hang: true }));
+		const pi = probeTool({}, { hang: true });
 		await assert.rejects(pi.execute("c4", {}, ac.signal), /Operation aborted/);
 	});
-
-	it("a tool that honors the signal settles before the timeout wins", async () => {
-		// The race resolves with the tool's own (partial) result — the fs
-		// tools' contract: abort yields partial results, not an error throw.
+});
+describe("serverExecute: cooperative settle, mapping parity, question bypass", () => {
+	it("a cooperative tool settles partial results before the grace", async () => {
 		toolTimeoutMs.current = 2_000;
-		const tool = lhTool({
+		const schema = Type.Object({});
+		const pi = {
 			name: "partial",
+			label: "partial",
 			description: "test",
-			schema: z.object({}),
-			execute: (_input, ctx) =>
+			parameters: schema,
+			execute: serverExecute("partial", schema, (_input: unknown, ctx: ToolExecuteContext) =>
 				new Promise((resolve) => {
 					// The fs-tools contract: poll upfront (a listener on an
 					// already-aborted signal never fires), else listen.
-					const signal = ctx!.signal!;
+					const signal = ctx.signal!;
 					if (signal.aborted) return resolve("partial results");
 					signal.addEventListener("abort", () => resolve("partial results"), { once: true });
-				}),
-		});
+				})),
+		};
 		const ac = new AbortController();
-		const pi = toPiTool(tool);
 		const pending = pi.execute("c5", {}, ac.signal);
 		ac.abort();
-		const result = (await pending) as { content: Array<{ text?: string }> };
-		assert.equal(result.content[0]!.text, "partial results");
+		const result = await pending;
+		assert.equal((result.content[0] as { text?: string }).text, "partial results");
 	});
 
-	it("question tools bypass the guard — the placeholder is instant", async () => {
+	it("questionResult is instant, terminates, and carries no details", async () => {
 		const ac = new AbortController();
-		ac.abort();
-		const tool = lhTool({
-			name: "quiz",
-			description: "test",
-			schema: z.object({}),
-			clientQuestion: true,
-		});
-		const pi = toPiTool(tool);
-		const result = (await pi.execute("c6", {}, ac.signal)) as { content: Array<{ text?: string }> };
-		assert.match(result.content[0]!.text!, /Question posed/);
+		ac.abort(); // a pre-aborted run signal — the placeholder must not care
+		const result = await askUserQuestionTool.execute("c6", { question: "q" }, ac.signal);
+		assert.match((result.content[0] as { text?: string }).text!, /Question posed/);
+		assert.equal(result.details, null);
+		assert.equal(result.terminate, true, "owner Option A: question results end the batch natively");
 	});
 
-	it("validation errors pass through the guard unchanged", async () => {
-		const tool = lhTool({
-			name: "strict",
-			description: "test",
-			schema: z.object({ n: z.number() }),
-			execute: () => "never",
+	it("authoring failures throw ToolInputError with the retryable problem list", async () => {
+		await assert.rejects(
+			askUserQuestionTool.execute("c7", {
+				question: "q",
+				options: [
+					{ label: "A", value: "same" },
+					{ label: "B", value: "same" },
+				],
+			}),
+			(e: unknown) => {
+				assert.ok(e instanceof ToolInputError);
+				assert.equal(e.toolName, "ask_user_question");
+				assert.match(e.message, /Invalid tool input for tool "ask_user_question":/);
+				assert.match(e.message, /- .*same value/s);
+				return true;
+			},
+		);
+	});
+
+	it("toToolResult parity: string verbatim, object as JSON, details rides the raw value", () => {
+		const str = toToolResult("plain");
+		assert.equal((str.content[0] as { text: string }).text, "plain");
+		assert.equal(str.details, "plain");
+		const obj = toToolResult({ a: 1 });
+		assert.equal((obj.content[0] as { text: string }).text, '{"a":1}');
+		assert.deepEqual(obj.details, { a: 1 });
+		const img = toToolResult({
+			text: "the picture",
+			images: [{ data: "AAAA", mimeType: "image/png" }],
+			details: { page: 2 },
 		});
-		const pi = toPiTool(tool);
-		await assert.rejects(pi.execute("c7", { n: "not a number" }, undefined as never), (e: unknown) => {
-			assert.ok(e instanceof ToolInputError);
-			assert.equal(e.toolName, "strict");
-			return true;
-		});
+		assert.equal(img.content.length, 2);
+		assert.equal(img.content[0]!.type, "text");
+		assert.equal(img.content[1]!.type, "image");
+		assert.deepEqual(img.details, { page: 2 });
+		const imgNoDetails = toToolResult({ text: "t", images: [{ data: "AAAA", mimeType: "image/png" }] });
+		assert.equal(imgNoDetails.details, null, "image reads keep the record part output-less (null details)");
 	});
 });

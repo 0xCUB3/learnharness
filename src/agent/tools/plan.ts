@@ -1,5 +1,6 @@
-import { z } from "zod";
-import { lhTool, type LhTool } from "../lh-tool.ts";
+import { Type } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { serverExecute } from "../tool-execute.ts";
 import type { PlanToolResult, PlanTree } from "../../core/contracts.ts";
 import type { ChatStore } from "../../core/ports.ts";
 import { createTree, emptyTree, PlanTreeError } from "../../core/plan-tree.ts";
@@ -37,27 +38,29 @@ export interface PlanToolContext {
  * latest state straight from the transcript's tool outputs (the plan
  * window and the plan blocks).
  */
-export function planTools(ctx: PlanToolContext): Record<string, LhTool<any, any>> {
+const planInitInput = Type.Object({
+	mermaid: Type.String({
+		minLength: 1,
+		description:
+			"A mermaid graph block (any direction), e.g.:\ngraph TD\n  primitives[Number primitives] --> operators[Arithmetic operators] --> expressions[Evaluating expressions]\n" +
+			"The only strict rule: ids are permanent lowercase slugs (a-z, 0-9, hyphens/underscores) — checks reference them via nodeId. " +
+			"Titles are free single-line text; `-->` means 'from = prerequisite' (chains fine); no subgraphs, styles, or classes.",
+	}),
+});
+
+export function planTools(ctx: PlanToolContext): Record<string, AgentTool<any>> {
 	return {
-		plan_init: lhTool({
+		plan_init: {
 			name: "plan_init",
+			label: "plan_init",
 			description:
 				"Write or REWRITE this session's plan map — the dependency graph the learner follows live in the plan window. " +
 				"Call once right after the probe concludes, to present the map; re-call whenever the map is wrong (the new block replaces the old tree). " +
 				"A mermaid graph block (any direction): one node per line (`slug[Short Title]` — slugs are permanent lowercase ids: a-z, 0-9, hyphens/underscores), " +
 				"`-->` edges meaning 'from must be understood before to' (chains fine). 5–15 nodes: a map, not a syllabus — one reasoning step per node, compress. " +
 				"Every check you fire names the node it assesses via `nodeId`; where the lesson stands derives from those tags.",
-			schema: z.object({
-				mermaid: z
-					.string()
-					.min(1)
-					.describe(
-						"A mermaid graph block (any direction), e.g.:\ngraph TD\n  primitives[Number primitives] --> operators[Arithmetic operators] --> expressions[Evaluating expressions]\n" +
-							"The only strict rule: ids are permanent lowercase slugs (a-z, 0-9, hyphens/underscores) — checks reference them via nodeId. " +
-							"Titles are free single-line text; `-->` means 'from = prerequisite' (chains fine); no subgraphs, styles, or classes.",
-					),
-			}),
-			execute: async ({ mermaid }): Promise<PlanToolResult> => {
+			parameters: planInitInput,
+			execute: serverExecute("plan_init", planInitInput, async ({ mermaid }): Promise<PlanToolResult> => {
 				const { chatId, chatStore } = ctx;
 				const record = chatStore.getChat(chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${chatId}`, tree: emptyTree() };
@@ -78,7 +81,7 @@ export function planTools(ctx: PlanToolContext): Record<string, LhTool<any, any>
 					if (err instanceof PlanTreeError) return { ok: false, error: err.message, tree: current };
 					throw err;
 				}
-			},
-		}),
+			}),
+		},
 	};
 }

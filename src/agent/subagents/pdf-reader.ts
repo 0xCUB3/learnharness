@@ -1,6 +1,5 @@
-import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
-import { z } from "zod";
-import { lhTool, piToolDeclarations, type LhTool } from "../lh-tool.ts";
+import type { AssistantMessage, Message, ToolResultMessage, Usage, Tool } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { piEngineFor, type PiEngine, type ThinkingLevel } from "../models.ts";
 import type { PdfResult, PdfToolInput } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
@@ -70,77 +69,73 @@ export interface PdfReaderOptions {
 
 export interface PdfReaderInput extends PdfToolInput {}
 
-export function createPdfTools(
-	pdfPath: string,
-): {
-	pdf_info: LhTool<any, any>;
-	pdf_extract: LhTool<any, any>;
-	pdf_render: LhTool<any, any>;
-	pdf_search: LhTool<any, any>;
-} {
+/** The wire declarations (pi-ai Tool, TypeBox parameters). This loop owns
+ *  execution itself — pdf_info/pdf_extract run via the plain pdfInfoText/
+ *  pdfExtractText bodies below, pdf_search/pdf_render dispatch inline in
+ *  the loop (search hits must join the citation set; renders feed the
+ *  image-in-the-loop message) — so the declarations carry no execute.
+ *  dpi/context_lines/literal carry the old zod `.default()`s as schema
+ *  descriptions + loop-side ??-fills (the loop reads them via numOr). */
+export function createPdfTools(_pdfPath: string): Record<string, Tool> {
 	return {
-		pdf_info: lhTool({
+		pdf_info: {
 			name: "pdf_info",
 			description: "Metadata + per-page triage signals for the PDF (page count, text length, image count, math density). ALWAYS call this first.",
-			schema: z.object({}),
-			execute: async () => {
-				const info = await pdfInfo(pdfPath);
-				const lines = [
-					`File: ${info.path}`,
-					`Pages: ${info.page_count} (mean text length/page: ${info.mean_text_length})`,
-					...info.pages.map(
-						(p) =>
-							`p${p.page}: len=${p.text_length} img=${p.image_count} math=${p.math_density.toFixed(2)}`,
-					),
-				];
-				return lines.join("\n");
-			},
-		}),
-		pdf_extract: lhTool({
+			parameters: Type.Object({}),
+		},
+		pdf_extract: {
 			name: "pdf_extract",
 			description: "Extract text from pages (spec: 'all', '1-5', '1,3,7', '3'). Use pdf_info first; narrow the spec for big documents.",
-			schema: z.object({ pages: z.string().describe("Page spec, e.g. 'all', '1-5', '1,3,7'") }),
-			execute: async ({ pages }) => {
-				const text = await pdfExtract(pdfPath, pages);
-				if (text.length > EXTRACT_CAP) {
-					return `${text.slice(0, EXTRACT_CAP)}\n\n[Output truncated at ${EXTRACT_CAP} chars — narrow the page spec and extract in smaller batches.]`;
-				}
-				return text;
-			},
-		}),
-		pdf_render: lhTool({
+			parameters: Type.Object({
+				pages: Type.String({ description: "Page spec, e.g. 'all', '1-5', '1,3,7'" }),
+			}),
+		},
+		pdf_render: {
 			name: "pdf_render",
 			description:
 				"Render pages to images and show them to you for visual reading (equations, diagrams, layout). DPI: 100 text, 150 default, 200 dense small print. Max 6 pages per call.",
-			schema: z.object({
-				pages: z.string().describe("Page spec, e.g. '1-3' or '2,5,8'"),
-				dpi: z.number().int().min(72).max(300).default(150).describe("Render DPI (100 text / 150 default / 200 dense)"),
+			parameters: Type.Object({
+				pages: Type.String({ description: "Page spec, e.g. '1-3' or '2,5,8'" }),
+				dpi: Type.Optional(
+					Type.Integer({ minimum: 72, maximum: 300, description: "Render DPI (100 text / 150 default / 200 dense)" }),
+				),
 			}),
-			execute: async () => {
-				// Actual rendering happens OUTSIDE execute — the loop appends the
-				// images as a user message after the tool results (the
-				// image-in-the-loop idiom). execute returns the plan the loop uses.
-				return "render requested";
-			},
-		}),
-		pdf_search: lhTool({
+		},
+		pdf_search: {
 			name: "pdf_search",
 			description: "Search the PDF's text by keyword or regex (case-insensitive); returns hits with context lines. Use for long documents before reading anything at length.",
-			schema: z.object({
-				query: z.string().describe("Keyword or regex"),
-				context_lines: z.number().int().min(0).max(8).default(3).describe("Context lines around each hit"),
-				literal: z.boolean().default(false).describe("true = treat the query literally (no regex)"),
+			parameters: Type.Object({
+				query: Type.String({ description: "Keyword or regex" }),
+				context_lines: Type.Optional(
+					Type.Integer({ minimum: 0, maximum: 8, description: "Context lines around each hit (default 3)" }),
+				),
+				literal: Type.Optional(Type.Boolean({ description: "true = treat the query literally (no regex; default false)" })),
 			}),
-			execute: async ({ query, context_lines, literal }) => {
-				const { hits } = await pdfSearch(pdfPath, query, { contextLines: context_lines, literal });
-				if (hits.length === 0) return "No hits.";
-				const cap = hits.slice(0, 40);
-				const body = cap.map((h: PdfSearchHit) => `=== Page ${h.page}, line ${h.line} ===\n${h.context}`).join("\n");
-				const more = hits.length > cap.length ? `\n\n[${hits.length - cap.length} more hits — narrow the query.]` : "";
-				return body + more;
-			},
-		}),
+		},
 	};
+}
+
+/** pdf_info's body (the loop's dispatch target): the triage readout. */
+async function pdfInfoText(pdfPath: string): Promise<string> {
+	const info = await pdfInfo(pdfPath);
+	const lines = [
+		`File: ${info.path}`,
+		`Pages: ${info.page_count} (mean text length/page: ${info.mean_text_length})`,
+		...info.pages.map(
+			(p) =>
+				`p${p.page}: len=${p.text_length} img=${p.image_count} math=${p.math_density.toFixed(2)}`,
+		),
+	];
+	return lines.join("\n");
+}
+
+/** pdf_extract's body: capped text extraction with the narrow-the-spec notice. */
+async function pdfExtractText(pdfPath: string, pages: string): Promise<string> {
+	const text = await pdfExtract(pdfPath, pages);
+	if (text.length > EXTRACT_CAP) {
+		return `${text.slice(0, EXTRACT_CAP)}\n\n[Output truncated at ${EXTRACT_CAP} chars — narrow the page spec and extract in smaller batches.]`;
+	}
+	return text;
 }
 
 function toolText(toolCallId: string, toolName: string, value: string): ToolResultMessage {
@@ -179,7 +174,7 @@ export async function runPdfReaderAgent(
 	// doctrine degrades to extract+search (render calls return an error note).
 
 	const tools = createPdfTools(pdfPath);
-	const toolDeclarations = piToolDeclarations(tools);
+	const toolDeclarations = Object.values(tools);
 	const engine = opts.engine ?? piEngineFor("pdfReader");
 	// BYOK (owner, 2026-09-22): the level rides the injected engine — no
 	// factory pin to consult (engine.level is the resolved/clamped value).
@@ -242,12 +237,12 @@ export async function runPdfReaderAgent(
 				try {
 					if (call.name === "pdf_info") {
 						opts.onActivity?.("pdf_info: triaging");
-						const r = await tools.pdf_info.execute!({}, { toolCallId: call.id });
+						const r = await pdfInfoText(pdfPath);
 						toolResults.push(toolText(call.id, call.name, String(r)));
 					} else if (call.name === "pdf_extract") {
 						const spec = String(args.pages ?? "all");
 						opts.onActivity?.(`pdf_extract: ${spec}`);
-						const r = await tools.pdf_extract.execute!({ pages: spec }, { toolCallId: call.id });
+						const r = await pdfExtractText(pdfPath, spec);
 						toolResults.push(toolText(call.id, call.name, String(r)));
 						for (const p of specNumbers(spec, Infinity)) {
 							consulted.add(p);
@@ -393,7 +388,7 @@ async function streamOnce(
 	engine: PiEngine,
 	systemPrompt: string,
 	messages: Message[],
-	tools: ReturnType<typeof piToolDeclarations>,
+	tools: Tool[],
 	reasoning: ThinkingLevel | undefined,
 	abortSignal?: AbortSignal,
 ): Promise<AssistantMessage> {

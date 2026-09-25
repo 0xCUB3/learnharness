@@ -28,6 +28,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
+import { Value } from "typebox/value";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PATHS } from "../config.ts";
@@ -845,13 +846,13 @@ describe("tool + renderer registry wiring", () => {
 		for (const name of ["demo", "visual", "research", "pdf"] as const) {
 			assert.equal(typeof (tools[name] as { execute?: unknown }).execute, "function", `${name} executes server-side — fire-and-forget ack per THE ASYNC PROTOCOL`);
 		}
-		assert.equal(demoInputSchema.safeParse({ title: "T", brief: "b" }).success, true);
-		assert.equal(demoInputSchema.safeParse({ brief: "b" }).success, false, "demo requires a title");
-		assert.equal(visualInputSchema.safeParse({ brief: "b" }).success, true);
-		assert.equal(visualInputSchema.safeParse({}).success, false, "visual requires a brief");
-		assert.equal(pdfInputSchema.safeParse({ path: "/tmp/doc.pdf", question: "q" }).success, true);
-		assert.equal(pdfInputSchema.safeParse({ question: "q" }).success, false, "pdf requires a path");
-		assert.equal(pdfInputSchema.safeParse({ path: "/tmp/doc.pdf" }).success, false, "pdf requires a question");
+		assert.equal(Value.Check(demoInputSchema, { title: "T", brief: "b" }), true);
+		assert.equal(Value.Check(demoInputSchema, { brief: "b" }), false, "demo requires a title");
+		assert.equal(Value.Check(visualInputSchema, { brief: "b" }), true);
+		assert.equal(Value.Check(visualInputSchema, {}), false, "visual requires a brief");
+		assert.equal(Value.Check(pdfInputSchema, { path: "/tmp/doc.pdf", question: "q" }), true);
+		assert.equal(Value.Check(pdfInputSchema, { question: "q" }), false, "pdf requires a path");
+		assert.equal(Value.Check(pdfInputSchema, { path: "/tmp/doc.pdf" }), false, "pdf requires a question");
 	});
 
 	it("the artifact renderer registry maps demo/visual to the W6 cards", () => {

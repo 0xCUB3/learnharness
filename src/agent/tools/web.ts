@@ -1,5 +1,6 @@
-import { z } from "zod";
-import { lhTool } from "../lh-tool.ts";
+import { Type } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { serverExecute } from "../tool-execute.ts";
 // The search-hit shape lives in the core port since the search wave
 // (2026-09-20); this alias keeps callers churn-free.
 import type { SearchHit as WebSearchResult, SearchProvider } from "../../core/search.ts";
@@ -114,17 +115,26 @@ async function fetchAndExtract(url: string): Promise<string> {
 
 // ── tool registry ────────────────────────────────────────────────────────────
 
-export function createWebTools(search: () => SearchProvider | null) {
+const webSearchInput = Type.Object({
+	query: Type.String({ description: "The search query (a normal search string, phrases included)" }),
+	count: Type.Optional(
+		Type.Integer({ minimum: 1, maximum: 10, description: "Number of results (default 5, max 10)" }),
+	),
+});
+
+const webFetchInput = Type.Object({
+	url: Type.String({ description: "The URL to fetch" }),
+});
+
+export function createWebTools(search: () => SearchProvider | null): Record<string, AgentTool<any>> {
 	return {
-		web_search: lhTool({
+		web_search: {
 			name: "web_search",
+			label: "web_search",
 			description: "Search the web. One search per call — use one call per search angle. " +
 				"Returns an array of results with title, url, and snippet.",
-			schema: z.object({
-				query: z.string().describe("The search query (a normal search string, phrases included)"),
-				count: z.number().int().min(1).max(10).optional().describe("Number of results (default 5, max 10)"),
-			}),
-			execute: async ({ query, count }): Promise<WebSearchResult[] | string> => {
+			parameters: webSearchInput,
+			execute: serverExecute("web_search", webSearchInput, async ({ query, count }): Promise<WebSearchResult[] | string> => {
 				const provider = search();
 				if (!provider) {
 					return (
@@ -137,21 +147,20 @@ export function createWebTools(search: () => SearchProvider | null) {
 				} catch (err) {
 					return `web_search failed: ${err instanceof Error ? err.message : String(err)}`;
 				}
-			},
-		}),
+			}),
+		},
 
-		web_fetch: lhTool({
+		web_fetch: {
 			name: "web_fetch",
+			label: "web_fetch",
 			description:
 				"Fetch a web page and extract its readable content as markdown (Readability). " +
 				"Handles HTML pages and plain text; JS-rendered pages fall back to a reader service.",
-			schema: z.object({
-				url: z.string().describe("The URL to fetch"),
-			}),
-			execute: async ({ url }): Promise<string> => {
+			parameters: webFetchInput,
+			execute: serverExecute("web_fetch", webFetchInput, async ({ url }): Promise<string> => {
 				try {
 					const parsed = new URL(url);
-					if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Only http(s) URLs are supported");
+					if (parsed.protocol !== "http" && parsed.protocol !== "https") throw new Error("Only http(s) URLs are supported");
 				} catch {
 					return `web_fetch failed: invalid URL "${url}"`;
 				}
@@ -160,8 +169,8 @@ export function createWebTools(search: () => SearchProvider | null) {
 				} catch (err) {
 					return `web_fetch failed for ${url}: ${err instanceof Error ? err.message : String(err)}`;
 				}
-			},
-		}),
+			}),
+		},
 	};
 }
 

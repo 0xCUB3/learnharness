@@ -1,5 +1,6 @@
-import { z } from "zod";
-import { lhTool, type LhTool } from "../lh-tool.ts";
+import { Type, type Static } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { serverExecute } from "../tool-execute.ts";
 import type { JobRecord } from "../../core/contracts.ts";
 import type { JobStore } from "../../core/ports.ts";
 
@@ -30,43 +31,41 @@ export interface JobToolContext {
 	searchAvailable?: () => boolean;
 }
 
-export const researchInputSchema = z.object({
-	question: z
-		.string()
-		.describe("The single research question to answer. Make it specific — the researcher sees nothing else of the lesson."),
-	context: z
-		.string()
-		.optional()
-		.describe("Why you need this / what the lesson needs it for — focuses the brief. One or two sentences."),
+export const researchInputSchema = Type.Object({
+	question: Type.String({
+		description: "The single research question to answer. Make it specific — the researcher sees nothing else of the lesson.",
+	}),
+	context: Type.Optional(
+		Type.String({
+			description: "Why you need this / what the lesson needs it for — focuses the brief. One or two sentences.",
+		}),
+	),
 });
 
-export const demoInputSchema = z.object({
-	title: z.string().describe("Short title for the demo card, e.g. 'Damped harmonic oscillator'."),
-	brief: z
-		.string()
-		.describe(
+export const demoInputSchema = Type.Object({
+	title: Type.String({ description: "Short title for the demo card, e.g. 'Damped harmonic oscillator'." }),
+	brief: Type.String({
+		description:
 			"Precise brief for the builder: the concept, the parameters/controls and what each does, the interactions, and the visual style. " +
 			"The builder sees NOTHING else of the lesson — include everything it needs, including necessary formulas and constants.",
-		),
+	}),
 });
 
-export const visualInputSchema = z.object({
-	brief: z
-		.string()
-		.describe(
+export const visualInputSchema = Type.Object({
+	brief: Type.String({
+		description:
 			"Precise brief for ONE static figure: exactly what it must show — coordinates, labels, proportions, orientation. " +
 			"The maker sees NOTHING else of the lesson; a wrong or vague brief produces a wrong figure.",
-		),
+	}),
 });
 
-export const pdfInputSchema = z.object({
-	path: z.string().describe("Path to the learner's PDF (relative or absolute), exactly as they gave it."),
-	question: z
-		.string()
-		.describe(
+export const pdfInputSchema = Type.Object({
+	path: Type.String({ description: "Path to the learner's PDF (relative or absolute), exactly as they gave it." }),
+	question: Type.String({
+		description:
 			"What you need from the document — the specific content, explanation, or answer to extract and brief. " +
 			"The reader sees NOTHING else of the lesson.",
-		),
+	}),
 });
 
 /**
@@ -133,39 +132,47 @@ const PDF_DESCRIPTION =
  * server can't dispatch doomed research jobs. Jobs ALREADY in flight when
  * a key disappears still run to their honest failure (runner backstop).
  */
-export function jobTools(ctx: JobToolContext): Record<string, LhTool<any, any>> {
+export function jobTools(ctx: JobToolContext): Record<string, AgentTool<any>> {
 	const searchOn = ctx.searchAvailable?.() ?? true;
 	return {
 		...(searchOn && {
-			research: lhTool({
+			research: {
 				name: "research",
+				label: "research",
 				description: RESEARCH_DESCRIPTION,
-				schema: researchInputSchema,
-				execute: async (input, { toolCallId }) => dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input),
-			}),
+				parameters: researchInputSchema,
+				execute: serverExecute("research", researchInputSchema, (input, { toolCallId }) =>
+					dispatch(ctx, "research", toolCallId, RESEARCH_ACK, input),
+				),
+			},
 		}),
-		demo: lhTool({
+		demo: {
 			name: "demo",
+			label: "demo",
 			description: DEMO_DESCRIPTION,
-			schema: demoInputSchema,
-			execute: async (input, { toolCallId }) => dispatch(ctx, "demo", toolCallId, DEMO_ACK, input),
-		}),
-		visual: lhTool({
+			parameters: demoInputSchema,
+			execute: serverExecute("demo", demoInputSchema, (input, { toolCallId }) => dispatch(ctx, "demo", toolCallId, DEMO_ACK, input)),
+		},
+		visual: {
 			name: "visual",
+			label: "visual",
 			description: VISUAL_DESCRIPTION,
-			schema: visualInputSchema,
-			execute: async (input, { toolCallId }) => dispatch(ctx, "visual", toolCallId, VISUAL_ACK, input),
-		}),
-		pdf: lhTool({
+			parameters: visualInputSchema,
+			execute: serverExecute("visual", visualInputSchema, (input, { toolCallId }) =>
+				dispatch(ctx, "visual", toolCallId, VISUAL_ACK, input),
+			),
+		},
+		pdf: {
 			name: "pdf",
+			label: "pdf",
 			description: PDF_DESCRIPTION,
-			schema: pdfInputSchema,
-			execute: async (input, { toolCallId }) => dispatch(ctx, "pdf", toolCallId, PDF_ACK, input),
-		}),
+			parameters: pdfInputSchema,
+			execute: serverExecute("pdf", pdfInputSchema, (input, { toolCallId }) => dispatch(ctx, "pdf", toolCallId, PDF_ACK, input)),
+		},
 	};
 }
 
-export type ResearchInput = z.infer<typeof researchInputSchema>;
-export type DemoInput = z.infer<typeof demoInputSchema>;
-export type VisualInput = z.infer<typeof visualInputSchema>;
-export type PdfInput = z.infer<typeof pdfInputSchema>;
+export type ResearchInput = Static<typeof researchInputSchema>;
+export type DemoInput = Static<typeof demoInputSchema>;
+export type VisualInput = Static<typeof visualInputSchema>;
+export type PdfInput = Static<typeof pdfInputSchema>;

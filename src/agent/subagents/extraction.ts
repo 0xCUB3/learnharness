@@ -1,8 +1,9 @@
 import * as crypto from "node:crypto";
 import type { UIMessage } from "ai";
 import type { Usage } from "@earendil-works/pi-ai";
-import { z } from "zod";
-import { lhTool, toPiTools } from "../lh-tool.ts";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { Type, type Static, type TSchema } from "typebox";
+import { toToolResult } from "../tool-execute.ts";
 import type { ModelRole } from "../../../config.ts";
 import {
 	FACTORY_SETTINGS,
@@ -45,7 +46,7 @@ import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/co
  * The LLM stages supply only the judgment calls; the deterministic rebuild
  * in the merger owns everything that must never be mis-copied (event kinds,
  * timestamps, refs, provenance points). Both agents are single-tool-call
- * workers: their whole deliverable is one zod-validated submit call — a
+ * workers: their whole deliverable is one TypeBox-validated submit call — a
  * ToolLoopAgent purely so the model can retry a schema-invalid call.
  *
  * Created via createExtractionPipeline(deps) — the composition root
@@ -101,75 +102,170 @@ export function transcriptView(record: ChatRecord): string {
 
 // ─── the extractor ──────────────────────────────────────────────────────────
 
-const evidence = z
-	.array(z.string())
-	.min(1)
-	.describe("Verbatim quotes from the transcript that back this. The auditor will check every quote.");
+const evidenceSchema = Type.Array(Type.String(), {
+	minItems: 1,
+	description: "Verbatim quotes from the transcript that back this. The auditor will check every quote.",
+});
 
-const messagesField = z
-	.array(z.string())
-	.describe("The message ids (from the [id] tags in the transcript) where this came up — provenance.");
+const messagesSchema = Type.Array(Type.String(), {
+	description: "The message ids (from the [id] tags in the transcript) where this came up — provenance.",
+});
 
-const propositionSchema = z.object({
-	id: z.string().describe("Local id: \"p1\", \"p2\", … — referenced by edges and attribution."),
-	name: z
-		.string()
-		.describe(
-			"A very short label for the proposition — a few words, a compact handle like a glossary headword " +
-				'(\'Will to power\', \'Divine command theory\'). Not a sentence, needn\'t be unique or ' +
-				"self-contained: the statement carries the precision. This becomes the node's label in the graph.",
-		),
-	statement: z
-		.string()
-		.describe(
-			"The proposition as one reasoning step — a TRUE, self-contained, world-facing statement. " +
-				"Never reference the learner, the teacher, or the session: not \"the learner understands X\" but " +
-				'"X". A misconception is stated as the TRUE correction ("Nietzsche did not endorse ' +
-				'might-makes-right social Darwinism") — the wrongness lives in the quiz outcomes, never here.',
-		),
-	aliases: z.array(z.string()).describe("Verbatim phrasings this session used for the same proposition, if any."),
-	messages: messagesField,
-	evidence,
-	understanding: z
-		.enum(["solid", "shaky", "accepted", "resisted", "not yet engaged"])
-		.optional()
-		.describe(
-			"ONE word — the learner's grasp of this proposition in THIS session, from the fixed scale " +
+const understandingSchema = Type.Optional(
+	Type.Union(
+		[
+			Type.Literal("solid"),
+			Type.Literal("shaky"),
+			Type.Literal("accepted"),
+			Type.Literal("resisted"),
+			Type.Literal("not yet engaged"),
+		],
+		{
+			description:
+				"ONE word — the learner's grasp of this proposition in THIS session, from the fixed scale " +
 				'"solid" | "shaky" | "accepted" | "resisted" | "not yet engaged". Nothing else: no numbers, ' +
 				"no justification, no explanation.",
+		},
+	),
+);
+
+const propositionProps = {
+	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by edges and attribution.' }),
+	name: Type.String({
+		description:
+			"A very short label for the proposition — a few words, a compact handle like a glossary headword " +
+			"('Will to power', 'Divine command theory'). Not a sentence, needn't be unique or " +
+			"self-contained: the statement carries the precision. This becomes the node's label in the graph.",
+	}),
+	statement: Type.String({
+		description:
+			"The proposition as one reasoning step — a TRUE, self-contained, world-facing statement. " +
+			'Never reference the learner, the teacher, or the session: not "the learner understands X" but ' +
+			'"X". A misconception is stated as the TRUE correction ("Nietzsche did not endorse ' +
+			'might-makes-right social Darwinism") — the wrongness lives in the quiz outcomes, never here.',
+	}),
+	aliases: Type.Array(Type.String(), {
+		description: "Verbatim phrasings this session used for the same proposition, if any.",
+	}),
+	messages: messagesSchema,
+	evidence: evidenceSchema,
+	understanding: understandingSchema,
+};
+
+const edgeSchema = Type.Object({
+	from: Type.String({ description: "Proposition id that is followed / supported." }),
+	to: Type.String({ description: "Proposition id that follows / is supported by `from`." }),
+	type: Type.Union([Type.Literal("follows"), Type.Literal("supports")], {
+		description: '"follows" = to is derivable from from; "supports" = from grounds to without entailing it.',
+	}),
+	messages: messagesSchema,
+	evidence: evidenceSchema,
+});
+
+// Weak-model tolerance (owner, 2026-09-25): the old zod `.default([])` /
+// `.default({ quiz: {} })` on required-but-empty fields becomes Type.Optional
+// here + a ??-fill at the submit seam (fillFindings/fillAudit below) — same
+// contract on the wire (omission tolerated, empty never means "invalid"),
+// no zod left in the agent band.
+const findingsProps = {
+	propositions: Type.Array(Type.Object(propositionProps), {
+		description: "Every distinct proposition the session touched — true statements, misconception-free.",
+	}),
+	edges: Type.Optional(
+		Type.Array(edgeSchema, {
+			description:
+				"Relations between propositions: follows (derivable) / supports (grounds without entailing). Pass [] when there are none — never omit the field.",
+		}),
+	),
+	attribution: Type.Optional(
+		Type.Object(
+			{
+				quiz: Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]), {
+					description:
+						"toolCallId of EVERY quiz line → the proposition id it was really testing. Attribute RETROACTIVELY — the whole transcript is visible; map each quiz to the proposition it tests (often articulated elsewhere in the session). null when genuinely unattributable.",
+				}),
+			},
+			{
+				description:
+					"Quiz attribution — your only event judgment. Pass { quiz: {} } when the session has no quiz lines — never omit the field.",
+			},
 		),
-});
+	),
+};
 
-const edgeSchema = z.object({
-	from: z.string().describe("Proposition id that is followed / supported."),
-	to: z.string().describe("Proposition id that follows / is supported by `from`."),
-	type: z
-		.enum(["follows", "supports"])
-		.describe('"follows" = to is derivable from from; "supports" = from grounds to without entailing it.'),
-	messages: messagesField,
-	evidence,
-});
+const findingsSchema = Type.Object(findingsProps);
 
-const findingsSchema = z.object({
-	propositions: z
-		.array(propositionSchema)
-		.describe("Every distinct proposition the session touched — true statements, misconception-free."),
-	edges: z
-		.array(edgeSchema)
-		.describe("Relations between propositions: follows (derivable) / supports (grounds without entailing). Pass [] when there are none — never omit the field.")
-		.default([]), // weak models omit required-but-empty arrays; omission means "none"
+const auditProps = {
+	...findingsProps,
+	propositions: Type.Array(
+		Type.Object({
+			...propositionProps,
+			linkTo: Type.Optional(
+				Type.String({
+					description:
+						"The id of the EXISTING graph node this proposition IS — your identity verdict. Absent = create a new node. When unsure, omit: duplicates over wrong merges.",
+				}),
+			),
+		}),
+		{
+			description: "Every distinct proposition the session touched — true statements, misconception-free.",
+		},
+	),
+	dropped: Type.Optional(
+		Type.Array(
+			Type.Object({
+				ref: Type.String({
+					description: 'Proposition id, "from→to" for an edge, or attribution toolCallId.',
+				}),
+				reason: Type.String(),
+			}),
+			{
+				description:
+					"Everything you dropped, with the reason — the audit trail. Pass [] when you dropped nothing — never omit the field.",
+			},
+		),
+	),
+};
 
-	attribution: z
-		.object({
-			quiz: z
-				.record(z.string(), z.string().nullable())
-				.describe(
-					"toolCallId of EVERY quiz line → the proposition id it was really testing. Attribute RETROACTIVELY — the whole transcript is visible; map each quiz to the proposition it tests (often articulated elsewhere in the session). null when genuinely unattributable.",
-				),
-		})
-		.describe("Quiz attribution — your only event judgment. Pass { quiz: {} } when the session has no quiz lines — never omit the field.")
-		.default({ quiz: {} }), // weak models omit empty objects too
-});
+const auditSchema = Type.Object(auditProps);
+
+// The notes front door's shapes: everything session findings have, minus
+// quiz attribution — raw notes have no quiz tool parts, so there is
+// nothing to attribute (and no event to build: outcomes inside the text
+// surface only through understanding observations, user-decided).
+const { attribution: _omitted, ...notesFindingsProps } = findingsProps;
+const notesFindingsSchema = Type.Object(notesFindingsProps);
+const { attribution: _omitted2, ...notesAuditProps } = auditProps;
+const notesAuditSchema = Type.Object(notesAuditProps);
+type NotesFindings = Omit<SessionFindings, "attribution">;
+type NotesAuditResult = Omit<AuditResult, "attribution">;
+
+// ── the weak-model ??-fills (the old zod defaults, applied at submit) ──
+
+function fillFindings(raw: Static<typeof findingsSchema>): SessionFindings {
+	return {
+		propositions: raw.propositions,
+		edges: raw.edges ?? [],
+		attribution: raw.attribution ?? { quiz: {} },
+	};
+}
+
+function fillNotesFindings(raw: Static<typeof notesFindingsSchema>): NotesFindings {
+	return { propositions: raw.propositions, edges: raw.edges ?? [] };
+}
+
+function fillAudit(raw: Static<typeof auditSchema>): AuditResult {
+	return {
+		propositions: raw.propositions,
+		edges: raw.edges ?? [],
+		attribution: raw.attribution ?? { quiz: {} },
+		dropped: raw.dropped ?? [],
+	};
+}
+
+function fillNotesAudit(raw: Static<typeof notesAuditSchema>): NotesAuditResult {
+	return { propositions: raw.propositions, edges: raw.edges ?? [], dropped: raw.dropped ?? [] };
+}
 
 const NOTES_EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE source —
 the user's own NOTES, in an ARBITRARY format (personal notes, an exported conversation, a document — anything) — and
@@ -260,15 +356,19 @@ are no quizzes. NEVER omit a field because it is empty.
 Your entire deliverable is ONE submit_findings call.`;
 
 /** One single-submit agent run — the shared shape of EVERY LLM stage
- *  here (session + notes): the whole deliverable is ONE zod-validated
+ *  here (session + notes): the whole deliverable is ONE TypeBox-validated
  *  submit call (a pi agent purely so the model can retry a schema-invalid
  *  call). The submitted value is captured from the execute seam, which
- *  only fires on a schema-valid call. */
+ *  only fires on a schema-valid call — the ??-fill (the old zod defaults)
+ *  applies at the capture. */
 async function runSubmitAgent<T>(opts: {
 	role: ModelRole;
 	toolName: string;
 	toolDescription: string;
-	schema: z.ZodType<T>;
+	parameters: TSchema;
+	/** Weak-model tolerance: the old zod `.default()`s, applied to the
+	 *  schema-valid raw input at the submit seam. */
+	fill: (input: any) => T;
 	systemPrompt: string;
 	prompt: string;
 	engine: PiEngine | undefined;
@@ -278,17 +378,18 @@ async function runSubmitAgent<T>(opts: {
 }): Promise<T> {
 	let submitted: T | undefined;
 	const result = await runSubagent(
-		toPiTools({
-			[opts.toolName]: lhTool({
+		[
+			{
 				name: opts.toolName,
+				label: opts.toolName,
 				description: opts.toolDescription,
-				schema: opts.schema,
-				execute: async (findings) => {
-					submitted = findings;
-					return findings;
+				parameters: opts.parameters,
+				execute: async (_toolCallId, input) => {
+					submitted = opts.fill(input);
+					return toToolResult(submitted);
 				},
-			}),
-		}),
+			} satisfies AgentTool<any>,
+		],
 		{
 			role: opts.role,
 			engine: opts.engine,
@@ -326,7 +427,8 @@ function runExtractor(
 		role: "extractor",
 		toolName: "submit_findings",
 		toolDescription: "Submit the session findings.",
-		schema: findingsSchema,
+		parameters: findingsSchema,
+		fill: fillFindings,
 		systemPrompt: EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -348,7 +450,8 @@ function runNotesExtractor(
 		role: "extractor",
 		toolName: "submit_findings",
 		toolDescription: "Submit the notes findings.",
-		schema: notesFindingsSchema,
+		parameters: notesFindingsSchema,
+		fill: fillNotesFindings,
 		systemPrompt: NOTES_EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -360,36 +463,6 @@ function runNotesExtractor(
 
 // ─── the auditor ───────────────────────────────────────────────────────────
 
-const auditSchema = findingsSchema.extend({
-	propositions: z.array(
-		propositionSchema.extend({
-			linkTo: z
-				.string()
-				.optional()
-				.describe(
-					"The id of the EXISTING graph node this proposition IS — your identity verdict. Absent = create a new node. When unsure, omit: duplicates over wrong merges.",
-				),
-		}),
-	),
-	dropped: z
-		.array(
-			z.object({
-				ref: z.string().describe("Proposition id, \"from→to\" for an edge, or attribution toolCallId."),
-				reason: z.string(),
-			}),
-		)
-		.describe("Everything you dropped, with the reason — the audit trail. Pass [] when you dropped nothing — never omit the field.")
-		.default([]), // same weak-model tolerance as findings.edges
-});
-
-// The notes front door's shapes: everything session findings have, minus
-// quiz attribution — raw notes have no quiz tool parts, so there is
-// nothing to attribute (and no event to build: outcomes inside the text
-// surface only through understanding observations, user-decided).
-const notesFindingsSchema = findingsSchema.omit({ attribution: true });
-const notesAuditSchema = auditSchema.omit({ attribution: true });
-type NotesFindings = Omit<SessionFindings, "attribution">;
-type NotesAuditResult = Omit<AuditResult, "attribution">;
 
 const AUDITOR_INSTRUCTIONS = `You are the audit stage of a learning application's extraction pipeline. You receive
 ONE source — a session transcript, or the author's personal notes in an ARBITRARY format (the notes front door) — a
@@ -453,7 +526,8 @@ function runAuditor(
 		role: "auditor",
 		toolName: "submit_review",
 		toolDescription: "Submit the verified findings subset (with identity verdicts) + the dropped list.",
-		schema: auditSchema,
+		parameters: auditSchema,
+		fill: fillAudit,
 		systemPrompt: AUDITOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -475,7 +549,8 @@ function runNotesAuditor(
 		role: "auditor",
 		toolName: "submit_review",
 		toolDescription: "Submit the verified findings subset (with identity verdicts) + the dropped list.",
-		schema: notesAuditSchema,
+		parameters: notesAuditSchema,
+		fill: fillNotesAudit,
 		systemPrompt: AUDITOR_INSTRUCTIONS,
 		prompt,
 		engine,

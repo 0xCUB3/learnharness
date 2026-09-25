@@ -13,6 +13,8 @@
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { describe, it } from "node:test";
+import { Type } from "typebox";
+import { questionResult } from "../src/agent/tool-execute.ts";
 import { createProberAgent, createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import type { ProberToolContext } from "../src/agent/tools.ts";
 import { jobStore } from "../src/store/jobs.ts";
@@ -53,7 +55,13 @@ describe("AgentBuildOptions.toolToggles (the P2 bridge)", () => {
 		const teacher = createTeacherAgent(undefined, {
 			engine: fauxEngine(),
 			tools: {
-				quiz: { name: "quiz", description: "test", clientQuestion: true, schema: z.object({}) },
+				quiz: {
+					name: "quiz",
+					label: "quiz",
+					description: "test",
+					parameters: Type.Object({}),
+					execute: async () => questionResult(),
+				},
 			},
 			toolToggles: { quiz: false },
 		});

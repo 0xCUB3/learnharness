@@ -1,7 +1,10 @@
 /**
  * The read tool (sources v0) — a Node port of pi's read semantics:
  * truncation with continuation offsets, image mime detection, error paths.
- * Plus the lh-tool.ts image-result escape hatch it exercises.
+ * Driven through the NATIVE AgentTool execute (Wave A, 2026-09-26): text
+ * reads return the raw string as details (the record's tool part output
+ * reads it); image reads return native pi content parts (text + image)
+ * with null details (the output-less part until the record persists).
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -9,7 +12,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { readTool } from "../src/agent/tools/read.ts";
-import { toPiTool } from "../src/agent/lh-tool.ts";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lh-read-test-"));
 
@@ -19,16 +21,21 @@ function write(name: string, content: string): string {
 	return file;
 }
 
-/** The 2-line/8-byte local config, applied the same way as the real caps. */
+/** Native execute → the raw string body (text reads ride details verbatim). */
 const run = (args: { path: string; offset?: number; limit?: number }) =>
-	(readTool.execute as (i: unknown, c: { toolCallId: string }) => Promise<unknown>)!(args, {
-		toolCallId: "test",
+	readTool.execute!("test", args).then((r) => {
+		assert.ok(r.content.length >= 1);
+		const first = r.content[0]!;
+		assert.equal(first.type, "text");
+		return { text: (first as { type: "text"; text: string }).text, details: r.details };
 	});
 
 describe("read tool — text semantics", () => {
 	it("reads a small file verbatim", async () => {
 		const file = write("small.txt", "hello\nworld");
-		assert.equal(await run({ path: file }), "hello\nworld");
+		const { text, details } = await run({ path: file });
+		assert.equal(text, "hello\nworld");
+		assert.equal(details, "hello\nworld", "the record part output carries the string verbatim");
 	});
 
 	it("resolves relative paths against the learner's home (sources v1 anchoring)", async () => {
@@ -39,7 +46,7 @@ describe("read tool — text semantics", () => {
 		const homeFile = path.join(os.homedir(), rel);
 		fs.writeFileSync(homeFile, "rel", "utf-8");
 		try {
-			assert.equal(await run({ path: rel }), "rel");
+			assert.equal((await run({ path: rel })).text, "rel");
 		} finally {
 			fs.unlinkSync(homeFile);
 		}
@@ -48,7 +55,7 @@ describe("read tool — text semantics", () => {
 	it("honors offset (1-indexed) and limit", async () => {
 		const body = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
 		const file = write("thirty.txt", body);
-		const out = (await run({ path: file, offset: 10, limit: 3 })) as string;
+		const out = (await run({ path: file, offset: 10, limit: 3 })).text;
 		// pi parity: the explicit limit stopping short gets a remaining notice
 		assert.match(out, /^line 10\nline 11\nline 12\n\n\[18 more lines in file\. Use offset=13 to continue\.\]$/);
 	});
@@ -65,7 +72,7 @@ describe("read tool — text semantics", () => {
 	it("truncates at 2000 lines with a use-offset continuation notice", async () => {
 		const body = Array.from({ length: 3000 }, (_, i) => `l${i + 1}`).join("\n");
 		const file = write("big.txt", body);
-		const out = (await run({ path: file })) as string;
+		const out = (await run({ path: file })).text;
 		assert.match(out, /Showing lines 1-2000 of 3000 \(2000 line limit\)/);
 		assert.match(out, /Use offset=2001 to continue/);
 		assert.ok(!out.includes("l2001\n"), "line 2001 must not ride along");
@@ -76,7 +83,7 @@ describe("read tool — text semantics", () => {
 		const line = "x".repeat(400);
 		const body = Array.from({ length: 200 }, () => line).join("\n");
 		const file = write("wide.txt", body);
-		const out = (await run({ path: file })) as string;
+		const out = (await run({ path: file })).text;
 		assert.match(out, /50\.0KB limit\)\. Use offset=\d+ to continue\./);
 		// and the truncation actually cut content
 		assert.ok(out.length < 52_000, "the 50KB ceiling must cut the 80KB body");
@@ -85,38 +92,34 @@ describe("read tool — text semantics", () => {
 	it("an explicit limit that stops short gets a remaining-lines notice", async () => {
 		const body = Array.from({ length: 10 }, (_, i) => `l${i + 1}`).join("\n");
 		const file = write("ten.txt", body);
-		const out = (await run({ path: file, limit: 4 })) as string;
+		const out = (await run({ path: file, limit: 4 })).text;
 		assert.match(out, /\[6 more lines in file\. Use offset=5 to continue\.\]/);
 	});
 });
 
-describe("read tool — image semantics", () => {
-	it("returns the LhToolImageResult escape-hatch shape for image files", async () => {
+describe("read tool — image semantics (native content parts)", () => {
+	it("returns native text + image parts for image files, details null (output-less part)", async () => {
 		const file = path.join(tmp, "dot.png");
 		// minimal valid PNG header bytes are enough — detection is by extension
 		fs.writeFileSync(file, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-		const out = (await run({ path: file })) as { text: string; images?: { data: string; mimeType: string }[] };
-		assert.match(out.text, /Read image file \[image\/png\]/);
-		assert.equal(out.images?.length, 1);
-		assert.equal(out.images![0]!.mimeType, "image/png");
-		assert.match(out.images![0]!.data, /^[A-Za-z0-9+/]+={0,2}$/);
+		const result = await readTool.execute!("test", { path: file });
+		assert.equal(result.content.length, 2);
+		const parts = result.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+		const textPart = parts[0]!;
+		const imagePart = parts[1]!;
+		assert.equal(textPart.type, "text");
+		assert.match(textPart.text!, /Read image file \[image\/png\]/);
+		assert.equal(imagePart.type, "image");
+		assert.equal(imagePart.mimeType, "image/png");
+		assert.match(imagePart.data!, /^[A-Za-z0-9+/]+={0,2}$/);
+		assert.equal(result.details, null, "image reads keep the record part output-less");
 	});
 
-	it("toPiTool maps the image result to native pi content parts", async () => {
-		const pi = toPiTool(readTool);
-		const result = await pi.execute("call-1", { path: path.join(tmp, "dot.png") }, undefined as never);
-		assert.ok(!("isError" in result) || !(result as { isError?: boolean }).isError);
-		const content = (result as { content: Array<{ type: string }> }).content;
-		assert.equal(content[0]!.type, "text");
-		assert.equal(content[1]!.type, "image");
-	});
-
-	it("toPiTool maps plain string results to a single text part (parity)", async () => {
+	it("plain string results map to a single text part (parity)", async () => {
 		const file = write("plain.txt", "body");
-		const pi = toPiTool(readTool);
-		const result = await pi.execute("call-2", { path: file }, undefined as never);
-		const content = (result as { content: Array<{ type: string }> }).content;
-		assert.equal(content.length, 1);
-		assert.equal(content[0]!.type, "text");
+		const result = await readTool.execute!("test", { path: file });
+		assert.equal(result.content.length, 1);
+		assert.equal(result.content[0]!.type, "text");
+		assert.equal((result.content[0] as { type: "text"; text: string }).text, "body");
 	});
 });

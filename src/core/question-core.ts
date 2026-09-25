@@ -2,10 +2,10 @@
  * question-core — the question contract + pure grading logic. No framework
  * imports, no UI: everything here is deterministic and unit-testable.
  *
- * The zod schemas below are the tool INPUT contracts (agent/tools declares
- * the tools against them); the browser validates, shuffles, and grades with
- * these functions, then sends the verdict back as the tool output via
- * addToolOutput:
+ * The TypeBox schemas below are the tool INPUT contracts (agent/tools
+ * declares the tools against them); the browser validates, shuffles, and
+ * grades with these functions, then sends the verdict back as the tool
+ * output via addToolOutput:
  *   1. The teacher model calls the `quiz` tool (question + options +
  *      correctAnswer + explanation). No server execute → the call lands in
  *      the UI as a typed tool part in `input-available` state.
@@ -17,7 +17,7 @@
  * exited and resumed mid-question for free.
  */
 
-import { z } from "zod";
+import { Type, type Static } from "typebox";
 
 // ─── shared types ───────────────────────────────────────────────────────────
 
@@ -30,14 +30,18 @@ export interface QuizOption {
 // ─── tool input schemas (the question contract) ─────────────────────────────
 // Parameter names mirror the prompt docs exactly — keep them in sync.
 
-const optionSchema = z.object({
-	label: z.string().describe("Display label for the answer option"),
-	value: z
-		.string()
-		.optional()
-		.describe("Optional machine-readable value returned for the option. Defaults to the label."),
-	description: z.string().optional().describe("Optional extra detail shown below the option"),
-});
+/** One answer option — shared by quiz + ask. */
+const optionProps = {
+	label: Type.String({ description: "Display label for the answer option" }),
+	value: Type.Optional(
+		Type.String({
+			description: "Optional machine-readable value returned for the option. Defaults to the label.",
+		}),
+	),
+	description: Type.Optional(
+		Type.String({ description: "Optional extra detail shown below the option" }),
+	),
+};
 
 // ─── cross-field authoring validation (tool-schema refinements) ──────────
 // Enforced at the tool-call boundary (see the superRefines below): an invalid
@@ -111,114 +115,113 @@ export function quizInputProblems(input: {
 // and teach agents use DIFFERENT tools under the same name (docs/probe-teach-
 // split.md §1): the prober's quiz has NO nodeId field at all (there is no
 // map to position on), the teacher's adds it (the position signal — the
-// per-session tree validation chains on top in tools.ts). Grading rules
-// are identical, single-sourced here.
-export const quizInputBase = z.object({
-	question: z.string().describe("The single quiz question to ask. ONE question per turn: ask, then end your turn — the answer determines the next question."),
-	options: z
-		.array(optionSchema)
-		.min(2)
-		.describe(
+// per-session tree validation runs in the tool's execute, tools.ts).
+// Grading rules are identical, single-sourced here. The cross-field
+// authoring contract (quizInputProblems, above) is enforced at the
+// tool-call boundary in execute — TypeBox carries the structure to the
+// model, the problems function carries the refinements.
+//
+// Argument-order ruling (owner, 2026-09-25): the explanation is REASONING,
+// and reasoning happens BEFORE the answer is chosen — models emit tool
+// args in schema order, so explanation sits immediately BEFORE correctAnswer.
+// (All consumers read by key; the order is authoring guidance, nothing else.)
+export const quizInputBase = Type.Object({
+	question: Type.String({
+		description:
+			"The single quiz question to ask. ONE question per turn: ask, then end your turn — the answer determines the next question.",
+	}),
+	options: Type.Array(Type.Object(optionProps), {
+		minItems: 2,
+		description:
 			"The answer options (2 or more). Options only — there is no free-text mode. " +
-				"Give each option a stable `value`; you reference the correct one by that value in correctAnswer. " +
-				"Never add your own 'I don't know' option — that choice is added for you.",
-		),
-	multiSelect: z
-		.boolean()
-		.optional()
-		.describe("Set to true when more than one option is correct and the learner must select all of them."),
-	// Argument-order ruling (owner, 2026-09-25): the explanation is REASONING,
-	// and reasoning happens BEFORE the answer is chosen — models emit tool
-	// args in schema order, so explanation sits immediately BEFORE correctAnswer.
-	// (All consumers read by key; the order is authoring guidance, nothing else.)
-	explanation: z
-		.string()
-		.describe(
+			"Give each option a stable `value`; you reference the correct one by that value in correctAnswer. " +
+			"Never add your own 'I don't know' option — that choice is added for you.",
+	}),
+	multiSelect: Type.Optional(
+		Type.Boolean({
+			description: "Set to true when more than one option is correct and the learner must select all of them.",
+		}),
+	),
+	explanation: Type.String({
+		description:
 			"REQUIRED. Explanation revealed AFTER the learner answers (shown whether they got it right or wrong). " +
-				"Use it to reinforce why the correct answer is correct. It is written BEFORE correctAnswer by design: " +
-				"reason it out first, then commit the answer the reasoning supports.",
-		),
-	correctAnswer: z
-		.union([z.string(), z.array(z.string())])
-		.describe(
+			"Use it to reinforce why the correct answer is correct. It is written BEFORE correctAnswer by design: " +
+			"reason it out first, then commit the answer the reasoning supports.",
+	}),
+	correctAnswer: Type.Union([Type.String(), Type.Array(Type.String())], {
+		description:
 			"REQUIRED. The correct answer as the option value(s) — the `value` field of the option you intend. " +
-				'Single-select: a single string (e.g. "mercury"). Multi-select: an array of strings (e.g. ["belize", "niue"]); ' +
-				"the learner is only correct if their selection matches this set exactly. " +
-				"Always pass the value, not a position number — this is self-checking and prevents miscounting. " +
-				"A value that matches no option fails validation and the call is returned to you to fix.",
-		),
-	details: z.string().optional().describe("Optional extra context or instructions shown under the question."),
+			'Single-select: a single string (e.g. "mercury"). Multi-select: an array of strings (e.g. ["belize", "niue"]); ' +
+			"the learner is only correct if their selection matches this set exactly. " +
+			"Always pass the value, not a position number — this is self-checking and prevents miscounting. " +
+			"A value that matches no option fails validation and the call is returned to you to fix.",
+	}),
+	details: Type.Optional(
+		Type.String({ description: "Optional extra context or instructions shown under the question." }),
+	),
 });
 
 // The TEACH-side quiz object: the shared base + the plan-position field.
 // `nodeId` means "this question is ABOUT this node" — a position signal,
-// never a completion signal (docs/probe-teach-split.md §3).
-export const quizInputObject = quizInputBase.extend({
-	nodeId: z
-		.string()
-		.optional()
-		.describe(
-			"Optional plan-tree node id this question is about — must EXACTLY match one of this session's " +
+// never a completion signal (docs/probe-teach-split.md §3). The cross-field
+// authoring contract (the Gate-3 hardening: a quiz whose correctAnswer
+// can't be graded NEVER reaches the learner — schema-valid ⇔ gradeable, the
+// rules exactly what the grading path accepts) runs at the CALL BOUNDARY in
+// the tool's execute: quizInputProblems here, the per-session plan-nodeId
+// validation in tools.ts (it reads the live chat record, which this core
+// never touches).
+export const quizInputObject = Type.Object({
+	...quizInputBase.properties,
+	nodeId: Type.Optional(
+		Type.String({
+			description:
+				"Optional plan-tree node id this question is about — must EXACTLY match one of this session's " +
 				"plan_init node slugs (validated at call time; a mismatched id is rejected back to you). " +
 				"Tag every question that targets a map node: the lesson's position on the map derives from these tags " +
 				"(the node the latest tagged question is about is where the map stands; earlier ones count as visited). " +
 				"Omit for quick ad-hoc checks that don't target a node.",
-		),
-})
-	// The cross-field authoring contract (the Gate-3 hardening): a quiz whose
-	// correctAnswer can't be graded NEVER reaches the learner. The SDK validates
-	// client-side tool inputs against this schema at the call boundary and, on
-	// failure, returns the validation error to the teacher as a tool result —
-	// the teacher retries with a fixed quiz in the same turn. Schema-valid ⇔
-	// gradeable: the rules are exactly what the grading path accepts.
-	//
-// NOTE the split: the raw objects (pre-refinement) are exported for
-// composition — tools.ts teachQuestionTools chains the per-session
-// plan-nodeId validation (it reads the live chat record, which this core
-// never touches) on top of this shared refinement, and the PROBE quiz
-// (no nodeId at all) refines quizInputBase directly.
-export const quizInputSchema = quizInputObject
-	.superRefine((input, ctx) => {
-		for (const problem of quizInputProblems(input)) {
-			ctx.addIssue({ code: "custom", message: problem });
-		}
-	});
-
-/** The PROBE-side quiz schema: the shared authoring contract, no nodeId
- *  field at all — the session's map doesn't exist yet. */
-export const probeQuizInputSchema = quizInputBase.superRefine((input, ctx) => {
-	for (const problem of quizInputProblems(input)) {
-		ctx.addIssue({ code: "custom", message: problem });
-	}
+		}),
+	),
 });
 
-export const askInputSchema = z
-	.object({
-		// No `mode` param — the pi original has none: the mode is inferred from
-		// whether options are present (the dock does exactly this). One less
-		// knob for the model to misuse.
-		question: z.string().describe("The single question to ask the learner. ONE question per turn: ask, then end your turn — the answer determines the next question."),
-		details: z.string().optional().describe("Optional extra context or instructions shown under the question."),
-		options: z
-			.array(optionSchema)
-			.min(2)
-			.optional()
-			.describe(
-				"Optional multiple-choice options. Omit for free-form text input. " +
-					"The learner can always choose 'Other' and type a custom answer when options are provided.",
-			),
-		multiSelect: z.boolean().optional().describe("Set to true to allow multiple answers to the same question."),
-	})
-	// Same option sanity as the quiz (labels non-empty, values distinct — ask
-	// is not graded, but duplicate values break the dock's value keying).
-	.superRefine((input, ctx) => {
-		for (const problem of askOptionProblems(input.options ?? [])) {
-			ctx.addIssue({ code: "custom", message: problem });
-		}
-	});
+/** The PROBE-side quiz declaration: the shared authoring contract, no
+ *  nodeId field at all — the session's map doesn't exist yet. Structurally
+ *  identical to quizInputBase (the old superRefine never reached the wire —
+ *  it ran at the call boundary, where quizInputProblems runs now). */
+export const probeQuizInputSchema = quizInputBase;
 
-export type QuizToolInput = z.infer<typeof quizInputSchema>;
-export type AskToolInput = z.infer<typeof askInputSchema>;
+/** The TEACHER's quiz declaration (base + the position field). */
+export const quizInputSchema = quizInputObject;
+
+export const askInputSchema = Type.Object({
+	// No `mode` param — the pi original has none: the mode is inferred from
+	// whether options are present (the dock does exactly this). One less
+	// knob for the model to misuse.
+	question: Type.String({
+		description:
+			"The single question to ask the learner. ONE question per turn: ask, then end your turn — the answer determines the next question.",
+	}),
+	details: Type.Optional(
+		Type.String({ description: "Optional extra context or instructions shown under the question." }),
+	),
+	options: Type.Optional(
+		Type.Array(Type.Object(optionProps), {
+			minItems: 2,
+			description:
+				"Optional multiple-choice options. Omit for free-form text input. " +
+				"The learner can always choose 'Other' and type a custom answer when options are provided.",
+		}),
+	),
+	multiSelect: Type.Optional(
+		Type.Boolean({ description: "Set to true to allow multiple answers to the same question." }),
+	),
+});
+// Ask's option sanity (labels non-empty, values distinct — ask is not
+// graded, but duplicate values break the dock's value keying) runs at the
+// call boundary in execute (askOptionProblems, above).
+
+export type QuizToolInput = Static<typeof quizInputObject>;
+export type AskToolInput = Static<typeof askInputSchema>;
 
 
 /** A real selected answer, in the order the options were displayed. */

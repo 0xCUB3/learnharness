@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { z } from "zod";
-import { lhTool } from "../lh-tool.ts";
+import { Type } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { serverExecute } from "../tool-execute.ts";
 import { capOutput, formatSize, MAX_OUTPUT_BYTES, resolveSourcePath } from "./fs-shared.ts";
 
 /**
@@ -14,19 +15,21 @@ import { capOutput, formatSize, MAX_OUTPUT_BYTES, resolveSourcePath } from "./fs
 
 const DEFAULT_LIMIT = 500;
 
-const lsInputSchema = z.object({
-	path: z
-		.string()
-		.optional()
-		.describe("Directory to list (default: the learner's home directory)"),
-	limit: z.number().int().positive().optional().describe("Maximum number of entries to return (default: 500)"),
+const lsInput = Type.Object({
+	path: Type.Optional(
+		Type.String({ description: "Directory to list (default: the learner's home directory)" }),
+	),
+	limit: Type.Optional(
+		Type.Integer({ description: "Maximum number of entries to return (default: 500)" }),
+	),
 });
 
-export const lsTool = lhTool({
+export const lsTool: AgentTool<typeof lsInput> = {
 	name: "ls",
+	label: "ls",
 	description: `List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to ${DEFAULT_LIMIT} entries or ${formatSize(MAX_OUTPUT_BYTES)} (whichever is hit first).`,
-	schema: lsInputSchema,
-	async execute(input) {
+	parameters: lsInput,
+	execute: serverExecute("ls", lsInput, async (input) => {
 		const dirPath = resolveSourcePath(input.path);
 
 		let stat;
@@ -70,5 +73,5 @@ export const lsTool = lhTool({
 		if (entryLimitReached) notices.push(`${effectiveLimit} entries limit`);
 		if (truncated) notices.push(`${formatSize(MAX_OUTPUT_BYTES)} limit`);
 		return notices.length > 0 ? `${content}\n\n[Truncated: ${notices.join(", ")}]` : content;
-	},
-});
+	}),
+};

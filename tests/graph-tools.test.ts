@@ -138,7 +138,7 @@ describe("list_sessions", () => {
 			},
 		);
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
-		const out = (await tools.list_sessions!.execute!({}, { toolCallId: "tc" })) as string;
+		const out = (await tools.list_sessions!.execute!("tc", {})).details as string;
 		assert.match(out, /2 session\(s\) in the knowledge graph, most recent first:/);
 		// The chat: name, kind, born count, dates, id — the full resume.
 		assert.match(out, /First lesson \(chat, 2 propositions, born 2026-09-20T10:00:00.000Z, last active 2026-09-21T10:00:00.000Z\) — id: c1/);
@@ -151,7 +151,7 @@ describe("list_sessions", () => {
 	it("an empty graph gets an honest answer, not an empty string or a throw", async () => {
 		const { chatStore, graphStore } = fakeStores([]);
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
-		const out = (await tools.list_sessions!.execute!({}, { toolCallId: "tc" })) as string;
+		const out = (await tools.list_sessions!.execute!("tc", {})).details as string;
 		assert.equal(out, "The knowledge graph is empty — no session has contributed propositions yet.");
 	});
 });
@@ -172,7 +172,7 @@ describe("list_propositions", () => {
 			},
 		);
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
-		const out = (await tools.list_propositions!.execute!({ session: "c1" }, { toolCallId: "tc" })) as string;
+		const out = (await tools.list_propositions!.execute!("tc", { session: "c1" })).details as string;
 		assert.match(out, /2 proposition\(s\) born in this session:/);
 		assert.match(out, /- Water cycle — solid \(as of 2026-09-22T12:00:00.000Z\)/);
 		assert.match(out, /- Evaporation — not yet engaged \(as of 2026-09-21T12:00:00.000Z\)/);
@@ -186,7 +186,7 @@ describe("list_propositions", () => {
 			events: [],
 		});
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
-		const out = (await tools.list_propositions!.execute!({ session: "c1" }, { toolCallId: "tc" })) as string;
+		const out = (await tools.list_propositions!.execute!("tc", { session: "c1" })).details as string;
 		assert.match(out, /- Water cycle — never evaluated/);
 		assert.ok(!out.includes("(as of"));
 	});
@@ -194,7 +194,7 @@ describe("list_propositions", () => {
 	it("an unknown session id — honest redirect, not a throw", async () => {
 		const { chatStore, graphStore } = fakeStores([node("n1", "Water cycle", [pt("c1")])]);
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
-		const out = (await tools.list_propositions!.execute!({ session: "no-such" }, { toolCallId: "tc" })) as string;
+		const out = (await tools.list_propositions!.execute!("tc", { session: "no-such" })).details as string;
 		assert.equal(out, 'No propositions born in session "no-such". Call list_sessions for the current ids.');
 	});
 });

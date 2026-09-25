@@ -2,7 +2,6 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createWebTools } from "../tools/web.ts";
 import type { SearchProvider } from "../../core/search.ts";
-import { toPiTools } from "../lh-tool.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 
@@ -80,7 +79,7 @@ export interface ResearcherRunOptions {
  * the loop scripted.
  */
 export async function runResearcherAgent(prompt: string, opts: ResearcherRunOptions = {}): Promise<string> {
-	const { text } = await runSubagent(toPiTools(createWebTools(opts.search ?? (() => null))) as AgentTool<any, any>[], {
+	const { text } = await runSubagent(Object.values(createWebTools(opts.search ?? (() => null))), {
 		role: "researcher",
 		prompt,
 		engine: opts.engine,
