@@ -2,7 +2,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
-import { piEngineFor, openRouterApiKey, type PiEngine } from "./models.ts";
+import { piEngineFor, type PiEngine } from "./models.ts";
 import { effectivePromptSegments } from "./prompt-segments.ts";
 import {
 	askUserQuestionTool,
@@ -158,7 +158,6 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			messages: opts.messages ?? [],
 		},
 		streamFn: engine.streamFn,
-		getApiKey: () => openRouterApiKey(),
 		shouldStopAfterTurn: stopper,
 	});
 	if (opts.onUsage) {

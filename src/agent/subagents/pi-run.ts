@@ -1,6 +1,6 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
-import { openRouterApiKey, piEngineFor, type PiEngine } from "../models.ts";
+import { piEngineFor, type PiEngine } from "../models.ts";
 import type { ModelRole } from "../../../config.ts";
 
 /**
@@ -65,7 +65,6 @@ export async function runSubagent(tools: AgentTool<any, any>[], opts: SubagentRu
 			messages: opts.messages ?? [],
 		},
 		streamFn: engine.streamFn,
-		getApiKey: () => openRouterApiKey(),
 		shouldStopAfterTurn: (context) => {
 			turns++;
 			return turns >= opts.maxTurns || opts.shouldStop?.(context.message, context.toolResults) === true;
