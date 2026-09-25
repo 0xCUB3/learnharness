@@ -222,7 +222,18 @@ function toolPartOf(
 }
 
 function applyResultTo(part: LhViewPart | undefined, result: ToolResultMessage): void {
-	if (part) applyResult(part, result);
+	if (part) {
+		// Fork 2 (owner, Wave D): the clean "Question posed" placeholder
+		// (details: null — tool-execute questionResult) is client-owned
+		// question territory. The dock mounts on the dangling call; the
+		// AnsweredCard renders only the learner's REAL answer (details set).
+		// Flipping the part to output-available on the placeholder would hand
+		// AnsweredCard a null and crash the render (the live crash, 2026-09-26).
+		const tool = part.type.startsWith("tool-") ? part.type.slice("tool-".length) : part.type;
+		const isQuestion = (QUESTION_TOOLS as readonly string[]).includes(tool);
+		if (isQuestion && !result.isError && result.details == null) return;
+		applyResult(part, result);
+	}
 	// A result with no visible part (e.g. a call whose assistant message
 	// rendered nothing) is dropped from the view — the record keeps it.
 }

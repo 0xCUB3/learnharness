@@ -192,7 +192,11 @@ export class SessionModel {
 	constructor(opts: SessionModelOptions) {
 		this.chatId = opts.chatId;
 		this.base = opts.initialMessages;
-		this.fetch = opts.fetch ?? globalThis.fetch;
+		// BOUND: the browser's native fetch is a Window method — storing it
+		// unbound makes every call throw "Illegal invocation" in the browser
+		// (Node's undici doesn't care, so the tests never saw it). Always go
+		// through a receiver-preserving wrapper.
+		this.fetch = opts.fetch ?? ((...args) => globalThis.fetch(...args));
 		this.pollMs = opts.pollMs ?? TURN_POLL_MS;
 		this.waitMaxMs = opts.waitMaxMs ?? TURN_WAIT_MAX_MS;
 		this.onChange = opts.onChange;

@@ -115,6 +115,24 @@ function installFetch(routes: {
 }
 
 describe("postInputEvent (the 409 identity-retry)", { skip: process.env.NO_SLOW ? true : undefined }, () => {
+	it("the model's default fetch is RECEIVER-SAFE (the browser 'Illegal invocation' pin)", async () => {
+		// The live empty-session bug (2026-09-26): storing globalThis.fetch
+		// UNBOUND and calling it as this.fetch(...) throws "Illegal
+		// invocation" in the browser (native fetch requires this === Window;
+		// Node's undici doesn't care, so every test passed while the app was
+		// dead). Pin the browser's receiver discipline with a strict stub.
+		let receiverWasGlobal = false;
+		globalThis.fetch = (function (this: unknown, ...args: Parameters<typeof fetch>) {
+			if (this !== globalThis) throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+			receiverWasGlobal = true;
+			return Promise.resolve(sseResponse("[DONE]"));
+		}) as typeof fetch;
+		const m = model(); // NO injected fetch — exercises the default wrapper
+		const res = await m.postInputEvent({ type: "text", text: "hi" });
+		assert.equal(res.status, 200);
+		assert.ok(receiverWasGlobal, "the default wrapper calls fetch with the global receiver");
+	});
+
 	it("passes non-409 responses through untouched", async () => {
 		const calls = installFetch({ chatPOST: () => new Response("stream", { status: 200 }) });
 		const m = model({ pollMs: 10, waitMaxMs: 100 });
@@ -303,6 +321,29 @@ describe("send (one input event, verbatim consumption)", () => {
 		assert.equal(parts[0]!.state, "input-available", "the clean placeholder is IGNORED — the dock mounts on it");
 		assert.equal(parts[1]!.state, "output-error");
 		assert.equal(parts[1]!.errorText, "correctAnswer does not match any option value");
+		// turn_end carries the placeholder as a toolResult MESSAGE (details:
+		// null — tool-execute questionResult): it must not flip the part to
+		// output-available either — the AnsweredCard would read .dismissed off
+		// null and crash the whole render (the live crash, 2026-09-26).
+		push({
+			type: "turn_end",
+			message: { role: "assistant", id: "a1", content: [{ type: "text", text: "" }], stopReason: "toolUse" },
+			toolResults: [
+				{
+				id: "tr_q1",
+				role: "toolResult",
+				toolCallId: "q1",
+				toolName: "quiz",
+				content: [{ type: "text", text: "Question posed — the turn ends here; the learner's graded answer arrives as this call's result." }],
+				details: null,
+				isError: false,
+			} as never,
+			],
+		});
+		await settle();
+		const afterTurnEnd = m.getState().messages.flatMap((v) => v.parts).filter((p) => p.type === "tool-quiz");
+		assert.equal(afterTurnEnd[0]!.state, "input-available", "the placeholder toolResult keeps the dock's mount state");
+		assert.equal(afterTurnEnd[0]!.output, undefined, "no null output ever reaches the AnsweredCard");
 		push({ type: "agent_end", messages: [] });
 		push("[DONE]");
 		await done;

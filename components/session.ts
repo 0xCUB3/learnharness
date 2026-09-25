@@ -34,21 +34,27 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight }: U
 		modelRef.current = new SessionModel({ chatId, initialMessages });
 	}
 	const model = modelRef.current;
-	const [, forceRender] = useReducer((n: number) => n + 1, 0);
+	// The render VERSION — bumped by every model change, so the state memo
+	// below recomputes exactly when the model actually changed. (Using the
+	// reducer's dispatch as the memo dep was a freeze bug: dispatch is
+	// STABLE by contract, so the memo computed once per mount and the view
+	// never saw a single model update — no optimistic bubble, no stream, no
+	// error banner. The empty-session bug, 2026-09-26.)
+	const [version, bump] = useReducer((n: number) => n + 1, 0);
 	useEffect(() => {
-		model.onChange = forceRender;
+		model.onChange = bump;
 		return () => {
 			model.onChange = undefined;
 		};
-	}, [model, forceRender]);
+	}, [model, bump]);
 
 	// Reattach on mount (StrictMode-safe: a newer resume cancels the older).
 	useEffect(() => {
 		if (initiallyInFlight) void model.resumeStream();
 	}, [initiallyInFlight, model]);
 
-	// The view + state, derived per render from the model.
-	const state = useMemo<SessionState>(() => model.getState(), [model, forceRender] as const);
+	// The view + state, derived per model change from the model.
+	const state = useMemo<SessionState>(() => model.getState(), [model, version] as const);
 
 	// The reattach settled terminal → the sync-and-continue seam (chat.tsx).
 	const setReattachSettled = useCallback(
