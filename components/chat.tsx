@@ -1310,6 +1310,12 @@ export function Chat({
 					}
 					onSubmitAnswer={(output) => {
 						if (!pending) return;
+						// THE INPUT-EVENTS CONTRACT (Wave B): the answer ride order is
+						// stash-then-send — addToolOutput triggers the SDK's automatic
+						// continuation send (sendAutomaticallyWhen), and the transport
+						// consumes THIS stash to build {chatId, input}. Dismissals ride
+						// the same callback (QuestionAnswerData.dismissed).
+						stashInput({ type: "answer", toolCallId: pending.toolCallId, answer: output });
 						void addToolOutput({
 							tool: pending.tool as "quiz" | "ask_user_question",
 							toolCallId: pending.toolCallId,
