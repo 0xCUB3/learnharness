@@ -4,20 +4,77 @@
  * path discipline (traversal guard), and the SOURCE-DERIVED segment list
  * (the loader mirrors teacher-agent.ts's composeInstructions discovery;
  * these tests pin that the mirror tracks the real src/agent/prompts tree).
- * Writes under the repo data/prompts/ (disposable scratch) and cleans up.
+ *
+ * TEST-DIR ISOLATION (contract fix, interlude 2026-09-26): data/prompts
+ * holds REAL user override files — this suite must never touch it (the
+ * old after() wiped it as "disposable scratch", killing real overrides
+ * and orphaning their ON switches). LH_DATA_DIR is the established
+ * data-location seam (Electron contract, 2026-09-17; see
+ * data-dir-seam.test.ts), evaluated at config.ts's MODULE LOAD — so it
+ * must be set before the first import that (transitively) loads config.
+ * Every app-module import below is dynamic for exactly that reason;
+ * only node builtins and config-independent libs stay static. The seam
+ * pins at the bottom assert the redirection, and after() snapshots that
+ * the REAL repo data/prompts survived the suite untouched.
+ *
+ * This file OWNS the temp dir (parallel-test discipline: one fs owner
+ * per file) — every override-writing test lives here, including the
+ * route-level contract pins for the same interlude (delete-clears-switch,
+ * orphaned-ON-heals-to-OFF).
  */
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
+import * as os from "node:os";
+import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import { PROMPTS_OVERRIDE_DIR } from "../config.ts";
-import * as teacherAgent from "../src/agent/teacher-agent.ts";
-import { allSegmentPaths, effectivePromptSegments } from "../src/agent/prompt-segments.ts";
-import { isValidSegmentPath } from "../src/core/prompt-segments.ts";
-import { promptOverrides } from "../src/store/prompt-overrides.ts";
 import { createFauxCore } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
+
+// ── the seam, BEFORE any config-loading import ──────────────────────────────
+const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "lh-prompt-overrides-"));
+process.env.LH_DATA_DIR = TMP_DATA;
+
+const { PROMPTS_OVERRIDE_DIR } = await import("../config.ts");
+const teacherAgent = await import("../src/agent/teacher-agent.ts");
+const { allSegmentPaths, effectivePromptSegments } = await import("../src/agent/prompt-segments.ts");
+const { isValidSegmentPath } = await import("../src/core/prompt-segments.ts");
+const { promptOverrides } = await import("../src/store/prompt-overrides.ts");
+// Route-level pins drive the actual app/api handlers (framework-free
+// Request/Response), isolated under the same temp LH_DATA_DIR.
+const { PUT: putSettingsSection } = await import("../app/api/settings/[section]/route.ts");
+const { DELETE: deletePromptText } = await import("../app/api/settings/prompts/[...segment]/route.ts");
+const { readSettingsRecord } = await import("../src/server/index.ts");
+
+/** The REAL repo prompts dir this suite must never touch (read-only). */
+const REPO_PROMPTS = path.resolve(import.meta.dirname, "../data/prompts");
+
+/** Read-only recursive snapshot of a dir (sorted "rel|size" lines) — the
+ *  survival pin compares before/after the whole suite. */
+function snapshotDir(dir: string): string[] {
+	if (!fs.existsSync(dir)) return [];
+	const out: string[] = [];
+	const walk = (rel: string) => {
+		for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+			const child = rel ? `${rel}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) walk(child);
+			else out.push(`${child}|${fs.statSync(path.join(dir, child)).size}`);
+		}
+	};
+	walk("");
+	return out;
+}
+const REAL_PROMPTS_BEFORE = snapshotDir(REPO_PROMPTS);
+
+after(() => {
+	// The suite's own scratch dies; the REAL user dir must be untouched.
+	assert.deepEqual(
+		snapshotDir(REPO_PROMPTS),
+		REAL_PROMPTS_BEFORE,
+		"real data/prompts survives npm test byte-for-byte (the old suite wiped it)",
+	);
+	fs.rmSync(TMP_DATA, { recursive: true, force: true });
+});
 
 /** A scripted pi engine (pi-ai's faux provider) — the agent build needs an
  *  injected engine since BYOK removed the factory pins (owner, 2026-09-22). */
@@ -26,9 +83,24 @@ function fauxEngine(): PiEngine {
 	return { model: faux.getModel(), streamFn: faux.streamSimple };
 }
 
-after(() => {
-	fs.rmSync(PROMPTS_OVERRIDE_DIR, { recursive: true, force: true });
-});
+/** PUT /api/settings/<section> with a fabricated params context. */
+function putSection(section: string, body: unknown): Promise<Response> {
+	return putSettingsSection(
+		new Request(`http://test/api/settings/${section}`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		}),
+		{ params: Promise.resolve({ section }) },
+	);
+}
+
+/** DELETE /api/settings/prompts/<segment...> with a fabricated params context. */
+function deleteSegment(segment: string[]): Promise<Response> {
+	return deletePromptText(new Request("http://test/api/settings/prompts", { method: "DELETE" }), {
+		params: Promise.resolve({ segment }),
+	});
+}
 
 describe("isValidSegmentPath (the mirror-layout discipline)", () => {
 	it("accepts the shared base and numeric fragments, rejects everything else", () => {
@@ -94,9 +166,9 @@ describe("the source-derived segment list", () => {
 		// The shared base composes both prompts, SAME path.
 		assert.equal(prober[0]?.path, "system-prompt.md");
 		assert.equal(teacher[0]?.path, "system-prompt.md");
-		assert.equal(prober[0]?.shared, true);
-		assert.equal(teacher[0]?.shared, true);
-		assert.equal(prober[0]?.sourceText.length > 0, true, "base prompt text loads");
+		assert.equal(prober[0].shared, true);
+		assert.equal(teacher[0].shared, true);
+		assert.equal(prober[0].sourceText.length > 0, true, "base prompt text loads");
 		// Fragments track the REAL source tree (numeric order, right agent dir),
 		// with the shared/ fragments between the base and the agent's own —
 		// the exact order composeInstructions loads them in (P2, 2026-09-19).
@@ -165,8 +237,8 @@ describe("the source-derived segment list", () => {
 });
 
 // ─── composeInstructions honors overrides (P2 reconciliation, 2026-09-19) ────
-// This file OWNS PROMPTS_OVERRIDE_DIR (parallel-test discipline), so every
-// override-writing composition test lives here.
+// This file OWNS the (isolated) PROMPTS_OVERRIDE_DIR (parallel-test
+// discipline), so every override-writing composition test lives here.
 
 describe("composeInstructions: override honoring + the byte-identical source path", () => {
 	const { composeInstructions, createTeacherAgent } = teacherAgent;
@@ -240,5 +312,115 @@ describe("composeInstructions: override honoring + the byte-identical source pat
 		} finally {
 			promptOverrides.deleteOverride("system-prompt.md");
 		}
+	});
+});
+
+// ─── the orphan-heal contract (interlude, 2026-09-26) ────────────────────────
+// The orphan-400 trap: an ON switch whose file dies orphaned the record;
+// every agent-section write then 400'd while the disabled toggle couldn't
+// reach the OFF escape hatch — a user stuck unable to write settings.
+// Fix: the delete route clears the switch by construction, AND the write
+// path heals any orphan that still arises (disk wipes outside the app).
+
+describe("delete clears the switch — the record and file agree by construction", () => {
+	const SEGMENT = "teacher/20-teaching.md";
+
+	it("DELETE removes the file AND clears the on-switch in one operation", async () => {
+		promptOverrides.writeOverride(SEGMENT, "custom teaching");
+		const on = await putSection("agent", { prompts: { [SEGMENT]: true } });
+		assert.equal(on.status, 200, "ON with a real file is valid");
+		assert.equal(readSettingsRecord()?.agent?.prompts?.[SEGMENT], true, "switch landed in the record");
+
+		const res = await deleteSegment(["teacher", "20-teaching.md"]);
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { deleted: boolean; switchCleared: boolean };
+		assert.deepEqual(body, { path: SEGMENT, deleted: true, switchCleared: true }, "the response names what happened");
+
+		assert.equal(readSettingsRecord()?.agent?.prompts?.[SEGMENT], undefined, "the switch is GONE from the record");
+		assert.equal(promptOverrides.readOverride(SEGMENT), null, "the file is gone");
+		// And the trap's step 4 — flipping any tool toggle afterwards —
+		// just works (nothing orphaned to mirror):
+		const followUp = await putSection("agent", { tools: { research: false } });
+		assert.equal(followUp.status, 200, "a subsequent agent write succeeds");
+		assert.equal(readSettingsRecord()?.agent?.tools?.research, false);
+	});
+
+	it("DELETE is idempotent for file and switch — nothing to clear, still 200", async () => {
+		const res = await deleteSegment(["teacher", "20-teaching.md"]);
+		assert.equal(res.status, 200);
+		const body = (await res.json()) as { switchCleared: boolean };
+		assert.equal(body.switchCleared, false, "no switch was present — nothing cleared");
+	});
+});
+
+describe("an orphaned ON heals to OFF on write — never a 400 (the invariant: a user can never get stuck)", () => {
+	const SEGMENT = "teacher/20-teaching.md";
+
+	it("the exact repro: file wiped at disk level → UI mirrors the orphan and flips a tool toggle → the write SUCCEEDS and heals", async () => {
+		promptOverrides.writeOverride(SEGMENT, "custom teaching");
+		const on = await putSection("agent", { prompts: { [SEGMENT]: true } });
+		assert.equal(on.status, 200);
+
+		// The disk-level wipe — OUTSIDE the app (the delete route now clears
+		// the switch, so this is the only way an orphan still arises).
+		fs.rmSync(path.join(PROMPTS_OVERRIDE_DIR, "teacher", "20-teaching.md"));
+
+		// The exact trap shape: the client mirrors the record's orphaned ON
+		// while writing an unrelated tool toggle. Today (pre-fix) → 400 forever.
+		const res = await putSection("agent", { tools: { research: false }, prompts: { [SEGMENT]: true } });
+		assert.equal(res.status, 200, "the write heals instead of 400-ing — the user is never stuck");
+
+		const record = readSettingsRecord();
+		assert.equal(record?.agent?.prompts?.[SEGMENT], undefined, "the orphaned ON landed as OFF (key dropped)");
+		assert.equal(record?.agent?.tools?.research, false, "the rest of the write landed — nothing was silently dropped");
+
+		// And the SECOND write (the "400 forever" of the trap) succeeds too:
+		const again = await putSection("agent", { tools: { research: false }, prompts: { [SEGMENT]: true } });
+		assert.equal(again.status, 200, "repeated writes keep succeeding");
+	});
+
+	it("an ON for a segment that left the source tree heals the same way", async () => {
+		promptOverrides.writeOverride(SEGMENT, "custom teaching");
+		// A vanished-fragment orphan: the switch keys a path that is no
+		// longer a current source segment (simulate by keying junk that the
+		// store never guarded — the record is the only place it exists).
+		const on = await putSection("agent", { prompts: { "teacher/99-vanished.md": true, [SEGMENT]: true } });
+		assert.equal(on.status, 200, "vanished-fragment ON heals too, not a 400");
+		assert.equal(readSettingsRecord()?.agent?.prompts?.["teacher/99-vanished.md"], undefined, "the vanished key healed to OFF");
+		promptOverrides.deleteOverride(SEGMENT);
+	});
+
+	it("a VALID ON (file present) stays valid — no heal, no 400", async () => {
+		promptOverrides.writeOverride(SEGMENT, "custom teaching");
+		try {
+			const res = await putSection("agent", { prompts: { [SEGMENT]: true } });
+			assert.equal(res.status, 200);
+			const record = (await res.json()) as { settings: { agent?: { prompts?: Record<string, boolean> } } };
+			assert.equal(record.settings.agent?.prompts?.[SEGMENT], true, "a real ON+file write keeps the switch on");
+		} finally {
+			promptOverrides.deleteOverride(SEGMENT);
+		}
+	});
+});
+
+describe("test isolation (the suite must never touch real user data)", () => {
+	it("every write this suite makes lands under the LH_DATA_DIR seam, not the repo data dir", () => {
+		assert.ok(
+			PROMPTS_OVERRIDE_DIR.startsWith(TMP_DATA),
+			`PROMPTS_OVERRIDE_DIR (${PROMPTS_OVERRIDE_DIR}) must live under the temp seam (${TMP_DATA})`,
+		);
+		assert.notEqual(
+			PROMPTS_OVERRIDE_DIR,
+			REPO_PROMPTS,
+			"the seam must NOT resolve to the repo's real data/prompts",
+		);
+		// The suite proves it writes here:
+		promptOverrides.writeOverride("system-prompt.md", "isolation probe");
+		assert.equal(
+			fs.existsSync(path.join(TMP_DATA, "prompts", "system-prompt.md")),
+			true,
+			"the write landed under the temp dir",
+		);
+		promptOverrides.deleteOverride("system-prompt.md");
 	});
 });

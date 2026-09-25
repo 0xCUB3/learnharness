@@ -15,9 +15,14 @@
  *   level CLAMPS to the named model's nearest supported level and the
  *   clamped value is stored — model swaps just work, same as the
  *   defaults route. The agent section additionally validates prompt
- *   switches: an ON switch must reference a CURRENT source segment with an
- *   existing override file (an OFF switch may reference anything — users
- *   cleaning up orphans must not be blocked).
+ *   switches — under the orphan-heal contract (interlude 2026-09-26): an
+ *   ON switch with its override file present is valid as-is; an ON whose
+ *   file is gone (deleted outside the app, a disk wipe, or a record from
+ *   before the delete-clears-switch fix) is an ORPHAN and is healed to
+ *   OFF (the key drops) inside the same write — never a 400. Invariant:
+ *   a user can never get stuck unable to write settings, and switch
+ *   state never contradicts file reality for long (the delete route
+ *   clears the switch by construction; this is the backstop).
  *
  * The static siblings (defaults, prompts) take precedence over this
  * dynamic segment — Next resolves static routes first, so "prompts" never
@@ -58,6 +63,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ section: st
 	if (!parsed.ok) {
 		return Response.json({ error: parsed.error }, { status: 400 });
 	}
+	let agentHealed: AgentSettings | undefined;
 
 	// Section-specific cross-validation (against the catalog / the prompt
 	// store) — the parsers only see shapes.
@@ -77,19 +83,23 @@ export async function PUT(request: Request, ctx: { params: Promise<{ section: st
 		}
 	}
 	if (section === "agent") {
+		// Orphan-heal (contract fix, interlude 2026-09-26): an ON switch
+		// whose override file is gone (or whose segment left the source
+		// tree) is healed to OFF (key dropped) inside this write — never a
+		// 400. The old 400 trapped users: the record's own orphaned ON was
+		// mirrored back by every write while the disabled toggle couldn't
+		// reach the OFF escape hatch. An ON with a real file stays valid.
 		const agent = parsed.settings as AgentSettings;
 		const segments = new Set(allSegmentPaths());
+		const orphans: string[] = [];
 		for (const [path, on] of Object.entries(agent.prompts ?? {})) {
-			if (on && (!segments.has(path) || promptOverrides.readOverride(path) === null)) {
-				return Response.json(
-					{
-						error: `prompt switch for "${path}" cannot be on: ${
-							segments.has(path) ? "no override file exists" : "not a current source segment"
-						}`,
-					},
-					{ status: 400 },
-				);
-			}
+			if (on && (!segments.has(path) || promptOverrides.readOverride(path) === null)) orphans.push(path);
+		}
+		if (orphans.length > 0) {
+			const prompts = { ...(agent.prompts ?? {}) };
+			for (const path of orphans) delete prompts[path];
+			agentHealed = { ...agent, prompts };
+			console.info(`[settings] healed orphaned prompt switch(es) to off: ${orphans.join(", ")}`);
 		}
 	}
 
@@ -100,12 +110,17 @@ export async function PUT(request: Request, ctx: { params: Promise<{ section: st
 	// value is what lands in the record. The chat section's bare levels
 	// clamp against the record's resolved strong slot (the chain's
 	// fallback); the models section's slots each carry their own model.
+	// The agent section lands HEALED when orphaned prompt switches were
+	// found above (the healed copy) — after every write the record and
+	// file reality agree.
 	const sectionOut =
 		section === "chat"
 			? clampChatLevel(parsed.settings as ChatSettings, effectiveSettings().models.strong)
 			: section === "models"
 				? clampModelsLevels(parsed.settings as ModelsSettings)
-				: parsed.settings;
+				: section === "agent" && agentHealed
+					? agentHealed
+					: parsed.settings;
 
 	// Read-modify-write ONE section of the record; everything else rides
 	// along untouched (other sections, unknown keys — sanitize preserves).
