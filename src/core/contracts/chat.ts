@@ -174,10 +174,22 @@ export function verdictText(accepted: boolean): string {
 /** The model-facing text of the probe→teach handoff wake (the custom-message
  *  scheme): the wake message carries only the data-probe-handoff part, and
  *  the adapter flattens it to THIS. Single-sourced so the prober's seam, the
- *  tests, and reality can't drift apart. */
+ *  tests, and reality can't drift apart.
+ *
+ *  REASONING-FIRST PACING (owner, 2026-09-26): the wake is the one per-turn
+ *  cue on the launch turn — the old one-liner read as a dispatch order
+ *  ("author now") and the teacher skipped the deliberation the planning
+ *  fragment asks for. So the wake paces it: reason out the optimal way to
+ *  teach THIS person THIS thing BEFORE plan_init. Honest to the machinery
+ *  — plan_init is still the first tool, the plan map still the first
+ *  artifact, and presenting still waits for the verdict. */
 export const HANDOFF_TEXT =
 	"The probe is concluded — the learner assessment is recorded. " +
-	"Author the session's plan map now (call plan_init) and present it, then begin teaching.";
+	"This is the session's highest-leverage moment, and nothing has been authored yet — take your time. " +
+	"Read his assessment and the probing transcript, and reason out the optimal way to teach this person this thing: " +
+	"what he already holds and where each strand runs out, the misconceptions to route around, " +
+	"and the minimal tree from what he holds as obviously true to his goal — so every step lands as obviously true. " +
+	"When the plan is genuinely reasoned out, call plan_init and present it, then wait for his verdict.";
 
 
 export interface PlanBlockData {
