@@ -1330,6 +1330,33 @@ export function revealArrival(wasQuestion: boolean): { expanded: boolean; reveal
 	return wasQuestion ? { expanded: true, revealed: true } : { expanded: false, revealed: false };
 }
 
+/**
+ * A PROBE question's arrival state (flicker round, 2026-09-26): open iff
+ * the learner is at the bottom following along; scrolled up in history →
+ * arrive as the collapsed bar (owner ruling: "it should just remain
+ * closed"). Decided DURING RENDER like the teach seam above — the old
+ * after-paint effect painted one stale-open frame first (the box "opened
+ * and immediately closed" when scrolled up). Pure for tests.
+ */
+export function probeArrivalExpanded(isAtBottom: boolean): boolean {
+	return isAtBottom;
+}
+
+/**
+ * The geometry-mute's growth rule (flicker round, 2026-09-26): a reserve
+ * GROWTH while a question is pending is the dock stretching (the dictation
+ * flush landing many lines at once) — the spacer lands in that commit, the
+ * smooth catch-up lags by exactly the growth, and that lag is our own
+ * motion, not the learner leaving, so the fold machine ignores scroll
+ * events for the mute window after (reproduced d≈152 > COLLAPSE_DIST).
+ * Shrinks never stamp — that path self-muted the at-bottom re-expand and
+ * left the box stuck collapsed (resize round, verified live). Pure for
+ * tests.
+ */
+export function shouldStampGeometryMute(nextH: number, prevH: number, pending: boolean): boolean {
+	return pending && nextH > prevH + 1;
+}
+
 function DockOverlay({
 	pending,
 	requiresReveal,
@@ -1375,6 +1402,11 @@ function DockOverlay({
 	setupCta?: React.ReactNode;
 }) {
 	const { isAtBottom, scrollToBottom, scrollRef } = useStickToBottomContext();
+	// Render-fresh bottom state (flicker round): the arrival block below reads
+	// it DURING RENDER — the same value the after-paint effect used to read a
+	// frame too late. Assigned per render like the other refs below.
+	const atBottomRef = useRef(isAtBottom);
+	atBottomRef.current = isAtBottom;
 	// Teach-phase mount (session reload with a pending check): the dock starts
 	// as the collapsed invitation too — the check must not pop open on reload.
 	const [expanded, setExpanded] = useState(!requiresReveal);
@@ -1405,20 +1437,24 @@ function DockOverlay({
 			const arrival = revealArrival(wasQuestion);
 			setExpanded(arrival.expanded);
 			setRevealed(arrival.revealed);
+		} else if (pendingId) {
+			// Probe arrival (flicker round): open iff following at the bottom.
+			// Painted in THIS render — no stale-open frame, no after-paint flip.
+			setExpanded(probeArrivalExpanded(atBottomRef.current));
 		}
 	}
 
-	// New question MID-SESSION: open expanded if the learner is following at
-	// the bottom (scroll to reveal it); reading history → arrive as the bar.
-	// Teach-phase arrivals are handled above, during render. On session
-	// mount the dock simply starts in its initial state (expanded for
-	// probe, invitation for teach) — no scroll, no morph.
+	// New question MID-SESSION (flicker round): the open/closed state itself
+	// is decided DURING RENDER above; this effect only owns the reveal
+	// scroll for the at-bottom arrival — and now under the SAME fold
+	// suppression the teach reveal uses (the arrival's growth used to
+	// out-run the scroll catch-up, the position machine read the lag as the
+	// learner leaving, and the dock flashed open → bar → open; reproduced
+	// frame-by-frame 2026-09-26, d peaked ~405px). On session mount the dock
+	// starts in its initial state — no scroll, no morph.
 	useEffect(() => {
 		if (!pendingId || pendingId === initialPendingRef.current) return;
-		if (!requiresReveal) {
-			setExpanded(isAtBottom);
-			if (isAtBottom) void scrollToBottom();
-		}
+		if (!requiresReveal && atBottomRef.current) void suppressFoldDuringReveal();
 		// fire only when a NEW question lands
 	}, [pendingId]);
 
@@ -1449,17 +1485,18 @@ function DockOverlay({
 	// stamps this — the fold machine ignores scroll events for a beat after,
 	// because a resize/rewrap re-clamps scrollTop and emits PHANTOM scroll
 	// events mid-transient (the box flickered to the bar and back).
+	// Width changes stamp HERE (column resizes); height growth stamps at
+	// the OFFER (see offer below) — the spacer growing is the phantom-scroll
+	// source, not the field stretching. SHRINKS never stamp anywhere: the
+	// fold's own morph shrinks the block and gives back the reserve, and
+	// stamping that self-mutes the at-bottom re-expand — the box got stuck
+	// collapsed (resize round).
 	const geometryAtRef = useRef(0);
 	useIsoLayoutEffect(() => {
 		const block = blockRef.current;
 		if (!block) return;
 		const measure = () => {
 			const next = Math.round(block.offsetWidth / 2 - DOCK_W / 2 - 2 * MARGIN_GAP);
-			// Stamp the mute on WIDTH changes ONLY: column resizes are the
-			// phantom-scroll source. Height changes are the dock's own doing
-			// (morphs, question rewraps) — stamping those would self-mute the
-			// fold machine and swallow the at-bottom auto re-expand right
-			// after a fold (verified live: the box got stuck collapsed).
 			if (Math.abs(next - flankWRef.current) > 1) {
 				flankWRef.current = next;
 				setFlankW(next);
@@ -1524,6 +1561,17 @@ function DockOverlay({
 	const offer = (blockH: number) => {
 		const next = blockH + GRADIENT_H;
 		if (next <= reserveRef.current + 0.5 && pendingRef.current) return; // fold immunity
+		// Reserve GROWTH is the phantom-scroll SOURCE (flicker round,
+		// 2026-09-26): the spacer's height lands in this commit, the smooth
+		// catch-up lags it by the growth amount, and the position machine
+		// used to read that lag as the learner leaving — form → bar → form
+		// (the dictation flush, reproduced d≈152 > COLLAPSE_DIST). Stamp the
+		// mute right where the spacer grows: it covers the scroll events of
+		// THIS growth no matter how long after the field stretched (the
+		// field grows on its own render; the offer lands on the NEXT
+		// DockOverlay render — ~1s apart live). Shrinks never stamp (the
+		// fold's own give-back must not self-mute the re-expand).
+		if (shouldStampGeometryMute(next, reserveRef.current, pendingRef.current)) geometryAtRef.current = Date.now();
 		reserveRef.current = next;
 		onReserve(next);
 	};
@@ -1533,20 +1581,27 @@ function DockOverlay({
 	// the collapse zone — the machine would instantly re-collapse the dock
 	// (open → snap shut → reopen at the bottom, the flicker). Suppress the
 	// collapse branch until the reveal scroll settles or is interrupted.
+	// (Flicker round, 2026-09-26: extracted — the probe arrival at the
+	// bottom is the SAME motion class and needs the same cover; the owner's
+	// phrasing: the arrival's open and its scroll-to-bottom "should be the
+	// same kind of motion".)
 	const expandIntentRef = useRef(false);
 	const intentTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	const expandAndReveal = () => {
+	const suppressFoldDuringReveal = () => {
 		expandIntentRef.current = true;
-		setRevealed(true); // the teach-check invitation was accepted (W5)
-		setExpanded(true);
 		clearTimeout(intentTimerRef.current);
 		intentTimerRef.current = setTimeout(() => {
 			expandIntentRef.current = false;
 		}, 2000);
-		void Promise.resolve(scrollToBottom()).finally(() => {
+		return Promise.resolve(scrollToBottom()).finally(() => {
 			clearTimeout(intentTimerRef.current);
 			expandIntentRef.current = false;
 		});
+	};
+	const expandAndReveal = () => {
+		setRevealed(true); // the teach-check invitation was accepted (W5)
+		setExpanded(true);
+		void suppressFoldDuringReveal();
 	};
 
 	useEffect(() => {
