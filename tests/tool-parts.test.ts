@@ -216,3 +216,53 @@ describe("LaTeX-escape restoration (the JSON-debris fix, owner ruling 2026-09-26
 		assert.equal(parsed.question, "\\(\\x0corall");
 	});
 });
+
+describe("display-math newline rule (Option A, owner ruling 2026-09-27)", () => {
+	// TS literal below: \\[ is \[, \\forall is intact \forall, \n is a REAL newline, \\\\ is the LaTeX \\ line break.
+	const MULTILINE = "Compare:\n\\[\n\\forall x, & f(x) = x^2 \\\\\n& g(x) = x^3\n\\]";
+
+	it("real newlines inside display math are kept — multi-line equations pass through untouched", () => {
+		const parsed = parseQuizInput({
+			question: MULTILINE,
+			options: [{ label: "f grows slower" }, { label: "g grows slower" }],
+			correctAnswer: "f grows slower",
+			explanation: "",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, MULTILINE);
+	});
+
+	it("non-newline debris inside display math still restores (the \\right CR case)", () => {
+		const parsed = parseQuizInput({
+			question: "Evaluate \\[\\left( a \right)\\] carefully.",
+			options: [{ label: "a" }, { label: "not a" }],
+			correctAnswer: "a",
+			explanation: "",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, "Evaluate \\[\\left( a \\right)\\] carefully.");
+	});
+
+	it("sloppy \\neq in display math stays broken — the accepted cost (newline kept, byte-identical to a real line break)", () => {
+		const debris = "Is \\[p \neq q\\] valid?";
+		const parsed = parseQuizInput({
+			question: debris,
+			options: [{ label: "yes" }, { label: "no" }],
+			correctAnswer: "no",
+			explanation: "",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, debris);
+	});
+
+	it("inline spans still restore newline debris (inline math is single-line by nature)", () => {
+		const parsed = parseQuizInput({
+			question: "Is \\(p \neq q\\) valid?",
+			options: [{ label: "yes" }, { label: "no" }],
+			correctAnswer: "no",
+			explanation: "",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, "Is \\(p \\neq q\\) valid?");
+	});
+});

@@ -229,6 +229,16 @@ export function transformMathDelimiters(markdown: string): string {
  * balanced `\(…\)` / `\[…\]` spans are touched — the same scanner rules as
  * transformMathDelimiters (escaped delimiters are literal, unbalanced
  * delimiters pass through untouched).
+ *
+ * ASYMMETRIC NEWLINE RULE (owner ruling 2026-09-27, Option A): inline spans
+ * restore all six debris chars — real newlines/tabs inside INLINE math
+ * essentially never occur (options and inline math are single-line by
+ * nature). Display spans restore five and KEEP real newlines — multi-line
+ * display math (aligned environments, equation systems) is common, and a
+ * real line break is byte-identical on the wire to sloppy `\neq`/`\nu`/
+ * `\neg`/`\nabla` (JSON `\n` resolves to a newline either way). Corrupting
+ * legitimate content is strictly worse than failing to repair that rarest
+ * slice, so display-span n-command sloppiness stays broken by design.
  */
 const ESCAPE_DEBRIS: Record<string, string> = {
 	"\b": "\\b",
@@ -240,6 +250,11 @@ const ESCAPE_DEBRIS: Record<string, string> = {
 };
 
 const DEBRIS_RE = /[\b\t\n\v\f\r]/;
+
+/** Display spans keep real newlines (multi-line equations) — debris there is
+ *  everything except \n (a lone real \r never occurs in authored text, and
+ *  `\right`/`\rho`/`\rangle` corruption is common in display math). */
+const DISPLAY_DEBRIS_RE = /[\b\t\v\f\r]/;
 
 export function restoreMathEscapes(text: string): string {
 	if (!DEBRIS_RE.test(text)) return text;
@@ -256,7 +271,8 @@ export function restoreMathEscapes(text: string): string {
 				const closeAt = findClose(text, i + open.length, close);
 				if (closeAt !== -1) {
 					const inner = text.slice(i + open.length, closeAt);
-					out.push(open + inner.replace(DEBRIS_RE, (c) => ESCAPE_DEBRIS[c]!) + close);
+					const debris = isDisplay ? DISPLAY_DEBRIS_RE : DEBRIS_RE;
+					out.push(open + inner.replace(debris, (c) => ESCAPE_DEBRIS[c]!) + close);
 					i = closeAt + close.length;
 					continue;
 				}
