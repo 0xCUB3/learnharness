@@ -207,10 +207,14 @@ export const TEXT_CAP_SCALE = 16 / 12.5;
  *  x 27.2 with a 9.6-tall opening — at full height 104 the tail opening
  *  is ≈10, per the owner's spec. Solid white fill, no padding. */
 export const ARROW_HEAD = "M48,55.2C49.4,54.6 50.2,53.4 50.2,52C50.2,50.6 49.4,49.4 48,48.8C38.2,45.6 29.2,38.8 21,28.4C15.2,21.4 11.4,13.2 9.6,3.8C9,1.2 7.4,0 4.8,0C1.6,0 0,1.6 0,5L0.2,5.6C3.6,23 12.6,36.8 27.2,47.2L27.2,56.8C12.6,67.2 3.6,81 0.2,98.4L0,99C0,102.4 1.6,104 4.8,104C7.4,104 9,102.8 9.6,100.2C11.4,90.8 15.2,82.6 21,75.6C29.2,65.2 38.2,58.4 48,55.2Z";
-/** Head height 16: the tail opening (9.6/104 of height) then tucks the
- *  1.5-wide line flush — the LaTeX proportion. The owner's rule: keep the
- *  current line width; size the head from the 104→10 ratio. */
-const HEAD_H = 16;
+/** Lines + outlines run at the app's standard border weight (owner,
+ *  2026-09-26 — same 1px the UI borders use; was 1.5). */
+export const STROKE_W = 1;
+/** The heads scale by the SAME factor the lines thinned by (owner,
+ *  2026-09-26): 16 was the height tuned for 1.5-wide lines, so both sides
+ *  of the head:shaft proportion shrink together — the LaTeX ratio (tail
+ *  opening tucking the line flush) is preserved exactly, just smaller. */
+const HEAD_H = 16 * (STROKE_W / 1.5);
 const HEAD_SCALE = HEAD_H / 104;
 const HEAD_W = 50.2 * HEAD_SCALE;
 /** The drawn line terminates at the notch mouth (refX 27.2) — it never
@@ -220,8 +224,9 @@ const HEAD_W = 50.2 * HEAD_SCALE;
 const HEAD_TIP_OVERHANG = (50.2 - 27.2) * HEAD_SCALE;
 /** The head floats this far off the target face — the tip kisses nothing
  *  (owner, round 12). ~half a head length: clearly docked-off, still
- *  visually attached. */
-const DOCK_GAP = 4;
+ *  visually attached. Scaled with the head (2026-09-26) so "half a head"
+ *  stays true at the thinner lines. */
+const DOCK_GAP = 4 * (STROKE_W / 1.5);
 /** The shaft stub — the straight run before the head (owner, round 12):
  *  control points from Q on sit exactly on the approach line, so the
  *  basis spline renders that stretch perfectly straight and the head
@@ -351,7 +356,11 @@ const MONO_BOX = "fill-background/50 stroke-white";
 const MONO_TEXT = "fill-white text-xs";
 
 /** The diagram itself: positioned nodes + bezier edges. Pure-ish render —
- *  every input is data, so SSR render tests pin the whole thing. */
+ *  every input is data, so SSR render tests pin the whole thing. The root
+ *  sets font-family var(--font-prose): node titles render in the READING
+ *  font, not the mono UI font (owner, 2026-09-26) — and the runtime var
+ *  rides the Appearance reading-font override (the utility can't: @theme
+ *  inline bakes literals — the --font-title trap). */
 export function PlanDiagram({
 	nodes,
 	edges,
@@ -403,13 +412,19 @@ export function PlanDiagram({
 		<svg
 			viewBox={viewBoxOverride ?? `${-pad} ${-pad} ${vbW} ${vbH}`}
 			className={`block ${fill ? "h-full w-full" : `h-auto${naturalSize ? "" : " w-full"}`}${textCapScale ? " mx-auto" : ""}`}
-			style={
-				textCapScale
+			style={{
+				// The READING font (owner, 2026-09-26) — via the runtime var, NOT
+				// the font-prose utility: @theme inline bakes the literal into
+				// utilities (the --font-title trap), which would freeze the
+				// graph at Source Sans 3 and ignore the Appearance reading-font
+				// override. var(--font-prose) rides it.
+				fontFamily: "var(--font-prose)",
+				...(textCapScale
 					? { maxWidth: `${Math.round(vbW * textCapScale * 100) / 100}px` }
 					: naturalSize
 						? { width: `${vbW}px` }
-						: undefined
-			}
+						: {}),
+			}}
 			role="img"
 			aria-label="Plan diagram"
 		>
@@ -463,15 +478,20 @@ export function PlanDiagram({
 					tx !== undefined && ty !== undefined
 						? { x: tx, y: ty, w: NODE_W, h: layout.nodeH.get(e.to) ?? NODE_H }
 						: undefined;
-				// An arrow into a not-yet-visited node is grayed out like the
-				// node (owner, round 6); the in-chat block stays all-white.
-				const dim = !monochrome && statusOf(e.to) === "upcoming";
+				// An arrow is white only when BOTH its ends are white (owner,
+				// 2026-09-26): origin AND terminal covered — a gray box's outgoing
+				// arrows stay gray even when they point into covered territory
+				// (supersedes round 6's target-only rule); the in-chat block
+				// stays all-white.
+				const dim =
+					!monochrome &&
+					(statusOf(e.from) === "upcoming" || statusOf(e.to) === "upcoming");
 				return (
 					<path
 						key={`${e.from}->${e.to}`}
 						d={edgePathD(pts, target)}
 						className={dim ? "fill-none stroke-border" : "fill-none stroke-white"}
-						strokeWidth={1.5}
+						strokeWidth={STROKE_W}
 						markerEnd={`url(#${markerId}${dim ? "-dim" : ""})`}
 					/>
 				);
@@ -495,7 +515,7 @@ export function PlanDiagram({
 							width={NODE_W}
 							height={h}
 							className={monochrome ? MONO_BOX : BOX[status]}
-							strokeWidth={1.5}
+							strokeWidth={STROKE_W}
 						/>
 						{glow && (
 							// The current node's highlight: faint yellow, blurred so it

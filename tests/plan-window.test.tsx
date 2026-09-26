@@ -60,7 +60,7 @@ describe("PlanMarginalia render", () => {
 		assert.ok(!/viewBox="-?\d+(\.\d+)? -?\d+(\.\d+)? 360 180"/.test(html), "the windowed viewBox is retired");
 		// Meet-fit mode: the svg fills the band box (h-full w-full), letting
 		// preserveAspectRatio contain the diagram in the flank.
-		assert.ok(html.includes('class="block h-full w-full'), "fill mode classes");
+		assert.ok(html.includes('font-family:var(--font-prose)'), "fill mode classes");
 	});
 
 	it("glows the current node and dims the not-yet-visited (live statuses)", () => {

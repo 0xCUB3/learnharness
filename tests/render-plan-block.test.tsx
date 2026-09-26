@@ -62,12 +62,13 @@ describe("plan block layout (pure)", () => {
 	it("edgePathD draws dagre's route through curveBasis — mouth pulled back from the border", () => {
 		// Straight 3-point route (source border → mid → target border): the
 		// basis curve starts exactly at the border point; the END pulls
-		// back by HEAD_TIP_OVERHANG + the docking gap (92 − 3.538 − 4) so the
-		// head's TIP floats 4 short of the border with its mouth at the
-		// path's end, on a straight shaft (owner, rounds 11–12).
+		// back by HEAD_TIP_OVERHANG + the docking gap (92 − 2.359 − 2.667) so
+		// the head's TIP floats 2.67 short of the border with its mouth at
+		// the path's end, on a straight shaft (owner, rounds 11–12; the head
+		// + gap scaled ⅔ with the 1px lines, 2026-09-26).
 		const d = edgePathD([{ x: 80, y: 44 }, { x: 80, y: 68 }, { x: 80, y: 92 }]);
 		assert.ok(d.startsWith("M80,44"), "starts at the source border point");
-		assert.ok(d.endsWith("L80,84.462"), "mouth pulled back; tip floats 4 off the border");
+		assert.ok(d.endsWith("L80,86.974"), "mouth pulled back; tip floats 2.67 off the border");
 		// The whole run stays on-axis (every x is 80): a collinear route
 		// renders straight — the shaft stub never bends a straight edge.
 		const xs = [...d.matchAll(/(?:[MLC]|,)(-?[\d.]+),/g)].map((m) => m[1]);
@@ -84,7 +85,7 @@ describe("plan block layout (pure)", () => {
 		// exactly 40° (Δx/Δy = tan 40°). The tip floats DOCK_GAP (4) off the
 		// face along the normal: border (100,100) → tip (100,96).
 		const clamped = edgePathD([{ x: 70, y: 70 }, { x: 100, y: 100 }], box);
-		assert.ok(clamped.endsWith("L97.726,93.289"), "swung to the cone edge");
+		assert.ok(clamped.endsWith("L98.484,95.526"), "swung to the cone edge");
 		// final L's from-point is the previous number pair; recompute direction
 		const nums = [...clamped.matchAll(/(-?[\d.]+)/g)].map((m) => Number(m[1]));
 		const ax = nums[nums.length - 4]!;
@@ -92,12 +93,12 @@ describe("plan block layout (pure)", () => {
 		const bx = nums[nums.length - 2]!;
 		const by = nums[nums.length - 1]!;
 		assert.ok(Math.abs((bx - ax) / (by - ay) - Math.tan((40 * Math.PI) / 180)) < 0.01, "40° cone edge");
-		// Tip = mouth + u'·overhang floats 4 above the face.
-		const tipY = by + 0.766 * 3.538;
-		assert.ok(Math.abs(tipY - 96) < 0.01, "docking gap along the face normal");
+		// Tip = mouth + u'·overhang floats 2.67 above the face.
+		const tipY = by + 0.766 * 2.359;
+		assert.ok(Math.abs(tipY - 97.333) < 0.01, "docking gap along the face normal");
 		// A shallow (~9.5°) tilt is WITHIN the limit: no swing.
 		const free = edgePathD([{ x: 90, y: 40 }, { x: 100, y: 100 }], box);
-		assert.ok(free.endsWith("L99.418,92.51"), "unclamped within the cone");
+		assert.ok(free.endsWith("L99.612,95.006"), "unclamped within the cone");
 	});
 
 	it("wrapTitle wraps greedily and NEVER drops content (boxes grow instead)", () => {
@@ -133,6 +134,13 @@ describe("plan block render", () => {
 		// renders past the 16px prose size (owner, plan-graph round 1; the
 		// snap 16.5→16 landed in typography round 4).
 		assert.match(html, /<svg[^>]*class="block h-auto w-full mx-auto"/);
+		// The reading font, not the mono UI font (owner, 2026-09-26) — via the
+		// runtime var (the font-prose utility would bake the @theme literal
+		// and ignore the Appearance reading-font override).
+		assert.match(html, /<svg[^>]*font-family:var\(--font-prose\)/);
+		// Lines + outlines at the app's standard 1px border weight (owner,
+		// 2026-09-26; was 1.5).
+		assert.match(html, /<rect[^>]*stroke-width="1"/);
 		assert.match(html, /max-width:225\.28px/); // (160+16) × 1.28
 		// Two stacked nodes: 2*NODE_H + GAP_Y = 136 extent + GRAPH_PAD on
 		// every side (strokes/glow never clip at the edges).
@@ -199,6 +207,42 @@ describe("plan popup (live derivation)", () => {
 		// top-left zoom:1 state for a frame (owner report, 2026-09-19;
 		// transition-gating alone didn't hide it).
 		assert.match(html, /opacity: ?0[;,}]/, "diagram hidden until the first fit applies");
+	});
+
+	it("dims an arrow when EITHER end is gray — white needs both ends white (owner, 2026-09-26)", () => {
+		// x upcoming → y visited: the OLD rule (target-only) painted this
+		// white; the new rule keeps it gray — a gray box's outgoing arrows
+		// stay gray even into covered territory. y → z (visited → current)
+		// stays white: BOTH ends white.
+		const tree: PlanTree = {
+			nodes: [
+				{ id: "x", title: "Gray origin" },
+				{ id: "y", title: "Covered middle" },
+				{ id: "z", title: "Covered latest" },
+			],
+			edges: [
+				{ from: "x", to: "y" },
+				{ from: "y", to: "z" },
+			],
+			version: 1,
+		};
+		const msgs: PopupMessage[] = [
+			{ parts: [{ type: "tool-plan_init", state: "output-available", output: { ok: true, tree } }] },
+			{ parts: [{ type: "tool-quiz", state: "output-available", input: { nodeId: "y" }, output: { correct: true } }] },
+			{ parts: [{ type: "tool-quiz", state: "output-available", input: { nodeId: "z" }, output: { correct: true } }] },
+		];
+		const html = renderToStaticMarkup(<PlanPopup messages={msgs} onClose={() => {}} />);
+		assert.match(html, /data-testid="plan-node-x" data-status="upcoming"/);
+		assert.match(html, /data-testid="plan-node-y" data-status="visited"/);
+		assert.match(html, /data-testid="plan-node-z" data-status="current"/);
+		// Exactly one gray edge (x→y, gray origin) and one white edge (y→z,
+		// both ends white): count the head markers, one per edge.
+		const dimHeads = (html.match(/marker-end="url\(#.*-dim\)"/g) ?? []).length;
+		const whiteHeads = (html.match(/marker-end="url\(#(?:R\d+|[a-z0-9-]+)\)"/g) ?? []).length;
+		assert.equal(dimHeads, 1, "the gray-origin edge dims");
+		assert.equal(whiteHeads, 1, "the both-white edge stays white");
+		assert.match(html, /<path[^>]*class="fill-none stroke-border"/);
+		assert.match(html, /<path[^>]*class="fill-none stroke-white"/);
 	});
 
 	it("renders the empty state when the session has no plan", () => {
