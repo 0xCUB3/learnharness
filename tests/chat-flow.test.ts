@@ -55,6 +55,7 @@ const QUIZ_INPUT = {
 	],
 	correctAnswer: "Mercury",
 	explanation: "Mercury is the innermost planet.",
+	nodeId: "planet-order",
 };
 
 /** Turn 1: a bit of reasoning, then the quiz tool call. Turn 2: plain text.
@@ -187,6 +188,18 @@ function post(chatId: string, input: unknown): Request {
 function createConfiguredChat(title: string) {
 	const chat = chatStore.createChat(title);
 	chatStore.saveSettings(chat.id, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } });
+	// nodeId is required on teach quizzes (owner ruling 2026-09-26) — the
+	// scripted lessons quiz against this seeded tree.
+	chatStore.saveTree(chat.id, {
+		nodes: [
+			{ id: "planet-order", title: "Planet order" },
+			{ id: "genealogy", title: "Genealogy of religion" },
+			{ id: "indexicals", title: "Indexical 'actual'" },
+			{ id: "modal-realism", title: "Modal realism" },
+		],
+		edges: [],
+		version: 1,
+	});
 	return chat;
 }
 
@@ -560,6 +573,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// same turn. This pins that whole mechanism (the live Nietzsche bug).
 		const BAD_QUIZ_INPUT = {
 			question: "What is Nietzsche's genealogical claim about religion?",
+			nodeId: "genealogy",
 			options: [{ label: "A cultural diagnosis" }, { label: "Atheism as a conclusion" }],
 			correctAnswer: "cultural-diagnosis", // the exact live failure shape: a slug, no match
 			explanation: "Genealogy diagnoses, it does not convert.",
@@ -635,6 +649,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// question, and the model's retry must become the pending quiz.
 		const STRINGY_QUIZ_INPUT = {
 			question: "Lewis's indexical analysis of 'actual' — which is it?",
+			nodeId: "indexicals",
 			options: JSON.stringify([
 				{ label: "Like 'I'", value: "indexical" },
 			{ label: "Like a title", value: "unique" },

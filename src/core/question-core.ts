@@ -200,16 +200,15 @@ export const quizInputBase = Type.Object({
 // never touches).
 export const quizInputObject = Type.Object({
 	...quizInputBase.properties,
-	nodeId: Type.Optional(
-		Type.String({
-			description:
-				"Optional plan-tree node id this question is about — must EXACTLY match one of this session's " +
-				"plan_init node slugs (validated at call time; a mismatched id is rejected back to you). " +
-				"Tag every question that targets a map node: the lesson's position on the map derives from these tags " +
-				"(the node the latest tagged question is about is where the map stands; earlier ones count as visited). " +
-				"Omit for quick ad-hoc checks that don't target a node.",
-		}),
-	),
+	nodeId: Type.String({
+		description:
+			"REQUIRED plan-tree node id this question is about — must EXACTLY match one of this session's " +
+			"plan_init node slugs (validated at call time; a mismatched id is rejected back to you). " +
+			"The lesson's position on the map derives from these tags (the node the latest tagged question is about is " +
+			"where the map stands; earlier ones count as visited). A node takes as many questions as it deserves: stay on " +
+			"one node for as many turns as the understanding needs — one reasoning step at a time, never rush forward. " +
+			"For off-map checks use ask_user_question.",
+	}),
 });
 
 /** The PROBE-side quiz declaration: the shared authoring contract, no

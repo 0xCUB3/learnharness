@@ -201,8 +201,8 @@ function nodeIdProblem(ctx: Pick<PlanToolContext, "chatId" | "chatStore">, nodeI
 		return (
 			`nodeId "${nodeId}" matches no node in this session's plan map. ` +
 			(known.length > 0
-				? `Copy one of your plan_init slugs exactly (${known.slice(0, 5).join(", ")}${known.length > 5 ? ", …" : ""}), or omit nodeId for an ad-hoc check.`
-				: "No plan map exists yet — omit nodeId (ad-hoc checks only until you call plan_init).")
+				? `Copy one of your plan_init slugs exactly (${known.slice(0, 5).join(", ")}${known.length > 5 ? ", …" : ""}).`
+				: "No plan map exists yet — call plan_init before posing quizzes.")
 		);
 	}
 	return null;
@@ -212,7 +212,9 @@ function nodeIdProblem(ctx: Pick<PlanToolContext, "chatId" | "chatStore">, nodeI
  *  + the per-session plan-nodeId validation (both run in execute — the
  *  grading contract is untouched). Reads the LIVE chat record, so rewrites
  *  mid-turn are honored, and with no tree yet every nodeId is rejected.
- *  Omitting nodeId is legal — an ad-hoc check that moves nothing. */
+ *  nodeId is REQUIRED (owner ruling 2026-09-26): the untagged ad-hoc quiz is
+ *  gone — off-map checks route through ask_user_question, and the teach
+ *  seam (first tagged quiz) is structurally guaranteed. */
 export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStore">): AgentTool<typeof quizInputObject> {
 	return {
 		name: "quiz",
@@ -222,8 +224,9 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 			"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
 			"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
 			"can show an explanation. Use it to (1) confirm a taught node actually landed, or (2) probe understanding " +
-			"whenever you're unsure. Set `nodeId` whenever the question targets a map node — the lesson's position on the " +
-			"map derives from those tags; omit it only for quick ad-hoc checks. Options-only: single-select or multi-select, " +
+			"whenever you're unsure. Set `nodeId` (required) to the plan node this question is about — the lesson's " +
+			"position on the map derives from those tags; a node takes as many questions as it deserves, so don't rush " +
+			"forward. Off-map checks use ask_user_question. Options-only: single-select or multi-select, " +
 			"plus an automatic 'I don't know' choice so the learner can signal a genuine gap instead of guessing. " +
 			"An always-present optional note field lets the learner attach a free-text note to ANY answer; it reaches you " +
 			"only when non-empty. No free-text answers — for non-graded questions use ask_user_question instead. " +
@@ -233,10 +236,8 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 		executionMode: "sequential",
 		execute: async (_toolCallId, input) => {
 			const problems = [...quizInputProblems(input)];
-			if (typeof input.nodeId === "string" && input.nodeId.length > 0) {
-				const nodeIdProblemText = nodeIdProblem(ctx, input.nodeId);
-				if (nodeIdProblemText) problems.push(nodeIdProblemText);
-			}
+			const nodeIdProblemText = nodeIdProblem(ctx, input.nodeId);
+			if (nodeIdProblemText) problems.push(nodeIdProblemText);
 			if (problems.length > 0) throw new ToolInputError("quiz", problems);
 			return questionResult();
 		},

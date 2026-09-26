@@ -79,10 +79,11 @@ That is the wrong signal and is **abolished**. The new contract:
   regardless of individual check outcomes (a failed check followed by a
   re-teach and a move-on is still a visited node).
 - **Failed checks move nothing.** Results no longer feed derivation at all.
-- **Untagged checks are legal ad-hoc checks** — they don't move the map
-  (quick comprehension checks don't need nodes). Not every check needs a
-  node. The prompt stresses tagging when teaching a map node: an untagged
-  stream leaves the map frozen (lost signal).
+- **Untagged checks no longer exist** (owner ruling 2026-09-26): `nodeId`
+  is required on the teach quiz schema — an untagged call is rejected at the
+  boundary and the model retries tagged. Off-map checks (quick comprehension
+  checks that don't fit a node) route through ask_user_question. The map can
+  never freeze from a lost tagging signal again.
 - **No fallback current.** Before the first tagged check nothing is
   current. No derived-from-prereqs guess.
 - Present-but-invalid ids are still rejected at the call boundary (existing

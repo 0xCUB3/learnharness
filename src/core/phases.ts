@@ -17,8 +17,9 @@
  * turn, and the learner's next message is a natural reply (a change
  * request, or the go-ahead). The live indicator LAGS by design (owner
  * accepted): "teach" shows only once the first node's question is posed.
- * A teacher that never tags a quiz would sit in "plan" visually —
- * off-doctrine (tagging is prompt-mandated and nodeId is call-validated).
+ * A teacher that never tags a quiz can no longer exist — nodeId is
+ * schema-required at the teach quiz boundary (owner ruling 2026-09-26),
+ * so the seam signal is structural, not prompt-mandated.
  *
  * The former derived-occupancy seam (phase-of-tree via `currentNodeId`)
  * is GONE, as is the verdict-marker fold: no backwards compatibility

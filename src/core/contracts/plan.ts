@@ -55,9 +55,9 @@ export type PlanNodeStatus = "current" | "visited" | "upcoming";
 // node is the teacher's judgment the previous one is finished, regardless of
 // check outcomes (a failed check then a move-on is still visited); results
 // feed nothing; there is NO fallback current (before the first tagged check
-// nothing is current). Untagged checks are legal ad-hoc checks — they move
-// nothing. NodeIds missing from the current tree are ignored (a rewrite
-// may have dropped the node).
+// nothing is current). Untagged checks no longer exist (nodeId is required
+// on the teach quiz, owner ruling 2026-09-26). NodeIds missing from the
+// current tree are ignored (a rewrite may have dropped the node).
 
 /** Minimal structural message slice — anything with typed parts (mirrors
  * phases.ts: pure, no runtime deps, safe on server, client, and in tests). */

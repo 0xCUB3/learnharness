@@ -73,6 +73,7 @@ describe("quizInputSchema / quizInputProblems (the authoring contract)", () => {
 		options: [{ label: "Venus" }, { label: "Mercury" }, { label: "Mars" }],
 		correctAnswer: "Mercury",
 		explanation: "Mercury is the innermost planet.",
+		nodeId: "planet-order",
 	};
 
 	it("accepts a valid single-select quiz (label as correctAnswer)", () => {
