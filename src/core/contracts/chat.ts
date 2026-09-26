@@ -149,30 +149,6 @@ export interface TurnUsage {
  * block renders current node + direct parents + direct children in its own
  * small container, the current node glowing — clearly a fragment, not the
  * whole plan. Clicking either opens the full plan in a popup. */
-/** The learner's plan verdict (docs/probe-teach-split.md §4): a data part
- *  riding its own user message — the ONLY thing on that message. It is THE
- *  plan→teach phase seam (phaseAt3 reads accepted from the transcript), and
- *  both verdicts are real transcript events: accept sanctions teaching,
- *  decline asks for revision. The part is the message TYPE (the "custom
- *  message" scheme, 2026-09-12): the message carries no human-authored text,
- *  the model-facing wording is owned by toLlmMessages (native-messages.ts
- *  flattens it to verdictText below), and the UI renders the verdict
- *  marker — never a user bubble. A learner who also typed a note sends the
- *  note as its own real user message first; the verdict message follows. */
-export interface PlanVerdictData {
-	/** true = accept (sanction to teach); false = decline (revise the plan). */
-	accepted: boolean;
-	/** ISO timestamp of the click. */
-	at: string;
-}
-
-/** The model-facing text of a verdict message — single-sourced here so the
- *  adapter, the tests, and reality can't drift apart. */
-export function verdictText(accepted: boolean): string {
-	return accepted
-		? "The learner accepted the plan — begin teaching."
-		: "The learner would like the plan revised before teaching begins.";
-}
 
 /** The model-facing text of the probe→teach handoff wake (the custom-message
  *  scheme): the wake message carries only the data-probe-handoff part, and
@@ -185,14 +161,16 @@ export function verdictText(accepted: boolean): string {
  *  fragment asks for. So the wake paces it: reason out the optimal way to
  *  teach THIS person THIS thing BEFORE plan_init. Honest to the machinery
  *  — plan_init is still the first tool, the plan map still the first
- *  artifact, and presenting still waits for the verdict. */
+ *  artifact, and presenting still ends the turn (the verdict death,
+ *  2026-09-26: the learner's next message is a natural reply — a change
+ *  request or the go-ahead). */
 export const HANDOFF_TEXT =
 	"The probe is concluded — the learner assessment is recorded. " +
 	"This is the session's highest-leverage moment, and nothing has been authored yet — take your time. " +
 	"Read his assessment and the probing transcript, and reason out the optimal way to teach this person this thing: " +
 	"what he already holds and where each strand runs out, the misconceptions to route around, " +
 	"and the minimal tree from what he holds as obviously true to his goal — so every step lands as obviously true. " +
-	"When the plan is genuinely reasoned out, call plan_init and present it, then wait for his verdict.";
+	"When the plan is genuinely reasoned out, call plan_init, present it, and end your turn — his next message either asks for changes or moves the lesson forward.";
 
 
 export interface PlanBlockData {

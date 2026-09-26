@@ -147,7 +147,7 @@ flowchart TB
 
 - `contracts/plan.ts` — plan tree types + derived statuses (`derivePlanStatuses`)
 - `contracts/graph.ts` — graph domain: ledgers, findings/audit shapes, snapshot, birth-session clusters
-- `contracts/chat.ts` — session records, usage/money channel, settings, verdicts
+- `contracts/chat.ts` — session records, usage/money channel, settings, handoff text
 - `contracts/jobs.ts` — the ack-and-steer protocol: job records, steer message builders, deterministic steer ids, usage accumulation
 - `contracts/probe.ts` — probe assessment + the shared zod schema
 - `contracts/models.ts` — client-safe model-catalog shapes

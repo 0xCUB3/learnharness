@@ -14,7 +14,7 @@
  * sees it (verified single site, below).
  *
  * UI-ONLY CONTENT (owner ruling, fork 1 + the plan's custom-message
- * taxonomy): verdict markers, the probe→teach handoff, sub-agent steers,
+ * taxonomy): the probe→teach handoff, sub-agent steers,
  * and plan blocks are LhMarkerMessage — this app's declaration-merged
  * member of pi-agent-core's CustomAgentMessages extension point, shaped
  * exactly like pi's own CustomMessage ({role:"custom", customType,
@@ -36,7 +36,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { QUESTION_TOOLS } from "./pending.ts";
-import { HANDOFF_TEXT, verdictText } from "./contracts/chat.ts";
+import { HANDOFF_TEXT } from "./contracts/chat.ts";
 
 /** The hard-invariant wording for an aborted turn's unanswered calls —
  *  carried over verbatim from the pre-native era so the model's view
@@ -58,7 +58,7 @@ export interface LhMarkerMessage {
 	/** Record identity (pi messages carry no id — see the file header). */
 	id: string;
 	role: "custom";
-	customType: "verdict" | "probe-handoff" | "subagent-steer" | "subagent-abort" | "plan-block";
+	customType: "probe-handoff" | "subagent-steer" | "subagent-abort" | "plan-block";
 	/** The model-facing text ("" for plan blocks — UI-only). */
 	content: string;
 	display: boolean;
@@ -121,21 +121,6 @@ export function newAnswerResult(
 		// our payloads are JSON-safe answer structures, so the cast is honest.
 		details: answer as ToolResultMessage["details"],
 		isError: false,
-		timestamp: Date.now(),
-	};
-}
-
-/** The plan verdict (the plan→teach seam): marker only — the model-facing
- *  wording is owned by verdictText (core/contracts/chat.ts), the UI
- *  renders the quiet accept/decline line off details. */
-export function newVerdictMessage(accepted: boolean, at: string): LhMarkerMessage {
-	return {
-		id: newMessageId(),
-		role: "custom",
-		customType: "verdict",
-		content: verdictText(accepted),
-		display: true,
-		details: { accepted, at },
 		timestamp: Date.now(),
 	};
 }

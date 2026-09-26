@@ -128,7 +128,7 @@ const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayout
  * as a sub-agent result — rendered as an artifact card, never a bubble. */
 /** The quiet system line (custom-message scheme rendering): centered, muted,
  *  small — the transcript's voice for events that are not speech (wake
- *  scaffolding, the learner's plan verdict). */
+ *  scaffolding). */
 function SystemLine({ children, testId }: { children: React.ReactNode; testId?: string }) {
 	return (
 		<div
@@ -402,7 +402,7 @@ export function Chat({
 			.catch(() => {});
 	});
 	const [setupOpen, setSetupOpen] = useState(false);
-	/** The last explicitly-sent draft (composer send, verdict note): the
+	/** The last explicitly-sent draft (composer send): the
 	 *  refusal flow restores it into the composer and Save replays it.
 	 *  Auto-continuations (probe answers) never set it — their refusal
 	 *  opens the dialog with no replay. */
@@ -574,35 +574,6 @@ export function Chat({
 	// The session's live plan (drives the top-bar chip; the marginalia
 	// derives its own from the same transcript).
 	const planTree = useMemo(() => latestTree(messages), [messages]);
-
-	// ── The plan verdict gate (docs/probe-teach-split.md §4) ──
-	// The plan has been presented (a tree exists) and the session still sits in
-	// the planning phase → the composer's send square becomes the stacked
-	// Accept / Decline buttons. Acceptance is the explicit plan→teach seam
-	// (a data-plan-accepted part on the message); decline asks for revision.
-	const planVerdict = useMemo(
-		() => phaseAt3(messages) === "plan" && planTree !== null,
-		[messages, planTree],
-	);
-	const sendVerdict = useCallback(
-		(accepted: boolean) => {
-			const note = text.trim();
-			if (note) draftRef.current = note; // refusal flow: the note replays as text
-			setText("");
-			// TWO REAL MESSAGES, ONE TURN (the custom-message scheme, user-decided
-			// 2026-09-12): a typed note is the learner's own user message, and the
-			// verdict is its own custom message — marker part ONLY, no human-
-			// authored text (the model-facing wording lives in toLlmMessages,
-			// the native convertToLlm seam; nothing fake is persisted as speech).
-			// ONE input event, ONE turn: the session hook appends the optimistic
-			// note + verdict marker (local ids — the settle sync lands the
-			// server canon) and POSTs {type:"verdict"}; the server persists the
-			// pair as its own write-ahead — the same single-turn mechanism
-			// syncFromServer uses, no 409 dance, no double teacher turn.
-			void send({ type: "verdict", accepted, note: note || undefined });
-		},
-		[text, send],
-	);
 
 	// ── Session usage (wave-4 stats bar) ──
 	// The money channel: the record's turns log, folded client-side by
@@ -1076,21 +1047,17 @@ export function Chat({
 								// assistant group — is gone). Never a user bubble: the wake is
 								// scaffolding; the model-facing instruction lives in the adapter.
 								<PhaseDivider key={m.id || `m-${mi}`} phase="plan" />
-							) : m.role === "user" && m.parts.some((p) => p.type === "data-verdict") ? (
-								// The learner's plan verdict (custom-message scheme): the
-								// accept IS the phase seam — it renders the TEACHING DIVIDER
-								// (owner ruling 2026-09-26: replaced the "✓ Plan accepted"
-								// line; same spot, one signal, not two). A DECLINE is not a
-								// seam — it stays the quiet revision line. Never a user
-								// bubble: the model-facing wording is the adapter's, and this
-								// is the learner's ACT, not their words (a typed note, if
-								// any, renders above as its own real message).
-								((m.parts.find((p) => p.type === "data-verdict") as
-									| { data?: { accepted?: boolean } }
-									| undefined)?.data?.accepted)
-									? <PhaseDivider key={m.id || `m-${mi}`} phase="teach" />
-									: <SystemLine key={m.id || `m-${mi}`} testId="verdict-declined">↻ Plan revision requested</SystemLine>
-							) : (
+							) : m.role === "assistant" && mi > 0 && phases[mi] === "teach" && phases[mi - 1] !== "teach" ? (
+							// THE INFERRED TEACH SEAM (owner ruling 2026-09-26, the verdict
+							// death): teaching begins where the FIRST nodeId-tagged quiz is
+							// posed — the fold (phaseTimeline, the same derivation the phase
+							// chip reads) flips to teach exactly AT this assistant group, so
+							// the divider renders before the whole block (thinking -> prose ->
+							// the quiz call) — where the explicit accept marker used to sit.
+							// The boundary check (this index flips, the previous didn't)
+							// guarantees exactly ONE divider per session.
+							<PhaseDivider key={`teach-${m.id || `m-${mi}`}`} phase="teach" />
+						) : (
 									<Fragment key={m.id || `m-${mi}`}>
 									<Message from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
 									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
@@ -1234,14 +1201,6 @@ export function Chat({
 							onStop={abortInFlightTurn}
 							canSend={canSend}
 							onEscape={dictation.active ? dictation.cancel : undefined}
-							verdict={
-								planVerdict
-									? {
-											onAccept: () => sendVerdict(true),
-											onDecline: () => sendVerdict(false),
-										}
-									: undefined
-							}
 						/>
 					}
 					onSubmitAnswer={(output) => {

@@ -181,7 +181,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		steeringMode: "all",
 		// Wave B (owner-approved 2026-09-26): the model-facing conversion is
 		// THE app seam — markers flatten to their canonical user text
-		// (verdictText / HANDOFF_TEXT / steer text, all single-sourced),
+		// (HANDOFF_TEXT / steer text, all single-sourced),
 		// UI-only markers (plan-block) drop, the app's id fields strip, and
 		// an abort's dangling question call gets its INTERRUPTED result. It
 		// must never throw (pi's convertToLlm contract).

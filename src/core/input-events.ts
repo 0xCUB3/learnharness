@@ -13,12 +13,12 @@
  *             built client-side exactly as today; a dismissal is an answer
  *             carrying its flag). Server-side this becomes the call's
  *             native tool result — fork 1's normal agent history.
- *   verdict — the plan verdict (accept/decline); an optional note is the
- *             learner's own real user message, sent first, exactly the
- *             two-real-messages scheme.
  *   continue — run the next turn on the current record (mount
  *             continuations, job-settle re-syncs: the record ends at an
  *             answered question with no teacher reaction yet).
+ *
+ * (The plan verdict input died 2026-09-26 with the verdict itself — the
+ * learner's post-plan reply is a natural text message.)
  *
  * Server-originated delivery (the wake pipeline's steers) is NOT a client
  * input — the handler accepts it on the same path (TurnInput) so every
@@ -31,7 +31,6 @@ import {
 	danglingQuestionOf,
 	newAnswerResult,
 	newUserMessage,
-	newVerdictMessage,
 } from "./native-messages.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 
@@ -39,7 +38,6 @@ import { QUESTION_TOOLS } from "./pending.ts";
 export type ChatInput =
 	| { type: "text"; text: string }
 	| { type: "answer"; toolCallId: string; answer: QuestionAnswerData }
-	| { type: "verdict"; accepted: boolean; note?: string }
 	| { type: "continue" };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
@@ -73,12 +71,6 @@ export function parseChatInput(input: unknown): ChatInput {
 				throw new ChatInputError("answer input requires the graded answer object");
 			}
 			return { type: "answer", toolCallId: i.toolCallId, answer: i.answer as QuestionAnswerData };
-		case "verdict":
-			if (typeof i.accepted !== "boolean") throw new ChatInputError("verdict input requires accepted");
-			if (i.note !== undefined && typeof i.note !== "string") {
-				throw new ChatInputError("verdict note must be a string");
-			}
-			return { type: "verdict", accepted: i.accepted, note: i.note as string | undefined };
 		case "continue":
 			return { type: "continue" };
 		default:
@@ -105,14 +97,6 @@ export function inputAppends(record: { messages: LhMessage[] }, input: ChatInput
 				throw new ChatInputError("answer input targets no pending question call");
 			}
 			return [newAnswerResult(input.toolCallId, pending.tool, input.answer)];
-		}
-		case "verdict": {
-			const appends: LhMessage[] = [];
-			if (input.note && input.note.trim().length > 0) {
-				appends.push(newUserMessage(input.note));
-			}
-			appends.push(newVerdictMessage(input.accepted, new Date().toISOString()));
-			return appends;
 		}
 		case "continue":
 			return [];

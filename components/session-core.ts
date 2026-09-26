@@ -19,7 +19,6 @@ import {
 	needsContinuation,
 	newAnswerResult,
 	newUserMessage,
-	newVerdictMessage,
 	projectView,
 	type ChatInput,
 	type LhMessage,
@@ -131,16 +130,6 @@ export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
 			(r) =>
 				(r as { role?: string }).role === "toolResult" &&
 				(r as ToolResultMessage).toolCallId === toolCallId,
-		);
-	}
-	if (role === "custom") {
-		const marker = m as { customType?: string; details?: { accepted?: unknown } };
-		if (marker.customType !== "verdict") return false;
-		return record.some(
-			(r) =>
-				(r as { role?: string }).role === "custom" &&
-				(r as { customType?: string }).customType === "verdict" &&
-				(r as { details?: { accepted?: unknown } }).details?.accepted === marker.details?.accepted,
 		);
 	}
 	return false;
@@ -465,12 +454,6 @@ export class SessionModel {
 		else if (input.type === "answer") {
 			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
 			optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });
-		} else if (input.type === "verdict") {
-			if (input.note) optimistic.push({ ...newUserMessage(input.note), id: localId() });
-			optimistic.push({
-				...newVerdictMessage(input.accepted, new Date().toISOString()),
-				id: localId(),
-			});
 		}
 		if (optimistic.length > 0) this.mutate(() => {
 			this.tail = [...this.tail, ...optimistic];

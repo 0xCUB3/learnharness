@@ -57,24 +57,17 @@ describe("Composer", () => {
 	});
 });
 
-// The Enter decision (user-decided 2026-09-19, docs/probe-teach-split.md §4):
-// while the plan verdict pends, Enter must ACCEPT the plan — formerly it sent
-// a plain message, leaving the verdict pending again on the next message.
-// Pure function so the static-render harness can pin it (key events can't be
-// simulated in renderToStaticMarkup).
+// The Enter decision: stop a busy stream, otherwise send. (The plan-verdict
+// accept branch died 2026-09-26 with the verdict itself — the post-plan
+// reply is a natural text message.) Pure function so the static-render
+// harness can pin it (key events can't be simulated in renderToStaticMarkup).
 describe("enterAction", () => {
-	it("busy stream: Enter stops — verdict or not", () => {
-		assert.equal(enterAction({ busy: true, verdictPending: false, canSend: true }), "stop");
-		assert.equal(enterAction({ busy: true, verdictPending: true, canSend: true }), "stop");
+	it("busy stream: Enter stops", () => {
+		assert.equal(enterAction({ busy: true, canSend: true }), "stop");
 	});
 
-	it("verdict pends: Enter ACCEPTS — with text (the note rides) and with an empty box alike", () => {
-		assert.equal(enterAction({ busy: false, verdictPending: true, canSend: true }), "accept", "typed text rides the acceptance note");
-		assert.equal(enterAction({ busy: false, verdictPending: true, canSend: false }), "accept", "empty box still accepts — Enter can never strand the verdict");
-	});
-
-	it("no verdict: send when there is text, nothing when there is not", () => {
-		assert.equal(enterAction({ busy: false, verdictPending: false, canSend: true }), "send");
-		assert.equal(enterAction({ busy: false, verdictPending: false, canSend: false }), "none");
+	it("idle: send when there is text, nothing when there is not", () => {
+		assert.equal(enterAction({ busy: false, canSend: true }), "send");
+		assert.equal(enterAction({ busy: false, canSend: false }), "none");
 	});
 });

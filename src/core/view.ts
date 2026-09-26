@@ -36,7 +36,7 @@ import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai"
 import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 import type { SubagentArtifactData, SubagentResultMeta } from "./contracts/jobs.ts";
-import type { PlanBlockData, PlanVerdictData } from "./contracts/chat.ts";
+import type { PlanBlockData } from "./contracts/chat.ts";
 
 /** A view part — the loose part vocabulary the renderers consume (the same
  *  shape names the pre-Wave-D UIMessage dialect used, so the renderer
@@ -248,18 +248,9 @@ function applyResultTo(part: LhViewPart | undefined, result: ToolResultMessage):
 	// rendered nothing) is dropped from the view — the record keeps it.
 }
 
-/** A marker's projected message (verdict/handoff/steers) or splice (plan block). */
+/** A marker's projected message (handoff/steers) or splice (plan block). */
 function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 	switch (marker.customType) {
-		case "verdict": {
-			const data = marker.details as PlanVerdictData;
-			out.push({
-				id: marker.id,
-				role: "user",
-				parts: [{ type: "data-verdict", id: `vd_${marker.id}`, data }],
-			});
-			return;
-		}
 		case "probe-handoff": {
 			out.push({
 				id: marker.id,

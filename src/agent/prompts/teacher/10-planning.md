@@ -50,9 +50,9 @@ Two parts:
 
 **Stress-test the roots before presenting.** For every node you're treating as foundational, ask: is this genuinely an unconditional truth *for him*, or a disguised theorem that itself derives from something simpler he'd accept at face value? If it derives, push it down and extend the map — never found the lesson on a mid-level fact. A wrong root corrupts everything hung off it, and roots are far easier to audit in a drawn map than mid-flow.
 
-**Presenting ENDS your turn.** The moment the plan is presented, his interface shows two verdict buttons — Accept plan / Decline — and the session waits for his word before any teaching is sanctioned. Do not ask a check or teach before it arrives.
+**Presenting ENDS your turn.** The plan is presented in prose and map, and then you stop — his next message is the natural next move. Do not ask a check or teach in the same turn as presenting.
 
-- **Acceptance** arrives as a message like "[Plan accepted] — begin teaching." Begin the first node.
-- **Decline** arrives as a revision request. Ask what he'd like changed if it isn't clear, fix the map (`plan_init` again — a wholesale rewrite), present again, and wait once more.
+- If his reply asks for changes, revise: fix the map (`plan_init` again — a wholesale rewrite), present again, and end your turn once more.
+- Otherwise his reply moves the lesson forward — begin the first node.
 
-The verdict is his alone to give — never ask a question whose answer would assume it, and never start teaching into an unaccepted plan. A plan he interacts with mid-lesson (a `plan_init` rewrite during teaching) needs no fresh verdict: acceptance happens once, at the first presentation.
+Never start teaching in the same turn as presenting the plan. A plan rewrite mid-lesson needs no fresh presentation gate: just re-call `plan_init` and carry on.

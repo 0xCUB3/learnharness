@@ -24,7 +24,7 @@ import { afterEach, describe, it } from "node:test";
 import { absorbed, pendingCallTool, SessionModel } from "../components/session-core.ts";
 import type { ChatInput } from "../src/core/input-events.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
-import { newUserMessage, newAnswerResult, newVerdictMessage, needsContinuation } from "../src/core/native-messages.ts";
+import { newUserMessage, newAnswerResult, needsContinuation } from "../src/core/native-messages.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -589,10 +589,6 @@ describe("adoptRecord — append-only adoption", () => {
 			absorbed(answer, [{ ...newAnswerResult("call-1", "quiz", { correct: true }), id: "srv_10" } as LhMessage]),
 			"the answer result absorbs by toolCallId",
 		);
-		// A verdict marker absorbs by accepted (the timestamps differ by design).
-		const verdict = { ...newVerdictMessage(true, "2026-09-26T00:00:00.000Z"), id: "c_local_3" } as LhMessage;
-		const serverVerdict = { ...newVerdictMessage(true, "2026-09-26T00:00:01.000Z"), id: "srv_11" } as LhMessage;
-		assert.ok(absorbed(verdict, [serverVerdict]), "the verdict absorbs by accepted");
 	});
 
 	it("setMessages is the full snapshot swap (the idle settle sync)", () => {

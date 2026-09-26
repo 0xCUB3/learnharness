@@ -95,24 +95,22 @@ That is the wrong signal and is **abolished**. The new contract:
 
 The phase chain is **event-driven**:
 
-**probe (prober)** — `probe_done` → **planning (teacher)** — `plan_init`
-presents the plan → **accept** → **teach (teacher)**
+**probe (prober)** — `probe_done` → **planning (teacher)** — the first
+`nodeId`-tagged quiz call → **teach (teacher)**
 
 - The broken derived-occupancy seam (phase-of-tree via `currentNodeId`
   nothing ever sets — the stuck-on-plan bug) is **replaced, not patched**.
-- The verdict gate is LIVE (landed 2026-09-11, same day): presenting the
-  plan (`plan_init`) does NOT move the phase — the learner's **accept**
-  does. The composer's send square becomes two stacked buttons (green
-  Accept plan / red Decline) while the verdict pends; accept sends a user
-  message carrying a `data-verdict` data part — THE plan→teach seam
-  (`phaseAt3` reads it; `convertToModelMessages` drops data parts, so the
-  teacher sees only the text). Decline asks for a revision. While the
-  verdict pends, Enter ACCEPTS the plan — typed text rides the acceptance
-  as its note, an empty box accepts too (user-decided 2026-09-19; formerly
-  Enter sent a plain message, which left the verdict still pending on the
-  next message — a side question now rides the acceptance note instead).
-  Mid-lesson rewrites need no fresh verdict: acceptance happens once.
-- The session picker phase derives from transcript markers the same way.
+- The verdict gate is DEAD (owner ruling 2026-09-26 — simplified away):
+  presenting the plan ends the teacher's turn, and the learner's next
+  message is a natural reply — a change request (revise, re-present, end
+  the turn again) or the go-ahead. The plan→teach seam is **inferred**:
+  the first quiz call tagged with a `nodeId` (a question ABOUT a plan
+  node; probe quizzes carry no nodeId) is where teaching begins. The
+  phase fold (`phaseAt3`) advances there, the teaching divider renders
+  before that whole assistant block, and the live phase indicator may lag
+  until the first node's question is posed (owner-accepted). Mid-lesson
+  `plan_init` rewrites need no gate at all.
+- The session picker phase derives from the transcript the same way.
 
 ## 5. No global-graph context in sessions (for now)
 
@@ -140,8 +138,9 @@ live-derived movement.
 
 ## 7. Deferred / later waves (designed, not now)
 
-- ~~**Accept-plan UI**~~ — **landed 2026-09-11** (see §4): stacked
-  Accept/Decline buttons; the `data-verdict` part is the seam.
+- ~~**Accept-plan UI**~~ — landed 2026-09-11, then **removed 2026-09-26**
+  (the verdict death): the seam is inferred from the first `nodeId`-tagged
+  quiz call (see §4).
 - **Assessment viewer** — the strand assessments displayed to the learner
   as a proper card (data already durable in the transcript; the plain v1
   probe-done card renders the assessment meanwhile).
