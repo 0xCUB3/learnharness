@@ -394,6 +394,46 @@ describe("send (one input event, verbatim consumption)", () => {
 		await done;
 	});
 
+it("Wave C: markers injected mid-run (custom role, follow-up delivery) append to the tail by id", () => {
+	// A never-settling fetch: the send only needs to flip the model into its
+	// streaming status synchronously — its POST floats (never rejects) while
+	// the injected wire events are asserted.
+	const m = model({ fetch: () => new Promise<Response>(() => {}) });
+	m.adoptRecord([
+		{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never,
+	] as never);
+	void m.send({ type: "text", text: "hello" });
+
+	// pi emits message_start + message_end for an injected follow-up marker
+	// (no streaming partials) — both must UPSERT the same tail slot by id.
+	const marker = {
+		id: "steer_job_x_1",
+		role: "custom",
+		customType: "subagent-steer",
+		content: "The research result arrived.",
+		display: true,
+		details: { jobId: "job_x", kind: "research" },
+		timestamp: 2,
+	};
+	m.applyWireEvent({ type: "message_start", message: marker } as never);
+	m.applyWireEvent({ type: "message_end", message: marker } as never);
+
+	const state = m.getState();
+	const ids = state.messages.map((v) => v.parts.length);
+	assert.ok(state.messages.length >= 2, "the marker produced a view message");
+	const tail = state.messages.at(-1)!;
+	assert.equal(tail.role, "user", "a steer marker projects as a user-role view message");
+	assert.ok(
+		tail.parts.some((p) => p.type === "data-subagent-artifact"),
+		"the marker renders its artifact part (SubagentSteerCard)",
+	);
+
+	// A re-delivery of the same id (message_end replay) must NOT duplicate.
+	m.applyWireEvent({ type: "message_end", message: marker } as never);
+	const again = m.getState();
+	assert.equal(again.messages.length, state.messages.length, "same id upserts, never appends a second copy");
+});
+
 	it("a provider error rides VERBATIM (owner ruling) — no masking anywhere", async () => {
 		globalThis.fetch = (async () =>
 			sseResponse(

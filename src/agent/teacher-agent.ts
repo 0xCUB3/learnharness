@@ -165,6 +165,12 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		},
 		streamFn: engine.streamFn,
 		shouldStopAfterTurn: stopper,
+		// Wave C (2026-09-26): markers handed to a live run drain from pi's own
+		// follow-up queue — "all" joins every handed marker in ONE
+		// continuation turn, matching the idle wake's carry-everything
+		// semantics (the default "one-at-a-time" would spend one teacher
+		// turn per marker).
+		followUpMode: "all",
 		// Wave B (owner-approved 2026-09-26): the model-facing conversion is
 		// THE app seam — markers flatten to their canonical user text
 		// (verdictText / HANDOFF_TEXT / steer text, all single-sourced),

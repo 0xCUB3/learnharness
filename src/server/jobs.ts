@@ -1,24 +1,40 @@
 /**
  * THE WAKE PIPELINE (contracts.ts "THE ASYNC PROTOCOL" §4) — server-side
- * steer delivery for finished sub-agent jobs.
+ * steer delivery for finished sub-agent jobs. Wave C (2026-09-26):
+ * delivery rides pi's OWN follow-up queue when a run is live, and the
+ * idle wake otherwise. One registry, two vehicles.
  *
- *   deliverJobResult(steer) — the runner calls this on job completion. The
- *     steer joins a per-chat serialized queue and a pump drives it:
+ *   deliverJobResult(steer) — the runner calls this on job completion.
+ *     The steer joins a per-chat serialized registry and the pump drives
+ *     it along ONE of two paths:
  *
- *       1. WAIT FOR IDLE: while a turn is in flight (turn-liveness) OR a
- *          question tool part is pending (an unanswered client-side tool
- *          call breaks provider conversion — the steer fires right after
- *          the learner's continuation), poll. A short grace after the gates
- *          open avoids stealing the turn a client is about to send.
- *       2. FIRE: a server-side teacher turn through the SAME composition as
- *          a client request (the injected turn runner wraps
- *          handleChatRequest): write-ahead persist, liveness, extraction —
- *          one code path. A 409 means a client turn raced in — retry with
- *          backoff. Idempotent per jobId (steerDelivered): a crashed wake
- *          or a duplicate deliver is skipped, not duplicated.
- *       3. FLIP: only now does the job go done/error — a polling client
- *          that sees the flip re-syncs once and gets the finished record
- *          (steer + the teacher's response to it).
+ *       1. LIVE RUN → pi follow-up: a turn is streaming, so the marker is
+ *          handed to the LIVE agent's followUp queue (agent.followUp).
+ *          pi polls that queue when the run would otherwise stop and
+ *          CONTINUES THE SAME RUN — the marker joins the context, rides
+ *          the live event stream (message_start/message_end), and lands
+ *          in the record at that run's persist. The question stopper
+ *          runs BEFORE the follow-up poll and exits the loop, so an open
+ *          quiz is never overridden: a handed marker strands (see
+ *          settleSteers) and waits for the next run — today's pacing.
+ *          probe-handoff markers NEVER take this path (owner ruling:
+ *          the handoff must start the TEACHER's run — a record-level
+ *          branch only a fresh wake can make).
+ *       2. IDLE WAKE: no live turn. WAIT FOR IDLE (turn-liveness OR a
+ *          dangling question — an unanswered client-side tool call breaks
+ *          provider conversion), then fire ONE server-side wake turn
+ *          carrying EVERY queued marker as its input appends (write-ahead
+ *          persist, liveness, extraction — one code path, the same
+ *          composition as a client request). A 409 means a client turn
+ *          raced in — re-queue and retry with backoff. Idempotent per
+ *          jobId (steerDelivered): a crashed wake or a duplicate deliver
+ *          is skipped, not duplicated.
+ *
+ *   settleSteers(chatId, persisted) — the handler calls this at turn
+ *     settlement (after unregisterLiveAgent): entries the run DELIVERED
+ *     resolve + flip their jobs; entries that were handed to the dying
+ *     run but never injected (stopper exit, abort, a missed final poll)
+ *     return to pending and the pump restarts — no stranding, no loss.
  *
  *   Crash recovery (recoverStaleJobs): a process restart can orphan jobs —
  *     "running" with a result (the wake never fired) or without one (the
@@ -44,10 +60,12 @@ import { danglingQuestionOf } from "../core/native-messages.ts";
 import { fireJobAbort, isJobLive } from "../agent/subagents/aborts.ts";
 import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
+import type { Agent } from "@earendil-works/pi-agent-core";
 
 /** Fires one server-side teacher turn: (chatId, input) → HTTP-ish status.
- *  Wave B: the input is the STEER EVENT — the handler appends the marker
- *  natively under its own turn claim (one composition for every turn). */
+ *  Wave C: the input is the IDLE WAKE — every queued marker as the turn's
+ *  input appends (the handler appends them natively under the wake's own
+ *  turn claim; one composition for every turn). */
 export type TurnRunner = (chatId: string, input: TurnInput) => Promise<number>;
 
 /** Re-runs a job's sub-agent loop (crash recovery for orphaned jobs). */
@@ -57,13 +75,24 @@ interface QueuedSteer {
 	steer: SteerMessage;
 	resolve: () => void;
 	reject: (reason: Error) => void;
+	/** The live agent this marker was handed to via followUp() — set by the
+	 *  pump's live path. Guards double-handoff (a re-pumped loop must not
+	 *  re-queue what a run already holds) and is CLEARED at settlement for
+	 *  markers the dying run never injected. */
+	handedTo?: Agent;
 }
 
 interface WakeState {
 	turnRunner?: TurnRunner;
 	respawn?: JobRespawn;
-	/** chatId → steers awaiting delivery, in arrival order. */
+	/** chatId → steers awaiting delivery, in arrival order. The single
+	 *  delivery registry (Wave C: the agent's own follow-up queue is a
+	 *  per-run VEHICLE, not the registry — settlement reconciles here). */
 	queues: Map<string, QueuedSteer[]>;
+	/** chatId → the agent of the CURRENTLY streaming turn (cleared at
+	 *  settlement, before settleSteers). The pump's live path hands
+	 *  markers to this agent's follow-up queue. */
+	liveAgents: Map<string, Agent>;
 	/** Chats whose pump loop is currently active (serialization per chat). */
 	pumping: Set<string>;
 	/** Throttle bookkeeping for the stale-job sweep. */
@@ -76,7 +105,7 @@ interface LhWakeGlobal {
 
 function state(): WakeState {
 	const g = globalThis as typeof globalThis & LhWakeGlobal;
-	return (g.__lhWakePipeline ??= { queues: new Map(), pumping: new Set(), lastSweepAt: 0 });
+	return (g.__lhWakePipeline ??= { queues: new Map(), liveAgents: new Map(), pumping: new Set(), lastSweepAt: 0 });
 }
 
 /** chat-handler wires this at module init: its adapter around handleChatRequest. */
@@ -145,48 +174,55 @@ export function deliverJobResult(steer: SteerMessage): Promise<void> {
 	});
 }
 
-/**
- * CONTINUATION COALESCING ("THE ASYNC PROTOCOL" §4): the chat-handler calls
- * this the instant a client turn wins the turn registry, BEFORE its
- * write-ahead persist. Undelivered steers for the chat ride THAT turn —
- * appended after the learner's answer, which is conversion-safe (the
- * answered quiz carries its output) — instead of waiting for the pump's
- * idle window, which a quiz-chaining teacher may never open (the delivery
- * starvation bug: every turn ends with a new pending quiz, so the gates
- * never stay open long enough to fire a wake).
+/** The chat-handler registers the CURRENTLY STREAMING turn's agent right
+ *  after registerTurn — the pump's live path hands queued markers to this
+ *  agent's pi-native follow-up queue (followUpMode "all": every handed
+ *  marker joins the continuation turn together, matching the wake's
+ *  carry-everything semantics). Registration is race-free the same way
+ *  registerTurn is: the agent loop only ticks in later microtasks, so the
+ *  settle seam cannot beat the registration. */
+export function registerLiveAgent(chatId: string, agent: Agent): void {
+	state().liveAgents.set(chatId, agent);
+}
+
+/** Clear the live agent at settlement — MUST run before settleSteers so the
+ *  reconciliation's re-pump can never hand a marker to the dying agent. */
+export function unregisterLiveAgent(chatId: string): void {
+	state().liveAgents.delete(chatId);
+}
+
+/** TURN SETTLEMENT RECONCILIATION (Wave C): the handler calls this AFTER
+ * unregisterLiveAgent, with the run's persisted messages. Two jobs:
  *
- * Claimed steers resolve their deliver() promise and flip the job done
- * here: the caller holds the turn registry, so the write-ahead persist is
- * imminent and durable. Steers already in the transcript (a wake raced in)
- * are finalized, not returned. The pump re-checks steerDelivered right
- * before firing, so a claim racing the pump converges to exactly one
- * delivery either way.
+ *   - entries whose marker the run DELIVERED (in-run follow-up injection —
+ *     their ids are in the persisted slice) resolve and flip their jobs;
+ *   - entries handed to the dying run but never injected (the question
+ *     stopper exited before the follow-up poll; an abort; a delivery that
+ *     raced the final poll) return to PENDING (handedTo cleared) and the
+ *     pump restarts — the idle wake delivers them once the gates open.
  *
- * incoming (the turn's request body — the wake pump fires turns that
- * ALREADY CARRY the steer it dequeues only after the turn returns 200, so
- * the entry is still queued here): a steer already in the incoming list is
- * being delivered by THIS VERY TURN — finalized and resolved, but never
- * appended again. Without this the write-ahead persist would hold two
- * copies of the same steer id (a live React duplicate-key warning the
- * owner hit 2026-09-18; withMessageIds only heals it at onFinish).
- */
-export function claimSteers(chatId: string): SteerMessage[] {
-	const s = state();
-	const queue = s.queues.get(chatId);
-	if (!queue || queue.length === 0) return [];
-	s.queues.delete(chatId);
-	// The caller holds the turn registry (chat-handler claims after
-	// beginTurn), so the write-ahead persist is imminent and durable:
-	// every queued steer is claimed — its delivery is THIS turn's job.
-	// Steers already in the transcript (a wake raced in) still finalize
-	// here; the handler's append filter (steerDelivered) keeps exactly
-	// one copy in the record.
-	const claimed = queue.map((entry) => entry.steer);
+ * This is what makes the live hand-off safe: pi owns no retry for a marker
+ * stranded in a settled agent's queue, so the registry stays the truth and
+ * the dead agent's copy is simply abandoned (GC'd with the agent). */
+export function settleSteers(chatId: string, persisted: { id?: string }[]): void {
+	const queue = state().queues.get(chatId);
+	if (!queue || queue.length === 0) return;
+	const deliveredIds = new Set(persisted.map((m) => m.id).filter(Boolean));
+	const remaining: QueuedSteer[] = [];
 	for (const entry of queue) {
-		finalizeSteer(entry.steer);
-		entry.resolve();
+		if (deliveredIds.has(entry.steer.id)) {
+			finalizeSteer(entry.steer);
+			entry.resolve();
+		} else {
+			entry.handedTo = undefined;
+			remaining.push(entry);
+		}
 	}
-	return claimed;
+	if (remaining.length === 0) state().queues.delete(chatId);
+	else {
+		state().queues.set(chatId, remaining);
+		void pump(chatId);
+	}
 }
 
 /** Result of an abort attempt — the endpoint maps these to HTTP. */
@@ -231,13 +267,18 @@ export function abortJob(jobId: string): AbortOutcome {
 	fireJobAbort(jobId); // no-op when the loop already returned (delivering)
 
 	// Drop any queued steers for this job (their deliver() resolves unfired).
+	// HANDED entries (already in a live run's follow-up queue) are past
+	// recall — same ruling as a fired wake: the result lands, and the abort
+	// note below dedupes against it via steerDelivered (same jobId).
 	const queue = state().queues.get(job.chatId);
 	if (queue) {
-		const remaining = queue.filter((e) => jobIdOf(e.steer) !== jobId);
+		const remaining = queue.filter(
+			(e) => jobIdOf(e.steer) !== jobId || e.handedTo !== undefined,
+		);
 		if (remaining.length === 0) state().queues.delete(job.chatId);
 		else state().queues.set(job.chatId, remaining);
 		for (const entry of queue) {
-			if (jobIdOf(entry.steer) === jobId) entry.resolve();
+			if (jobIdOf(entry.steer) === jobId && entry.handedTo === undefined) entry.resolve();
 		}
 	}
 
@@ -262,8 +303,14 @@ function chatIdOf(steer: SteerMessage): string {
 }
 
 /**
- * The per-chat pump: delivers every queued steer in order, one wake turn
- * each. Only one loop per chat at a time; later arrivals ride the queue.
+ * The per-chat pump: delivers the registry along pi's two native paths.
+ * Only one loop per chat at a time; later arrivals ride the registry.
+ *
+ * Each iteration first clears dead weight (gone chat, already-delivered
+ * markers), then picks the vehicle: a LIVE turn takes every eligible
+ * marker via agent.followUp (the run continues at its own stop — nothing
+ * more to do here until settlement re-pumps); otherwise the IDLE WAKE
+ * fires ONE turn carrying every pending marker as its input appends.
  */
 async function pump(chatId: string): Promise<void> {
 	if (!chatId) return;
@@ -277,26 +324,69 @@ async function pump(chatId: string): Promise<void> {
 				s.queues.delete(chatId);
 				return;
 			}
-			const entry = queue[0]!;
-		const steerId = entry.steer.id;
 
 			// Gone chat: nothing to deliver into.
 			const record = stores.chatStore.getChat(chatId);
 			if (!record) {
-				queue.shift();
-				entry.reject(new Error(`chat ${chatId} not found — cannot deliver steer ${steerId}`));
+				s.queues.delete(chatId);
+				for (const entry of queue) {
+					entry.reject(new Error(`chat ${chatId} not found — cannot deliver steer ${entry.steer.id}`));
+				}
 				continue;
 			}
 
-			// Idempotent delivery: the transcript already carries this steer
-			// (a previous wake completed, or a duplicate deliver raced in).
-			if (steerDelivered(record.messages, steerId)) {
-				queue.shift();
-				finalizeSteer(entry.steer);
-				entry.resolve();
-				continue;
+			// Idempotent delivery: the transcript already carries these steers
+			// (an in-run injection persisted, a wake completed, or a duplicate
+			// deliver raced in). Resolve and flip without re-firing anything.
+			const stillPending = queue.filter((e) => !steerDelivered(record.messages, e.steer.id));
+			for (const entry of queue) {
+				if (!stillPending.includes(entry)) {
+					finalizeSteer(entry.steer);
+					entry.resolve();
+				}
+			}
+			if (stillPending.length === 0) {
+				s.queues.delete(chatId);
+				return;
+			}
+			s.queues.set(chatId, stillPending);
+
+			// VEHICLE 1 — THE LIVE RUN: pi's own follow-up queue. The agent of
+			// the streaming turn takes every marker not already handed to IT;
+			// pi polls the queue when the run would otherwise stop, injects
+			// them (message_start/message_end on the live wire), and continues
+			// the run. Delivery resolves at settlement (settleSteers). Nothing
+			// else to do in this loop iteration — the turn owns the delivery.
+			const live = s.liveAgents.get(chatId);
+			if (live && isTurnRunning(chatId)) {
+				const handable = stillPending.filter(
+					(e) => e.handedTo !== live && e.steer.customType !== "probe-handoff",
+				);
+				let handedAny = false;
+				for (const entry of handable) {
+					live.followUp(entry.steer);
+					entry.handedTo = live;
+					handedAny = true;
+				}
+				// probe-handoffs never ride a live run (owner ruling: the
+				// handoff must START the teacher's run) — if any remain
+				// pending, wait the run out and loop to the wake below.
+				const handoffWaits = stillPending.some(
+					(e) => e.steer.customType === "probe-handoff",
+				);
+				if (handedAny && !handoffWaits) {
+					return; // the run delivers; settleSteers re-pumps the rest
+				}
+				if (handedAny) {
+					await delay(POLL_MS);
+					await waitForIdle(chatId);
+					continue;
+				}
 			}
 
+			// VEHICLE 2 — THE IDLE WAKE: one server-side turn carrying EVERY
+			// pending marker as its input appends (the handler write-ahead
+			// persists them under the wake's own turn claim).
 			await waitForIdle(chatId);
 
 			// Re-fetch AFTER the gates open — waitForIdle can wait out a quiz
@@ -304,59 +394,80 @@ async function pump(chatId: string): Promise<void> {
 			// the client's answer + continuation in the write-ahead persist.
 			const fresh = stores.chatStore.getChat(chatId);
 			if (!fresh) {
-				queue.shift();
-				entry.reject(new Error(`chat ${chatId} not found — cannot deliver steer ${steerId}`));
-				continue;
+				continue; // the gone-chat branch rejects next iteration
 			}
 
 			// The runner is required — chat-handler sets it at init. If some
 			// module instance missed the wiring, fail loudly rather than hang.
 			if (!s.turnRunner) {
-				queue.shift();
+				s.queues.delete(chatId);
 				const err = new Error("wake pipeline: no turn runner wired (setTurnRunner)");
-				failSteer(entry.steer, err);
-				entry.reject(err);
-				continue;
+				for (const entry of stillPending) {
+					failSteer(entry.steer, err);
+					entry.reject(err);
+				}
+				return;
 			}
 
-			// A client continuation may have COALESCED this steer (claimSteers) while
-			// the gates were closed — re-check before firing: exactly one delivery.
-			if (steerDelivered(fresh.messages, steerId)) {
-				queue.shift();
-				finalizeSteer(entry.steer);
-				entry.resolve();
-				continue;
+			// A live run may have delivered some markers while the gates were
+			// closed — re-check: only still-missing markers ride the wake.
+			const fire = stillPending.filter((e) => !steerDelivered(fresh.messages, e.steer.id));
+			for (const entry of stillPending) {
+				if (!fire.includes(entry)) {
+					finalizeSteer(entry.steer);
+					entry.resolve();
+				}
+			}
+			if (fire.length === 0) {
+				s.queues.delete(chatId);
+				return;
 			}
 
-			// Fire the server-side teacher turn (the steer EVENT: the handler
-			// appends the marker natively under its own turn claim). A 409 = a
-			// client turn raced in between idle and firing — back off and
-			// retry the same steer.
-			const status = await s.turnRunner(chatId, { type: "steer", steer: entry.steer }).catch((err: unknown) => {
-				console.error(`[steer ${steerId}] wake turn crashed:`, err);
+			// DEQUEUE-AT-FIRE (the Wave C lesson from the Wave B regression):
+			// the carried markers leave the registry BEFORE the turn runs —
+			// the wake run's OWN follow-up poll must never see its own cargo,
+			// and a 409 (client raced in) must be able to push them back.
+			s.queues.delete(chatId);
+			const steers = fire.map((e) => e.steer);
+
+			// Fire the wake (every marker as the turn's input appends). A 409 =
+			// a client turn raced in between idle and firing — push the cargo
+			// back and retry after backoff (the racing turn's own settlement
+			// re-pumps if it beats us to the re-queue).
+			const status = await s.turnRunner(chatId, { type: "steers", steers }).catch((err: unknown) => {
+				console.error(`[steer ${steers.map((x) => x.id).join(",")}] wake turn crashed:`, err);
 				return -1;
 			});
 			if (status === 409) {
+				const back = s.queues.get(chatId) ?? [];
+				back.push(...fire);
+				s.queues.set(chatId, back);
 				await delay(RETRY_BACKOFF_MS[Math.min(attempt++, RETRY_BACKOFF_MS.length - 1)]!);
 				continue;
 			}
 			attempt = 0;
 
-			queue.shift();
 			if (status === 200) {
-				finalizeSteer(entry.steer);
-				entry.resolve();
+				for (const entry of fire) {
+					finalizeSteer(entry.steer);
+					entry.resolve();
+				}
 			} else {
 				const err = new Error(`wake turn failed with status ${status}`);
-				failSteer(entry.steer, err);
-				entry.reject(err);
+				for (const entry of fire) {
+					failSteer(entry.steer, err);
+					entry.reject(err);
+				}
 			}
 		}
 	} finally {
 		s.pumping.delete(chatId);
 		// A steer may have arrived between the last check and the finally —
-		// restart the pump rather than strand it.
-		if ((state().queues.get(chatId) ?? []).length > 0) void pump(chatId);
+		// restart the pump rather than strand it. Entries already handed to
+		// a live run are NOT stragglers (settleSteers owns their resurrection)
+		// — restarting for them would just park in waitForIdle forever.
+		const q = state().queues.get(chatId) ?? [];
+		if (q.some((e) => e.handedTo === undefined)) void pump(chatId);
 	}
 }
 

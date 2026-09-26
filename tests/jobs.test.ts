@@ -47,7 +47,16 @@ import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-ag
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { webTools } from "../src/agent/tools/web.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
-import { abortJob, claimSteers, deliverJobResult, recoverStaleJobs, setJobRespawn, setTurnRunner } from "../src/server/jobs.ts";
+import {
+	abortJob,
+	deliverJobResult,
+	registerLiveAgent,
+	recoverStaleJobs,
+	setJobRespawn,
+	setTurnRunner,
+	settleSteers,
+	unregisterLiveAgent,
+} from "../src/server/jobs.ts";
 import { registerJobAbort, unregisterJobAbort } from "../src/agent/subagents/aborts.ts";
 import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { persistTurn } from "../src/server/turn-service.ts";
@@ -708,9 +717,9 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 		// open question.
 		chatStore.saveMessages(chat.id, nativeToolMessages("teach me calc", "probe_done", "call-pd", { ok: true }));
 		const handoff = buildProbeHandoffSteer(chat.id);
-		let seen: { chatId: string; steer: SteerMessage } | undefined;
+		let seen: { chatId: string; steers: SteerMessage[] } | undefined;
 		setTurnRunner(async (cid, input) => {
-			seen = { chatId: cid, steer: (input as SteerInput).steer as SteerMessage };
+			seen = { chatId: cid, steers: (input as SteerInput).steers as SteerMessage[] };
 			return 200;
 		});
 
@@ -718,7 +727,8 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 		await waitFor(() => seen !== undefined, 8000, "handoff wake fired");
 		const firedHandoff = seen!;
 		assert.equal(firedHandoff.chatId, chat.id);
-		assert.equal(firedHandoff.steer.id, `steer_probe_${chat.id}`, "the handoff IS the wake turn's input");
+		assert.equal(firedHandoff.steers.length, 1);
+		assert.equal(firedHandoff.steers[0]!.id, `steer_probe_${chat.id}`, "the handoff IS the wake turn's input");
 	});
 
 	it("a redelivered handoff dedupes via the transcript (idempotent by steer id)", async () => {
@@ -739,9 +749,9 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 
 	it("delivers: fires the turn runner with the record + steer, then flips the job done", async () => {
 		const { chatId, jobId, steer } = setup();
-		let seen: { chatId: string; steer: SteerMessage } | undefined;
+		let seen: { chatId: string; steers: SteerMessage[] } | undefined;
 		setTurnRunner(async (cid, input) => {
-			seen = { chatId: cid, steer: (input as SteerInput).steer as SteerMessage };
+			seen = { chatId: cid, steers: (input as SteerInput).steers as SteerMessage[] };
 			return 200;
 		});
 
@@ -752,7 +762,8 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 		assert.equal(jobStore.getJob(jobId)!.activity, "delivered");
 		assert.ok(seen, "the turn runner fired");
 		assert.equal(seen.chatId, chatId);
-		assert.equal(seen.steer.id, steer.id, "the steer IS the wake turn's input");
+		assert.equal(seen.steers.length, 1);
+		assert.equal(seen.steers[0]!.id, steer.id, "the steer IS the wake turn's input");
 	});
 
 	it("waits while a question part is pending, and fires once it clears", async () => {
@@ -843,144 +854,118 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 
 // ─── continuation coalescing (the delivery-starvation fix) ───────────────────
 
-describe("claimSteers + pump duplicate-guard (continuation coalescing)", () => {
-	it("claims queued undelivered steers: resolves deliver(), flips the job done, empties the queue", async () => {
+describe("Wave C: live follow-up handoff + settlement reconciliation", () => {
+	/** A minimal stand-in for pi's Agent — the pump touches only followUp(). */
+	function fakeAgent(): { handed: SteerMessage[]; agent: unknown } {
+		const handed: SteerMessage[] = [];
+		return { handed, agent: { followUp: (m: SteerMessage) => handed.push(m) } };
+	}
+
+	it("hands queued markers to the LIVE run (pi followUp) — no wake fires, the registry waits", async () => {
 		const { chatId, jobId, steer } = setup();
+		const { handed, agent } = fakeAgent();
 		let fired = 0;
 		setTurnRunner(async () => {
 			fired++;
 			return 200;
 		});
 
-		const delivery = deliverJobResult(steer);
-		await delay(300); // the pump is inside waitForIdle's grace (750ms)
-		const claimed = claimSteers(chatId);
+		// A live turn is streaming (turn registry + live agent registered).
+		assert.ok(beginTurn(chatId));
+		registerLiveAgent(chatId, agent as never);
 
-		assert.equal(claimed.length, 1, "the queued steer is claimed");
-		assert.equal(claimed[0]!.id, steer.id);
-		// The handler's write-ahead persist lands the claim immediately after
-		// claiming (the very next statement in handleChatRequest).
-		const record = chatStore.getChat(chatId)!;
-		chatStore.saveMessages(chatId, [...record.messages, ...claimed] as never);
-		await delivery; // the runner's deliver() promise resolves on claim
-		assert.equal(jobStore.getJob(jobId)!.status, "done", "job flips done at claim");
-		assert.deepEqual(claimSteers(chatId), [], "queue is empty after the claim");
-		await delay(800);
-		assert.equal(fired, 0, "the pump never fires a wake for a claimed steer");
-	});
-
-	it("finalizes already-delivered steers; the handler's steerDelivered filter keeps one copy (a wake raced in)", async () => {
-		const { chatId, jobId, steer } = setup();
-		const record = chatStore.getChat(chatId)!;
-		chatStore.saveMessages(chatId, [...record.messages, steer] as never);
-
-		const delivery = deliverJobResult(steer);
-		await delay(100); // let the pump's top-of-loop idempotent skip run
-		const claimed = claimSteers(chatId);
-		// The pump itself finalizes already-delivered steers at the top of
-		// its loop — the queue is empty by the time a racing turn claims.
-		// (A steer that DID ride the queue gets claimed whole; the HANDLER's
-		// steerDelivered filter keeps exactly one copy at append.)
-		assert.equal(claimed.length, 0, "the pump finalized the delivered steer without firing a wake");
-		assert.ok(steerDelivered(chatStore.getChat(chatId)!.messages, steer.id), "the record already holds it");
-		assert.equal(jobStore.getJob(jobId)!.status, "done");
-		await delivery;
-	});
-
-	it("claimSteers on a chat with no queue returns [] and touches nothing", () => {
-		assert.deepEqual(claimSteers("chat_never_existed"), []);
-	});
-
-	it("pump path: a steer coalesced into the record mid-flight is claimed, filtered at append, never double-fired (duplicate-key bug, 2026-09-18)", async () => {
-		const { chatId, jobId, steer } = setup();
-		// Own runner: this chat's gates are OPEN, so the pump would otherwise
-		// fire whatever runner the NEXT test registers (leaked counter).
-		let fired = 0;
-		setTurnRunner(async () => {
-			fired++;
-			return 200;
-		});
-		// The racing turn's write-ahead ALREADY landed the steer in the record
-		// while the entry is still queued — the exact window the handler
-		// claims in (the pump dequeues only after the turn returns 200).
-		const delivery = deliverJobResult(steer);
-		await delay(300); // the pump is inside waitForIdle's grace (750ms)
-		const incoming = [...chatStore.getChat(chatId)!.messages, steer];
-		chatStore.saveMessages(chatId, incoming); // the racing turn's write-ahead persist
-		const claimed = claimSteers(chatId);
-		assert.equal(claimed.length, 1, "the queued steer is claimed — its delivery rides the turn");
-		assert.equal(jobStore.getJob(jobId)!.status, "done", "job still finalizes — the claim resolves the delivery");
-		await delivery;
-		assert.deepEqual(claimSteers(chatId), [], "queue is drained");
-		// The handler appends only steers NOT already in the record
-		// (steerDelivered) — the write-ahead keeps exactly ONE copy of the
-		// steer id, and the pump's post-idle re-check reads the RECORD and
-		// skips the delivered id.
-		const appends = claimed.filter((c) => !steerDelivered(chatStore.getChat(chatId)!.messages, c.id));
-		assert.equal(appends.length, 0, "the already-persisted steer never appends again");
-		const outgoing = [...chatStore.getChat(chatId)!.messages, ...appends];
-		const ids = outgoing.map((m) => m.id);
-		assert.equal(ids.filter((id) => id === steer.id).length, 1, "exactly one steer copy persists");
-		await delay(800); // the pump's grace elapses — its re-check sees the delivered id
-		assert.equal(fired, 0, "the claimed-and-persisted steer never double-fires a wake");
-	});
-
-	it("pump duplicate-guard: a steer coalesced into the record while the gates were closed is never double-fired", async () => {
-		const { chatId, jobId, steer } = setup();
-		let fired = 0;
-		setTurnRunner(async () => {
-			fired++;
-			return 200;
-		});
-
-		// Gates closed: a dangling question call parks the pump in waitForIdle.
-		chatStore.saveMessages(chatId, [
-			{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never,
-			{
-				id: "a1",
-				role: "assistant",
-				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", choices: ["a", "b"] } as never }],
-				api: "openai-completions",
-				provider: "openrouter",
-				model: "test",
-				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				stopReason: "toolUse",
-				timestamp: 1,
-			} as never,
-		]);
-		const delivery = deliverJobResult(steer);
+		const delivery = deliverJobResult(steer); // floats — resolves at settlement
+		await waitFor(() => handed.length === 1, 8000, "marker handed to the live agent");
 		await delay(1200);
-		assert.equal(fired, 0, "parked behind the pending quiz");
+		assert.equal(fired, 0, "no wake while the run is live");
+		assert.equal(jobStore.getJob(jobId)!.status, "running", "job flips only at delivery");
 
-		// The client turn coalesces: it claims the steer and lands it in the record.
-		const claimed = claimSteers(chatId);
-		assert.equal(claimed.length, 1, "coalescing claims the parked steer");
-		const record = chatStore.getChat(chatId)!;
-		chatStore.saveMessages(chatId, [...record.messages, steer] as never); // write-ahead persist
-
-		// The learner answers: the gates open — the parked pump must see the
-		// delivered steer via its post-idle re-check, NOT fire a second turn.
-		const answeredRecord = chatStore.getChat(chatId)!;
-		chatStore.saveMessages(chatId, [
-			...answeredRecord.messages,
-			{
-				id: "r1",
-				role: "toolResult",
-				toolCallId: "quiz-call",
-				toolName: "quiz",
-				content: [{ type: "text", text: "answered" }],
-				details: { answer: "a", correct: true, explanation: "" },
-				isError: false,
-				timestamp: 1,
-			} as never,
-		]);
-
+		// Settlement: the run persisted the injected marker.
+		unregisterLiveAgent(chatId);
+		settleSteers(chatId, [steer as never]);
 		await delivery;
-		await delay(1500);
-		assert.equal(fired, 0, "no duplicate wake after coalescing");
+		assert.equal(jobStore.getJob(jobId)!.status, "done", "delivery resolves at settlement");
+		assert.equal(fired, 0, "never needed a wake");
+		endTurn(chatId);
+	});
+
+	it("a handed marker the run never injected (stopper exit / missed poll) strands at settlement — the idle wake delivers it", async () => {
+		const { chatId, jobId, steer } = setup();
+		const { handed, agent } = fakeAgent();
+		let fired = 0;
+		setTurnRunner(async () => {
+			fired++;
+			return 200;
+		});
+
+		assert.ok(beginTurn(chatId));
+		registerLiveAgent(chatId, agent as never);
+
+		const delivery = deliverJobResult(steer);
+		await waitFor(() => handed.length === 1, 8000, "handed");
+		// The run settles WITHOUT the marker (question stopper exited before
+		// the follow-up poll) — reconcile against the persisted truth.
+		unregisterLiveAgent(chatId);
+		settleSteers(chatId, []);
+		endTurn(chatId);
+
+		// The marker returned to pending — the pump's idle wake delivers it.
+		await delivery;
+		assert.equal(fired, 1, "the stranded marker rode the idle wake");
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
+	});
+
+	it("a probe-handoff NEVER rides a live run — it waits the turn out and wakes", async () => {
+		const chat = chatStore.createChat("Test: handoff never live");
+		trackChat(chat.id);
+		chatStore.saveMessages(chat.id, nativeToolMessages("teach me calc", "probe_done", "call-pd", { ok: true }));
+		const handoff = buildProbeHandoffSteer(chat.id);
+		const { handed, agent } = fakeAgent();
+		const fired: SteerMessage[][] = [];
+		setTurnRunner(async (_cid, input) => {
+			fired.push((input as SteerInput).steers as SteerMessage[]);
+			return 200;
+		});
+
+		assert.ok(beginTurn(chat.id));
+		registerLiveAgent(chat.id, agent as never);
+
+		const delivery = deliverJobResult(handoff);
+		await delay(1200);
+		assert.equal(handed.length, 0, "the handoff was NOT handed to the live agent");
+		assert.equal(fired.length, 0, "no wake while the prober's turn streams");
+
+		// The prober's turn settles — now the handoff wakes the TEACHER.
+		unregisterLiveAgent(chat.id);
+		settleSteers(chat.id, []);
+		endTurn(chat.id);
+		await delivery;
+		assert.equal(fired.length, 1);
+		assert.equal(fired[0]![0]!.id, handoff.id, "the handoff rode the wake");
+	});
+
+	it("the idle wake carries EVERY pending marker in ONE turn", async () => {
+		const { chatId, steer } = setup();
+		const job2 = jobStore.createJob({ kind: "research", chatId, toolCallId: "call-2" });
+		trackJob(job2.id);
+		const result: ResearchResult = { brief: "Second result.", sources: [] };
+		jobStore.updateJob(job2.id, { result });
+		const steer2 = buildSubagentSteer(job2, result);
+
+		const fired: SteerMessage[][] = [];
+		setTurnRunner(async (_cid, input) => {
+			fired.push((input as SteerInput).steers as SteerMessage[]);
+			return 200;
+		});
+
+		await Promise.all([deliverJobResult(steer), deliverJobResult(steer2)]);
+		assert.equal(fired.length, 1, "one wake for the whole queue");
+		assert.equal(fired[0]!.length, 2, "both markers ride the same turn");
+		const ids = fired[0]!.map((s) => s.id).sort();
+		assert.deepEqual(ids, [steer.id, steer2.id].sort());
 	});
 });
+
 
 	it("fails the job (error status) when the wake turn errors unrecoverably", async () => {
 		const { jobId, steer } = setup();
@@ -1238,7 +1223,7 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 		const { jobId } = newChatWithResearchJob("abort running job", "call-abort1");
 		const fired: SteerMessage[] = [];
 		setTurnRunner(async (_cid, input) => {
-			fired.push((input as SteerInput).steer as SteerMessage);
+			fired.push(...((input as SteerInput).steers as SteerMessage[]));
 			return 200;
 		});
 		researchModelOverride.current = hangingModel();
@@ -1316,7 +1301,7 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 		assert.ok(beginTurn(chat.id));
 		const fired: SteerMessage[] = [];
 		setTurnRunner(async (_cid, input) => {
-			fired.push((input as SteerInput).steer as SteerMessage);
+			fired.push(...((input as SteerInput).steers as SteerMessage[]));
 			return 200;
 		});
 		void deliverJobResult(buildSubagentSteer(job, result)).catch(() => {

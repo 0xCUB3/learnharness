@@ -290,7 +290,22 @@ export class SessionModel {
 					role?: string;
 					id?: string;
 				};
-				if ((message as { role?: string }).role !== "assistant") return;
+				if ((message as { role?: string }).role !== "assistant") {
+					// Wave C: markers injected mid-run (pi's follow-up delivery)
+					// arrive as custom-role message_start/message_end events -
+					// UPSERT by id (markers always carry steer_<id> ids; id-less
+					// non-assistant events never occur - injected messages emit
+					// start+end only, no streaming partials). Without this the
+					// live stream dropped the marker until the settle sync.
+					const mid = message.id;
+					if (mid === undefined) return;
+					this.mutate(() => {
+						const idx = this.tail.findIndex((m) => m.id === mid);
+						this.tail =
+							idx === -1 ? [...this.tail, message as LhMessage] : this.tail.with(idx, message as LhMessage);
+					});
+					return;
+				}
 				// pi streams AssistantMessages with NO id — the id exists only
 				// once the server's persistTurn stamps the record (the live
 				// streaming bug, 2026-09-26: minting a fresh id per event made

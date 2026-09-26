@@ -4,7 +4,7 @@ import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import type { ModelRole } from "../../config.ts";
-import { claimSteers, deliverJobResult, setJobRespawn, setTurnRunner } from "./jobs.ts";
+import { deliverJobResult, registerLiveAgent, setJobRespawn, setTurnRunner, settleSteers, unregisterLiveAgent } from "./jobs.ts";
 import { piTurnResponse, runPiTurn } from "./pi/ui-stream.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
@@ -184,14 +184,16 @@ export async function handleChatInput(
 
 	// The input's native appends (pure; the honest 400 for an answer with no
 	// pending question call). Computed BEFORE beginTurn so a refused input
-	// leaves no liveness effects; read against the CURRENT record.
+	// leaves no liveness effects; read against the CURRENT record. Wave C:
+	// the idle wake carries EVERY queued marker (steerDelivered filters a
+	// re-fire of an already-landed one) - with claimSteers gone, this wake
+	// input is the only steer appender; in-run delivery rides pi's own
+	// follow-up queue and never builds an input event at all.
 	let appends;
 	try {
 		appends =
-			input.type === "steer"
-				? steerDelivered(record.messages, input.steer.id)
-					? []
-					: [input.steer]
+			input.type === "steers"
+				? input.steers.filter((s) => !steerDelivered(record.messages, s.id))
 				: inputAppends(record, input);
 	} catch (err) {
 		if (err instanceof ChatInputError) {
@@ -208,30 +210,13 @@ export async function handleChatInput(
 		return Response.json({ error: "A turn is already running for this session" }, { status: 409 });
 	}
 
-	// CONTINUATION COALESCING (async protocol §4, the delivery-starvation fix):
-	// steers finished while a quiz chain held the wake gates ride THIS turn —
-	// appended after the learner's answer (conversion-safe: the answer is the
-	// question call's tool result now). Claiming happens after beginTurn, so
-	// this turn owns the registry and the write-ahead persist below makes the
-	// claim durable. Steers already in the transcript (a wake raced in) are
-	// finalized by the claim itself — the append filter keeps exactly one copy.
-	// THE CARRIED FILTER (restored 2026-09-26, the Wave B regression of the
-	// 2026-09-18 duplicate-key bug): a pump-fired wake turn ALREADY CARRIES
-	// its steer in `appends` — and the pump only shifts its queue entry AFTER
-	// the turn registers, so the claim above pops that very steer too. The
-	// old record-side-only filter couldn't see the carried copy (it checks
-	// the PRE-write-ahead snapshot), and the marker persisted twice with the
-	// same `steer_<jobId>` id — two view messages, one React key, crash.
-	const carried = input.type === "steer" ? input.steer.id : undefined;
-	const steers = claimSteers(chatId).filter(
-			(s) => s.id !== carried && !steerDelivered(record.messages, s.id),
-		);
-
 	// Write-ahead persistence: the input's native appends go on disk BEFORE
-	// the turn starts — the learner's answer is durable the instant the
+	// the turn starts - the learner's answer is durable the instant the
 	// request arrives, and any remount, second tab, or server crash reads
-	// truth instead of the pre-answer record.
-	const merged = [...record.messages, ...appends, ...steers];
+	// truth instead of the pre-answer record. (Wave C: the wake's markers
+	// ride this same write-ahead - the pump de-queued them at fire, so this
+	// is the ONLY copy ever appended.)
+	const merged = [...record.messages, ...appends];
 	try {
 		stores.chatStore.saveMessages(chatId, merged);
 	} catch (err) {
@@ -373,6 +358,13 @@ export async function handleChatInput(
 				// nothing must find the persisted record current — the same
 				// ordering rule as endTurn.
 				unregisterTurn(chatId);
+				// Wave C steer settlement: the live agent is dead (no more
+				// followUp handoffs) - reconcile the steer registry against
+				// what this run actually persisted (in-run injections
+				// resolve; stranded markers return to pending), then let
+				// the pump take any stragglers down the idle wake.
+				unregisterLiveAgent(chatId);
+				settleSteers(chatId, stamped);
 			},
 		});
 		// The turn is now a live background object: register it so any view
@@ -381,6 +373,11 @@ export async function handleChatInput(
 		// runPiTurn call is race-free: the agent loop only ticks in later
 		// microtasks, so settle (and thus unregister) cannot beat us here.
 		registerTurn(chatId, handle);
+		// Wave C: the pump hands queued steer markers to THIS run's agent
+		// (pi's own follow-up queue) - same race-freedom as registerTurn:
+		// the loop only ticks in later microtasks, so settlement cannot
+		// beat the registration.
+		registerLiveAgent(chatId, constructed);
 		// The POST response: just this caller's view onto the running turn —
 		// identical wire dialect to the reattach stream.
 		return piTurnResponse(handle);
@@ -388,6 +385,9 @@ export async function handleChatInput(
 		// The stream never started, so no onFinish will fire — clear the registry
 		// or a malformed request would lock the chat until the TTL eviction.
 		endTurn(chatId);
+		// Wave C: the live-agent registration (if it happened) dies with the
+		// turn here too - nothing was handed (the loop never ticked).
+		unregisterLiveAgent(chatId);
 		console.error(`[chat ${chatId}] turn failed to start:`, err);
 		return Response.json({ error: "Failed to start the turn" }, { status: 500 });
 	}

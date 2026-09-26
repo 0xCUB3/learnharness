@@ -42,8 +42,12 @@ export type ChatInput =
 	| { type: "verdict"; accepted: boolean; note?: string }
 	| { type: "continue" };
 
-/** A wake-pipeline steer delivery — same turn composition, server-origin. */
-export type SteerInput = { type: "steer"; steer: LhMessage };
+/** A wake-pipeline steer delivery — same turn composition, server-origin.
+ *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
+ *  input appends — with claimSteers deleted, the pump's wake is the only
+ *  steer appender left (the in-run path hands markers to pi's own
+ *  follow-up queue instead, so it never builds an input event). */
+export type SteerInput = { type: "steers"; steers: LhMessage[] };
 
 /** Every input the turn composition accepts. */
 export type TurnInput = ChatInput | SteerInput;
