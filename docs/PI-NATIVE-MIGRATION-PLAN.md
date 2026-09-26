@@ -453,3 +453,139 @@ unchanged. Agent band (src/agent): untouched.
 4. Session hook + chat.tsx transplant + renderer switch + ai-elements.
 5. Deletes (projection, ui-message, chat-transport, deps) + gates.
 6. Test migration + live smoke.
+
+---
+
+# Wave C planning — pi-native steer/follow-up delivery (2026-09-26 recon)
+
+## Trigger
+
+Live crash on first post-Wave-B steer delivery: a pump-fired wake turn
+double-appended its own steer (the Wave B regression of the 2026-09-18
+duplicate-key bug). Hotfixed as `c364013` (the carried filter restored;
+record `chat_muhlcltz` deduped by hand). The hotfix makes steers WORK
+again — Wave C is the structural migration onto pi's own delivery seams.
+
+## What pi offers natively (verified in pi-agent-core source)
+
+- `getSteeringMessages()` — injected at turn boundaries, mid-run.
+- `getFollowUpMessages()` — polled when the agent would otherwise STOP;
+  returned messages join the context and the SAME run continues.
+  Emitted as full `message_start`/`message_end` events (our verbatim
+  wire carries them to clients for free) and pushed into the run's
+  `newMessages` (persistTurn persists them).
+- `shouldStopAfterTurn` runs BEFORE both polls and EXITS the loop — the
+  existing `makeQuestionStopper` guarantees an open quiz is never
+  overridden by a queued steer. No new guard needed.
+- `CustomAgentMessages` declaration merging — our `LhMarkerMessage`
+  (role "custom") can become a REGISTERED pi custom message type:
+  first-class in agent state, events, and newMessages.
+  `toLlmMessages` already is the sanctioned `convertToLlm` seam.
+- `runAgentLoopContinue` takes no new messages: the wake's context must
+  already carry them. And pi polls follow-ups only AFTER the first LLM
+  call — an empty-input wake would produce a stray teacher turn before
+  the artifact arrives.
+
+## Owner rulings (2026-09-26)
+
+1. Hotfix first, Wave C after (done: `c364013`).
+2. **Follow-ups ONLY** (owner corrected an initial steering choice):
+   turns are typically single-message; follow-up semantics reproduces
+   today's pacing (never interrupt a running turn) with least risk.
+   `getSteeringMessages` is NOT wired.
+3. **One queue, no claim machinery** (the unified intent): the per-chat
+   steer queue is the single delivery registry; `claimSteers` and
+   continuation coalescing are DELETED. The idle wake carries its
+   markers as the run's input (write-ahead appends — today's semantics,
+   now the ONLY appender), because follow-up polls don't exist at run
+   start.
+
+## The design
+
+### Delivery paths (exactly one queue, three arrival contexts)
+
+1. **Steer arrives mid-run** (teacher working): the agent's
+   `getFollowUpMessages` returns queued markers at the run's natural
+   stop; the same run continues (no second turn claim, no 409 dance, no
+   client re-attach — the marker streams over the live view).
+2. **Steer queued during a quiz chain**: the answer's run stops on the
+   question stopper BEFORE the follow-up poll → the steer waits (exactly
+   today's waitForIdle semantics); it rides the first run that ends
+   without an open question — that run's follow-up poll delivers it.
+   (This replaces continuation coalescing: `claimSteers` dies.)
+3. **No run at all** (client closed, idle): the pump keeps
+   `waitForIdle` + fires the wake turn carrying the queued markers as
+   its input appends (write-ahead durable, then the run responds).
+   The pump becomes: gates → fire ONE wake for everything queued → done.
+   The 409 backoff stays (a client turn may race the wake).
+
+### Marker representation
+
+- `declare module` augmentation registers `LhMarkerMessage` under
+  `CustomAgentMessages` — type-level only; the runtime shape is
+  unchanged (role "custom", customType, content, details, id,
+  timestamp). Markers stay the record shape (SubagentSteerCard,
+  probe-handoff, verdict rendering all keep working).
+- `getFollowUpMessages` returns the marker as-is; pi pushes it into
+  context; `toLlmMessages` flattens it for the provider (unchanged).
+
+### Idempotency + crash story
+
+- Dequeue-at-poll: a follow-up marker leaves the queue when handed to
+  the loop; it reaches the record at that run's persistTurn. A crash
+  between poll and persist loses it — the SAME exposure today's
+  in-memory queue has (server restart re-derives steers only for
+  running jobs via job respawn). Not worse, not better.
+- The wake path keeps write-ahead persistence (durable before the run).
+- `steerDelivered` (id-in-transcript) remains the dedupe oracle at the
+  wake's append and for redelivery races.
+
+### Client
+
+- `applyWireEvent` extends to append NON-assistant messages arriving via
+  `message_start`/`message_end` (custom/user roles) — today it drops
+  them, and in-run follow-up markers arrive exactly that way on the
+  live stream. Assistant streaming keeps the slot logic (Wave D fix).
+- Nothing else: `projectView` already renders steer markers; the wake is
+  still a turn (reattach paths unchanged).
+
+### Scope boundaries
+
+- **probe-handoff stays a wake input** (not a follow-up): the
+  prober→teacher switch is a record-level branch (`hasProbeDone` → the
+  next run builds the teacher); `prepareNextTurn` cannot swap a
+  toolset, so the handoff must start a new run regardless.
+- Abort steers and pdf/research/demo/visual result steers ride the same
+  queue (kind is inert to the delivery mechanism).
+- Extraction/coverage treatment of markers is unchanged (custom role,
+  view-line-less → invisible to coverage).
+
+## Deletions
+
+- `claimSteers` + its handler call site + the carried-filter complexity
+  (nothing left to double-append: the wake is the only appender).
+- The pump's per-entry retry loop simplifies (one fire for the whole
+  queue snapshot; the 409 backoff survives).
+- jobs.test coalescing suite → rewritten as follow-up delivery tests.
+
+## Test plan
+
+- jobs.test: queue → getFollowUpMessages handoff (dequeue-once);
+  quiz-open deferral (stopper exits before the poll); pump idle wake
+  fires ONE turn for N queued steers; 409 backoff unchanged.
+- chat-flow: mid-run follow-up e2e — a scripted teacher run whose
+  follow-up poll returns a marker → the SAME stream continues with the
+  marker's message events + the teacher's response; record holds one
+  copy; `steerDelivered` redelivery no-op.
+- session-core: custom-role message events append to the tail (wire
+  events from in-run injections).
+- Live smoke on PORT=3004: dispatch a researcher job, deliver mid-turn
+  and idle, reload, abort steer.
+
+## Implementation order
+
+1. Declaration merging (type-level) + agentOpts wiring of
+   `getFollowUpMessages` reading the queue.
+2. Client `applyWireEvent` non-assistant appends.
+3. Pump simplification + `claimSteers` deletion + handler cleanup.
+4. Test migration (jobs, chat-flow, session-core) + live smoke.
