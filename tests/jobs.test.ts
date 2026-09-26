@@ -854,14 +854,14 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 
 // ─── continuation coalescing (the delivery-starvation fix) ───────────────────
 
-describe("Wave C: live follow-up handoff + settlement reconciliation", () => {
-	/** A minimal stand-in for pi's Agent — the pump touches only followUp(). */
+describe("Wave C: live steering handoff + settlement reconciliation", () => {
+	/** A minimal stand-in for pi's Agent — the pump touches only steer(). */
 	function fakeAgent(): { handed: SteerMessage[]; agent: unknown } {
 		const handed: SteerMessage[] = [];
-		return { handed, agent: { followUp: (m: SteerMessage) => handed.push(m) } };
+		return { handed, agent: { steer: (m: SteerMessage) => handed.push(m) } };
 	}
 
-	it("hands queued markers to the LIVE run (pi followUp) — no wake fires, the registry waits", async () => {
+	it("hands queued markers to the LIVE run (pi steering queue) — no wake fires, the registry waits", async () => {
 		const { chatId, jobId, steer } = setup();
 		const { handed, agent } = fakeAgent();
 		let fired = 0;
@@ -942,6 +942,53 @@ describe("Wave C: live follow-up handoff + settlement reconciliation", () => {
 		await delivery;
 		assert.equal(fired.length, 1);
 		assert.equal(fired[0]![0]!.id, handoff.id, "the handoff rode the wake");
+	});
+
+	it("registerLiveAgent immediately steers pending markers into the NEW run (the parked-behind-quiz path)", async () => {
+		const { chatId, jobId, steer } = setup();
+		const { handed, agent } = fakeAgent();
+		let fired = 0;
+		setTurnRunner(async () => {
+			fired++;
+			return 200;
+		});
+
+		// A dangling question has the pump parked in waitForIdle: the
+		// marker is pending but no live run exists to take it.
+		chatStore.saveMessages(chatId, [
+			...nativeToolMessages("teach me", "probe_done", "call-q", { ok: true }),
+			{
+				id: "a-q",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", choices: ["a", "b"] } as never }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+				timestamp: 1,
+			} as never,
+		]);
+		const delivery = deliverJobResult(steer);
+		await delay(300); // let the pump park behind the dangling question
+		assert.equal(handed.length, 0, "nothing to hand to — no live agent");
+
+		// The learner answers: the handler registers the answer run's agent
+		// BEFORE runPiTurn, so the marker is steered into it synchronously —
+		// it rides the run's START steering poll (first LLM call).
+		assert.ok(beginTurn(chatId));
+		registerLiveAgent(chatId, agent as never);
+		assert.equal(handed.length, 1, "registration itself steered the marker in");
+		assert.equal(handed[0]!.id, steer.id);
+
+		// The answer run persisted the marker — the parked pump's wake
+		// re-check resolves it without ever firing a turn.
+		unregisterLiveAgent(chatId);
+		settleSteers(chatId, [steer as never]);
+		endTurn(chatId);
+		await delivery;
+		assert.equal(fired, 0, "the parked wake never fired — the run delivered");
+		assert.equal(jobStore.getJob(jobId)!.status, "done");
 	});
 
 	it("the idle wake carries EVERY pending marker in ONE turn", async () => {

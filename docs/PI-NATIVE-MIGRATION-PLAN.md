@@ -589,3 +589,36 @@ again — Wave C is the structural migration onto pi's own delivery seams.
 2. Client `applyWireEvent` non-assistant appends.
 3. Pump simplification + `claimSteers` deletion + handler cleanup.
 4. Test migration (jobs, chat-flow, session-core) + live smoke.
+
+## Wave C pivot (owner correction, later 2026-09-26): follow-ups → STEERING
+
+The owner re-examined the follow-ups-only ruling and overturned it: a real
+learning session is ONE continuous run — teach a thing, verify it with a
+quiz tool call, begin teaching the next thing. There are no "run would
+otherwise stop" moments mid-lesson, and the few run ends that do exist are
+exactly the ones where delivery must NOT happen (the question stopper). So
+subagent results must be delivered MID-RUN, BETWEEN messages.
+
+The pivot (all in the same two-vehicle skeleton):
+
+- Vehicle 1 hands markers to `agent.steer()` — pi's STEERING queue. The
+  loop drains it at TURN BOUNDARIES: after a completed assistant message
+  AND its tool results (never between a toolCall and its toolResult — the
+  bonded pair survives injection), and again at RUN START (a continuation
+  drains the queue BEFORE its first LLM call). The run CONTINUES with the
+  marker in context.
+- `steeringMode: "all"` (was `followUpMode`) — every handed marker joins
+  one boundary injection.
+- `registerLiveAgent` moved BEFORE `runPiTurn` in the handler and now
+  hands pending markers itself: the loop's start poll drains the queue
+  SYNCHRONOUSLY inside the `runPiTurn` call, so a later registration would
+  miss it. A marker stranded by a quiz-terminated run therefore rides the
+  ANSWER run's first LLM call — the native replacement for the old
+  continuation coalescing.
+- Settlement reconciliation, the idle wake, probe-handoff exclusion, and
+  the registry-as-truth design are UNCHANGED (stranding is now exactly the
+  stopper-exit case; the wake still covers a cold-and-idle queue).
+
+Deferred after the pivot (owner's list): thinking blocks sometimes
+rendering after messages; output tokens of certain tool calls vanishing
+with no tool call actually happening.

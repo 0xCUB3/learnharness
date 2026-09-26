@@ -389,6 +389,84 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.equal((record.messages[at + 1] as { role?: string } | undefined)?.role, "assistant", "the wake response follows the marker");
 	});
 
+	it("Wave C steering: a mid-run result injects BETWEEN turn units — never splitting a toolCall from its toolResult", { timeout: 15000 }, async () => {
+		// THE OWNER'S CORRECTION (2026-09-26): a real lesson is ONE continuous
+		// teach→quiz→teach run, so a subagent result must land BETWEEN messages
+		// inside the run — pi's steering queue, drained at turn boundaries
+		// (after a completed assistant message AND its tool results). Waiting
+		// for run end (follow-ups) can never fire mid-lesson: the question
+		// stopper pre-empts that poll at exactly the moments a run DOES end.
+		const chat = createConfiguredChat("Test: mid-run steering");
+		createdChats.push(chat.id);
+
+		// Step 1 (gated): a non-question tool — an unknown name yields an
+		// error toolResult WITHOUT terminating, so the run continues. Step 2:
+		// the reaction AFTER the boundary injection (records its prompt).
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const seen: string[] = [];
+		const faux = createFauxCore({});
+		faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage(
+					[fauxToolCall("no_such_tool", { note: "x" }, { id: "call-mid" })],
+					{ stopReason: "toolUse" },
+				);
+			},
+			(context) => {
+				seen.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)).join("\n"));
+				return fauxAssistantMessage([fauxText("Folded the marker in.")]);
+			},
+		]);
+		const engine: PiEngine = { model: faux.getModel(), streamFn: faux.streamSimple };
+
+		// A wake here would be a BUG (delivery must ride the live run) — the
+		// counter keeps an erroneous wake hermetic and assertable.
+		let wakes = 0;
+		setTurnRunner(async () => {
+			wakes++;
+			return 200;
+		});
+
+		// The turn floats mid-run: step 1 is gated, the run is live.
+		const res = handleChatRequest(post(chat.id, { type: "text", text: "teach" }), agentFactory(engine));
+		await waitFor(() => isTurnRunning(chat.id), 8000, "the turn is live");
+
+		// The result lands MID-RUN: the pump hands it to the live agent's
+		// steering queue (vehicle 1) — the queued marker waits for the
+		// in-flight turn to complete so the injection lands at its boundary.
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-mid" });
+		const steer = buildSubagentSteer(job, { brief: "Mid-run brief.", sources: [] });
+		const delivery = deliverJobResult(steer);
+		await new Promise((r) => setTimeout(r, 300)); // vehicle 1 hands off
+		assert.equal(wakes, 0, "no wake — the live run owns the delivery");
+
+		release(); // step 1 completes → tool result → TURN BOUNDARY → inject → step 2
+		await drain(await res);
+		await delivery; // resolves at settleSteers (the run persisted the marker)
+
+		// Record shape: the marker sits BETWEEN completed turn units — after
+		// the toolResult it must never split, adjacent to it.
+		const record = chatStore.getChat(chat.id)!;
+		const at = (role: string, pred: (m: LhMessage) => boolean) =>
+			record.messages.findIndex((m) => (m as { role?: string }).role === role && pred(m as never));
+		const callAt = record.messages.findIndex(
+			(m) => (m as { role?: string }).role === "assistant" &&
+				JSON.stringify((m as { content?: unknown }).content).includes("call-mid"),
+		);
+		const resultAt = at("toolResult", (m) => (m as { toolCallId?: string }).toolCallId === "call-mid");
+		const steerAt = record.messages.findIndex((m) => (m as { id?: string }).id === steer.id);
+		const finalAt = at("assistant", (m) => JSON.stringify((m as { content?: unknown }).content).includes("Folded the marker in."));
+		assert.ok(callAt !== -1 && resultAt !== -1 && steerAt !== -1 && finalAt !== -1, `all units present: ${callAt}/${resultAt}/${steerAt}/${finalAt}`);
+		assert.ok(callAt < resultAt, "the toolCall precedes its toolResult (bonded pair)");
+		assert.equal(steerAt, resultAt + 1, "the marker injected at the turn boundary — immediately after the completed unit");
+		assert.ok(steerAt < finalAt, "the run CONTINUED after the injection (same run, no wake)");
+		assert.equal(record.messages.filter((m) => (m as { id?: string }).id === steer.id).length, 1, "exactly one marker copy");
+		assert.ok(seen[0]!.includes("Mid-run brief."), "the model SAW the marker in its next prompt");
+		assert.equal(wakes, 0, "delivery rode the live run end to end");
+	});
+
 	it("a cancelled view NEVER aborts the turn — it runs to completion (owner ruling 2026-09-25)", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));

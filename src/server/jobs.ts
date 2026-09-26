@@ -8,18 +8,26 @@
  *     The steer joins a per-chat serialized registry and the pump drives
  *     it along ONE of two paths:
  *
- *       1. LIVE RUN → pi follow-up: a turn is streaming, so the marker is
- *          handed to the LIVE agent's followUp queue (agent.followUp).
- *          pi polls that queue when the run would otherwise stop and
- *          CONTINUES THE SAME RUN — the marker joins the context, rides
- *          the live event stream (message_start/message_end), and lands
- *          in the record at that run's persist. The question stopper
- *          runs BEFORE the follow-up poll and exits the loop, so an open
- *          quiz is never overridden: a handed marker strands (see
- *          settleSteers) and waits for the next run — today's pacing.
- *          probe-handoff markers NEVER take this path (owner ruling:
- *          the handoff must start the TEACHER's run — a record-level
- *          branch only a fresh wake can make).
+ *       1. LIVE RUN → pi steering: the marker is handed to the LIVE
+ *          agent's steering queue (agent.steer). pi polls that queue at
+ *          TURN BOUNDARIES — after a completed assistant message AND its
+ *          tool results (never between a toolCall and its result), and
+ *          again at the run's start (a continuation drains the queue
+ *          BEFORE its first LLM call) — and CONTINUES THE SAME RUN: the
+ *          marker joins the context mid-lesson, rides the live event
+ *          stream (message_start/message_end), and lands in the record
+ *          at that run's persist. This is the owner's 2026-09-26
+ *          correction: a real lesson is one continuous teach→quiz→teach
+ *          loop, so delivery must happen BETWEEN messages inside the
+ *          run — waiting for the run to stop (follow-ups) only ever
+ *          fires at a stopper exit, which is exactly when it must not.
+ *          The question stopper runs BEFORE the post-turn poll and
+ *          exits the loop, so a quiz-terminated run never injects: the
+ *          handed marker strands (see settleSteers) and waits — the
+ *          ANSWER run then picks it up at its start poll. probe-handoff
+ *          markers NEVER take this path (owner ruling: the handoff must
+ *          start the TEACHER's run — a record-level branch only a fresh
+ *          wake can make).
  *       2. IDLE WAKE: no live turn. WAIT FOR IDLE (turn-liveness OR a
  *          dangling question — an unanswered client-side tool call breaks
  *          provider conversion), then fire ONE server-side wake turn
@@ -75,10 +83,10 @@ interface QueuedSteer {
 	steer: SteerMessage;
 	resolve: () => void;
 	reject: (reason: Error) => void;
-	/** The live agent this marker was handed to via followUp() — set by the
-	 *  pump's live path. Guards double-handoff (a re-pumped loop must not
-	 *  re-queue what a run already holds) and is CLEARED at settlement for
-	 *  markers the dying run never injected. */
+	/** The live agent this marker was steered into (agent.steer) — set by
+	 *  the hand-off helper. Guards double-handoff (a re-pumped loop or a
+	 *  re-registered run must not re-queue what a run already holds) and is
+	 *  CLEARED at settlement for markers the dying run never injected. */
 	handedTo?: Agent;
 }
 
@@ -174,15 +182,34 @@ export function deliverJobResult(steer: SteerMessage): Promise<void> {
 	});
 }
 
-/** The chat-handler registers the CURRENTLY STREAMING turn's agent right
- *  after registerTurn — the pump's live path hands queued markers to this
- *  agent's pi-native follow-up queue (followUpMode "all": every handed
- *  marker joins the continuation turn together, matching the wake's
- *  carry-everything semantics). Registration is race-free the same way
- *  registerTurn is: the agent loop only ticks in later microtasks, so the
- *  settle seam cannot beat the registration. */
+/** Hand every eligible pending marker to a live agent's steering queue
+ *  (idempotent per agent via handedTo). Called from BOTH the pump's live
+ *  path and registerLiveAgent — a parked marker (stranded behind a quiz)
+ *  must not wait for the pump loop to notice the new run: the handler
+ *  registers the answer run's agent BEFORE runPiTurn, so this hand-off
+ *  beats the loop's synchronous start-poll drain and the marker rides the
+ *  run's FIRST LLM call (the native equivalent of the old continuation
+ *  coalescing). */
+function handOffEligible(chatId: string, agent: Agent): void {
+	const queue = state().queues.get(chatId);
+	if (!queue || queue.length === 0) return;
+	for (const entry of queue) {
+		if (entry.handedTo !== agent && entry.steer.customType !== "probe-handoff") {
+			agent.steer(entry.steer);
+			entry.handedTo = agent;
+		}
+	}
+}
+
+/** The chat-handler registers the CURRENTLY STREAMING turn's agent BEFORE
+ *  runPiTurn (the loop's start steering-poll drains synchronously inside
+ *  that call — a later registration would miss it). Pending registry
+ *  markers are steered into the run right here. The settle seam cannot
+ *  beat the registration: settlement needs a streamed response, which
+ *  never happens inside the constructor call. */
 export function registerLiveAgent(chatId: string, agent: Agent): void {
 	state().liveAgents.set(chatId, agent);
+	handOffEligible(chatId, agent);
 }
 
 /** Clear the live agent at settlement — MUST run before settleSteers so the
@@ -351,33 +378,26 @@ async function pump(chatId: string): Promise<void> {
 			}
 			s.queues.set(chatId, stillPending);
 
-			// VEHICLE 1 — THE LIVE RUN: pi's own follow-up queue. The agent of
-			// the streaming turn takes every marker not already handed to IT;
-			// pi polls the queue when the run would otherwise stop, injects
-			// them (message_start/message_end on the live wire), and continues
-			// the run. Delivery resolves at settlement (settleSteers). Nothing
-			// else to do in this loop iteration — the turn owns the delivery.
+			// VEHICLE 1 — THE LIVE RUN: pi's steering queue. The agent of the
+			// streaming turn takes every eligible marker; pi injects at the
+			// next turn boundary (message_start/message_end on the live wire,
+			// between completed assistant+toolResult units) and continues the
+			// run. Delivery resolves at settlement (settleSteers). Nothing else
+			// to do in this loop iteration — the turn owns the delivery.
 			const live = s.liveAgents.get(chatId);
 			if (live && isTurnRunning(chatId)) {
-				const handable = stillPending.filter(
-					(e) => e.handedTo !== live && e.steer.customType !== "probe-handoff",
-				);
-				let handedAny = false;
-				for (const entry of handable) {
-					live.followUp(entry.steer);
-					entry.handedTo = live;
-					handedAny = true;
-				}
+				handOffEligible(chatId, live);
+				const handable = stillPending.filter((e) => e.handedTo === live);
 				// probe-handoffs never ride a live run (owner ruling: the
 				// handoff must START the teacher's run) — if any remain
 				// pending, wait the run out and loop to the wake below.
 				const handoffWaits = stillPending.some(
 					(e) => e.steer.customType === "probe-handoff",
 				);
-				if (handedAny && !handoffWaits) {
+				if (handable.length > 0 && !handoffWaits) {
 					return; // the run delivers; settleSteers re-pumps the rest
 				}
-				if (handedAny) {
+				if (handable.length > 0) {
 					await delay(POLL_MS);
 					await waitForIdle(chatId);
 					continue;

@@ -315,6 +315,15 @@ export async function handleChatInput(
 		// is just the FIRST subscriber (a view). A client disconnect can no
 		// longer abort the turn; the remote kill is the abort channel, and
 		// late views reattach via GET /api/chats/[id]/stream.
+		// Wave C (owner correction, 2026-09-26 — steering): register the live
+		// agent BEFORE runPiTurn — the loop's start steering-poll drains the
+		// queue SYNCHRONOUSLY inside that call, so a later registration would
+		// miss it. Registration also steers any pending registry markers into
+		// this run: a marker parked behind a just-answered quiz rides THIS
+		// run's first LLM call (the native replacement for continuation
+		// coalescing). Settlement still cannot beat the flow below: it needs
+		// a streamed response, which never happens inside the constructor.
+		registerLiveAgent(chatId, constructed);
 		const handle = runPiTurn({
 			agent: constructed,
 			// Stream-level failures are provider/transport internals — masked,
@@ -373,11 +382,6 @@ export async function handleChatInput(
 		// runPiTurn call is race-free: the agent loop only ticks in later
 		// microtasks, so settle (and thus unregister) cannot beat us here.
 		registerTurn(chatId, handle);
-		// Wave C: the pump hands queued steer markers to THIS run's agent
-		// (pi's own follow-up queue) - same race-freedom as registerTurn:
-		// the loop only ticks in later microtasks, so settlement cannot
-		// beat the registration.
-		registerLiveAgent(chatId, constructed);
 		// The POST response: just this caller's view onto the running turn —
 		// identical wire dialect to the reattach stream.
 		return piTurnResponse(handle);

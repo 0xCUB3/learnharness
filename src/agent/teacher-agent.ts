@@ -165,12 +165,14 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		},
 		streamFn: engine.streamFn,
 		shouldStopAfterTurn: stopper,
-		// Wave C (2026-09-26): markers handed to a live run drain from pi's own
-		// follow-up queue — "all" joins every handed marker in ONE
-		// continuation turn, matching the idle wake's carry-everything
-		// semantics (the default "one-at-a-time" would spend one teacher
-		// turn per marker).
-		followUpMode: "all",
+		// Wave C (2026-09-26, owner correction same day): markers handed to a
+		// live run drain from pi's STEERING queue — the lesson loop is one
+		// continuous teach→quiz→teach run, so delivery must inject at turn
+		// boundaries INSIDE the run, not wait for it to stop (follow-ups).
+		// "all" joins every handed marker at one boundary, matching the idle
+		// wake's carry-everything semantics (the default "one-at-a-time"
+		// would spend one teacher turn per marker).
+		steeringMode: "all",
 		// Wave B (owner-approved 2026-09-26): the model-facing conversion is
 		// THE app seam — markers flatten to their canonical user text
 		// (verdictText / HANDOFF_TEXT / steer text, all single-sourced),
