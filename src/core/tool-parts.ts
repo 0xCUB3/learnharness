@@ -30,6 +30,7 @@
 import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
 import { quizInputBase, askInputSchema, askOptionProblems, quizInputProblems, type AskToolInput, type QuizToolInput } from "./question-core.ts";
+import { restoreMathEscapes } from "./math-delims.ts";
 import { probeDoneInputSchema, type ProbeDoneInput } from "./contracts/probe.ts";
 
 /** The pi-boundary parse step, mirrored here (live-smoke fix, 2026-09-26):
@@ -65,8 +66,25 @@ function boundaryParse<T>(schema: TSchema, input: unknown): T | undefined {
  * never have been posed (e.g. `correctAnswer: undefined`, which Convert
  * widens to "") renders as a quiet fallback, not a broken quiz.
  */
+/** LaTeX-escape restoration, deep over every string field (the JSON-debris
+ *  fix, owner ruling 2026-09-26): records persist RAW call args, so
+ *  single-backslash LaTeX eaten by JSON escape resolution (FF ate the 'f' of
+ *  \forall, VT the 'v' of \varphi, TAB the 't' of \to) survives to the
+ *  display path. This is the ONE seam every rendered question passes
+ *  through — new turns and already-poisoned records alike heal here. */
+function restoreMathEscapesDeep(value: unknown): unknown {
+	if (typeof value === "string") return restoreMathEscapes(value);
+	if (Array.isArray(value)) return value.map(restoreMathEscapesDeep);
+	if (typeof value === "object" && value !== null) {
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value)) out[k] = restoreMathEscapesDeep(v);
+		return out;
+	}
+	return value;
+}
+
 export function parseQuizInput(input: unknown): QuizToolInput | undefined {
-	const cleaned = boundaryParse<QuizToolInput>(quizInputBase, input);
+	const cleaned = boundaryParse<QuizToolInput>(quizInputBase, restoreMathEscapesDeep(input));
 	if (!cleaned) return undefined;
 	if (quizInputProblems(cleaned).length > 0) return undefined;
 	return cleaned;
@@ -79,7 +97,7 @@ export function parseQuizInput(input: unknown): QuizToolInput | undefined {
  * keying, so they parse to undefined exactly like the zod seam did).
  */
 export function parseAskInput(input: unknown): AskToolInput | undefined {
-	const cleaned = boundaryParse<AskToolInput>(askInputSchema, input);
+	const cleaned = boundaryParse<AskToolInput>(askInputSchema, restoreMathEscapesDeep(input));
 	if (!cleaned) return undefined;
 	if (askOptionProblems(cleaned.options ?? []).length > 0) return undefined;
 	return cleaned;

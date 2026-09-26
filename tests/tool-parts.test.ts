@@ -153,3 +153,66 @@ describe("parseProbeDoneInput", () => {
 		assert.equal(parseProbeDoneInput({ assessment: { summary: "…" } }), undefined);
 	});
 });
+describe("LaTeX-escape restoration (the JSON-debris fix, owner ruling 2026-09-26)", () => {
+	// The exact live shapes from the modal-logic session: single-backslash
+	// LaTeX inside JSON args — JSON escape resolution ate the command's
+	// first letter (\f → FF ate 'f' of \forall, \v → VT ate 'v' of \varphi).
+	it("parseQuizInput restores escape debris inside math spans (question + options + explanation)", () => {
+		const parsed = parseQuizInput({
+			question: "What does \\(\\forall x\\, \\varphi(x)\\) mean?",
+			options: [
+				{ label: "\\(\x0barphi\\) is true when every element satisfies it", value: "tarski" },
+				{ label: "\\(\x0corall\\) and \\(\\exists\\) are just shorthand", value: "shorthand" },
+			],
+			correctAnswer: "tarski",
+			explanation: "\\(\x0corall\\) quantifies over the domain.",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, "What does \\(\\forall x\\, \\varphi(x)\\) mean?");
+		assert.equal(parsed.options[0]!.label, "\\(\\varphi\\) is true when every element satisfies it");
+		assert.equal(parsed.options[1]!.label, "\\(\\forall\\) and \\(\\exists\\) are just shorthand");
+		assert.equal(parsed.explanation, "\\(\\forall\\) quantifies over the domain.");
+	});
+
+	it("parseAskInput restores debris in ask option labels too", () => {
+		const parsed = parseAskInput({
+			question: "Goal?",
+			options: [{ label: "\\(\x0corall\\) rigor" }, { label: "Intuition first" }],
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.options![0]!.label, "\\(\\forall\\) rigor");
+	});
+
+	it("restores TAB debris (the \\to case) inside spans only", () => {
+		const parsed = parseQuizInput({
+			question: "Is \\(p\to q\\) valid?",
+			options: [{ label: "yes" }, { label: "no" }],
+			correctAnswer: "no",
+			explanation: "",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, "Is \\(p\\to q\\) valid?");
+	});
+
+	it("control chars OUTSIDE math spans are left alone (real prose/pasted text)", () => {
+		const parsed = parseQuizInput({
+			question: "Pick:\ta\x0bb",
+			options: [{ label: "x" }, { label: "y" }],
+			correctAnswer: "x",
+			explanation: "",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, "Pick:\ta\x0bb");
+	});
+
+	it("unbalanced delimiters pass through untouched (mid-stream safety)", () => {
+		const parsed = parseQuizInput({
+			question: "\\(\\x0corall",
+			options: [{ label: "x" }, { label: "y" }],
+			correctAnswer: "x",
+			explanation: "",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, "\\(\\x0corall");
+	});
+});

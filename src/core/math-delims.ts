@@ -214,3 +214,56 @@ export function transformMathDelimiters(markdown: string): string {
 
 	return out.join("");
 }
+
+/**
+ * LaTeX-escape restoration (owner ruling 2026-09-26) — the JSON-debris fix.
+ *
+ * When a model emits LaTeX with SINGLE backslashes inside JSON tool-call
+ * arguments (`\forall`, not the properly escaped `\\forall`), JSON escape
+ * resolution eats the command's first letter: `\f` → form feed + "orall",
+ * `\v` → vertical tab + "arphi", `\t` → tab + "o". The debris survives into
+ * the persisted RAW args and renders as garbage. Inside a MATH SPAN these
+ * control chars can never be legitimate content, so restoring the two-char
+ * escape reconstructs the model's intent byte-perfectly. Outside spans the
+ * same chars might be real prose (pasted tables, formatted text), so only
+ * balanced `\(…\)` / `\[…\]` spans are touched — the same scanner rules as
+ * transformMathDelimiters (escaped delimiters are literal, unbalanced
+ * delimiters pass through untouched).
+ */
+const ESCAPE_DEBRIS: Record<string, string> = {
+	"\b": "\\b",
+	"\t": "\\t",
+	"\n": "\\n",
+	"\v": "\\v",
+	"\f": "\\f",
+	"\r": "\\r",
+};
+
+const DEBRIS_RE = /[\b\t\n\v\f\r]/;
+
+export function restoreMathEscapes(text: string): string {
+	if (!DEBRIS_RE.test(text)) return text;
+	const out: string[] = [];
+	let i = 0;
+	while (i < text.length) {
+		const ch = text[i]!;
+		if (ch === "\\" && !isEscaped(text, i)) {
+			const next = text[i + 1];
+			if (next === "(" || next === "[") {
+				const isDisplay = next === "[";
+				const open = isDisplay ? DISPLAY_OPEN : INLINE_OPEN;
+				const close = isDisplay ? DISPLAY_CLOSE : INLINE_CLOSE;
+				const closeAt = findClose(text, i + open.length, close);
+				if (closeAt !== -1) {
+					const inner = text.slice(i + open.length, closeAt);
+					out.push(open + inner.replace(DEBRIS_RE, (c) => ESCAPE_DEBRIS[c]!) + close);
+					i = closeAt + close.length;
+					continue;
+				}
+			}
+		}
+		out.push(ch);
+		i += 1;
+	}
+	return out.join("");
+}
