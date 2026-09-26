@@ -156,6 +156,20 @@ function jobIdOf(steer: SteerMessage): string | null {
 	return typeof details?.jobId === "string" ? details.jobId : null;
 }
 
+/** Dock bookkeeping: the marker reached the learner's view — flip its job
+ *  NOW instead of waiting for the delivering turn to settle. Called from
+ *  BOTH visibility seams: the marker's message_end wire event (live steer
+ *  injection — the card is on screen while the teacher keeps teaching) and
+ *  the write-ahead persist in handleChatInput (the wake's input appends —
+ *  the card is durable in the record). The registry's delivery promise
+ *  still settles via settleSteers / the runner-200 path; finalizeJob is
+ *  idempotent, so the later flip is a no-op. Owner ruling (2026-09-26): a
+ *  delivered subagent leaves the background dock the moment its result is
+ *  visible, not when the teacher's turn ends. */
+export function noteSteerVisible(steer: SteerMessage): void {
+	finalizeSteer(steer);
+}
+
 /** Finalize a delivered steer's job bookkeeping — job steers only. */
 function finalizeSteer(steer: SteerMessage): void {
 	const jobId = jobIdOf(steer);

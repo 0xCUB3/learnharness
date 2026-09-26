@@ -50,8 +50,9 @@ import { handleChatRequest } from "../src/server/chat-handler.ts";
 import {
 	abortJob,
 	deliverJobResult,
-	registerLiveAgent,
+	noteSteerVisible,
 	recoverStaleJobs,
+	registerLiveAgent,
 	setJobRespawn,
 	setTurnRunner,
 	settleSteers,
@@ -989,6 +990,22 @@ describe("Wave C: live steering handoff + settlement reconciliation", () => {
 		await delivery;
 		assert.equal(fired, 0, "the parked wake never fired — the run delivered");
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
+	});
+
+	it("noteSteerVisible flips the job at the visibility seam — before any settle (owner ruling 2026-09-26)", async () => {
+		// The dock fix: the marker reaching the learner's view (wire
+		// message_end / write-ahead persist) flips the job NOW — the
+		// delivering turn may keep teaching for minutes. Idempotent with
+		// the settle-path finalize.
+		const { chatId, jobId, steer } = setup();
+		assert.equal(jobStore.getJob(jobId)!.status, "running");
+		noteSteerVisible(steer);
+		assert.equal(jobStore.getJob(jobId)!.status, "done", "flipped at the seam, no turn settled");
+		noteSteerVisible(steer); // the settle-path flip re-runs — no-op
+		assert.equal(jobStore.getJob(jobId)!.status, "done");
+		// A probe-handoff (no jobId) is a harmless no-op.
+		const handoff = buildProbeHandoffSteer(chatId);
+		noteSteerVisible(handoff);
 	});
 
 	it("the idle wake carries EVERY pending marker in ONE turn", async () => {

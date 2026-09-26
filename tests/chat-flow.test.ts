@@ -404,6 +404,10 @@ describe("teacher chat flow (scripted model)", () => {
 		// the reaction AFTER the boundary injection (records its prompt).
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));
+		let release2!: () => void;
+		const gate2 = new Promise<void>((r) => (release2 = r));
+		let jobIdMid = "";
+		let jobFlippedMidTurn: string | undefined;
 		const seen: string[] = [];
 		const faux = createFauxCore({});
 		faux.setResponses([
@@ -414,8 +418,14 @@ describe("teacher chat flow (scripted model)", () => {
 					{ stopReason: "toolUse" },
 				);
 			},
-			(context) => {
+			async (context) => {
 				seen.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)).join("\n"));
+				// HOLD the turn open past the injection: the marker's
+				// message_end already fired, so the job must be flipped
+				// done NOW (dock fix, owner 2026-09-26) — not at this
+				// turn's settle.
+				jobFlippedMidTurn = jobStore.getJob(jobIdMid)?.status;
+				await gate2;
 				return fauxAssistantMessage([fauxText("Folded the marker in.")]);
 			},
 		]);
@@ -437,14 +447,21 @@ describe("teacher chat flow (scripted model)", () => {
 		// steering queue (vehicle 1) — the queued marker waits for the
 		// in-flight turn to complete so the injection lands at its boundary.
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-mid" });
+		jobIdMid = job.id;
+		// The runner stores the result BEFORE delivery (finalizeJob reads it).
+		jobStore.updateJob(job.id, { result: { brief: "Mid-run brief.", sources: [] } });
 		const steer = buildSubagentSteer(job, { brief: "Mid-run brief.", sources: [] });
 		const delivery = deliverJobResult(steer);
 		await new Promise((r) => setTimeout(r, 300)); // vehicle 1 hands off
 		assert.equal(wakes, 0, "no wake — the live run owns the delivery");
 
 		release(); // step 1 completes → tool result → TURN BOUNDARY → inject → step 2
+		// Step 2 has pended briefly — give the wire seam a beat, then release.
+		await new Promise((r) => setTimeout(r, 150));
+		release2();
 		await drain(await res);
 		await delivery; // resolves at settleSteers (the run persisted the marker)
+		assert.equal(jobFlippedMidTurn, "done", "the job flipped at the marker's message_end — WHILE the turn still streamed");
 
 		// Record shape: the marker sits BETWEEN completed turn units — after
 		// the toolResult it must never split, adjacent to it.
@@ -465,6 +482,48 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.equal(record.messages.filter((m) => (m as { id?: string }).id === steer.id).length, 1, "exactly one marker copy");
 		assert.ok(seen[0]!.includes("Mid-run brief."), "the model SAW the marker in its next prompt");
 		assert.equal(wakes, 0, "delivery rode the live run end to end");
+	});
+
+	it("the view canon HOISTS reasoning above the message text (owner ruling 2026-09-26)", () => {
+		// GLM emits trailing reasoning tokens — the persisted content lands
+	// [text, thinking] (and [text, thinking, toolCall]), which arrival-order
+	// presentation rendered as reasoning UNDER its message. The projection
+	// stable-partitions: reasoning parts first (their own order), then the
+	// rest — live partials and settled records alike.
+		const baseMessage = {
+			role: "assistant",
+			api: "openai-completions",
+			provider: "openrouter",
+			model: "test",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			timestamp: 1,
+		};
+		const trailingThink: LhMessage = {
+			...baseMessage,
+			id: "a_trail",
+			content: [
+				{ type: "text", text: "The answer text." },
+				{ type: "thinking", thinking: "Checked the map afterwards." },
+				{ type: "toolCall", id: "call-tr", name: "quiz", arguments: { question: "q", options: [{ label: "a" }], correctAnswer: "a", explanation: "" } },
+			],
+			stopReason: "toolUse",
+		} as never;
+		const view = projectView([{ id: "u0", role: "user", content: "hi", timestamp: 1 } as never, trailingThink]);
+		assert.equal(view.length, 2);
+		const parts = view[1]!.parts.filter((p) => p.type !== "step-start");
+		const order = parts.map((p) => p.type);
+		assert.equal(order[0], "reasoning", "reasoning renders FIRST regardless of content order");
+		assert.ok(order.indexOf("text") > order.indexOf("reasoning"), "text follows the reasoning");
+		assert.equal(order[order.length - 1], "tool-quiz", "the tool call stays last");
+		// The canonical think-first shape is unchanged.
+		const leadingThink: LhMessage = {
+			...baseMessage,
+			id: "a_lead",
+			stopReason: "stop",
+			content: [{ type: "thinking", thinking: "First." }, { type: "text", text: "The answer text." }],
+		} as never;
+		const view2 = projectView([{ id: "u1", role: "user", content: "hi", timestamp: 1 } as never, leadingThink]);
+		assert.deepEqual(view2[1]!.parts.filter((p) => p.type !== "step-start").map((p) => p.type), ["reasoning", "text"], "think-first messages project identically");
 	});
 
 	it("a cancelled view NEVER aborts the turn — it runs to completion (owner ruling 2026-09-25)", async () => {

@@ -156,18 +156,28 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 
 		if (role === "assistant") {
 			const assistant = m as AssistantMessage;
-			const parts: LhViewPart[] = [];
+			// OWNER RULING (2026-09-26): reasoning ALWAYS renders above the
+			// message it belongs to. Providers emit trailing reasoning tokens
+			// (GLM fires a final reasoning burst after the answer), which
+			// lands the thinking block AFTER the text in the persisted
+			// content — presenting arrival order verbatim put the reasoning
+			// UNDER the message. The view canon owns presentation order:
+			// stable-partition each assistant message, reasoning parts first
+			// (their own order kept), then everything else.
+			const rest: LhViewPart[] = [];
+			const reasoning: LhViewPart[] = [];
 			let textN = 0;
 			let reasoningN = 0;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
-					parts.push({ type: "text", id: `${m.id}-t${textN++}`, text: block.text, state: "done" });
+					rest.push({ type: "text", id: `${m.id}-t${textN++}`, text: block.text, state: "done" });
 				} else if (block.type === "thinking") {
-					parts.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
+					reasoning.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
 				} else if (block.type === "toolCall") {
-					parts.push(toolPartOf(block, live));
+					rest.push(toolPartOf(block, live));
 				}
 			}
+			const parts: LhViewPart[] = [...reasoning, ...rest];
 			if (parts.length === 0) continue; // presentation-only (nothing renderable)
 			const group = lastAssistant();
 			if (group) {

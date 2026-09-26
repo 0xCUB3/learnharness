@@ -4,7 +4,15 @@ import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import type { ModelRole } from "../../config.ts";
-import { deliverJobResult, registerLiveAgent, setJobRespawn, setTurnRunner, settleSteers, unregisterLiveAgent } from "./jobs.ts";
+import {
+	deliverJobResult,
+	noteSteerVisible,
+	registerLiveAgent,
+	setJobRespawn,
+	setTurnRunner,
+	settleSteers,
+	unregisterLiveAgent,
+} from "./jobs.ts";
 import { piTurnResponse, runPiTurn } from "./pi/ui-stream.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
@@ -28,7 +36,7 @@ import {
 	type TurnInput,
 } from "../core/input-events.ts";
 import { steerDelivered } from "../core/contracts.ts";
-import type { CallUsage } from "../core/contracts.ts";
+import type {CallUsage, SteerMessage} from "../core/contracts.ts";
 
 /**
  * One chat turn over the server-owned native record. Framework-free (plain
@@ -219,6 +227,12 @@ export async function handleChatInput(
 	const merged = [...record.messages, ...appends];
 	try {
 		stores.chatStore.saveMessages(chatId, merged);
+		// Dock fix (owner ruling 2026-09-26): persisted markers are visible
+		// in the record — flip their jobs now (the wake's steers ride this
+		// write-ahead; the delivering turn may run for minutes).
+		for (const appended of appends) {
+			if ((appended as { role?: string }).role === "custom") noteSteerVisible(appended as SteerMessage);
+		}
 	} catch (err) {
 		console.error(`[chat ${chatId}] write-ahead persist failed:`, err);
 	}
