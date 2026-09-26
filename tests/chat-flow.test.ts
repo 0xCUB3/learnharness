@@ -26,11 +26,14 @@ import {
 	type FauxResponseStep,
 } from "@earendil-works/pi-ai";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
-import { handleChatRequest } from "../src/server/chat-handler.ts";
+import { handleChatInput, handleChatRequest } from "../src/server/chat-handler.ts";
 import { effectiveSettings } from "../src/server/stores.ts";
 import { isTurnRunning } from "../src/server/turn-liveness.ts";
+import { deliverJobResult, setTurnRunner } from "../src/server/jobs.ts";
+import { buildSubagentSteer } from "../src/core/contracts.ts";
 import { abortTurn, runningTurn, settledTurnResponse } from "../src/server/turn-runs.ts";
 import { chatStore } from "../src/store/chats.ts";
+import { jobStore } from "../src/store/jobs.ts";
 import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 import { danglingQuestionOf, newAnswerResult } from "../src/core/native-messages.ts";
 import { projectView } from "../src/core/view.ts";
@@ -332,6 +335,58 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.ok(execEnd !== -1, "tool_execution_end present in the stream");
 		assert.ok(callSeen < execStart && execStart < execEnd, "partial → execution start → execution end");
 		assert.equal(events[execEnd]!.isError, false, "the clean end is what mounts the dock");
+	});
+
+	it("a pump-fired wake turn never double-appends its steer (Wave B regression of the 2026-09-18 bug)", { timeout: 15000 }, async () => {
+		// THE SHAPE: the pump fires {type:'steer'} while the SAME steer still
+		// sits at the head of the delivery queue (the pump shifts its entry
+		// only AFTER the turn registers). Wave B's claimSteers filter checked
+		// only the PRE-write-ahead record, so the copy carried by the input
+		// was invisible — the marker persisted TWICE with the same id, two
+		// view messages shared one React key, and the client crashed (live,
+		// 2026-09-26: steer_job_muhlokbf_84e9373c in chat_muhlcltz).
+		const chat = createConfiguredChat("Test: wake single-copy");
+		createdChats.push(chat.id);
+		// Seed a plain-text turn (no dangling question — waitForIdle must pass).
+		const seed = scriptedTeacher(() => [() => fauxAssistantMessage([fauxText("On it — dispatched the researcher.")])]);
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "research it" }), agentFactory(seed.engine)));
+
+		// The pump's turn runner, faithfully shaped but scripted (the real one
+		// is chat-handler's module-level wiring; this file's import already set
+		// it — we override for the scripted engine, as jobs.test does).
+		const wake = scriptedTeacher(() => [() => fauxAssistantMessage([fauxText("Good research — building on it.")])]);
+		setTurnRunner(async (chatId, input) => {
+			const res = await handleChatInput(chatId, input, agentFactory(wake.engine));
+			await res.arrayBuffer().catch(() => undefined);
+			return res.status;
+		});
+
+		// A REAL job record — chatIdOf resolves the chat through the job
+		// store (details.jobId indexes it); a synthetic id with no record
+		// yields "" and the pump silently no-ops (the hang this test taught
+		// us about on first contact).
+		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-1" });
+		const steer = buildSubagentSteer(
+			job,
+			{ brief: "The Mercury answer, with sources.", sources: [{ title: "NASA", url: "https://nasa.gov" }] },
+		);
+		// NOTE: deliverJobResult resolves at CLAIM time (the wake turn's own
+		// claimSteers pops the queue inside handleChatInput — the write-ahead
+		// persist is imminent but the TURN is still running). The record
+		// assertion therefore waits for the wake response to land.
+		await deliverJobResult(steer); // queue + pump → waitForIdle → the wake turn
+		await waitFor(() => {
+			const rec = chatStore.getChat(chat.id);
+			const at = rec?.messages.findIndex((m) => (m as { id?: string }).id === steer.id) ?? -1;
+			return at !== -1 && (rec!.messages[at + 1] as { role?: string } | undefined)?.role === "assistant";
+		}, 8000, "the wake turn to persist (marker + response)");
+
+		const record = chatStore.getChat(chat.id)!;
+		const copies = record.messages.filter((m) => (m as { id?: string }).id === steer.id);
+		assert.equal(copies.length, 1, "exactly ONE copy of the steer marker (the carried filter)");
+		const at = record.messages.findIndex((m) => (m as { id?: string }).id === steer.id);
+		assert.ok(at !== -1, "the marker is in the record");
+		assert.equal((record.messages[at + 1] as { role?: string } | undefined)?.role, "assistant", "the wake response follows the marker");
 	});
 
 	it("a cancelled view NEVER aborts the turn — it runs to completion (owner ruling 2026-09-25)", async () => {

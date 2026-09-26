@@ -215,7 +215,17 @@ export async function handleChatInput(
 	// this turn owns the registry and the write-ahead persist below makes the
 	// claim durable. Steers already in the transcript (a wake raced in) are
 	// finalized by the claim itself — the append filter keeps exactly one copy.
-	const steers = claimSteers(chatId).filter((s) => !steerDelivered(record.messages, s.id));
+	// THE CARRIED FILTER (restored 2026-09-26, the Wave B regression of the
+	// 2026-09-18 duplicate-key bug): a pump-fired wake turn ALREADY CARRIES
+	// its steer in `appends` — and the pump only shifts its queue entry AFTER
+	// the turn registers, so the claim above pops that very steer too. The
+	// old record-side-only filter couldn't see the carried copy (it checks
+	// the PRE-write-ahead snapshot), and the marker persisted twice with the
+	// same `steer_<jobId>` id — two view messages, one React key, crash.
+	const carried = input.type === "steer" ? input.steer.id : undefined;
+	const steers = claimSteers(chatId).filter(
+			(s) => s.id !== carried && !steerDelivered(record.messages, s.id),
+		);
 
 	// Write-ahead persistence: the input's native appends go on disk BEFORE
 	// the turn starts — the learner's answer is durable the instant the
