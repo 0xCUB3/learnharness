@@ -50,7 +50,10 @@ Two parts:
 
 **Stress-test the roots before presenting.** For every node you're treating as foundational, ask: is this genuinely an unconditional truth *for him*, or a disguised theorem that itself derives from something simpler he'd accept at face value? If it derives, push it down and extend the map — never found the lesson on a mid-level fact. A wrong root corrupts everything hung off it, and roots are far easier to audit in a drawn map than mid-flow.
 
-**Presenting ENDS your turn.** The plan is presented in prose and map, and then you stop — his next message is the natural next move. Do not ask a check or teach in the same turn as presenting.
+**Presenting ENDS your turn.** The plan is presented in prose and map, and
+then you stop. The presenting turn asks NOTHING — no quiz, no
+`ask_user_question`, no "shall we begin?": there is nothing to confirm. His
+next message is his own unprompted reply and the natural next move.
 
 - If his reply asks for changes, revise: fix the map (`plan_init` again — a wholesale rewrite), present again, and end your turn once more.
 - Otherwise his reply moves the lesson forward — begin the first node.

@@ -1047,18 +1047,22 @@ export function Chat({
 								// assistant group — is gone). Never a user bubble: the wake is
 								// scaffolding; the model-facing instruction lives in the adapter.
 								<PhaseDivider key={m.id || `m-${mi}`} phase="plan" />
-							) : m.role === "assistant" && mi > 0 && phases[mi] === "teach" && phases[mi - 1] !== "teach" ? (
-							// THE INFERRED TEACH SEAM (owner ruling 2026-09-26, the verdict
-							// death): teaching begins where the FIRST nodeId-tagged quiz is
-							// posed — the fold (phaseTimeline, the same derivation the phase
-							// chip reads) flips to teach exactly AT this assistant group, so
-							// the divider renders before the whole block (thinking -> prose ->
-							// the quiz call) — where the explicit accept marker used to sit.
-							// The boundary check (this index flips, the previous didn't)
-							// guarantees exactly ONE divider per session.
-							<PhaseDivider key={`teach-${m.id || `m-${mi}`}`} phase="teach" />
-						) : (
+							) : (
 									<Fragment key={m.id || `m-${mi}`}>
+									{/* THE INFERRED TEACH SEAM (owner ruling 2026-09-26, the verdict
+									death): teaching begins where the FIRST nodeId-tagged quiz is
+									posed — the fold (phaseTimeline, the same derivation the phase chip
+									reads) flips to teach exactly AT this assistant group, so the divider
+									renders BEFORE the whole block (thinking -> prose -> the quiz call) —
+									where the explicit accept marker used to sit. The boundary check
+									(this index flips, the previous didn't) guarantees exactly ONE divider
+									per session. PREPENDED, never a replacement branch: the teach group is
+									a real message with content (the marker branches above have none) — a
+									replacement ternary swallowed the entire first lesson block (the
+									Lacan session, 2026-09-27). */}
+									{m.role === "assistant" && mi > 0 && phases[mi] === "teach" && phases[mi - 1] !== "teach" ? (
+										<PhaseDivider key={`teach-${m.id || `m-${mi}`}`} phase="teach" />
+									) : null}
 									<Message from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
 									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
 										{m.role === "user" ? (
