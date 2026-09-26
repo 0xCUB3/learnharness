@@ -30,18 +30,45 @@ export interface QuizOption {
 // ─── tool input schemas (the question contract) ─────────────────────────────
 // Parameter names mirror the prompt docs exactly — keep them in sync.
 
-/** One answer option — shared by quiz + ask. */
-const optionProps = {
-	label: Type.String({ description: "Display label for the answer option" }),
+/** One quiz answer option. Owner ruling (2026-09-26): NO `description`
+ *  field — the model reliably used it to leak correctness ("that's not the
+ *  gradient", "close but…"), making quizzes answerable by elimination.
+ *  Neutral elaboration belongs in the question text or the post-answer
+ *  explanation; the option is a bare claim. */
+const quizOptionProps = {
+	label: Type.String({ description: "Display label for the answer option — a bare claim, no reasoning" }),
 	value: Type.Optional(
 		Type.String({
 			description: "Optional machine-readable value returned for the option. Defaults to the label.",
 		}),
 	),
+};
+
+/** One ask answer option — keeps `description`: ask is ungraded preference
+ *  collection, there is no correctness to leak. */
+const askOptionProps = {
+	...quizOptionProps,
 	description: Type.Optional(
 		Type.String({ description: "Optional extra detail shown below the option" }),
 	),
 };
+
+/** GLM wobble guard (owner-approved, 2026-09-26): models sometimes emit
+ *  `options` as a JSON-ENCODED STRING instead of an array. Parse it before
+ *  use. Shared by the tools' prepareArguments (server, pre-validation) and
+ *  normalizeOptions (client — the persisted call keeps the raw string, so
+ *  the dock must coerce again). Returns the input untouched when it isn't
+ *  a parseable array — validation then reports honestly. */
+export function parseOptionsIfString<T>(options: string | T[] | undefined): unknown {
+	if (typeof options !== "string") return options;
+	try {
+		const parsed: unknown = JSON.parse(options);
+		if (Array.isArray(parsed)) return parsed;
+	} catch {
+		/* not JSON — fall through untouched */
+	}
+	return options;
+}
 
 // ─── cross-field authoring validation (tool-schema refinements) ──────────
 // Enforced at the tool-call boundary (see the superRefines below): an invalid
@@ -130,10 +157,11 @@ export const quizInputBase = Type.Object({
 		description:
 			"The single quiz question to ask. ONE question per turn: ask, then end your turn — the answer determines the next question.",
 	}),
-	options: Type.Array(Type.Object(optionProps), {
+	options: Type.Array(Type.Object(quizOptionProps), {
 		minItems: 2,
 		description:
-			"The answer options (2 or more). Options only — there is no free-text mode. " +
+			"REQUIRED. The answer options (2 or more) as a JSON ARRAY of option objects — never a " +
+			"JSON-encoded string. Options only — there is no free-text mode. " +
 			"Give each option a stable `value`; you reference the correct one by that value in correctAnswer. " +
 			"Never add your own 'I don't know' option — that choice is added for you.",
 	}),
@@ -205,7 +233,7 @@ export const askInputSchema = Type.Object({
 		Type.String({ description: "Optional extra context or instructions shown under the question." }),
 	),
 	options: Type.Optional(
-		Type.Array(Type.Object(optionProps), {
+		Type.Array(Type.Object(askOptionProps), {
 			minItems: 2,
 			description:
 				"Optional multiple-choice options. Omit for free-form text input. " +
@@ -330,10 +358,17 @@ export const QUESTION_ANSWERED_ENTRY = "lh_question_answered";
 // ─── options ────────────────────────────────────────────────────────────────
 
 export function normalizeOptions(
-	options: Array<{ label: string; value?: string; description?: string }> | undefined,
+	options: string | Array<{ label: string; value?: string; description?: string }> | undefined,
 ): QuizOption[] {
 	const seen = new Set<string>();
-	return (options || [])
+	// The persisted tool call can carry GLM's string-encoded options —
+	// parseOptionsIfString is the same coercion the server's
+	// prepareArguments runs pre-validation (see parseOptionsIfString).
+	const coerced = parseOptionsIfString(options);
+	const list = Array.isArray(coerced)
+		? (coerced as Array<{ label: string; value?: string; description?: string }>)
+		: [];
+	return list
 		.map((option) => ({
 			label: option.label.trim(),
 			value: option.value?.trim() || option.label.trim(),

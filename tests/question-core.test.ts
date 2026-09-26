@@ -8,6 +8,7 @@ import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
 import {
 	askInputSchema,
+	quizInputBase,
 	askOptionProblems,
 	buildAnswer,
 	coerceCorrectAnswer,
@@ -184,6 +185,34 @@ describe("normalizeOptions", () => {
 
 	it("throws on duplicate option values", () => {
 		assert.throws(() => normalizeOptions([{ label: "a", value: "x" }, { label: "b", value: "x" }]), /duplicate/);
+
+		// GLM wobble guard (2026-09-26 gradient-descent session): the model
+		// sometimes emits `options` as a JSON-encoded string — 6 of 7 quiz
+		// validation failures in that session. The dock (and grading) coerce
+		// via the same parseOptionsIfString the server's prepareArguments
+		// runs pre-validation.
+		const asString = JSON.stringify([{ label: "Slope", value: "slope" }, { label: "Value", value: "value" }]);
+		const coerced = normalizeOptions(asString);
+		assert.deepEqual(coerced, [
+			{ label: "Slope", value: "slope", description: undefined },
+			{ label: "Value", value: "value", description: undefined },
+		], "a JSON-encoded string coerces to the same normalized options");
+		// Non-JSON strings pass through and behave like no options (the
+		// server's schema validation reports the honest error instead).
+		assert.deepEqual(normalizeOptions("not json"), []);
+	});
+
+it("quiz options carry NO description field; ask keeps it (owner nuke, 2026-09-26)", () => {
+	// The model used quiz option descriptions to telegraph correctness
+	// ("that's not the gradient") in every quiz of the gradient-descent
+	// session — the field is gone from BOTH quiz schemas; ask (ungraded,
+	// nothing to leak) keeps it.
+	const quizOption = (quizInputBase.properties.options as { items?: { properties?: Record<string, unknown> } })
+		.items!.properties!;
+	assert.ok(!("description" in quizOption), "quiz option schema has no description");
+	const askOption = (askInputSchema.properties.options as { items?: { properties?: Record<string, unknown> } })
+		.items!.properties!;
+	assert.ok("description" in askOption, "ask option schema keeps description");
 	});
 
 	it("handles undefined input", () => {

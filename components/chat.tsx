@@ -34,7 +34,7 @@ import { QuestionDock } from "@/components/question-dock";
 import { SidebarToggle } from "@/components/sidebar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsage } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
-import { PhaseChip, PhaseDivider, planNodeCount } from "@/components/phase-divider";
+import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import { CoverageRing } from "@/components/extraction-coverage";
 import { findPendingToolCall, phaseAt3, phaseTimeline, streamingToolActivity } from "@/src/core";
 import { slotsConfigured, type ModelsSettings } from "@/src/core";
@@ -1067,41 +1067,31 @@ export function Chat({
 									// can still hold empty ids — the index keeps keys unique for them.
 									<SubagentSteerCard key={m.id || `m-${mi}`} message={m} />
 								) : m.role === "user" && m.parts.some((p) => p.type === "data-probe-handoff") ? (
-								// The probe→teach handoff wake (custom-message scheme): quiet
-								// system line, never a user bubble — the wake is scaffolding,
-								// the "Planning" divider marks the seam, and the model-facing
-								// instruction lives in the adapter.
-								<SystemLine key={m.id || `m-${mi}`} testId="probe-handoff">
-									Preparing your plan…
-								</SystemLine>
+								// The probe→teach handoff wake (custom-message scheme): the
+								// PLANNING DIVIDER IS the seam (owner ruling 2026-09-26 — it
+								// replaced the "Preparing your plan…" system line; the marker
+								// renders in the right spot by record construction, so the old
+								// fold-based divider — which floated to the transcript top once
+								// Wave D grouping merged the whole probe into one giant
+								// assistant group — is gone). Never a user bubble: the wake is
+								// scaffolding; the model-facing instruction lives in the adapter.
+								<PhaseDivider key={m.id || `m-${mi}`} phase="plan" />
 							) : m.role === "user" && m.parts.some((p) => p.type === "data-verdict") ? (
-								// The learner's plan verdict (custom-message scheme): its own
-								// message, the quiet marker — the accept is the phase seam, a
-								// decline asks for revision. Never a user bubble: the model-
-								// facing wording is the adapter's, and this is the learner's
-								// ACT, not their words (a typed note, if any, rendered above
-								// as its own real message).
-								<SystemLine
-									key={m.id || `m-${mi}`}
-									testId={
-										(m.parts.find((p) => p.type === "data-verdict") as
-											| { data?: { accepted?: boolean } }
-											| undefined)?.data?.accepted
-											? "verdict-accepted"
-											: "verdict-declined"
-									}
-								>
-									{(m.parts.find((p) => p.type === "data-verdict") as
-										| { data?: { accepted?: boolean } }
-										| undefined)?.data?.accepted
-										? "✓ Plan accepted"
-										: "↻ Plan revision requested"}
-								</SystemLine>
+								// The learner's plan verdict (custom-message scheme): the
+								// accept IS the phase seam — it renders the TEACHING DIVIDER
+								// (owner ruling 2026-09-26: replaced the "✓ Plan accepted"
+								// line; same spot, one signal, not two). A DECLINE is not a
+								// seam — it stays the quiet revision line. Never a user
+								// bubble: the model-facing wording is the adapter's, and this
+								// is the learner's ACT, not their words (a typed note, if
+								// any, renders above as its own real message).
+								((m.parts.find((p) => p.type === "data-verdict") as
+									| { data?: { accepted?: boolean } }
+									| undefined)?.data?.accepted)
+									? <PhaseDivider key={m.id || `m-${mi}`} phase="teach" />
+									: <SystemLine key={m.id || `m-${mi}`} testId="verdict-declined">↻ Plan revision requested</SystemLine>
 							) : (
 									<Fragment key={m.id || `m-${mi}`}>
-									{mi > 0 && phases[mi] !== phases[mi - 1] && (
-										<PhaseDivider phase={phases[mi]!} nodeCount={planNodeCount(m)} />
-									)}
 									<Message from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
 									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
 										{m.role === "user" ? (
@@ -1113,6 +1103,24 @@ export function Chat({
 										) : (
 											m.parts.map((part, pi) => {
 												const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
+												// A tool call that errored BACK TO THE AGENT (validation
+												// failure, malformed args) is invisible work — the agent
+												// reads the error and retries. Owner ruling 2026-09-26:
+												// surface the retry loop as one quiet line, any tool,
+												// instead of silence (question tools used to render null,
+												// so a flailing quiz loop read as a stall). Aborts are
+												// terminal — nothing retries — so they stay silent.
+												if (
+													part.state === "output-error" &&
+													part.type.startsWith("tool-") &&
+													part.errorText !== "Operation aborted"
+												) {
+													return (
+														<SystemLine key={`retry-${pi}`} testId="tool-retry">
+															Retrying…
+														</SystemLine>
+													);
+												}
 												switch (part.type) {
 													case "text":
 														return <MessageResponse key={pi}>{part.text}</MessageResponse>;

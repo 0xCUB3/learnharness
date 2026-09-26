@@ -4,6 +4,7 @@ import { questionResult, serverExecute, ToolInputError } from "./tool-execute.ts
 import {
 	askInputSchema,
 	askOptionProblems,
+	parseOptionsIfString,
 	probeQuizInputSchema,
 	quizInputObject,
 	quizInputProblems,
@@ -51,6 +52,26 @@ export type { ProbeDoneContext } from "./tools/probe.ts";
  *   only.
  */
 
+/** GLM wobble guard (owner-approved, 2026-09-26): models sometimes emit
+ *  `options` as a JSON-encoded string instead of an array; pi runs this
+ *  BEFORE schema validation, so a double-encoded call lands instead of
+ *  bouncing back as a validation error + wasted retry turn. NOTE: pi
+ *  persists the tool call with its RAW arguments — the client coerces
+ *  again in normalizeOptions (question-core), the same parseOptionsIfString.
+ *  Anything unparseable passes through untouched: validation then reports
+ *  honestly and the agent retries with a real error to learn from. */
+function prepareQuestionArguments<T extends object>(args: unknown): T {
+	if (args && typeof args === "object" && !Array.isArray(args)) {
+		const o = args as { options?: unknown };
+		if (typeof o.options === "string") {
+			const parsed = parseOptionsIfString(o.options);
+			if (parsed !== o.options) return { ...o, options: parsed } as T;
+		}
+		return o as T;
+	}
+	return args as T;
+}
+
 export const askUserQuestionTool: AgentTool<typeof askInputSchema> = {
 	name: "ask_user_question",
 	label: "ask_user_question",
@@ -60,6 +81,7 @@ export const askUserQuestionTool: AgentTool<typeof askInputSchema> = {
 		"or you need an open-ended response. ONE question per turn: call a single ask_user_question, then end your " +
 		"turn — his answer determines the next.",
 	parameters: askInputSchema,
+	prepareArguments: prepareQuestionArguments,
 	executionMode: "sequential",
 	execute: async (_toolCallId, input) => {
 		const problems = askOptionProblems(input.options ?? []);
@@ -85,6 +107,7 @@ export const probeQuizTool: AgentTool<typeof probeQuizInputSchema> = {
 		"questions use ask_user_question instead. ONE question per turn: call a single quiz, then end your turn — " +
 		"his answer determines the next question to ask.",
 	parameters: probeQuizInputSchema,
+	prepareArguments: prepareQuestionArguments,
 	executionMode: "sequential",
 	execute: async (_toolCallId, input) => {
 		const problems = quizInputProblems(input);
@@ -206,6 +229,7 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 			"only when non-empty. No free-text answers — for non-graded questions use ask_user_question instead. " +
 			"ONE question per turn: call a single quiz, then end your turn — his answer determines the next.",
 		parameters: quizInputObject,
+		prepareArguments: prepareQuestionArguments,
 		executionMode: "sequential",
 		execute: async (_toolCallId, input) => {
 			const problems = [...quizInputProblems(input)];

@@ -457,9 +457,12 @@ function QuestionDockForm({
 									</span>
 									<span>
 										<MessageResponse>{opt.label}</MessageResponse>
-										{opt.description && (
+										{kind !== "quiz" && opt.description && (
 											// Option subtext renders in Source Sans 3 (owner's mockup);
-											// the "I don't know" copy stays JetBrains Mono.
+											// the "I don't know" copy stays JetBrains Mono. QUIZ options render
+											// NO description (owner ruling 2026-09-26): the model used them to
+											// telegraph correctness — the schema dropped the field and old
+											// records must not leak either.
 											<span className="lh-prose block text-xs text-muted-foreground">{opt.description}</span>
 										)}
 									</span>

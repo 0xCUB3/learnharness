@@ -15,7 +15,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import { Value } from "typebox/value";
-import { createProberTools, createTeacherTools, teachQuizToolFor, type TeacherToolContext } from "../src/agent/tools.ts";
+import {
+	askUserQuestionTool,
+	createProberTools,
+	createTeacherTools,
+	probeQuizTool,
+	teachQuizToolFor,
+	type TeacherToolContext,
+} from "../src/agent/tools.ts";
 import { TOGGLEABLE_TOOLS } from "../src/core/pending.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { probeQuizInputSchema } from "../src/core/question-core.ts";
@@ -229,5 +236,41 @@ describe("tool toggles (core/pending.ts + factories)", () => {
 			full,
 			"absent keys mean enabled — old records behave exactly as today",
 		);
+	});
+});
+
+
+// ─── prepareArguments: the GLM string-encoded options guard (2026-09-26) ────
+
+describe("prepareQuestionArguments (the string-encoded options wobble)", () => {
+	// The gradient-descent session (chat_muhskq6p): 6 of 7 quiz validation
+	// failures were `options` arriving as a JSON-encoded STRING. pi runs
+	// prepareArguments BEFORE schema validation — the coerced call lands
+	// instead of bouncing back as a wasted retry turn.
+	const goodOptions = [
+		{ label: "The slope of the tangent line", value: "slope" },
+		{ label: "The value of the curve", value: "value" },
+	];
+	const asString = JSON.stringify(goodOptions);
+
+	it("coerces string-encoded options on ALL THREE question tools", () => {
+		for (const tool of [askUserQuestionTool, probeQuizTool, teachQuizToolFor({ chatId: "chat_x", chatStore: undefined as never })]) {
+			const prepare = (tool as unknown as { prepareArguments?: (a: unknown) => unknown }).prepareArguments;
+			assert.ok(prepare, `${tool.name} has the hook`);
+			const out = prepare({ question: "q", options: asString, correctAnswer: "slope", explanation: "e" });
+			assert.deepEqual(
+				(out as { options: unknown }).options,
+				goodOptions,
+				`${tool.name} coerces the string to an array`,
+			);
+		}
+	});
+
+	it("passes everything else through UNTOUCHED (identity — pi's fast path)", () => {
+		const prepare = (probeQuizTool as unknown as { prepareArguments: (a: unknown) => unknown }).prepareArguments;
+		const arrayArgs = { question: "q", options: goodOptions, correctAnswer: "slope", explanation: "e" };
+		assert.equal(prepare(arrayArgs), arrayArgs, "array args return the SAME object (no defensive copies)");
+		const unparseable = { question: "q", options: "not json", correctAnswer: "slope", explanation: "e" };
+		assert.equal(prepare(unparseable), unparseable, "unparseable strings pass through — validation reports honestly");
 	});
 });
