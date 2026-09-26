@@ -122,7 +122,8 @@ export interface AgentBuildOptions {
  *
  * Question results also carry terminate: true (tool-execute's
  * questionResult), so single-question batches stop natively at the pi
- * loop's own batch check; this shouldStopAfterTurn hook is the
+ * loop's own batch check; this finishTurn hook (0.87.1 rename of
+ * shouldStopAfterTurn) is the
  * belt-and-suspenders HALF for the mixed batch (a question + other calls
  * in one message) that terminate-only semantics would let run on — the
  * learner cannot answer while a turn is in flight (per-chat 409), so a
@@ -164,7 +165,12 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			messages: opts.messages ?? [],
 		},
 		streamFn: engine.streamFn,
-		shouldStopAfterTurn: stopper,
+		// 0.87.1: shouldStopAfterTurn → finishTurn. Same call point (after
+		// tool results attach, before turn_end) and `{ action: "end" }` still
+		// exits BEFORE the steering poll — the parked-marker stranding our
+		// Wave C registerLiveAgent-before-runPiTurn design depends on.
+		// undefined preserves normal scheduling (the old boolean false).
+		finishTurn: (turn) => (stopper(turn) ? { action: "end" } : undefined),
 		// Wave C (2026-09-26, owner correction same day): markers handed to a
 		// live run drain from pi's STEERING queue — the lesson loop is one
 		// continuous teach→quiz→teach run, so delivery must inject at turn

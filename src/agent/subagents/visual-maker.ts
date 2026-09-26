@@ -1,4 +1,5 @@
 import type { AssistantMessage, Message, Tool, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { piEngineFor, type PiEngine, type ThinkingLevel } from "../models.ts";
 import type { VisualResult } from "../../core/contracts.ts";
@@ -307,7 +308,10 @@ async function streamOnce(
 	reasoning: ThinkingLevel | undefined,
 	abortSignal?: AbortSignal,
 ): Promise<AssistantMessage> {
-	const stream = engine.streamFn(engine.model, { systemPrompt, messages, tools }, {
+	// 0.87.1: provider-facing contexts are TranscriptContexts — the prompt
+	// and tool declarations fold into a leading system message.
+	// normalizeContext is the library's only Context→TranscriptContext entry.
+	const stream = engine.streamFn(engine.model, normalizeContext({ systemPrompt, messages, tools }), {
 		reasoning: reasoning && reasoning !== "off" ? reasoning : undefined,
 		apiKey: process.env.OPENROUTER_API_KEY || undefined,
 		signal: abortSignal,

@@ -29,7 +29,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import { Value } from "typebox/value";
-import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
+import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep, type ToolCall } from "@earendil-works/pi-ai";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PATHS } from "../config.ts";
 import {
@@ -122,7 +122,7 @@ function scriptedModel(turns: Array<{ toolCalls?: Array<{ toolCallId: string; to
 	const steps: FauxResponseStep[] = turns.map((step) => {
 		if (step.toolCalls) {
 			return fauxAssistantMessage(
-				step.toolCalls.map((c) => fauxToolCall(c.toolName, c.input as Record<string, unknown>, { id: c.toolCallId })),
+				step.toolCalls.map((c) => fauxToolCall(c.toolName, c.input as ToolCall["arguments"], { id: c.toolCallId })),
 				{ stopReason: "toolUse" },
 			);
 		}

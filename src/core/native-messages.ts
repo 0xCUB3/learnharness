@@ -117,7 +117,9 @@ export function newAnswerResult(
 		toolCallId,
 		toolName,
 		content: [{ type: "text", text: JSON.stringify(answer) }],
-		details: answer,
+		// 0.87.1 narrowed ToolResultMessage.details to JsonRepresentation —
+		// our payloads are JSON-safe answer structures, so the cast is honest.
+		details: answer as ToolResultMessage["details"],
 		isError: false,
 		timestamp: Date.now(),
 	};

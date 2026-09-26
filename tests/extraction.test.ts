@@ -22,7 +22,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
-import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
+import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep, type ToolCall } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { newPlanBlockMessage } from "../src/core/native-messages.ts";
@@ -268,7 +268,7 @@ function submitModel(name: string, input: unknown, onCall?: () => void): PiEngin
 			onCall?.();
 			void context;
 			return fauxAssistantMessage(
-				[fauxToolCall(name, input as Record<string, unknown>, { id: `${name}-call` })],
+				[fauxToolCall(name, input as ToolCall["arguments"], { id: `${name}-call` })],
 				{ stopReason: "toolUse" },
 			);
 		},
@@ -956,7 +956,7 @@ function findingsStep(capture?: (view: string) => void): FauxResponseStep {
 	return (context) => {
 		capture?.(capturedView(context));
 		return fauxAssistantMessage(
-			[fauxToolCall("submit_findings", FINDINGS as unknown as Record<string, unknown>, { id: "findings-call" })],
+			[fauxToolCall("submit_findings", FINDINGS as unknown as ToolCall["arguments"], { id: "findings-call" })],
 			{ stopReason: "toolUse" },
 		);
 	};
@@ -974,7 +974,7 @@ function passThroughAuditStep(): FauxResponseStep {
 						edges: [],
 						attribution: { quiz: {} },
 						dropped: [{ ref: "p2", reason: "evidence not found" }],
-					} as unknown as Record<string, unknown>,
+					} as unknown as ToolCall["arguments"],
 					{ id: "review-call" },
 				),
 			],

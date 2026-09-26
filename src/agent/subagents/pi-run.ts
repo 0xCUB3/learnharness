@@ -65,9 +65,13 @@ export async function runSubagent(tools: AgentTool<any, any>[], opts: SubagentRu
 			messages: opts.messages ?? [],
 		},
 		streamFn: engine.streamFn,
-		shouldStopAfterTurn: (context) => {
+		// 0.87.1: shouldStopAfterTurn → finishTurn (same call point; "end"
+		// exits before the steering poll, exactly the old boolean-true).
+		finishTurn: (turn) => {
 			turns++;
-			return turns >= opts.maxTurns || opts.shouldStop?.(context.message, context.toolResults) === true;
+			return turns >= opts.maxTurns || opts.shouldStop?.(turn.message, turn.toolResults) === true
+				? { action: "end" }
+				: undefined;
 		},
 	});
 
@@ -119,7 +123,12 @@ export async function runSubagent(tools: AgentTool<any, any>[], opts: SubagentRu
 	}
 	if (errorMessage !== undefined) throw new Error(errorMessage);
 
-	const newMessages = agent.state.messages.slice(before);
+	// 0.87.1: drop the seeded leading SystemMessage (transcript rework —
+	// see ui-stream's settleWith) before slicing past the input count, or
+	// the seed displaces the slice and the last INPUT message leaks in.
+	const newMessages = agent.state.messages
+		.filter((m) => (m as { role?: string }).role !== "system")
+		.slice(before);
 	const assistants = newMessages.filter((m) => (m as { role?: string }).role === "assistant") as AssistantMessage[];
 	const last = assistants[assistants.length - 1];
 	const text = last

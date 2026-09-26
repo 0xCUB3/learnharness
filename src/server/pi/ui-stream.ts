@@ -115,8 +115,18 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 	// The settle seam: the record write is the agent's OWN final state
 	// (native history — signatures, usage, provider stamps all real).
 	// Copy the array: the agent may outlive this call's read.
+	// 0.87.1 (transcript rework): the Agent seeds a leading SystemMessage
+	// from initialState.systemPrompt (prompt + tool declarations) — it is
+	// synthesized per turn and must NEVER persist (the record would bloat
+	// with tool declarations AND replay would see messages[0] === system,
+	// suppressing the fresh per-turn re-seed). Our app mints no system
+	// messages of its own (the prompt is composed per turn), so dropping
+	// the role wholesale is exact; revisit if prompt-updates ever land.
 	const settleWith = () => {
-		onFinish([...agent.state.messages], sawAbort);
+		onFinish(
+			[...agent.state.messages].filter((m) => (m as { role?: string }).role !== "system"),
+			sawAbort,
+		);
 	};
 
 	const handle = (event: AgentEvent) => {

@@ -95,6 +95,7 @@ export const AUTH_PROVIDER_KEYS: readonly AuthProviderInfo[] = [
 	{ id: "groq", envVar: "GROQ_API_KEY", label: "Groq" },
 	{ id: "huggingface", envVar: "HF_TOKEN", label: "Hugging Face" },
 	{ id: "kimi-coding", envVar: "KIMI_API_KEY", label: "Kimi For Coding" },
+	{ id: "meta", envVar: "META_API_KEY", label: "Meta" },
 	{ id: "minimax", envVar: "MINIMAX_API_KEY", label: "MiniMax" },
 	{ id: "minimax-cn", envVar: "MINIMAX_CN_API_KEY", label: "MiniMax CN" },
 	{ id: "mistral", envVar: "MISTRAL_API_KEY", label: "Mistral" },
