@@ -29,10 +29,12 @@ import { toLlmMessages } from "../core/native-messages.ts";
  * deterministic lessons (see tests/chat-flow.test.ts).
  *
  * System prompts are COMPOSED per agent: system-prompt.md (the shared base:
- * philosophy, accuracy, quiz construction, question tools, formatting) +
- * every numeric-prefix fragment in that agent's directory
- * (src/agent/prompts/prober/ or src/agent/prompts/teacher/), in sorted
- * filename order, joined with `---` separators.
+ * agent, voice, philosophy, accuracy) + every numeric-prefix fragment in
+ * that agent's directory (src/agent/prompts/prober/ or
+ * src/agent/prompts/teacher/), in sorted filename order, then the shared/
+ * fragments as a trailing appendix (question tools, learner files,
+ * formatting) — the 2026-09-27 reorder: the agent's job and method lead,
+ * the mechanics trail. Joined with `---` separators.
  *
  * ONLY numeric-prefix files load — the loader enforces the convention, so
  * non-fragment documentation (README.md, …) can live in the directories

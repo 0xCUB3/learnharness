@@ -13,10 +13,10 @@
  * core port) stays in src/store/prompt-overrides.ts. Both sides share the
  * pure path grammar (src/core/prompt-segments.ts).
  *
- * SEGMENTS: the SHARED base (src/agent/system-prompt.md), the shared/
- * fragments directory (composed by BOTH agents between the base and their
- * own fragments — sources v1 2026-09-19), plus every numeric-prefix *.md
- * fragment in the agent's own directory, sorted by filename. The segment
+ * SEGMENTS: the SHARED base (src/agent/system-prompt.md), then every
+ * numeric-prefix *.md fragment in the agent's own directory (sorted by
+ * filename), then the shared/ fragments directory (composed by BOTH
+ * agents as a trailing appendix — the 2026-09-27 reorder). The segment
  * list adapts to the code: an override keyed to a segment the source no
  * longer ships stops composing automatically.
  *
@@ -52,24 +52,26 @@ export function readPromptOverride(segmentPath: string): string | null {
 }
 
 /** List the SOURCE segments for one agent, in composition order — the
- *  shared base, then the shared/ fragments, then the agent's own sorted
- *  by filename (the exact order composeInstructions composes them in). */
+ *  shared base, then the agent's own fragments sorted by filename, then
+ *  the shared/ fragments (the 2026-09-27 reorder: the agent's job and
+ *  method lead; the shared tool/file/format mechanics are an appendix).
+ *  The exact order composeInstructions composes them in. */
 export function listSourceSegments(agent: PromptAgent): Array<{ path: string; shared: boolean; file: string }> {
 	const segments: Array<{ path: string; shared: boolean; file: string }> = [
 		{ path: "system-prompt.md", shared: true, file: PATHS.teacherPrompt },
 	];
-	const sharedDir = path.join(PROMPTS_DIR, "shared");
-	if (fs.existsSync(sharedDir)) {
-		const sharedFragments = fs.readdirSync(sharedDir).filter((f) => FRAGMENT_RE.test(f)).sort();
-		for (const f of sharedFragments) {
-			segments.push({ path: `shared/${f}`, shared: true, file: path.join(sharedDir, f) });
-		}
-	}
 	const dir = path.join(PROMPTS_DIR, agent);
 	if (fs.existsSync(dir)) {
 		const fragments = fs.readdirSync(dir).filter((f) => FRAGMENT_RE.test(f)).sort();
 		for (const f of fragments) {
 			segments.push({ path: `${agent}/${f}`, shared: false, file: path.join(dir, f) });
+		}
+	}
+	const sharedDir = path.join(PROMPTS_DIR, "shared");
+	if (fs.existsSync(sharedDir)) {
+		const sharedFragments = fs.readdirSync(sharedDir).filter((f) => FRAGMENT_RE.test(f)).sort();
+		for (const f of sharedFragments) {
+			segments.push({ path: `shared/${f}`, shared: true, file: path.join(sharedDir, f) });
 		}
 	}
 	return segments;

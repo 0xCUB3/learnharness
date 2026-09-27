@@ -170,22 +170,22 @@ describe("the source-derived segment list", () => {
 		assert.equal(teacher[0].shared, true);
 		assert.equal(prober[0].sourceText.length > 0, true, "base prompt text loads");
 		// Fragments track the REAL source tree (numeric order, right agent dir),
-		// with the shared/ fragments between the base and the agent's own —
-		// the exact order composeInstructions loads them in (P2, 2026-09-19).
+		// the agent's OWN fragments between the base and the shared/ appendix —
+		// the exact order composeInstructions loads them in (reorder, 2026-09-27:
+		// job and method lead, mechanics trail).
 		assert.deepEqual(
 			prober.map((s) => s.path),
 			[
 				"system-prompt.md",
-				"shared/10-personality.md",
+				"prober/10-probe-doctrine.md",
 				"shared/20-question-tools.md",
 				"shared/30-learner-files.md",
 				"shared/40-formatting.md",
-				"prober/10-probe-doctrine.md",
 			],
 		);
 		assert.equal(teacher.some((s) => s.path === "teacher/05-method.md"), true);
 		assert.equal(teacher.some((s) => s.path === "teacher/10-planning.md"), true);
-		assert.equal(teacher.some((s) => s.path === "teacher/60-probing-in-brief.md"), true);
+		assert.equal(teacher.some((s) => s.path === "teacher/60-probing-in-brief.md"), false);
 		assert.equal(
 			teacher.every(
 				(s) => s.path === "system-prompt.md" || s.path.startsWith("teacher/") || s.path.startsWith("shared/"),
@@ -195,11 +195,11 @@ describe("the source-derived segment list", () => {
 		// the shared fragments compose for BOTH agents, same path key.
 		assert.equal(teacher.some((s) => s.path === "shared/30-learner-files.md" && s.shared), true);
 		assert.equal(prober.some((s) => s.path === "shared/30-learner-files.md" && s.shared), true);
-		// The voice block (owner, interlude 2026-09-23): its OWN shared chunk,
-		// composed into both agents — individually overridable so the learner can tune it.
-		for (const seg of [teacher, prober]) {
-			assert.equal(seg.some((s) => s.path === "shared/10-personality.md" && s.shared), true);
-		}
+		// The voice block (owner, interlude 2026-09-23) lives in the BASE now
+		// (moved out of shared/ 2026-09-27) — one base for both agents.
+		assert.equal(prober.some((s) => s.path === "shared/10-personality.md"), false);
+		assert.equal(teacher.some((s) => s.path === "shared/10-personality.md"), false);
+		assert.ok(prober[0].sourceText.includes("## Voice"), "the voice composes via the base");
 		// Tool MECHANICS are shared; question METHODOLOGY is phase-owned.
 		assert.equal(prober.some((s) => s.path.startsWith("teacher/")), false);
 		assert.equal(teacher.some((s) => s.path.startsWith("prober/")), false);
@@ -244,8 +244,9 @@ describe("composeInstructions: override honoring + the byte-identical source pat
 	const { composeInstructions, createTeacherAgent } = teacherAgent;
 
 	it("switches-less composition is byte-identical to the pre-refactor loader", () => {
-		// The old loader, rebuilt inline: base + shared/ fragments + the
-		// agent's own, trimmed, empties dropped, joined with the separator.
+		// The plain loader, rebuilt inline: base + the agent's own
+		// fragments + the shared/ appendix (the 2026-09-27 reorder),
+		// trimmed, empties dropped, joined with the separator.
 		const oldLoader = (kind: "prober" | "teacher") => {
 			const fragmentsOf = (dir: string) =>
 				fs
@@ -257,8 +258,8 @@ describe("composeInstructions: override honoring + the byte-identical source pat
 			const base = fs.readFileSync("src/agent/system-prompt.md", "utf-8").trim();
 			return [
 				base,
-				...fragmentsOf("src/agent/prompts/shared"),
 				...fragmentsOf(`src/agent/prompts/${kind}`),
+				...fragmentsOf("src/agent/prompts/shared"),
 			].join("\n\n---\n\n");
 		};
 		assert.equal(composeInstructions("teacher"), oldLoader("teacher"));

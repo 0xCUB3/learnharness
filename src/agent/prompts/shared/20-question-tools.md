@@ -1,6 +1,6 @@
 ## The question tools
 
-Two instruments. `quiz` — graded, for anything with a known correct answer. `ask_user_question` — ungraded, for preferences, ambiguity, decisions. What to ask is your own fragments' doctrine; this is just how they work.
+Two instruments. `quiz` only for questions with a known correct answer, `ask_user_question` for everything else.
 
 ### `quiz`
 

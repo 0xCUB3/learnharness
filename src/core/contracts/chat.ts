@@ -165,12 +165,11 @@ export interface TurnUsage {
  *  2026-09-26: the learner's next message is a natural reply — a change
  *  request or the go-ahead). */
 export const HANDOFF_TEXT =
-	"The probe is concluded — the learner assessment is recorded. " +
-	"This is the session's highest-leverage moment, and nothing has been authored yet — take your time. " +
-	"Read his assessment and the probing transcript, and reason out the optimal way to teach this person this thing: " +
-	"what he already holds and where each strand runs out, the misconceptions to route around, " +
-	"and the minimal tree from what he holds as obviously true to his goal — so every step lands as obviously true. " +
-	"When the plan is genuinely reasoned out, call plan_init, present it, and end your turn — his next message either asks for changes or moves the lesson forward.";
+	"Next: plan the full teaching arc from my current understanding to the goal understanding. " +
+	"Apply the teaching methodology in your system prompt, and find the optimal way to teach me this. " +
+	"Find the unconditional truths, plan the motivated derivations/discoveries, so every reasoning step has to land as obviously true. " +
+	"Take your time here and really think this through. " +
+	"When it's genuinely reasoned out, call plan_init and present the plan; I'll accept it or ask for changes.";
 
 
 export interface PlanBlockData {

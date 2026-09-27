@@ -1206,11 +1206,12 @@ describe("prompt composition", () => {
 			assert.ok(instructions.includes("find it yourself with `find`"), `${kind} knows to locate files itself`);
 			assert.ok(instructions.includes("home directory"), `${kind} knows the home-anchored path rule`);
 		}
-		// shared composes BEFORE the agent's own fragments (the seam's order rule)
+		// the agent's OWN fragments compose before the shared appendix
+		// (the reorder's order rule, 2026-09-27: job and method lead)
 		const teacher = composeInstructions("teacher");
 		assert.ok(
-			teacher.indexOf("## Learner files") < teacher.indexOf("## Learner source files"),
-			"shared fragment precedes the teacher's own 30-jobs section",
+			teacher.indexOf("## Learner source files") < teacher.indexOf("## Learner files"),
+			"the teacher's own 40-jobs section precedes the shared learner-files fragment",
 		);
 	});
 
