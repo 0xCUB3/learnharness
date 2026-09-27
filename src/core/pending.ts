@@ -39,7 +39,7 @@ export interface PendingToolCall {
 }
 
 /** Tools that render in the question dock and gate the composer. */
-export const QUESTION_TOOLS = ["quiz", "ask_user_question"] as const;
+export const QUESTION_TOOLS = ["quiz", "ask_user_question", "explain"] as const;
 
 /** Tools fulfilled by background sub-agent jobs (W2/W6). */
 export const JOB_TOOLS = ["research", "demo", "visual"] as const;
@@ -61,6 +61,13 @@ export const JOB_TOOLS = ["research", "demo", "visual"] as const;
  *  (research, not researcher; pdf is the PDF-reader dispatch, sources v0
  *  2026-09). */
 export const TOGGLEABLE_TOOLS = ["research", "demo", "visual", "pdf"] as const;
+
+/** The keys the settings WRITE side accepts in agent.tools: the plain
+ *  toggleables PLUS the quizzing-mechanics switch (`explain: true` arms
+ *  free-recall quizzing and drops the MC quiz — see quizMechanics in
+ *  agent/tools.ts; owner 2026-09-27). `quiz` itself stays unwritable:
+ *  mechanics-managed, never individually toggleable. */
+export const WRITABLE_TOOL_KEYS = [...TOGGLEABLE_TOOLS, "explain"] as const;
 
 /** The resolved settings → factory seam shape (Platform wires chat-handler
  *  to pass this through from the settings record; storage and defaults are

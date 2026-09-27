@@ -4,6 +4,9 @@ import { questionResult, serverExecute, ToolInputError } from "./tool-execute.ts
 import {
 	askInputSchema,
 	askOptionProblems,
+	explainInputBase,
+	explainInputObject,
+	explainInputProblems,
 	parseOptionsIfString,
 	probeQuizInputSchema,
 	quizInputObject,
@@ -92,6 +95,32 @@ export const askUserQuestionTool: AgentTool<typeof askInputSchema> = {
 
 // ─── the prober's question tools (no nodeId — no map exists yet) ─────────────
 
+/** The option-building craft (owner 2026-09-27: moved OUT of the system
+ *  prompt into the tool description — pi-native doctrine travels with
+ *  the armed tool). Shared verbatim by both quiz variants. */
+const QUIZ_OPTION_CRAFT =
+	"Building options — the giveaway is never the distractors' wrongness, it's asymmetry: the correct option " +
+	"carrying its reasoning while the others are bare, or key-term bolding that flags it. Build evenness in: " +
+	"(1) every option is a bare claim — zero 'why' in any of them; all reasoning goes in explanation, shown only " +
+	"after he answers; (2) write the correct claim first, then mutate it into each distractor — what would someone " +
+	"holding a specific misconception claim? Same skeleton, same grain, same register; (3) each distractor is a real " +
+	"error he might actually make (his pick is diagnostic) yet unambiguously wrong; (4) no asymmetric bolding. If " +
+	"you can tell the right one cold without knowing the material, regenerate — don't patch.";
+
+/** The explain doctrine (owner 2026-09-27): free-recall quizzing — the
+ *  sycophancy mitigation is the commitment. Carried by the DESCRIPTION
+ *  (pi-native ruling), not the system prompt. Shared by both variants;
+ *  the teach variant appends the nodeId tagging paragraph. */
+const EXPLAIN_DOCTRINE =
+	"Ask the learner to EXPLAIN something in his own words — a graded check with NO options: he types a free-text " +
+	"answer. Unlike ask_user_question (no right answer), explain always has one. THE COMMITMENT RULE: write " +
+	"explanation (your reasoning) first, then correctAnswer — the FULL correct answer, committed before he ever sees " +
+	"the question. When his answer returns, grade it strictly against your committed answer in your reply: never " +
+	"revise the commitment after seeing his words, and never mark a wrong answer right to be kind — a near-miss is " +
+	"partial understanding; name exactly what he got and what he missed. He sees the committed answer and the " +
+	"explanation on submit. An 'I don't know' choice is always available to him — a genuine gap, not a wrong answer. " +
+	"ONE question per turn: call a single explain, then end your turn — his answer determines the next.";
+
 export const probeQuizTool: AgentTool<typeof probeQuizInputSchema> = {
 	name: "quiz",
 	label: "quiz",
@@ -105,13 +134,55 @@ export const probeQuizTool: AgentTool<typeof probeQuizInputSchema> = {
 		"signal a genuine gap instead of guessing. An always-present optional note field lets the learner attach a " +
 		"free-text note to ANY answer; it reaches you only when non-empty. No free-text answers — for non-graded " +
 		"questions use ask_user_question instead. ONE question per turn: call a single quiz, then end your turn — " +
-		"his answer determines the next question to ask.",
+		"his answer determines the next question to ask. " + QUIZ_OPTION_CRAFT,
 	parameters: probeQuizInputSchema,
 	prepareArguments: prepareQuestionArguments,
 	executionMode: "sequential",
 	execute: async (_toolCallId, input) => {
 		const problems = quizInputProblems(input);
 		if (problems.length > 0) throw new ToolInputError("quiz", problems);
+		return questionResult();
+	},
+};
+
+/** The teacher's free-recall variant (nodeId-validated, same seam as the
+ *  teach quiz — phases/plan recognize BOTH tool names). */
+export function teachExplainToolFor(
+	ctx: Pick<PlanToolContext, "chatId" | "chatStore">,
+): AgentTool<typeof explainInputObject> {
+	return {
+		name: "explain",
+		label: "explain",
+		description:
+			EXPLAIN_DOCTRINE +
+			" Set `nodeId` (required) to the plan node this question is about — the lesson's position on the map derives " +
+			"from those tags; a node takes as many questions as it deserves, so don't rush forward. Off-map checks use " +
+			"ask_user_question.",
+		parameters: explainInputObject,
+		prepareArguments: prepareQuestionArguments,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			const problems = [...explainInputProblems(input)];
+			const nodeIdProblemText = nodeIdProblem(ctx, input.nodeId);
+			if (nodeIdProblemText) problems.push(nodeIdProblemText);
+			if (problems.length > 0) throw new ToolInputError("explain", problems);
+			return questionResult();
+		},
+	};
+}
+
+/** The prober's free-recall variant (no nodeId — same pattern as the
+ *  probe quiz). */
+export const probeExplainTool: AgentTool<typeof explainInputBase> = {
+	name: "explain",
+	label: "explain",
+	description: EXPLAIN_DOCTRINE,
+	parameters: explainInputBase,
+	prepareArguments: prepareQuestionArguments,
+	executionMode: "sequential",
+	execute: async (_toolCallId, input) => {
+		const problems = explainInputProblems(input);
+		if (problems.length > 0) throw new ToolInputError("explain", problems);
 		return questionResult();
 	},
 };
@@ -156,10 +227,20 @@ export function createProberTools(
 		spawn: ctx.spawn,
 		searchAvailable: ctx.searchAvailable,
 	});
+	// Quizzing mechanics (owner 2026-09-27): free-recall swaps the probe
+	// quiz for the probe explain — one quizzing tool at a time, whichever
+	// the settings arm. ask stays always-on.
+	const mechanics = quizMechanics(enabled);
+	// The armed quizzing tool, widened to the registry's heterogeneous
+	// AgentTool record BEFORE the filter (a conditional spread of two
+	// differently-typed literals makes the whole object's type a union —
+	// unusable as Record<string, AgentTool<any>> downstream).
+	const quizzing: Record<string, AgentTool<any>> =
+		mechanics === "free" ? { explain: probeExplainTool } : { quiz: probeQuizTool };
 	return {
 		...filterEnabledTools(
 			{
-				quiz: probeQuizTool,
+				...quizzing,
 				ask_user_question: askUserQuestionTool,
 				// The learner-filesystem set is always-on (user-decided 2026-09,
 				// sources v1): the prober inspects and LOCATES learner-referenced
@@ -184,7 +265,7 @@ export function createProberTools(
 					: {}),
 				...done,
 			},
-			enabled,
+			withoutMechanics(enabled),
 		),
 		...done,
 	};
@@ -230,7 +311,8 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 			"plus an automatic 'I don't know' choice so the learner can signal a genuine gap instead of guessing. " +
 			"An always-present optional note field lets the learner attach a free-text note to ANY answer; it reaches you " +
 			"only when non-empty. No free-text answers — for non-graded questions use ask_user_question instead. " +
-			"ONE question per turn: call a single quiz, then end your turn — his answer determines the next.",
+			"ONE question per turn: call a single quiz, then end your turn — his answer determines the next. " +
+		QUIZ_OPTION_CRAFT,
 		parameters: quizInputObject,
 		prepareArguments: prepareQuestionArguments,
 		executionMode: "sequential",
@@ -269,13 +351,39 @@ export interface TeacherToolContext extends PlanToolContext {
  * future toggleables (question-tool variants, …) need no change here.
  * Absent/undefined = enabled — tests and old records see today's set.
  */
+/** The quizzing mechanics (owner 2026-09-27): `tools.explain === true` in
+ *  the resolved settings ⇒ free-recall checks (explain armed, quiz dropped)
+ *  — anything else ⇒ multiple choice, exactly today's set. Mechanics-
+ *  managed, NOT individually toggleable: quiz/explain never pass through
+ *  filterEnabledTools (the 2026-09-19 wedge ruling stands — a quiz-less
+ *  prober collapses its assessment flow). */
+export function quizMechanics(enabled?: EnabledTools): "choice" | "free" {
+	return enabled?.explain === true ? "free" : "choice";
+}
+
+/** Strip the mechanics keys so filterEnabledTools can never drop the
+ *  quizzing tools (the derivation above is their only switch). */
+function withoutMechanics(enabled?: EnabledTools): EnabledTools | undefined {
+	if (!enabled) return undefined;
+	const { explain: _e, quiz: _q, ...rest } = enabled;
+	return rest;
+}
+
 export function createTeacherTools(
 	ctx: TeacherToolContext,
 	enabled?: EnabledTools,
 ): Record<string, AgentTool<any>> {
+	// Quizzing mechanics (owner 2026-09-27): free-recall swaps the teach
+	// quiz for the teach explain — one quizzing tool at a time, whichever
+	// the settings arm. ask stays always-on.
+	const mechanics = quizMechanics(enabled);
+	// Same widening as the prober's (see above) — the conditional spread of
+	// two differently-typed literals collapses into an unusable union type.
+	const quizzing: Record<string, AgentTool<any>> =
+		mechanics === "free" ? { explain: teachExplainToolFor(ctx) } : { quiz: teachQuizToolFor(ctx) };
 	return filterEnabledTools(
 		{
-			quiz: teachQuizToolFor(ctx),
+			...quizzing,
 			ask_user_question: askUserQuestionTool,
 			// The learner-filesystem set is always-on (user-decided 2026-09,
 			// sources v1): the teacher locates and reads learner-referenced
@@ -292,6 +400,6 @@ export function createTeacherTools(
 			// reaches jobTools' research gate.
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
 		},
-		enabled,
+		withoutMechanics(enabled),
 	);
 }

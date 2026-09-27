@@ -16,6 +16,7 @@ import {
 	parseAskInput,
 	parseProbeDoneInput,
 	parseQuizInput,
+	parseExplainInput,
 } from "../src/core/tool-parts.ts";
 import { quizInputSchema, probeQuizInputSchema } from "../src/core/question-core.ts";
 import { probeDoneInputSchema } from "../src/core/contracts/probe.ts";
@@ -264,5 +265,44 @@ describe("display-math newline rule (Option A, owner ruling 2026-09-27)", () => 
 		});
 		assert.ok(parsed);
 		assert.equal(parsed.question, "Is \\(p \\neq q\\) valid?");
+	});
+});
+
+// ─── parseExplainInput (free-recall display parse, owner 2026-09-27) ───────
+
+describe("parseExplainInput: the dock's display seam for explain calls", () => {
+	const good = {
+		question: "Explain why Mercury is hard to observe.",
+		explanation: "It never strays far from the Sun in our sky.",
+		correctAnswer: "Its small angular separation from the Sun.",
+		nodeId: "planet-order", // the teacher's field — STRIPPED by Clean, like quiz
+		details: "Think about where it appears at dusk.",
+	};
+
+	it("parses a valid call and strips the teacher-only nodeId", () => {
+		const parsed = parseExplainInput(good)!;
+		assert.equal(parsed.question, "Explain why Mercury is hard to observe.");
+		assert.equal(parsed.correctAnswer, "Its small angular separation from the Sun.");
+		assert.equal(parsed.details, "Think about where it appears at dusk.");
+		assert.ok(!("nodeId" in parsed), "the teacher-only key is cleaned away");
+	});
+
+	it("an empty commitment never arms the dock", () => {
+		assert.equal(parseExplainInput({ ...good, correctAnswer: "  " }), undefined);
+	});
+
+	it("restores LaTeX escape debris inside math spans (the pi-ai streaming wobble)", () => {
+		// \f of \forall was eaten by the lenient args parse: U+000C + "orall".
+		const dirty = "Because \(orall x\) holds.";
+		const parsed = parseExplainInput({ ...good, correctAnswer: dirty })!;
+		assert.equal(parsed.correctAnswer, "Because \(\forall x\) holds.");
+	});
+
+	it("wrong-shape input never arms the dock (numeric strings DO coerce — the seam's leniency)", () => {
+		assert.equal(parseExplainInput("just a string"), undefined);
+		assert.equal(parseExplainInput({ explanation: "e", correctAnswer: "a" }), undefined, "missing question");
+		assert.equal(parseExplainInput({ question: "q", explanation: "e", correctAnswer: { nested: true } }), undefined);
+		// 42 → "42": the same numeric coercion the quiz seam pins.
+		assert.equal(parseExplainInput({ question: "q", explanation: "e", correctAnswer: 42 })?.correctAnswer, "42");
 	});
 });

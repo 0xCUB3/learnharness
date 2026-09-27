@@ -457,3 +457,39 @@ describe("probe-done card", () => {
 		assert.match(html, /Writing the assessment/);
 	});
 });
+
+// ─── the explain reveal (free-recall, owner 2026-09-27) ────────────────────
+
+describe("AnsweredCard: the explain variant", () => {
+	const explainQD = (): QuestionData => ({
+		id: "e1",
+		kind: "explain",
+		question: "Explain why the null result matters.",
+		mode: "text",
+		options: [],
+		committedAnswer: "It ruled out the luminiferous aether.",
+		explanation: "A stationary aether predicts a fringe shift; none was seen.",
+		createdAt: new Date().toISOString(),
+	});
+
+	it("reveals the committed answer + explanation with NO verdict chips", () => {
+		const html = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(explainQD(), { text: "Something about relativity?" })} />);
+		assert.match(html, /Explain/, "labeled as the explain kind");
+		assert.match(html, /The answer:/);
+		assert.match(html, /luminiferous aether/);
+		assert.match(html, /Why:/);
+		assert.ok(!html.includes("incorrect") && !html.includes("correct</") , "no client grading");
+		assert.ok(!html.includes('data-mark="x"') && !html.includes('data-mark="check"'));
+	});
+
+	it("renders his free text as the answer", () => {
+		const html = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(explainQD(), { text: "Something about relativity?" })} />);
+		assert.match(html, /Something about relativity\?/);
+	});
+
+	it("dontKnow renders as the gap, not a wrong answer", () => {
+		const html = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(explainQD(), { dontKnow: true })} />);
+		assert.match(html, /I don&#x27;t know/);
+		assert.ok(!html.includes("The learner answered:"));
+	});
+});

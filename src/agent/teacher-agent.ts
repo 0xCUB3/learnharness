@@ -203,7 +203,8 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 }
 
 /**
- * The PROBER (agent A): quiz (no nodeId) + ask + probe_done, lean on
+ * The PROBER (agent A): the quizzing tool (quiz, or explain under free
+ * recall — no nodeId either way) + ask + probe_done, lean on
  * probing doctrine. Its whole job is bracketing the learner's edge and
  * concluding with the assessment (probe_done) — which also queues the
  * handoff wake (see tools/probe.ts) and is the transcript seam the

@@ -217,6 +217,68 @@ export const quizInputObject = Type.Object({
  *  it ran at the call boundary, where quizInputProblems runs now). */
 export const probeQuizInputSchema = quizInputBase;
 
+// ─── the explain tool (free-recall quizzing, owner 2026-09-27) ─────────────
+//
+// Quiz mechanics WITHOUT options: the learner answers in his own words.
+// The SYCOPHANCY MITIGATION is structural — the model commits to the full
+// correct answer BEFORE posing (the commitment rides the persisted call
+// args, is revealed to the learner on submit, and is restated in the answer
+// result the model grades against; the client never grades free text).
+// Mechanics doctrine lives in the TOOL DESCRIPTIONS (owner ruling
+// 2026-09-27: pi-native — doctrine travels with the armed tool), not in
+// the system prompt.
+
+export const explainInputBase = Type.Object({
+	question: Type.String({
+		description:
+			"The single question to ask. ONE question per turn: ask, then end your turn — the answer determines the next.",
+	}),
+	explanation: Type.String({
+		description:
+			"REQUIRED. Explanation revealed AFTER the learner answers (shown however he did). It is written BEFORE " +
+			"correctAnswer by design: reason it out first, then commit to the answer the reasoning supports.",
+	}),
+	correctAnswer: Type.String({
+		description:
+			"REQUIRED. The full correct answer in your own words — COMMITTED before the learner ever sees the question. " +
+			"The commitment is immutable: when his answer returns, grade it strictly against this text — never revise the " +
+			"commitment after seeing his words, and never mark a wrong answer right to be kind. Both this and the explanation " +
+			"are shown to him on submit; your next reply grades the nuance of what he wrote.",
+	}),
+	details: Type.Optional(
+		Type.String({ description: "Optional extra context or instructions shown under the question." }),
+	),
+});
+
+/** The TEACH-side explain object: base + the plan-position field (same
+ *  semantics as the quiz's nodeId — the seam recognizes BOTH tools). */
+export const explainInputObject = Type.Object({
+	...explainInputBase.properties,
+	nodeId: Type.String({
+		description:
+			"REQUIRED plan-tree node id this question is about — must EXACTLY match one of this session's " +
+			"plan_init node slugs (validated at call time; a mismatched id is rejected back to you). " +
+			"The lesson's position on the map derives from these tags (the node the latest tagged question is about is " +
+			"where the map stands; earlier ones count as visited). A node takes as many questions as it deserves: stay on " +
+			"one node for as many turns as the understanding needs — one reasoning step at a time, never rush forward. " +
+			"For off-map checks use ask_user_question.",
+	}),
+});
+
+/** The explain authoring contract: the commitment must exist. Empty
+ *  result = an explain the dock can arm and the model can grade against. */
+export function explainInputProblems(input: { correctAnswer: string }): string[] {
+	if (input.correctAnswer.trim().length === 0) {
+		return ["correctAnswer is required — commit to the full correct answer BEFORE posing the question."];
+	}
+	return [];
+}
+
+/** The tool names that carry the quizzing mechanic — the teach seam
+ *  (phases), the plan-position fold, and the pending gate all recognize
+ *  whichever is armed. */
+export const QUIZ_TOOL_NAMES = ["quiz", "explain"] as const;
+
 /** The TEACHER's quiz declaration (base + the position field). */
 export const quizInputSchema = quizInputObject;
 
@@ -249,6 +311,8 @@ export const askInputSchema = Type.Object({
 
 export type QuizToolInput = Static<typeof quizInputObject>;
 export type AskToolInput = Static<typeof askInputSchema>;
+export type ExplainToolInput = Static<typeof explainInputObject>;
+export type ProbeExplainToolInput = Static<typeof explainInputBase>;
 
 
 /** A real selected answer, in the order the options were displayed. */
@@ -258,7 +322,7 @@ export interface OptionAnswer {
 	index: number; // 1-based display index
 }
 
-export type QuestionKind = "quiz" | "ask";
+export type QuestionKind = "quiz" | "ask" | "explain";
 export type SelectMode = "single-select" | "multi-select";
 export type QuestionMode = SelectMode | "text";
 
@@ -272,6 +336,8 @@ export interface QuestionData {
 	options: QuizOption[]; // display order (post-shuffle)
 	// quiz only. NEVER send to the client before answering:
 	correctIndices?: number[];
+	// explain only. NEVER send to the client before answering:
+	committedAnswer?: string;
 	explanation?: string;
 	createdAt: string;
 }
@@ -285,11 +351,12 @@ export interface QuestionAnswerData {
 	dontKnow: boolean;
 	answers: OptionAnswer[];
 	other?: string; // ask: "Other" free text
-	text?: string; // ask: text-mode answer
+	text?: string; // ask/explain: text-mode answer
 	note?: string;
 	correct?: boolean; // quiz only
 	correctIndices?: number[]; // quiz only (rendering)
-	explanation?: string; // quiz only (rendering)
+	committed?: string; // explain only (rendering): the model's committed answer
+	explanation?: string; // quiz/explain only (rendering)
 	dismissed?: boolean;
 	answeredAt: string;
 }
@@ -526,12 +593,18 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest): QuestionAnswe
 		base.explanation = qd.explanation;
 		base.correct = base.dontKnow ? false : isCorrect(base.answers.map((a) => a.index), qd.correctIndices ?? []);
 	}
+	if (qd.kind === "explain") {
+		// No client grading — the model grades in its reply, against the
+		// commitment. Snapshots ride along for the reveal + rendering.
+		base.committed = qd.committedAnswer;
+		base.explanation = qd.explanation;
+	}
 	return base;
 }
 
 /** The user message that carries the answer into the agent's context. */
 export function formatAnswerMessage(ad: QuestionAnswerData): string {
-	const label = ad.kind === "quiz" ? "Quiz answer" : "Answer to your question";
+	const label = ad.kind === "quiz" ? "Quiz answer" : ad.kind === "explain" ? "Explain answer" : "Answer to your question";
 	const head = `[${label}]`;
 	const lines: string[] = [head];
 
@@ -553,6 +626,18 @@ export function formatAnswerMessage(ad: QuestionAnswerData): string {
 			lines.push(`Result: ${verdict}`);
 		}
 		lines.push(`Correct: ${correctStr}`);
+	} else if (ad.kind === "explain") {
+		if (ad.dontKnow) {
+			lines.push(
+				`The learner selected "I don't know" — they did NOT attempt an answer (a genuine knowledge gap, not a wrong guess).`,
+			);
+		} else {
+			lines.push(`The learner answered: ${ad.text ?? "(no answer)"}`);
+		}
+		if (ad.committed) {
+			lines.push(`Your committed correct answer (immutable — grade against it, never revise it): ${ad.committed}`);
+		}
+		lines.push("Grade his answer strictly against your committed answer in your reply: name what he got and what he missed.");
 	} else {
 		if (ad.text) {
 			lines.push(`The learner answered: ${ad.text}`);

@@ -181,3 +181,32 @@ test("phaseAt3Lh (native fold): probe→plan at the clean probe_done result; pla
 		]),
 	);
 });
+
+// ─── the explain mechanic at the seam (owner 2026-09-27) ───────────────────
+// Both quizzing tools (quiz OR explain, whichever the settings armed) open
+// teaching — the seam is structural, not name-bound to the MC tool.
+
+test("phaseAt3 + phaseAt3Lh: a tagged explain CALL is the plan→teach seam too", () => {
+	const done = toolResult("probe_done");
+	const explainCall = (args: Record<string, unknown>): LhMessage =>
+		({
+			id: "a_explain",
+			role: "assistant",
+			content: [{ type: "toolCall", id: "call_explain", name: "explain", arguments: args }],
+			timestamp: Date.now(),
+		}) as unknown as LhMessage;
+
+	const tagged = explainCall({ question: "q", correctAnswer: "a", explanation: "e", nodeId: "gravity-basics" });
+	const untagged = explainCall({ question: "q", correctAnswer: "a", explanation: "e" });
+
+	assert.equal(phaseAt3Lh([done, untagged]), "plan", "an untagged explain never starts teaching");
+	assert.equal(phaseAt3Lh([done, tagged]), "teach", "the tagged explain CALL is the seam");
+	assert.equal(
+		phaseAt3Lh([done, tagged]),
+		phaseAt3([
+			{ parts: [{ type: "tool-probe_done", state: "output-available" } as never] },
+			{ parts: [{ type: "tool-explain", input: { nodeId: "gravity-basics" } } as never] },
+		]),
+		"the two folds agree on the explain mechanic",
+	);
+});

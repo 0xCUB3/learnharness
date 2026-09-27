@@ -20,6 +20,8 @@ import {
 	createProberTools,
 	createTeacherTools,
 	probeQuizTool,
+	probeExplainTool,
+	teachExplainToolFor,
 	teachQuizToolFor,
 	type TeacherToolContext,
 } from "../src/agent/tools.ts";
@@ -228,10 +230,16 @@ describe("tool toggles (core/pending.ts + factories)", () => {
 		const noAsk = createProberTools(ctx, { ask_user_question: false });
 		assert.deepEqual(Object.keys(noAsk).sort(), ["find", "grep", "ls", "pdf", "probe_done", "quiz", "read", "research"]);
 
-		// quiz off is honored by the generic machinery too (future toggleable),
-		// but probe_done is never droppable — it is how the phase ends.
+		// Quizzing is mechanics-managed now (owner 2026-09-27): quiz/explain
+		// NEVER pass through the generic filter — hand-written quiz:false is a
+		// no-op (the wedge danger stands: a quiz-less prober collapses its
+		// assessment flow). probe_done is never droppable — it ends the phase.
 		const noQuiz = createProberTools(ctx, { quiz: false });
-		assert.deepEqual(Object.keys(noQuiz).sort(), ["ask_user_question", "find", "grep", "ls", "pdf", "probe_done", "read", "research"]);
+		assert.deepEqual(Object.keys(noQuiz).sort(), ["ask_user_question", "find", "grep", "ls", "pdf", "probe_done", "quiz", "read", "research"]);
+		// The mechanic switch (owner 2026-09-27): tools.explain === true arms
+		// free-recall — explain in, quiz out, exactly one quizzing tool.
+		const free = createProberTools(ctx, { explain: true });
+		assert.deepEqual(Object.keys(free).sort(), ["ask_user_question", "explain", "find", "grep", "ls", "pdf", "probe_done", "read", "research"]);
 		assert.ok(createProberTools(ctx, { probe_done: false }).probe_done, "probe_done always-on");
 	});
 
@@ -254,6 +262,16 @@ describe("tool toggles (core/pending.ts + factories)", () => {
 			Object.keys(createTeacherTools(ctx, {})).sort(),
 			full,
 			"absent keys mean enabled — old records behave exactly as today",
+		);
+
+		// The mechanic switch (owner 2026-09-27): free-recall swaps the teach
+		// quiz for the teach explain — one quizzing tool, whichever is armed.
+		const freeFull = ["ask_user_question", "demo", "explain", "find", "grep", "ls", "pdf", "plan_init", "read", "research", "visual"];
+		assert.deepEqual(Object.keys(createTeacherTools(ctx, { explain: true })).sort(), freeFull);
+		assert.deepEqual(
+			Object.keys(createTeacherTools(ctx, { explain: true, research: false })).sort(),
+			freeFull.filter((t) => t !== "research"),
+			"mechanics and plain toggles compose",
 		);
 	});
 });
@@ -291,5 +309,80 @@ describe("prepareQuestionArguments (the string-encoded options wobble)", () => {
 		assert.equal(prepare(arrayArgs), arrayArgs, "array args return the SAME object (no defensive copies)");
 		const unparseable = { question: "q", options: "not json", correctAnswer: "slope", explanation: "e" };
 		assert.equal(prepare(unparseable), unparseable, "unparseable strings pass through — validation reports honestly");
+	});
+});
+
+// ─── the explain tool boundary (free-recall, owner 2026-09-27) ─────────────
+
+describe("teachExplainToolFor: the explain variant validates nodeId like the quiz", () => {
+	const validExplain = {
+		question: "Explain why the null result matters.",
+		explanation: "A stationary aether predicts a fringe shift.",
+		correctAnswer: "It ruled out the aether.",
+		nodeId: "arith",
+	};
+
+	it("accepts a nodeId matching a tree node", async () => {
+		const chatId = newChat("Explain nodeId: valid");
+		chatStore.saveTree(chatId, {
+			nodes: [
+				{ id: "arith", title: "Arithmetic" },
+				{ id: "expressions", title: "Expressions" },
+			],
+			edges: [{ from: "arith", to: "expressions" }],
+			version: 1,
+		});
+		const res = await boundaryParse(teachExplainToolFor({ chatId, chatStore }), {
+			...validExplain,
+			nodeId: "expressions",
+		});
+		assert.equal(res.success, true);
+	});
+
+	it("rejects an off-map nodeId with the slugs listed", async () => {
+		const chatId = newChat("Explain nodeId: typo");
+		chatStore.saveTree(chatId, { nodes: [{ id: "arith", title: "A" }], edges: [], version: 1 });
+		const res = await boundaryParse(teachExplainToolFor({ chatId, chatStore }), {
+			...validExplain,
+			nodeId: "arithmetic",
+		});
+		assert.equal(res.success, false);
+		assert.match(problemLines(res.error).join("\n"), /matches no node/);
+	});
+
+	it("no tree yet: rejected — checks wait for plan_init", async () => {
+		const chatId = newChat("Explain nodeId: no tree");
+		const res = await boundaryParse(teachExplainToolFor({ chatId, chatStore }), validExplain);
+		assert.equal(res.success, false);
+		assert.match(problemLines(res.error).at(-1)!, /No plan map exists yet — call plan_init/);
+	});
+
+	it("an empty commitment is rejected at the boundary", async () => {
+		const chatId = newChat("Explain: empty commitment");
+		chatStore.saveTree(chatId, { nodes: [{ id: "arith", title: "A" }], edges: [], version: 1 });
+		const res = await boundaryParse(teachExplainToolFor({ chatId, chatStore }), {
+			...validExplain,
+			correctAnswer: "   ",
+		});
+		assert.equal(res.success, false);
+		assert.match(problemLines(res.error).join("\n"), /correctAnswer is required/);
+	});
+});
+
+describe("the prober's explain: no nodeId field at all", () => {
+	it("the probe schema carries no nodeId; the commitment contract still binds", async () => {
+		assert.ok(!("nodeId" in probeExplainTool.parameters.properties));
+		const res = await boundaryParse(probeExplainTool, {
+			question: "Explain what a derivative measures.",
+			explanation: "It is instantaneous rate of change.",
+			correctAnswer: "The instantaneous rate of change.",
+		});
+		assert.equal(res.success, true);
+		const empty = await boundaryParse(probeExplainTool, {
+			question: "q",
+			explanation: "e",
+			correctAnswer: " ",
+		});
+		assert.equal(empty.success, false);
 	});
 });

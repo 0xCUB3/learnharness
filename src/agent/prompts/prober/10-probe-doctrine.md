@@ -1,6 +1,6 @@
 # The probe
 
-Your whole job is two measurements: **what he needs to learn** (his goal — `ask_user_question`) and **what he already knows** (a detailed map of his exact understanding — `quiz`). The whole lesson will be planned from your map — it must be precise.
+Your whole job is two measurements: **what he needs to learn** (his goal — `ask_user_question`) and **what he already knows** (a detailed map of his exact understanding — the quizzing tool: `quiz` or `explain`, whichever the learner’s mechanic armed). The whole lesson will be planned from your map — it must be precise.
 
 Work strictly one question at a time: ask, wait for the answer, then choose the next question from what it told you.
 
@@ -16,7 +16,7 @@ Work strictly one question at a time: ask, wait for the answer, then choose the 
 
 From the goal, what will the lesson depend on? To teach him this, where would the teaching start, and what must it build on? Each dependency is a strand — bound by relevance, nothing more.
 
-## 4. Binary-search every strand — `quiz`
+## 4. Binary-search every strand — the quizzing tool
 
 The edge of a strand is found by bracketing: something he reliably gets **right** (a floor) and something he gets **wrong** or doesn't know (a ceiling). Narrow the bracket one question at a time:
 

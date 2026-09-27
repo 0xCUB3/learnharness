@@ -26,6 +26,7 @@ import {
 	type FauxResponseStep,
 } from "@earendil-works/pi-ai";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
+import { createTeacherTools } from "../src/agent/tools.ts";
 import { handleChatInput, handleChatRequest } from "../src/server/chat-handler.ts";
 import { effectiveSettings } from "../src/server/stores.ts";
 import { isTurnRunning } from "../src/server/turn-liveness.ts";
@@ -1049,4 +1050,85 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 			assert.equal(chatStore.getChat(chat.id)!.messages.length, 2, `chat ${chat.id} persisted its full turn`);
 		}
 	});
+});
+
+// ─── the explain mechanic end-to-end (free-recall, owner 2026-09-27) ───────
+
+it("explain tool call persists as a pending part; the free-text answer reveals the commitment and reaches the model", async () => {
+	const EXPLAIN_INPUT = {
+		question: "Explain why Mercury is hard to observe.",
+		explanation: "It never strays far from the Sun in our sky.",
+		correctAnswer: "Its small angular separation from the Sun.",
+		nodeId: "planet-order",
+	};
+	const { engine, calls } = scriptedTeacher((cs) => [
+		(context) => {
+			cs.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+			return fauxAssistantMessage(
+				[fauxThinking("Free recall this time."), fauxToolCall("explain", EXPLAIN_INPUT, { id: "call-1" })],
+				{ stopReason: "toolUse" },
+			);
+		},
+		(context) => {
+			cs.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+			return fauxAssistantMessage([fauxText("Right — it hugs the Sun.")]);
+		},
+	]);
+	const chat = createConfiguredChat("Test: explain mechanic");
+	createdChats.push(chat.id);
+
+	// Free-recall armed: the mechanic swap is the ONLY change to the registry.
+	const tools = createTeacherTools(
+		{ chatId: chat.id, chatStore, jobStore, spawn: () => {} },
+		{ explain: true },
+	);
+	assert.ok(tools.explain && !tools.quiz, "explain armed, quiz dropped — one quizzing tool");
+
+	const factory: Parameters<typeof handleChatRequest>[1] = (opts) =>
+		createTeacherAgent(undefined, { engine, messages: opts.messages, tools });
+	await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), factory));
+
+	const saved1 = chatStore.getChat(chat.id)!;
+	const savedContent1 = (saved1.messages[1] as { content: unknown }).content as Array<{ type: string; name?: string }>;
+	const call = savedContent1.find((b) => b.type === "toolCall" && b.name === "explain");
+	assert.ok(call, "explain tool call persisted");
+
+	const pending = danglingQuestionOf(saved1.messages);
+	assert.equal(pending?.tool, "explain");
+	assert.deepEqual(pending?.input, EXPLAIN_INPUT);
+
+	const view1 = projectView(saved1.messages);
+	assert.ok(view1[1]!.parts.some((p) => p.type === "tool-explain"), "tool-explain part projected — the dock arms");
+
+	// The client answers in his own words (the dock's buildAnswer seam):
+	const qd: QuestionData = {
+		id: "call-1",
+		kind: "explain",
+		question: EXPLAIN_INPUT.question,
+		mode: "text",
+		options: [],
+		committedAnswer: EXPLAIN_INPUT.correctAnswer,
+		explanation: EXPLAIN_INPUT.explanation,
+		createdAt: new Date().toISOString(),
+	};
+	const answer = buildAnswer(qd, { text: "It stays near the Sun." });
+	assert.equal(answer.correct, undefined, "no client grading — the model grades");
+
+	await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), factory));
+
+	const saved2 = chatStore.getChat(chat.id)!;
+	const view2 = projectView(saved2.messages);
+	const part = view2[1]!.parts.find((p) => p.type === "tool-explain");
+	assert.equal((part as { state?: string }).state, "output-available");
+	const out = (part as { output?: { committed?: string; explanation?: string } }).output!;
+	assert.equal(out.committed, EXPLAIN_INPUT.correctAnswer, "the commitment snapshots into the answer record");
+	assert.equal(out.explanation, EXPLAIN_INPUT.explanation);
+
+	// The model's continuation saw the answer JSON (fork 1: the answer IS
+	// the call's tool result) — his text AND the commitment snapshot ride it.
+	const seen = calls[1]!.join("\n");
+	assert.match(seen, /It stays near the Sun\./);
+	assert.match(seen, /committed/);
+	assert.match(seen, /small angular separation/);
+	assert.equal(danglingQuestionOf(saved2.messages), null, "no pending question remains");
 });

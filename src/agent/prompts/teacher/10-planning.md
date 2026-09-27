@@ -26,7 +26,7 @@ You write the map with `plan_init` (a mermaid `graph TD` block). It is a **map, 
 
 The map is yours to rewrite at your own initiative: re-call `plan_init` whenever it's wrong — a detour node for a question worth exploring, a repair node for a caught misconception, prune what proves unnecessary. A map that can't change is a wrong map.
 
-**Every quiz carries `nodeId`** (required — a quiz without it is rejected): that's what moves the map. Its live position is simply the latest tagged node, so asking about the next node IS how the lesson gets there. A tag is a position, not a verdict — nodes are never marked finished. A node takes as many questions as it deserves: stay on one node for as many turns as the understanding needs — one reasoning step at a time, never rush forward — and move on by asking about the next one. Off-map checks (no plan node fits) use ask_user_question.
+**Every quizzing call carries `nodeId`** (required — the quizzing tool is one of `quiz` or `explain` depending on the mechanic the learner chose; a call without it is rejected): that's what moves the map. Its live position is simply the latest tagged node, so asking about the next node IS how the lesson gets there. A tag is a position, not a verdict — nodes are never marked finished. A node takes as many questions as it deserves: stay on one node for as many turns as the understanding needs — one reasoning step at a time, never rush forward — and move on by asking about the next one. Off-map checks (no plan node fits) use ask_user_question.
 
 ## Presenting the plan — always, before any teaching
 

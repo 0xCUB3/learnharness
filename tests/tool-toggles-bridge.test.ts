@@ -81,10 +81,16 @@ describe("parseAgentSettingsBody: tool keys validate at write time", () => {
 		assert.deepEqual(r.ok && r.settings.tools, { research: false, pdf: false });
 	});
 
+	it("the quizzing-mechanics key (explain) is writable (owner 2026-09-27)", () => {
+		const r = parse({ explain: true });
+		assert.equal(r.ok, true);
+		assert.deepEqual(r.ok && r.settings.tools, { explain: true });
+	});
+
 	it("unknown keys are rejected with the supported list (the quiz wedge never persists)", () => {
 		const r = parse({ quiz: false });
 		assert.equal(r.ok, false);
-		assert.match(!r.ok && r.error, /unknown tool "quiz" \(supported: research, demo, visual, pdf\)/);
+		assert.match(!r.ok && r.error, /unknown tool "quiz" \(supported: research, demo, visual, pdf, explain\)/);
 		const typo = parse({ reasearch: false });
 		assert.equal(typo.ok, false);
 		assert.match(!typo.ok && typo.error, /unknown tool "reasearch"/);

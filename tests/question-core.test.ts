@@ -20,6 +20,9 @@ import {
 	QUESTION_ANSWERED_ENTRY,
 	QUESTION_ENTRY,
 	quizInputProblems,
+	explainInputBase,
+	explainInputObject,
+	explainInputProblems,
 	quizInputSchema,
 	probeQuizInputSchema,
 	resolveCorrect,
@@ -541,5 +544,73 @@ describe("dock selection (toggleOption / toggleOther)", () => {
 		sel = toggleOption("single-select", sel, 1);
 		assert.equal(sel.otherSelected, false, "an option displaces Other");
 		assert.deepEqual([...sel.selected], [1]);
+	});
+});
+
+// ─── the explain tool: free-recall quizzing (owner 2026-09-27) ─────────────
+
+describe("explainInputBase / explainInputProblems (the commitment contract)", () => {
+	it("commits the argument order: explanation (reasoning) BEFORE correctAnswer (the pick)", () => {
+		// Same ruling as the quiz (2026-09-25): models emit tool args in
+		// schema order — reasoning first, then the answer it supports.
+		const keys = Object.keys(explainInputBase.properties);
+		assert.ok(keys.indexOf("explanation") < keys.indexOf("correctAnswer"));
+	});
+
+	it("the teach object adds the required nodeId AFTER the base fields", () => {
+		const keys = Object.keys(explainInputObject.properties);
+		assert.deepEqual(keys, [...Object.keys(explainInputBase.properties), "nodeId"]);
+	});
+
+	it("an empty commitment is the one authoring problem", () => {
+		assert.deepEqual(explainInputProblems({ correctAnswer: "Full speed is c." }), []);
+		assert.deepEqual(explainInputProblems({ correctAnswer: "   " }), [
+			"correctAnswer is required — commit to the full correct answer BEFORE posing the question.",
+		]);
+	});
+});
+
+describe("buildAnswer / formatAnswerMessage: explain", () => {
+	const explainQD = (overrides?: Partial<QuestionData>): QuestionData => ({
+		id: "e1",
+		kind: "explain",
+		question: "Why does the Michelson-Morley null result matter?",
+		mode: "text",
+		options: [],
+		committedAnswer: "It ruled out the luminiferous aether and set up special relativity.",
+		explanation: "A stationary aether would produce a fringe shift; none was observed.",
+		createdAt: new Date().toISOString(),
+		...overrides,
+	});
+
+	it("snapshots the commitment + explanation; the client NEVER grades free text", () => {
+		const ad = buildAnswer(explainQD(), { text: "Something about light speed being constant?" });
+		assert.equal(ad.correct, undefined, "no client verdict — the model grades in its reply");
+		assert.equal(ad.correctIndices, undefined);
+		assert.equal(ad.committed, "It ruled out the luminiferous aether and set up special relativity.");
+		assert.equal(ad.text, "Something about light speed being constant?");
+	});
+
+	it("dontKnow records the gap with no attempted text", () => {
+		// The DOCK never sends text alongside dontKnow (its submit gates it);
+		// buildAnswer stays a pure mapping of the request it receives.
+		const ad = buildAnswer(explainQD(), { dontKnow: true });
+		assert.equal(ad.dontKnow, true);
+		assert.equal(ad.text, undefined);
+	});
+
+	it("formats the model's view: his answer, the immutable commitment, and the grading instruction", () => {
+		const text = formatAnswerMessage(buildAnswer(explainQD(), { text: "No idea about aether." }));
+		assert.ok(text.startsWith("[Explain answer]"));
+		assert.match(text, /The learner answered: No idea about aether\./);
+		assert.match(text, /Your committed correct answer \(immutable/);
+		assert.match(text, /luminiferous aether/);
+		assert.match(text, /Grade his answer strictly/);
+	});
+
+	it("formats dontKnow as a gap, not a guess", () => {
+		const text = formatAnswerMessage(buildAnswer(explainQD(), { dontKnow: true }));
+		assert.match(text, /did NOT attempt/);
+		assert.ok(!text.includes("The learner answered:"), "no phantom answer beside the gap");
 	});
 });

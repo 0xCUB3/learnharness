@@ -11,6 +11,9 @@ import type { QuestionAnswerData } from "@/src/core";
  * Quiz answers are GRADED: ✓/✗ marks, the correct answers, and the
  * explanation. Ask answers are NOT graded — a plain record of what was said.
  * (The v1 bug this pins: ask answers must never get quiz grading UI.)
+ * Explain answers are graded by the MODEL in its next reply, not by the
+ * client — the card reveals his answer, the committed correct answer, and
+ * the explanation, with NO verdict chips (owner ruling 2026-09-27).
  */
 export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 	if (answer.dismissed) {
@@ -22,13 +25,14 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 	}
 
 	const isQuiz = answer.kind === "quiz";
+	const isExplain = answer.kind === "explain";
 	const selectedIdx = new Set(answer.answers.map((a) => a.index));
 	const correctIdx = new Set(answer.correctIndices ?? []);
 
 	return (
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="answered-card">
 			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{isQuiz ? "Quiz" : "Question"}
+				{isQuiz ? "Quiz" : isExplain ? "Explain" : "Question"}
 				{isQuiz &&
 					(answer.dontKnow ? (
 						<span className="rounded bg-muted px-1.5 py-0.5">didn't know</span>
@@ -97,7 +101,9 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			)}
 
 			{answer.text && <div className="lh-prose mt-2 whitespace-pre-wrap">“{answer.text}”</div>}
-			{answer.dontKnow && isQuiz && <div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>}
+			{answer.dontKnow && (isQuiz || isExplain) && (
+				<div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>
+			)}
 
 			{answer.note && (
 				<div data-testid="your-thinking" className="mt-3 border-l-2 border-primary/40 pl-3">
@@ -117,6 +123,26 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 					{/* The markdown wrapper must go truly inline — a block <p> after the
 								   "Why:" label created the oversized leading gap (owner's fix list). */}
 								<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
+				</div>
+			)}
+			{/* The explain reveal (owner ruling 2026-09-27): the committed answer
+			    and its explanation, shown on submit — no verdict, the model's next
+			    reply IS the grading. */}
+			{isExplain && (answer.committed || answer.explanation) && (
+				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
+					{answer.committed && (
+						<>
+							<span className="font-medium text-foreground">The answer: </span>
+							<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.committed}</MessageResponse>
+						</>
+					)}
+					{answer.committed && answer.explanation && <div className="my-1" />}
+					{answer.explanation && (
+						<>
+							<span className="font-medium text-foreground">Why: </span>
+							<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
+						</>
+					)}
 				</div>
 			)}
 		</div>

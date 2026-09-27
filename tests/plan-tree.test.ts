@@ -405,3 +405,47 @@ describe("derivePlanStatuses (the map tracks position, not completion)", () => {
 		assert.equal(derivedNodeStatus(later, "c"), "upcoming");
 	});
 });
+
+// ─── the explain mechanic derives position identically (owner 2026-09-27) ──
+
+describe("derivePlanStatuses: tagged explain calls move the map like quiz calls", () => {
+	const tree: PlanTree = {
+		nodes: [
+			{ id: "a", title: "A" },
+			{ id: "b", title: "B" },
+		],
+		edges: [{ from: "a", to: "b" }],
+		version: 1,
+	};
+	const explainPart = (nodeId: string | undefined) => ({
+		type: "tool-explain",
+		state: "output-available",
+		input: nodeId === undefined ? {} : { nodeId },
+	});
+	type Part = { type: string; state: string; input: unknown; output?: unknown };
+	const msg = (...parts: Part[]) => ({ parts });
+
+	it("a tagged explain call is the current position; earlier ones are visited", () => {
+		const st = derivePlanStatuses(tree, [
+			msg(explainPart("a")),
+			msg(explainPart("b")),
+		]);
+		assert.equal(st.current, "b");
+		assert.deepEqual([...st.visited], ["a"]);
+	});
+
+	it("untagged explain calls move nothing", () => {
+		const st = derivePlanStatuses(tree, [msg(explainPart(undefined))]);
+		assert.equal(st.current, null);
+		assert.equal(st.visited.size, 0);
+	});
+
+	it("mixed mechanics (an old quiz record, then an explain) still derive one run", () => {
+		const st = derivePlanStatuses(tree, [
+			msg({ type: "tool-quiz", state: "output-available", input: { nodeId: "a" } }),
+			msg(explainPart("b")),
+		]);
+		assert.equal(st.current, "b");
+		assert.deepEqual([...st.visited], ["a"]);
+	});
+});

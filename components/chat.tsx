@@ -1115,7 +1115,8 @@ export function Chat({
 															/>
 														);
 													case "tool-quiz":
-													case "tool-ask_user_question": {
+													case "tool-ask_user_question":
+													case "tool-explain": {
 														// Pending/streaming questions live in the dock, not the
 														// transcript; answered ones render as graded records.
 														if (part.state === "output-available") {
@@ -1650,7 +1651,7 @@ function DockOverlay({
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
 							{pending ? (
 								<QuestionDock
-									toolName={pending.tool as "quiz" | "ask_user_question"}
+									toolName={pending.tool as "quiz" | "ask_user_question" | "explain"}
 									toolCallId={pending.toolCallId}
 									input={pending.input as never}
 									expanded={expanded}

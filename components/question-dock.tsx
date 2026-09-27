@@ -16,11 +16,13 @@ import {
 	shuffleOptions,
 	parseAskInput,
 	parseQuizInput,
+	parseExplainInput,
 	toggleOption,
 	toggleOther,
 	type AnswerRequest,
 	type AskToolInput,
 	type DockSelection,
+	type ExplainToolInput,
 	type QuestionAnswerData,
 	type QuestionData,
 	type QuestionMode,
@@ -50,9 +52,9 @@ import {
  */
 
 export interface QuestionDockProps {
-	toolName: "quiz" | "ask_user_question";
+	toolName: "quiz" | "ask_user_question" | "explain";
 	toolCallId: string;
-	input: QuizToolInput | AskToolInput;
+	input: QuizToolInput | AskToolInput | ExplainToolInput;
 	/** Collapse state, owned by the DockOverlay (it drives the shell's height morph). */
 	expanded: boolean;
 	/**
@@ -92,7 +94,8 @@ export function QuestionDock({
 	// bridge), so this is pure defense in depth — but it is STRUCTURAL now:
 	// anything that slips through renders the quiet fallback, never a
 	// crash on `.map` over model-authored bytes.
-	const parsed = toolName === "quiz" ? parseQuizInput(input) : parseAskInput(input);
+	const parsed =
+		toolName === "quiz" ? parseQuizInput(input) : toolName === "explain" ? parseExplainInput(input) : parseAskInput(input);
 	if (!parsed) {
 		return (
 			<div data-testid="malformed-question" className="rounded-xl border border-dashed bg-card/60 p-3 text-sm text-muted-foreground">
@@ -148,7 +151,7 @@ export function QuestionDockBar({
 	onExpand,
 	variant = "collapsed",
 }: {
-	toolName: "quiz" | "ask_user_question";
+	toolName: "quiz" | "ask_user_question" | "explain";
 	question: string;
 	onExpand: () => void;
 	variant?: "collapsed" | "reveal";
@@ -182,7 +185,7 @@ export function QuestionDockBar({
 			className="dock-variant flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/40"
 		>
 			<span className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{toolName === "quiz" ? "Quiz" : "Question"}
+				{toolName === "quiz" ? "Quiz" : toolName === "explain" ? "Explain" : "Question"}
 			</span>
 			<span className="min-w-0 flex-1 truncate text-muted-foreground">{teaserText(question)}</span>
 			<span className="flex shrink-0 items-center gap-1 text-xs font-medium">
@@ -202,7 +205,7 @@ function QuestionDockForm({
 	onSubmit,
 	onEscape,
 }: Omit<QuestionDockProps, "expanded" | "onExpand" | "reveal">) {
-	const kind = toolName === "quiz" ? ("quiz" as const) : ("ask" as const);
+	const kind = toolName === "quiz" ? ("quiz" as const) : toolName === "explain" ? ("explain" as const) : ("ask" as const);
 
 	// Canonical QuestionData, built once per question. Quiz options are
 	// deterministically shuffled (seeded by toolCallId) so position never leaks
@@ -211,7 +214,8 @@ function QuestionDockForm({
 	const qd = useMemo<QuestionData>(() => {
 		const quizInput = kind === "quiz" ? (input as QuizToolInput) : null;
 		const askInput = kind === "ask" ? (input as AskToolInput) : null;
-		const multi = input.multiSelect === true;
+		const explainInput = kind === "explain" ? (input as ExplainToolInput) : null;
+		const multi = input instanceof Object && "multiSelect" in input ? input.multiSelect === true : false;
 		const mode: QuestionMode =
 			kind === "quiz"
 				? multi
@@ -240,6 +244,12 @@ function QuestionDockForm({
 			if (resolved.error) console.error("[quiz] correctAnswer did not resolve:", resolved.error);
 			q.correctIndices = resolved.indices;
 			q.explanation = quizInput.explanation;
+		}
+		if (explainInput) {
+			// The commitment rides the question data (never sent to the
+			// client before answering) and snapshots into the answer at submit.
+			q.committedAnswer = explainInput.correctAnswer;
+			q.explanation = explainInput.explanation;
 		}
 		return q;
 	}, [toolCallId, kind, input]);
@@ -275,7 +285,7 @@ function QuestionDockForm({
 
 	const canSubmit =
 		qd.mode === "text"
-			? text.trim().length > 0
+			? sel.dontKnow || text.trim().length > 0 // explain: dontKnow is a first-class answer
 			: sel.dontKnow || (sel.otherSelected && other.trim().length > 0) || sel.selected.size > 0;
 
 	const submit = () => {
@@ -314,13 +324,14 @@ function QuestionDockForm({
 	const otherInputRef = useRef<HTMLInputElement>(null);
 	const thinkingRef = useRef<HTMLTextAreaElement>(null);
 	// One row past the options is the trailing row: quiz → don't-know,
-	// ask → Other (a question never has both).
+	// ask → Other (a question never has both). Explain has exactly ONE
+	// row — its don't-know (there are no options to walk).
 	const optionCount = qd.mode === "text" ? 0 : qd.options.length;
-	const rowCount = qd.mode === "text" ? 0 : optionCount + 1;
+	const rowCount = qd.mode === "text" ? (kind === "explain" ? 1 : 0) : optionCount + 1;
 
 	const kbdAct = (idx: number) => {
 		if (idx < optionCount) toggle(idx);
-		else if (kind === "quiz")
+		else if (kind === "quiz" || kind === "explain")
 			setSel((prev) => ({ ...prev, selected: new Set(), otherSelected: false, dontKnow: !prev.dontKnow }));
 		else {
 			// Space on the ask's Other row (owner refinement round,
@@ -412,7 +423,7 @@ function QuestionDockForm({
 			{/* Question area — scrolls internally if very tall; the bottom row stays put. */}
 			<div className="max-h-[55dvh] overflow-y-auto px-4 pt-3">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-					{kind === "quiz" ? "Quiz" : "Question"}
+					{kind === "quiz" ? "Quiz" : kind === "explain" ? "Explain" : "Question"}
 					{qd.mode === "multi-select" && " · select all that apply"}
 				</div>
 				<div className="mb-3 font-medium">
@@ -424,7 +435,10 @@ function QuestionDockForm({
 					</div>
 				)}
 
-				{qd.mode !== "text" && (
+				{/* Text-mode questions render no options list — EXCEPT explain,
+				    whose single "I don't know" row is the one walkable answer
+				    (kbd row 0). The answer itself goes in the composer below. */}
+				{(qd.mode !== "text" || kind === "explain") && (
 					<div className="flex flex-col gap-2 pb-2" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
 						{qd.options.map((opt, i) => {
 							const isSel = sel.selected.has(i);
@@ -470,7 +484,7 @@ function QuestionDockForm({
 							);
 						})}
 
-						{kind === "quiz" && (
+						{(kind === "quiz" || kind === "explain") && (
 							<button
 								type="button"
 								onClick={() =>

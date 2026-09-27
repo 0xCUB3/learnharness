@@ -85,7 +85,9 @@ export function derivePlanStatuses(tree: PlanTree, messages: readonly PartsCarri
 	// duplicates collapsed (several checks on one node = one stay on it)
 	for (const m of messages) {
 		for (const part of m.parts) {
-			if (part.type !== "tool-quiz") continue;
+			// Either quizzing tool (quiz/explain) tags position — the mechanic
+			// is a settings switch; the fold recognizes both (owner 2026-09-27).
+			if (part.type !== "tool-quiz" && part.type !== "tool-explain") continue;
 			const nodeId = (part.input as { nodeId?: unknown } | undefined)?.nodeId;
 			if (typeof nodeId !== "string" || !ids.has(nodeId)) continue; // untagged/unknown — moves nothing
 			if (runs.at(-1) !== nodeId) runs.push(nodeId);
@@ -130,7 +132,7 @@ export function derivePlanStatusesLh(tree: PlanTree, messages: readonly LhMessag
 		const content = (m as { content?: unknown }).content;
 		if (!Array.isArray(content)) continue;
 		for (const block of content as Array<{ type?: string; name?: string; arguments?: unknown }>) {
-			if (block.type !== "toolCall" || block.name !== "quiz") continue;
+			if (block.type !== "toolCall" || (block.name !== "quiz" && block.name !== "explain")) continue;
 			const nodeId = (block.arguments as { nodeId?: unknown } | undefined)?.nodeId;
 			if (typeof nodeId !== "string" || !ids.has(nodeId)) continue;
 			if (runs.at(-1) !== nodeId) runs.push(nodeId);

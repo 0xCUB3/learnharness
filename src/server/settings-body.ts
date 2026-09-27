@@ -23,7 +23,7 @@ import type {
 	RoleModelOverride,
 } from "../core/settings.ts";
 import { BACKGROUND_MODEL_ROLES, EXTRACTION_CHUNK_TOKENS_FLOOR, MODEL_SLOTS } from "../core/settings.ts";
-import { TOGGLEABLE_TOOLS } from "../core/pending.ts";
+import { WRITABLE_TOOL_KEYS } from "../core/pending.ts";
 
 /** Parsed-or-rejected — `ok: false` carries the 400's error message. */
 export type SettingsBodyResult<T> =
@@ -157,10 +157,11 @@ export function parseAgentSettingsBody(body: unknown): SettingsBodyResult<AgentS
 	if (tools.map) {
 		// Unknown tool keys are rejected at WRITE time (user decision
 		// 2026-09-19): the delta is inert while unread, but once the bridge
-		// honors it a persisted `quiz: false` would genuinely drop the quiz —
-		// and the definitive list is the adjudicated job-tools-only set.
-		// The read-side sanitizer stays lenient for forward-compat.
-		const supported = TOGGLEABLE_TOOLS as readonly string[];
+		// honors it a persisted bogus key would drift. The writable set is
+		// the job tools + the quizzing-mechanics switch (explain, owner
+		// 2026-09-27). The read-side sanitizer stays lenient for
+		// forward-compat.
+		const supported = WRITABLE_TOOL_KEYS as readonly string[];
 		for (const key of Object.keys(tools.map)) {
 			if (!supported.includes(key)) {
 				return { ok: false, error: `unknown tool "${key}" (supported: ${supported.join(", ")})` };

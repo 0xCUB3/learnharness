@@ -14,6 +14,7 @@ import {
 	composeSearchEngine,
 	composeSlotModel,
 	composeTool,
+	composeQuizMechanics,
 	researchToolUnavailable,
 	sectionedSegments,
 } from "../components/settings/agent-section.tsx";
@@ -386,5 +387,21 @@ describe("sectionedSegments — the prompts overhaul (2026-09-26)", () => {
 
 	it("the indicator copy is pinned — it states WHICH VERSION IS IN USE (refined 2026-09-26)", () => {
 		assert.equal(PROMPT_IN_USE_HINT, "Your version is in use");
+	});
+});
+
+// ─── the quizzing-mechanics segmented control (owner 2026-09-27) ───────────
+
+describe("composeQuizMechanics (the segmented control's write)", () => {
+	it("free recall writes explain:true; multiple choice writes explain:false — nothing else moves", () => {
+		const before: AgentSettings = { tools: { research: false }, prompts: { teacher: true } } as AgentSettings;
+		const free = composeQuizMechanics(before, "free");
+		assert.equal(free.tools?.explain, true);
+		const choice = composeQuizMechanics(before, "choice");
+		assert.equal(choice.tools?.explain, false);
+		for (const after of [free, choice]) {
+			assert.equal(after.tools?.research, false, "the research toggle carries verbatim");
+			assert.deepEqual(after.prompts, before.prompts, "the prompts map carries verbatim");
+		}
 	});
 });
