@@ -58,6 +58,27 @@ import { Hint } from "@/components/ui/hint";
  * Meter rendering lives in <DictationBar> (own 60ms timer over the level
  * ref) so the 16-renders/sec never touch the page component — only the
  * tiny bar strip repaints.
+ *
+ * Start-latency mitigation wave (owner, 2026-09-27 — A+B+C+D, the
+ * optimistic meter stays): the old start path serialized [token ∥ mic] →
+ * NEW AudioContext → addModule fetch → WSS handshake, and DROPPED every
+ * frame that arrived before the socket was OPEN — the first seconds of
+ * speech never reached Deepgram. Now:
+ *   - QUEUE-DON'T-DROP (A): frames arriving before OPEN buffer (capped,
+ *     oldest dropped) and flush in order on open — captured speech is
+ *     never lost, wherever in setup it lands.
+ *   - PARALLEL HANDSHAKE (B, mic-gated): the handshake starts the moment
+ *     the capture graph is live, not after it. Mic-gated, NOT token-gated:
+ *     an OS TCC prompt can outlive Deepgram's 10s idle timeout.
+ *   - PERSISTENT GRAPH (C): one app-lifetime AudioContext + a memoized
+ *     worklet module — per-run contexts paid context creation AND a
+ *     worklet-module fetch on every start (through the dev server in dev).
+ *   - WARM TOKEN (D): pre-minted at page mount and refreshed after every
+ *     run (TTL 3min); the click no longer waits on the remote mint. A
+ *     stale-token handshake failure self-heals via the reconnect-once
+ *     path, which always mints FRESH.
+ *   - The honest floor stays: getUserMedia can't be pre-warmed (the mic
+ *     indicator would stay lit) — hence the owner's optimistic meter.
  */
 
 /*
@@ -92,6 +113,78 @@ export const DEEPGRAM_KEY_ID = "DEEPGRAM_API_KEY";
  * instead. Exported for pins; the errored idle button's click recognizes
  * it and deep-links Settings → Keys → the Deepgram row. */
 export const DICTATION_KEYLESS = "Dictation needs a Deepgram key";
+
+/** Mint a fresh short-lived token (the route holds the real key
+ *  server-side). Module-level: the start path's warm cache and the
+ *  reconnect path both bottom out here. The keyless 503 (no
+ *  DEEPGRAM_API_KEY) is the route's ONLY 503 — the raw message is
+ *  dev-speak, so the error becomes the short client-authored line
+ *  (zero-keys wave, owner 2026-09-25). */
+async function mintFreshToken(): Promise<string> {
+	const res = await fetch("/api/stt/token");
+	const data = (await res.json()) as { token?: string; message?: string };
+	if (!res.ok || !data.token) {
+		if (res.status === 503) throw new Error(DICTATION_KEYLESS);
+		throw new Error(data.message ?? `token route ${res.status}`);
+	}
+	return data.token;
+}
+
+/** Warm-token cache (mitigation D, owner 2026-09-27): the click path takes
+ *  the cached promise instead of a remote mint. TTL keeps a cached token
+ *  from going stale (self-heal anyway: a rejected handshake rides the
+ *  reconnect-once path with a FRESH mint); a failed mint resets the cache
+ *  so the next call re-mints — the honest error path stays honest.
+ *  refresh() re-mints in the background (page mount, run end); its
+ *  failures are silently tolerated (a keyless pre-mint just doesn't warm). */
+export const WARM_TOKEN_TTL_MS = 3 * 60_000;
+
+export type WarmMinter = { mint: () => Promise<string>; refresh: () => void };
+
+export function createWarmMinter(
+	mint: () => Promise<string>,
+	now: () => number = Date.now,
+	ttlMs: number = WARM_TOKEN_TTL_MS,
+): WarmMinter {
+	let warm: { p: Promise<string>; at: number } | null = null;
+	const m: WarmMinter = {
+		mint: () => {
+			if (!warm || now() - warm.at > ttlMs) {
+				const p = mint().catch((e: unknown) => {
+					warm = null; // failed mint: next call re-mints
+					throw e;
+				});
+				warm = { p, at: now() };
+			}
+			return warm.p;
+		},
+		refresh: () => {
+			warm = null;
+			m.mint().catch(() => {}); // background best-effort
+		},
+	};
+	return m;
+}
+
+const warmTokens = createWarmMinter(mintFreshToken);
+
+/* Persistent capture graph (mitigation C, owner 2026-09-27): one
+ * app-lifetime AudioContext + a module-load memo. Created under the
+ * click gesture (autoplay policy) and NEVER closed — per-run nodes
+ * (source, worklet) disconnect at teardown instead. */
+let sharedCtx: AudioContext | null = null;
+let workletModule: Promise<void> | null = null;
+
+function ensureAudioGraph(): { ctx: AudioContext; module: Promise<void> } {
+	if (!sharedCtx) sharedCtx = new AudioContext({ sampleRate: 16000 });
+	if (!workletModule) {
+		workletModule = sharedCtx.audioWorklet.addModule("/worklets/pcm-capture.js").catch((e: unknown) => {
+			workletModule = null; // failed load: retry next run
+			throw e;
+		});
+	}
+	return { ctx: sharedCtx, module: workletModule };
+}
 
 /** RMS (0..1) → normalized 0..1 across the audible dB window. */
 export function rmsToMeter(rms: number): number {
@@ -180,11 +273,18 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	const appendRef = useRef(append);
 	appendRef.current = append;
 
-	// Live machinery (non-render values). AudioContext/MediaStream are
-	// closed on stop; the socket is recreated per run.
+	// Live machinery (non-render values). The MediaStream tracks stop and
+	// the per-run nodes disconnect on teardown; the socket is recreated per
+	// run; the AudioContext is app-lifetime (mitigation C).
 	const wsRef = useRef<WebSocket | null>(null);
-	const ctxRef = useRef<AudioContext | null>(null);
 	const streamRef = useRef<MediaStream | null>(null);
+	/** Per-run graph nodes — the CONTEXT outlives runs (mitigation C). */
+	const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+	const workletRef = useRef<AudioWorkletNode | null>(null);
+	/** Frames captured before the socket is OPEN (mitigation A): flushed in
+	 *  order on open; capped at 256 frames (≈32s) with the oldest dropped;
+	 *  cleared at teardown so a dead run's audio can't leak into the next. */
+	const pendingRef = useRef<ArrayBuffer[]>([]);
 	const genRef = useRef(0); // stale-handler guard (dictate pattern)
 	const safetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const reconnectsRef = useRef(0);
@@ -211,10 +311,14 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 			clearTimeout(safetyRef.current);
 			safetyRef.current = null;
 		}
+		pendingRef.current = [];
 		for (const track of streamRef.current?.getTracks() ?? []) track.stop();
 		streamRef.current = null;
-		void ctxRef.current?.close().catch(() => {});
-		ctxRef.current = null;
+		sourceRef.current?.disconnect();
+		sourceRef.current = null;
+		workletRef.current?.disconnect();
+		workletRef.current = null;
+		// The AudioContext is app-lifetime (mitigation C) — nodes die, it stays.
 		const ws = wsRef.current;
 		wsRef.current = null;
 		if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
@@ -223,20 +327,9 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 			} catch {}
 		}
 		setPhase("idle");
-	}, []);
-
-	/** Mint a short-lived token (the route holds the real key server-side).
-	 *  The keyless 503 (no DEEPGRAM_API_KEY) is the route's ONLY 503 — the
-	 *  raw message is dev-speak, so the error becomes the short
-	 *  client-authored line (zero-keys wave, owner 2026-09-25). */
-	const mintToken = useCallback(async () => {
-		const res = await fetch("/api/stt/token");
-		const data = (await res.json()) as { token?: string; message?: string };
-		if (!res.ok || !data.token) {
-			if (res.status === 503) throw new Error(DICTATION_KEYLESS);
-			throw new Error(data.message ?? `token route ${res.status}`);
-		}
-		return data.token;
+		// Pre-mint for the next run (mitigation D) — best-effort; a keyless
+		// page just doesn't warm.
+		warmTokens.refresh();
 	}, []);
 
 	/** Open the Deepgram socket and wire its messages. `gen` guards staleness. */
@@ -250,6 +343,11 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 
 			ws.addEventListener("open", () => {
 				if (gen !== genRef.current) return;
+				// Mitigation A: everything captured during the handshake (or a
+				// reconnect gap) goes out now, in order — Deepgram accepts
+				// faster-than-realtime sends.
+				for (const frame of pendingRef.current) ws.send(frame);
+				pendingRef.current = [];
 				setPhase("recording");
 			});
 			ws.addEventListener("message", (ev) => {
@@ -280,7 +378,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 				// research pass: resume is our job, no SDK to lean on).
 				if (reconnectsRef.current < 1) {
 					reconnectsRef.current++;
-					mintToken()
+					mintFreshToken() // always FRESH — a stale warm token is the likely culprit
 						.then((t) => {
 							if (gen === genRef.current) openSocket(gen, t);
 						})
@@ -296,7 +394,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 				}
 			});
 		},
-		[cleanup, mintToken],
+		[cleanup],
 	);
 
 	const start = useCallback(async () => {
@@ -305,30 +403,38 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		setPhase("connecting");
 		reconnectsRef.current = 0;
 		bufferRef.current = []; // fresh run, fresh buffer (round 2)
+		pendingRef.current = []; // fresh run, fresh queue (mitigation A)
 		const gen = ++genRef.current;
 
-		// Token + mic CONCURRENTLY (owner round 1: the sequential wait was the
-		// felt delay) — the optimistic meter already covers the gap. 127.0.0.1
-		// is a secure context, so getUserMedia works without TLS; macOS TCC
-		// prompts on first use.
-		const mic = navigator.mediaDevices.getUserMedia({
+		// Mitigation D: the warm token (pre-minted at mount / after the last
+		// run) resolves ~instantly; a cold/keyless mint surfaces below. The
+		// mic is the long pole (macOS HAL + APM init) and gates everything —
+		// the token runs concurrently with it. 127.0.0.1 is a secure
+		// context, so getUserMedia works without TLS; macOS TCC prompts on
+		// first use.
+		const tokenPromise = warmTokens.mint();
+		tokenPromise.catch(() => {}); // surfaced below; no unhandled rejection
+		const micPromise = navigator.mediaDevices.getUserMedia({
 			audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 		});
-		let token: string;
+		let stream: MediaStream;
 		try {
-			const [t, stream] = await Promise.all([mintToken(), mic]);
-			token = t;
+			stream = await micPromise;
 			if (gen !== genRef.current) {
 				for (const track of stream.getTracks()) track.stop();
 				return;
 			}
 			streamRef.current = stream;
 
-			const ctx = new AudioContext({ sampleRate: 16000 });
-			ctxRef.current = ctx;
-			await ctx.audioWorklet.addModule("/worklets/pcm-capture.js");
+			// Mitigation C: app-lifetime context + memoized worklet module —
+			// per-run costs (context creation, module fetch) are gone.
+			const { ctx, module } = ensureAudioGraph();
+			await module;
+			if (ctx.state === "suspended") await ctx.resume();
+			if (gen !== genRef.current) return;
 
 			const worklet = new AudioWorkletNode(ctx, "pcm-capture");
+			workletRef.current = worklet;
 			worklet.port.onmessage = (e) => {
 				const msg = e.data as { type: string; rms?: number; buffer?: ArrayBuffer };
 				if (msg.type === "level") {
@@ -336,9 +442,17 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 				} else if (msg.type === "audio") {
 					const ws = wsRef.current;
 					if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg.buffer!);
+					// Mitigation A: not OPEN yet (handshake or reconnect gap) —
+					// queue, capped; the open handler flushes in order.
+					else {
+						pendingRef.current.push(msg.buffer!);
+						if (pendingRef.current.length > 256) pendingRef.current.shift();
+					}
 				}
 			};
-			ctx.createMediaStreamSource(stream).connect(worklet);
+			const source = ctx.createMediaStreamSource(stream);
+			sourceRef.current = source;
+			source.connect(worklet);
 			// Pull the graph with silence out (the worklet writes no output) —
 			// an unconnected worklet node is never clocked.
 			worklet.connect(ctx.destination);
@@ -355,19 +469,34 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 			return;
 		}
 		if (gen !== genRef.current) return;
+		let token: string;
+		try {
+			token = await tokenPromise;
+		} catch (e) {
+			if (gen !== genRef.current) return;
+			setError(e instanceof Error ? e.message : "token unavailable");
+			cleanup();
+			return;
+		}
+		if (gen !== genRef.current) return;
+		// Mitigation B: the handshake fires the moment the graph is live,
+		// overlapping any remaining token wait — mic-gated, never before it.
 		openSocket(gen, token);
-	}, [openSocket, cleanup, mintToken]);
+	}, [openSocket, cleanup]);
 
 	const stop = useCallback(() => {
 		const gen = genRef.current;
 		if (phase !== "recording" && phase !== "connecting") return;
 		setPhase("stopping");
 
-		// Mic dies FIRST — no more audio enqueues (dictate pattern).
+		// Mic dies FIRST — no more audio enqueues (dictate pattern). The
+		// per-run nodes die with it; the AudioContext stays (mitigation C).
 		for (const track of streamRef.current?.getTracks() ?? []) track.stop();
 		streamRef.current = null;
-		void ctxRef.current?.close().catch(() => {});
-		ctxRef.current = null;
+		sourceRef.current?.disconnect();
+		sourceRef.current = null;
+		workletRef.current?.disconnect();
+		workletRef.current = null;
 
 		const ws = wsRef.current;
 		if (ws && ws.readyState === WebSocket.OPEN) {
@@ -406,6 +535,9 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	// page; the Esc chain lands here as a CANCEL (owner, round 3). Each
 	// page owns ONE hook instance, and only the mounted page's listener is
 	// attached.
+	useEffect(() => {
+		warmTokens.refresh(); // pre-mint at mount (mitigation D) — silent if keyless
+	}, []);
 	useEffect(() => {
 		window.addEventListener("lh:kbd-toggle-dictation", toggle);
 		return () => window.removeEventListener("lh:kbd-toggle-dictation", toggle);
