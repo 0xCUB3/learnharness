@@ -550,11 +550,11 @@ describe("dock selection (toggleOption / toggleOther)", () => {
 // ─── the explain tool: free-recall quizzing (owner 2026-09-27) ─────────────
 
 describe("explainInputBase / explainInputProblems (the commitment contract)", () => {
-	it("commits the argument order: explanation (reasoning) BEFORE correctAnswer (the pick)", () => {
-		// Same ruling as the quiz (2026-09-25): models emit tool args in
-		// schema order — reasoning first, then the answer it supports.
+	it("has ONE authoring field — no explanation remnant (owner ruling 2026-09-27)", () => {
+		// The MC quiz's explanation/answer split was quiz baggage: free
+		// recall commits a single correctAnswer, reasoning included.
 		const keys = Object.keys(explainInputBase.properties);
-		assert.ok(keys.indexOf("explanation") < keys.indexOf("correctAnswer"));
+		assert.deepEqual(keys, ["question", "correctAnswer", "details"]);
 	});
 
 	it("the teach object adds the required nodeId AFTER the base fields", () => {
@@ -577,8 +577,7 @@ describe("buildAnswer / formatAnswerMessage: explain", () => {
 		question: "Why does the Michelson-Morley null result matter?",
 		mode: "text",
 		options: [],
-		committedAnswer: "It ruled out the luminiferous aether and set up special relativity.",
-		explanation: "A stationary aether would produce a fringe shift; none was observed.",
+		committedAnswer: "It ruled out the luminiferous aether — a stationary aether would produce a fringe shift, none was observed — and set up special relativity.",
 		createdAt: new Date().toISOString(),
 		...overrides,
 	});
@@ -587,7 +586,7 @@ describe("buildAnswer / formatAnswerMessage: explain", () => {
 		const ad = buildAnswer(explainQD(), { text: "Something about light speed being constant?" });
 		assert.equal(ad.correct, undefined, "no client verdict — the model grades in its reply");
 		assert.equal(ad.correctIndices, undefined);
-		assert.equal(ad.committed, "It ruled out the luminiferous aether and set up special relativity.");
+		assert.equal(ad.committed, "It ruled out the luminiferous aether — a stationary aether would produce a fringe shift, none was observed — and set up special relativity.");
 		assert.equal(ad.text, "Something about light speed being constant?");
 	});
 
@@ -608,9 +607,4 @@ describe("buildAnswer / formatAnswerMessage: explain", () => {
 		assert.match(text, /Grade his answer strictly/);
 	});
 
-	it("formats dontKnow as a gap, not a guess", () => {
-		const text = formatAnswerMessage(buildAnswer(explainQD(), { dontKnow: true }));
-		assert.match(text, /did NOT attempt/);
-		assert.ok(!text.includes("The learner answered:"), "no phantom answer beside the gap");
-	});
 });

@@ -317,8 +317,7 @@ describe("prepareQuestionArguments (the string-encoded options wobble)", () => {
 describe("teachExplainToolFor: the explain variant validates nodeId like the quiz", () => {
 	const validExplain = {
 		question: "Explain why the null result matters.",
-		explanation: "A stationary aether predicts a fringe shift.",
-		correctAnswer: "It ruled out the aether.",
+		correctAnswer: "It ruled out the aether — a stationary aether predicts a fringe shift, and none was seen.",
 		nodeId: "arith",
 	};
 
@@ -374,13 +373,11 @@ describe("the prober's explain: no nodeId field at all", () => {
 		assert.ok(!("nodeId" in probeExplainTool.parameters.properties));
 		const res = await boundaryParse(probeExplainTool, {
 			question: "Explain what a derivative measures.",
-			explanation: "It is instantaneous rate of change.",
-			correctAnswer: "The instantaneous rate of change.",
+			correctAnswer: "The instantaneous rate of change at a point — the limit the slopes converge to.",
 		});
 		assert.equal(res.success, true);
 		const empty = await boundaryParse(probeExplainTool, {
 			question: "q",
-			explanation: "e",
 			correctAnswer: " ",
 		});
 		assert.equal(empty.success, false);

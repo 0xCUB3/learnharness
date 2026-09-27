@@ -1057,8 +1057,7 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 it("explain tool call persists as a pending part; the free-text answer reveals the commitment and reaches the model", async () => {
 	const EXPLAIN_INPUT = {
 		question: "Explain why Mercury is hard to observe.",
-		explanation: "It never strays far from the Sun in our sky.",
-		correctAnswer: "Its small angular separation from the Sun.",
+		correctAnswer: "Its small angular separation from the Sun — it never strays far from the Sun in our sky.",
 		nodeId: "planet-order",
 	};
 	const { engine, calls } = scriptedTeacher((cs) => [
@@ -1108,7 +1107,6 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 		mode: "text",
 		options: [],
 		committedAnswer: EXPLAIN_INPUT.correctAnswer,
-		explanation: EXPLAIN_INPUT.explanation,
 		createdAt: new Date().toISOString(),
 	};
 	const answer = buildAnswer(qd, { text: "It stays near the Sun." });
@@ -1122,7 +1120,7 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 	assert.equal((part as { state?: string }).state, "output-available");
 	const out = (part as { output?: { committed?: string; explanation?: string } }).output!;
 	assert.equal(out.committed, EXPLAIN_INPUT.correctAnswer, "the commitment snapshots into the answer record");
-	assert.equal(out.explanation, EXPLAIN_INPUT.explanation);
+	assert.equal(out.explanation, undefined, "no explanation remnant — one committed field (owner 2026-09-27)");
 
 	// The model's continuation saw the answer JSON (fork 1: the answer IS
 	// the call's tool result) — his text AND the commitment snapshot ride it.
@@ -1130,5 +1128,6 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 	assert.match(seen, /It stays near the Sun\./);
 	assert.match(seen, /committed/);
 	assert.match(seen, /small angular separation/);
+	assert.ok(!/"explanation"/.test(seen), "the answer record carries no explanation field");
 	assert.equal(danglingQuestionOf(saved2.messages), null, "no pending question remains");
 });

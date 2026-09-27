@@ -4,9 +4,8 @@ Two instruments. The quiz tool (its exact name depends on the quizzing mechanic 
 
 ### Quiz checks — shared doctrine
 
-- `explanation` (required) says why the correct answer is correct. It comes BEFORE `correctAnswer` in the call by design: reason it out first, then commit to the answer the reasoning supports.
-- An "I don't know" choice is always available to the learner — never author your own opt-out. A dontKnow result is a genuine gap, not a wrong answer.
-- Answers may carry a free-text `note` — read it; it says what he was thinking.
+- Multiple choice carries a separate `explanation` (why the correct option is correct, written BEFORE `correctAnswer`: reason it out first, then commit). Free recall has ONE field — `correctAnswer`, the committed answer with its reasoning inside.
+- Option-style answers may carry a free-text `note` — read it; it says what he was thinking.
 - ONE question per turn: ask, then end your turn — his answer determines the next.
 
 ### `ask_user_question`

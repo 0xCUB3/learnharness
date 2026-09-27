@@ -224,26 +224,22 @@ export const probeQuizInputSchema = quizInputBase;
 // correct answer BEFORE posing (the commitment rides the persisted call
 // args, is revealed to the learner on submit, and is restated in the answer
 // result the model grades against; the client never grades free text).
-// Mechanics doctrine lives in the TOOL DESCRIPTIONS (owner ruling
-// 2026-09-27: pi-native — doctrine travels with the armed tool), not in
-// the system prompt.
+// ONE committed answer, reasoning included (owner ruling 2026-09-27: the
+// separate explanation field was quiz remnant — collapsed away).
+// Mechanics doctrine lives in the TOOL DESCRIPTIONS (pi-native ruling),
+// not in the system prompt.
 
 export const explainInputBase = Type.Object({
 	question: Type.String({
 		description:
 			"The single question to ask. ONE question per turn: ask, then end your turn — the answer determines the next.",
 	}),
-	explanation: Type.String({
-		description:
-			"REQUIRED. Explanation revealed AFTER the learner answers (shown however he did). It is written BEFORE " +
-			"correctAnswer by design: reason it out first, then commit to the answer the reasoning supports.",
-	}),
 	correctAnswer: Type.String({
 		description:
-			"REQUIRED. The full correct answer in your own words — COMMITTED before the learner ever sees the question. " +
-			"The commitment is immutable: when his answer returns, grade it strictly against this text — never revise the " +
-			"commitment after seeing his words, and never mark a wrong answer right to be kind. Both this and the explanation " +
-			"are shown to him on submit; your next reply grades the nuance of what he wrote.",
+			"REQUIRED. The full correct answer in your own words, reasoning included — COMMITTED before the learner " +
+			"ever sees the question. The commitment is immutable: when his answer returns, grade it strictly against this " +
+			"text — never revise the commitment after seeing his words, and never mark a wrong answer right to be kind. " +
+			"It is shown to him on submit; your next reply grades the nuance of what he wrote.",
 	}),
 	details: Type.Optional(
 		Type.String({ description: "Optional extra context or instructions shown under the question." }),
@@ -338,6 +334,7 @@ export interface QuestionData {
 	correctIndices?: number[];
 	// explain only. NEVER send to the client before answering:
 	committedAnswer?: string;
+	// quiz only (the MC "why"). NEVER send to the client before answering:
 	explanation?: string;
 	createdAt: string;
 }
@@ -356,7 +353,7 @@ export interface QuestionAnswerData {
 	correct?: boolean; // quiz only
 	correctIndices?: number[]; // quiz only (rendering)
 	committed?: string; // explain only (rendering): the model's committed answer
-	explanation?: string; // quiz/explain only (rendering)
+	explanation?: string; // quiz only (rendering)
 	dismissed?: boolean;
 	answeredAt: string;
 }
@@ -595,9 +592,8 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest): QuestionAnswe
 	}
 	if (qd.kind === "explain") {
 		// No client grading — the model grades in its reply, against the
-		// commitment. Snapshots ride along for the reveal + rendering.
+		// commitment. The commitment snapshots for the reveal + rendering.
 		base.committed = qd.committedAnswer;
-		base.explanation = qd.explanation;
 	}
 	return base;
 }
@@ -627,13 +623,9 @@ export function formatAnswerMessage(ad: QuestionAnswerData): string {
 		}
 		lines.push(`Correct: ${correctStr}`);
 	} else if (ad.kind === "explain") {
-		if (ad.dontKnow) {
-			lines.push(
-				`The learner selected "I don't know" — they did NOT attempt an answer (a genuine knowledge gap, not a wrong guess).`,
-			);
-		} else {
-			lines.push(`The learner answered: ${ad.text ?? "(no answer)"}`);
-		}
+		// No opt-out row on explain (owner ruling 2026-09-27): if he doesn't
+		// know, he says so in his own words — his text is all there is.
+		lines.push(`The learner answered: ${ad.text ?? "(no answer)"}`);
 		if (ad.committed) {
 			lines.push(`Your committed correct answer (immutable — grade against it, never revise it): ${ad.committed}`);
 		}

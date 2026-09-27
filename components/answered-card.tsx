@@ -101,7 +101,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			)}
 
 			{answer.text && <div className="lh-prose mt-2 whitespace-pre-wrap">“{answer.text}”</div>}
-			{answer.dontKnow && (isQuiz || isExplain) && (
+			{answer.dontKnow && isQuiz && (
 				<div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>
 			)}
 
@@ -126,23 +126,12 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				</div>
 			)}
 			{/* The explain reveal (owner ruling 2026-09-27): the committed answer
-			    and its explanation, shown on submit — no verdict, the model's next
-			    reply IS the grading. */}
-			{isExplain && (answer.committed || answer.explanation) && (
+			    — one field, reasoning included — shown on submit; no verdict,
+			    the model's next reply IS the grading. */}
+			{isExplain && answer.committed && (
 				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
-					{answer.committed && (
-						<>
-							<span className="font-medium text-foreground">The answer: </span>
-							<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.committed}</MessageResponse>
-						</>
-					)}
-					{answer.committed && answer.explanation && <div className="my-1" />}
-					{answer.explanation && (
-						<>
-							<span className="font-medium text-foreground">Why: </span>
-							<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
-						</>
-					)}
+					<span className="font-medium text-foreground">The answer: </span>
+					<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.committed}</MessageResponse>
 				</div>
 			)}
 		</div>

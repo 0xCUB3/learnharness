@@ -248,8 +248,9 @@ function QuestionDockForm({
 		if (explainInput) {
 			// The commitment rides the question data (never sent to the
 			// client before answering) and snapshots into the answer at submit.
+			// One field, reasoning included — no separate explanation
+			// (owner ruling 2026-09-27).
 			q.committedAnswer = explainInput.correctAnswer;
-			q.explanation = explainInput.explanation;
 		}
 		return q;
 	}, [toolCallId, kind, input]);
@@ -285,7 +286,7 @@ function QuestionDockForm({
 
 	const canSubmit =
 		qd.mode === "text"
-			? sel.dontKnow || text.trim().length > 0 // explain: dontKnow is a first-class answer
+			? text.trim().length > 0
 			: sel.dontKnow || (sel.otherSelected && other.trim().length > 0) || sel.selected.size > 0;
 
 	const submit = () => {
@@ -324,14 +325,14 @@ function QuestionDockForm({
 	const otherInputRef = useRef<HTMLInputElement>(null);
 	const thinkingRef = useRef<HTMLTextAreaElement>(null);
 	// One row past the options is the trailing row: quiz → don't-know,
-	// ask → Other (a question never has both). Explain has exactly ONE
-	// row — its don't-know (there are no options to walk).
+	// ask → Other (a question never has both). Text mode (ask/explain)
+	// has no rows — the composer IS the answer surface.
 	const optionCount = qd.mode === "text" ? 0 : qd.options.length;
-	const rowCount = qd.mode === "text" ? (kind === "explain" ? 1 : 0) : optionCount + 1;
+	const rowCount = qd.mode === "text" ? 0 : optionCount + 1;
 
 	const kbdAct = (idx: number) => {
 		if (idx < optionCount) toggle(idx);
-		else if (kind === "quiz" || kind === "explain")
+		else if (kind === "quiz")
 			setSel((prev) => ({ ...prev, selected: new Set(), otherSelected: false, dontKnow: !prev.dontKnow }));
 		else {
 			// Space on the ask's Other row (owner refinement round,
@@ -435,10 +436,7 @@ function QuestionDockForm({
 					</div>
 				)}
 
-				{/* Text-mode questions render no options list — EXCEPT explain,
-				    whose single "I don't know" row is the one walkable answer
-				    (kbd row 0). The answer itself goes in the composer below. */}
-				{(qd.mode !== "text" || kind === "explain") && (
+				{qd.mode !== "text" && (
 					<div className="flex flex-col gap-2 pb-2" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
 						{qd.options.map((opt, i) => {
 							const isSel = sel.selected.has(i);
@@ -484,7 +482,7 @@ function QuestionDockForm({
 							);
 						})}
 
-						{(kind === "quiz" || kind === "explain") && (
+						{kind === "quiz" && (
 							<button
 								type="button"
 								onClick={() =>

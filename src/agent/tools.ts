@@ -113,12 +113,11 @@ const QUIZ_OPTION_CRAFT =
  *  the teach variant appends the nodeId tagging paragraph. */
 const EXPLAIN_DOCTRINE =
 	"Ask the learner to EXPLAIN something in his own words — a graded check with NO options: he types a free-text " +
-	"answer. Unlike ask_user_question (no right answer), explain always has one. THE COMMITMENT RULE: write " +
-	"explanation (your reasoning) first, then correctAnswer — the FULL correct answer, committed before he ever sees " +
-	"the question. When his answer returns, grade it strictly against your committed answer in your reply: never " +
+	"answer. Unlike ask_user_question (no right answer), explain always has one. THE COMMITMENT RULE: write correctAnswer — the FULL " +
+	"correct answer in your own words, reasoning included — committed before he ever sees the question. When his answer returns, grade it strictly against your committed answer in your reply: never " +
 	"revise the commitment after seeing his words, and never mark a wrong answer right to be kind — a near-miss is " +
-	"partial understanding; name exactly what he got and what he missed. He sees the committed answer and the " +
-	"explanation on submit. An 'I don't know' choice is always available to him — a genuine gap, not a wrong answer. " +
+	"partial understanding; name exactly what he got and what he missed. He sees the committed answer on submit. If he genuinely doesn't know, he says so in his own words — that is a genuine " +
+	"gap, not a wrong answer. " +
 	"ONE question per turn: call a single explain, then end your turn — his answer determines the next.";
 
 export const probeQuizTool: AgentTool<typeof probeQuizInputSchema> = {

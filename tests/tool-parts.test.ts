@@ -273,8 +273,7 @@ describe("display-math newline rule (Option A, owner ruling 2026-09-27)", () => 
 describe("parseExplainInput: the dock's display seam for explain calls", () => {
 	const good = {
 		question: "Explain why Mercury is hard to observe.",
-		explanation: "It never strays far from the Sun in our sky.",
-		correctAnswer: "Its small angular separation from the Sun.",
+		correctAnswer: "Its small angular separation from the Sun — it never strays far from the Sun in our sky.",
 		nodeId: "planet-order", // the teacher's field — STRIPPED by Clean, like quiz
 		details: "Think about where it appears at dusk.",
 	};
@@ -282,7 +281,7 @@ describe("parseExplainInput: the dock's display seam for explain calls", () => {
 	it("parses a valid call and strips the teacher-only nodeId", () => {
 		const parsed = parseExplainInput(good)!;
 		assert.equal(parsed.question, "Explain why Mercury is hard to observe.");
-		assert.equal(parsed.correctAnswer, "Its small angular separation from the Sun.");
+		assert.equal(parsed.correctAnswer, "Its small angular separation from the Sun — it never strays far from the Sun in our sky.");
 		assert.equal(parsed.details, "Think about where it appears at dusk.");
 		assert.ok(!("nodeId" in parsed), "the teacher-only key is cleaned away");
 	});
