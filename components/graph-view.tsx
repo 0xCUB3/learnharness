@@ -1067,9 +1067,10 @@ export function GraphView() {
 	// merge is its own graph change and must surface immediately, not wait
 	// for the whole feed to drain. A redundant fetch on aborted runs is
 	// free — the same doctrine as the deletion-refresh path below.
-	// Row ids are the registry JOB keys (source id, or "src#i" for chunk
-	// jobs) — unique per pill; chatId stays the SOURCE id (reveal/cost
-	// tracking is source-scoped).
+	// Tracked by ROW id (the registry JOB key — source id, or "src#i" for
+	// chunk jobs), NOT chatId: chatId-scoping re-batched per-chunk jobs
+	// into one end-of-import reveal (the exact bug this rule exists to
+	// prevent — a chunk's row leaving IS its merge landing).
 	const [pipelineRuns, setPipelineRuns] = useState<{ id: string; chatId: string; title: string; phase: string; startedAt: number }[]>([]);
 	useEffect(() => {
 		let cancelled = false;
@@ -1080,7 +1081,7 @@ export function GraphView() {
 				.then(({ runs }) => {
 					if (cancelled) return;
 					setPipelineRuns(runs);
-					const ids = new Set(runs.map((r) => r.chatId));
+					const ids = new Set(runs.map((r) => r.id));
 					if ([...prevIds].some((id) => !ids.has(id))) setRefreshTick((t) => t + 1);
 					prevIds = ids;
 				})
@@ -1111,13 +1112,13 @@ export function GraphView() {
 		refreshCosts();
 	}, [refreshCosts]);
 	// The same disappearance rule as the snapshot refresh (owner
-	// 2026-09-28): usage persists per run, so costs refresh per run —
-	// not only when the whole feed drains.
+	// 2026-09-28): usage persists per JOB (per-chunk jobs), so costs refresh
+	// per job row — not only when the whole feed drains.
 	const prevRunIds = useRef(new Set<string>());
 	useEffect(() => {
-		const gone = [...prevRunIds.current].some((id) => !pipelineRuns.some((r) => r.chatId === id));
+		const gone = [...prevRunIds.current].some((id) => !pipelineRuns.some((r) => r.id === id));
 		if (gone && prevRunIds.current.size > 0) refreshCosts();
-		prevRunIds.current = new Set(pipelineRuns.map((r) => r.chatId));
+		prevRunIds.current = new Set(pipelineRuns.map((r) => r.id));
 	}, [pipelineRuns, refreshCosts]);
 
 	/* Deletion refresh (wave 6 chunk A): the DELETE /api/chats/:id response
