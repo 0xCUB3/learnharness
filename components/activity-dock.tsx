@@ -54,7 +54,10 @@ export interface FeedJob extends JobRecord {
 }
 
 export interface FeedExtraction {
+	/** Unique row id (source id, or "src#i" for chunk jobs). */
+	id: string;
 	chatId: string;
+	part?: { i: number; n: number };
 	title: string;
 	phase: string;
 	startedAt: number;
@@ -145,7 +148,8 @@ export function useActivity(): { feed: ActivityFeed; refresh: () => void } {
 
 /** One dock blob: the unified view of a job or an extraction run. */
 export interface ActivityBlob {
-	/** job.id, or the extraction's chatId (one run per chat). */
+	/** job.id, or the extraction job's row id (source id, or "src#i" for
+	 *  chunk jobs — unique per row, per-chunk jobs owner 2026-09-28). */
 	id: string;
 	process: "job" | "extraction";
 	/** Sub-agent kind for jobs (extraction blobs have none). */
@@ -219,7 +223,7 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 	});
 	for (const run of feed.extractions) {
 		blobs.push({
-			id: run.chatId,
+			id: run.id,
 			process: "extraction",
 			phase: run.phase,
 			title: run.title,
@@ -292,7 +296,10 @@ export function ActivitySection({ feed: feedProp }: { feed?: ActivityFeed }) {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					kind: blob.process === "job" ? "job" : "extraction",
-					id: blob.id,
+					// Extractions abort by SOURCE id (chatId) — chunk rows
+					// share one source and die together (the route's id
+					// charset rejects the "#" of a "src#i" job key anyway).
+					id: blob.process === "job" ? blob.id : blob.chatId,
 				}),
 			});
 			if (!res.ok) {

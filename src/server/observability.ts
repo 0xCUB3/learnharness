@@ -40,9 +40,15 @@ export interface ActivityJob extends JobRecord {
 	contextLimit: number | null;
 }
 
-/** One extraction-pipeline run (title joined), oldest first. */
+/** One extraction-pipeline JOB (title joined), oldest first. Per-chunk
+ *  jobs (owner, 2026-09-28): a multi-chunk source owns SEVERAL rows — id
+ *  is the unique job key (source id, or "src#i"), chatId stays the SOURCE
+ *  id (abort + chat links are source-scoped), and the title carries the
+ *  "· i/N" part suffix. */
 export interface ActivityExtraction {
+	id: string;
 	chatId: string;
+	part?: { i: number; n: number };
 	title: string;
 	phase: ExtractionPhase;
 	startedAt: number;
@@ -75,8 +81,15 @@ export function activityFeed(): { jobs: ActivityJob[]; extractions: ActivityExtr
 		}
 	}
 	const extractions: ActivityExtraction[] = extractionStatuses().map((run) => ({
+		id: run.part ? `${run.chatId}#${run.part.i}` : run.chatId,
 		chatId: run.chatId,
-		title: chatStore.getChat(run.chatId)?.title ?? run.chatId,
+		part: run.part,
+		// The run's own label never reaches this feed (unlike the graph
+		// status route) — the chat store's title, or the bare id for notes
+		// sources, plus the chunk suffix when the source fanned out.
+		title:
+			(run.label ?? chatStore.getChat(run.chatId)?.title ?? run.chatId) +
+			(run.part ? ` · ${run.part.i}/${run.part.n}` : ""),
 		phase: run.phase,
 		startedAt: run.startedAt,
 	}));

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { ActivitySection, formatElapsed, toBlobs, type ActivityFeed } from "../components/activity-dock.tsx";
+import { ActivitySection, formatElapsed, toBlobs, type ActivityFeed, type FeedExtraction } from "../components/activity-dock.tsx";
 import { formatTokens, formatUsd } from "../components/usage-format.ts";
 
 // The section's pure layer: folds, formatting, and blob order — then the SSR
@@ -35,7 +35,7 @@ describe("activity dock pure layer", () => {
 	it("merges jobs + extractions oldest-first (the stable blob order)", () => {
 		const feed: ActivityFeed = {
 			jobs: [job({ id: "new", createdAt: new Date(NOW - 10_000).toISOString() })],
-			extractions: [{ chatId: "cx", title: "Old lesson", phase: "auditing", startedAt: NOW - 100_000 }],
+			extractions: [{ id: "cx", chatId: "cx", title: "Old lesson", phase: "auditing", startedAt: NOW - 100_000 }],
 		};
 		const blobs = toBlobs(feed);
 		assert.equal(blobs.length, 2);
@@ -44,6 +44,17 @@ describe("activity dock pure layer", () => {
 		assert.equal(first.process, "extraction");
 		assert.equal(first.phase, "auditing");
 		assert.equal(blobs[1]!.id, "new");
+	});
+
+	it("per-chunk jobs (owner, 2026-09-28): one source, N rows — unique ids (React keys), one chatId, part-suffixed titles", () => {
+		const rows = [
+			{ id: "src_a#1", chatId: "src_a", part: { i: 1, n: 2 }, title: "notes.md · 1/2", phase: "extracting", startedAt: NOW - 1000 },
+			{ id: "src_a#2", chatId: "src_a", part: { i: 2, n: 2 }, title: "notes.md · 2/2", phase: "queued", startedAt: NOW - 500 },
+		] as FeedExtraction[];
+		const blobs = toBlobs({ jobs: [], extractions: rows });
+		assert.equal(blobs.length, 2, "one blob per chunk job");
+		assert.deepEqual(blobs.map((b) => b.id), ["src_a#1", "src_a#2"], "unique row ids — no duplicate React keys");
+		assert.ok(blobs.every((b) => b.chatId === "src_a"), "abort/link identity stays source-scoped");
 	});
 
 	it("folds cost with jobCost; absent usage is null, never zero", () => {
@@ -149,7 +160,7 @@ describe("activity dock pure layer", () => {
 	it("extraction blobs carry no money/context (—, the doctrine)", () => {
 		const blob = toBlobs({
 			jobs: [],
-			extractions: [{ chatId: "cx", title: "T", phase: "extracting", startedAt: NOW }],
+			extractions: [{ id: "cx", chatId: "cx", title: "T", phase: "extracting", startedAt: NOW }],
 		})[0]!;
 		assert.equal(blob.cost, null);
 		assert.equal(blob.context, null);
@@ -187,7 +198,7 @@ describe("activity section render", () => {
 			<ActivitySection
 				feed={{
 					jobs: [job({ id: "j1", kind: "demo", activity: "building sandbox…", title: "Chain-rule demo" })],
-					extractions: [{ chatId: "cx", title: "Old lesson", phase: "merging", startedAt: NOW - 60_000 }],
+					extractions: [{ id: "cx", chatId: "cx", title: "Old lesson", phase: "merging", startedAt: NOW - 60_000 }],
 				}}
 			/>,
 		);
