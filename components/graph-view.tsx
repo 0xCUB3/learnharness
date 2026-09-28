@@ -1058,20 +1058,28 @@ export function GraphView() {
 			.finally(() => setImporting(false));
 	};
 
-	// Background pipeline status: poll /api/graph/status; when a run
-	// finishes (some -> none), refetch the graph.
+	// Background pipeline status: poll /api/graph/status; whenever a run
+	// LEAVES the feed (finished / aborted / failed), refetch the graph.
+	// A run only leaves the registry after its merge + settle + usage
+	// persist complete, so disappearance ⇒ the graph change is already on
+	// disk. The old some→none transition batched PARALLEL runs into one
+	// reveal (owner 2026-09-28): with serialized audits, the first run's
+	// merge is its own graph change and must surface immediately, not wait
+	// for the whole feed to drain. A redundant fetch on aborted runs is
+	// free — the same doctrine as the deletion-refresh path below.
 	const [pipelineRuns, setPipelineRuns] = useState<{ chatId: string; title: string; phase: string; startedAt: number }[]>([]);
 	useEffect(() => {
 		let cancelled = false;
-		let hadRuns = false;
+		let prevIds = new Set<string>();
 		const poll = () =>
 			fetch("/api/graph/status")
 				.then((res) => res.json() as Promise<{ runs: typeof pipelineRuns }>)
 				.then(({ runs }) => {
 					if (cancelled) return;
 					setPipelineRuns(runs);
-					if (hadRuns && runs.length === 0) setRefreshTick((t) => t + 1);
-					hadRuns = runs.length > 0;
+					const ids = new Set(runs.map((r) => r.chatId));
+					if ([...prevIds].some((id) => !ids.has(id))) setRefreshTick((t) => t + 1);
+					prevIds = ids;
 				})
 				.catch(() => {}); // status is cosmetic — never surface poll errors
 		poll();
@@ -1099,18 +1107,23 @@ export function GraphView() {
 	useEffect(() => {
 		refreshCosts();
 	}, [refreshCosts]);
-	const costsHadRunning = useRef(false);
+	// The same disappearance rule as the snapshot refresh (owner
+	// 2026-09-28): usage persists per run, so costs refresh per run —
+	// not only when the whole feed drains.
+	const prevRunIds = useRef(new Set<string>());
 	useEffect(() => {
-		if (costsHadRunning.current && pipelineRuns.length === 0) refreshCosts();
-		costsHadRunning.current = pipelineRuns.length > 0;
+		const gone = [...prevRunIds.current].some((id) => !pipelineRuns.some((r) => r.chatId === id));
+		if (gone && prevRunIds.current.size > 0) refreshCosts();
+		prevRunIds.current = new Set(pipelineRuns.map((r) => r.chatId));
 	}, [pipelineRuns, refreshCosts]);
 
 	/* Deletion refresh (wave 6 chunk A): the DELETE /api/chats/:id response
 	   carries the new graphRevision, and the sidebar (which owns the delete
 	   flow) announces it as lh:graph-revision. The status poll above can't
-	   see a deletion — no pipeline run ever transitions some→none for it —
-	   so this event is the one seam. Refetch the snapshot and the costs on
-	   every announcement: deletions are rare, a redundant fetch is free. */
+	   see a deletion — no pipeline run ever disappears from the feed for
+	   it — so this event is the one seam. Refetch the snapshot and the
+	   costs on every announcement: deletions are rare, a redundant fetch
+	   is free. */
 	useEffect(() => {
 		const onRevision = () => {
 			setRefreshTick((t) => t + 1);
