@@ -20,33 +20,43 @@ import type {
 	ChatRecord,
 	ExtractionRunUsage,
 	ExtractionStageUsage,
-	GraphNode,
 	SessionFindings,
 } from "../../core/contracts.ts";
 import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
 import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
-import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/coverage.ts";
+import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts";
+import { sessionMarkdown } from "../../core/session-markdown.ts";
+import { auditorGraphTools } from "../tools/graph.ts";
 
 /**
- * The extraction pipeline (vision §1 construction, 2026-09-02 redesign) — the
- * sole graph writer. Three stages, one orchestrator:
+ * The extraction pipeline (vision §1 construction, 2026-09-02 redesign;
+ * relinked 2026-09-27) — the sole graph writer. Three stages, one
+ * orchestrator:
  *
- *   extractor (LLM)  transcript → SessionFindings (free-form propositions,
- *                    follows/supports edges, quiz attribution, understanding
- *                    notes — each with verbatim evidence). TREE-BLIND: it
- *                    sees only the transcript, never the plan tree.
- *   auditor (LLM)    findings + THE CURRENT GRAPH → AuditResult: the
- *                    verified subset with an identity verdict per
- *                    proposition (linkTo an existing node, or create), plus
- *                    the drops for the log.
+ *   extractor (LLM)  the ONE stage that sees the raw source (a session
+ *                    rendered as markdown by the shared session-markdown
+ *                    engine, or a notes file verbatim) → SessionFindings:
+ *                    propositions + follows/supports edges, each with
+ *                    verbatim evidence. TREE-BLIND, graph-blind, FULLY
+ *                    TRUSTED — nothing downstream re-checks it.
+ *   auditor (LLM)    never sees the source. Its job is IDENTITY: for each
+ *                    proposition, linkTo an existing graph node or create —
+ *                    decided by EXPLORING the graph through tools (find /
+ *                    list_sessions / list_propositions), not by an injected
+ *                    graph dump (context bloat, owner 2026-09-27). It may
+ *                    also draw BRIDGING edges from existing graph nodes to
+ *                    the batch's propositions.
  *   merger (core)    mergeFindings() → deterministic ledger appends
  *
- * The LLM stages supply only the judgment calls; the deterministic rebuild
- * in the merger owns everything that must never be mis-copied (event kinds,
- * timestamps, refs, provenance points). Both agents are single-tool-call
- * workers: their whole deliverable is one TypeBox-validated submit call — a
- * ToolLoopAgent purely so the model can retry a schema-invalid call.
+ * The events ledger is GONE (2026-09-27): quiz outcomes and understanding
+ * observations are no longer formalized in the graph — the graph is purely
+ * extracted reasoning chains (nodes + edges). Understanding-level
+ * assessment is practice-module territory.
+ *
+ * The extractor is a single-tool-call worker (one TypeBox-validated submit
+ * call — a pi agent purely so the model can retry a schema-invalid call).
+ * The auditor is a small AGENTIC loop: exploration tools plus one submit.
  *
  * Created via createExtractionPipeline(deps) — the composition root
  * (chat-handler) injects the storage ports + models; this module never
@@ -60,11 +70,9 @@ import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/co
  * session, no message ids). A notes-mode extractor prompt replaces the
  * session one; the auditor and merger are shared (identity + deterministic
  * appends don't care where text came from). Provenance is the file itself:
- * source ids ("src_" + path hash) play the chatId role in mappings, events
- * and checkpoints, and the source record (graphStore sources seam) carries
- * the file path + the run's usage. No quiz events are ever built from
- * notes — quiz outcomes inside the text surface only through the
- * extractor's understanding observations (user-decided 2026-09-13).
+ * source ids ("src_" + path hash) play the chatId role in mappings and
+ * checkpoints, and the source record (graphStore sources seam) carries
+ * the file path + the run's usage.
  *
  * Observability (§5 baseline): every stage logs one line per step, its
  * start, and its duration; the pipeline logs a failure line before
@@ -72,32 +80,23 @@ import { batchRuns, batchTag, coverageOf, messageViewLines } from "../../core/co
  * stats (or failed) for every run.
  */
 
-// ─── the transcript view (what the extractor + auditor see) ─────────────────
+// ─── the source view (what the extractor sees) ──────────────────────────────
 
 /**
- * A quiz tool part's outcome, one line: the attribution evidence.
- * (question text + what the learner did — kind/correct are rebuilt by the
- * merger; the extractor only needs enough to attribute.)
- */
-/**
- * The compact transcript both LLM stages see: user/teacher text VERBATIM,
- * each tagged with its message id (provenance anchors — the extractor
- * reports them back per proposition/edge), and quiz outcome lines.
- * TREE-BLIND by design (2026-09-02): no plan tree, no mark_done —
- * extraction is free-form, decoupled from the session's plan. Job tool
- * parts (research/demo/visual) are noise for extraction — their outcomes
- * are summarized as one line each.
+ * A session rendered as readable markdown — the EXTRACTOR's view (owner
+ * ruling 2026-09-27): the whole session goes in, formatted by the ONE
+ * shared session-markdown engine (core/session-markdown.ts — the same
+ * engine the user-facing session export will use), with the message-id
+ * anchors preserved (the extractor reports them back per
+ * proposition/edge — they become provenance). TREE-BLIND by design:
+ * no plan tree, no mark_done.
+ *
+ * Presentation-only: coverage fingerprints hash core/coverage.ts's line
+ * format, which is SEPARATE and unchanged — re-formatting the view never
+ * re-opens covered history (the deliberate 2026-09-27 split).
  */
 export function transcriptView(record: ChatRecord): string {
-	// The shared seam (core/coverage.ts messageViewLines): the LLM's prompt
-	// view and the coverage fingerprint use ONE line builder, so "covered"
-	// means — exactly — what the extractor saw. Wave D: the record is native
-	// history — the view reads the native messages directly.
-	const lines = [`SESSION: ${record.title}`];
-	record.messages.forEach((message, index) => {
-		lines.push(...messageViewLines(message, (message as { id?: string }).id || `m${index}`));
-	});
-	return lines.join("\n");
+	return sessionMarkdown(record.messages, { title: record.title });
 }
 
 // ─── the extractor ──────────────────────────────────────────────────────────
@@ -110,24 +109,6 @@ const evidenceSchema = Type.Array(Type.String(), {
 const messagesSchema = Type.Array(Type.String(), {
 	description: "The message ids (from the [id] tags in the transcript) where this came up — provenance.",
 });
-
-const understandingSchema = Type.Optional(
-	Type.Union(
-		[
-			Type.Literal("solid"),
-			Type.Literal("shaky"),
-			Type.Literal("accepted"),
-			Type.Literal("resisted"),
-			Type.Literal("not yet engaged"),
-		],
-		{
-			description:
-				"ONE word — the learner's grasp of this proposition in THIS session, from the fixed scale " +
-				'"solid" | "shaky" | "accepted" | "resisted" | "not yet engaged". Nothing else: no numbers, ' +
-				"no justification, no explanation.",
-		},
-	),
-);
 
 const propositionProps = {
 	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by edges and attribution.' }),
@@ -142,14 +123,13 @@ const propositionProps = {
 			"The proposition as one reasoning step — a TRUE, self-contained, world-facing statement. " +
 			'Never reference the learner, the teacher, or the session: not "the learner understands X" but ' +
 			'"X". A misconception is stated as the TRUE correction ("Nietzsche did not endorse ' +
-			'might-makes-right social Darwinism") — the wrongness lives in the quiz outcomes, never here.',
+			'might-makes-right social Darwinism") — wrongness is never recorded in the graph.',
 	}),
 	aliases: Type.Array(Type.String(), {
 		description: "Verbatim phrasings this session used for the same proposition, if any.",
 	}),
 	messages: messagesSchema,
 	evidence: evidenceSchema,
-	understanding: understandingSchema,
 };
 
 const edgeSchema = Type.Object({
@@ -177,20 +157,6 @@ const findingsProps = {
 				"Relations between propositions: follows (derivable) / supports (grounds without entailing). Pass [] when there are none — never omit the field.",
 		}),
 	),
-	attribution: Type.Optional(
-		Type.Object(
-			{
-				quiz: Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]), {
-					description:
-						"toolCallId of EVERY quiz line → the proposition id it was really testing. Attribute RETROACTIVELY — the whole transcript is visible; map each quiz to the proposition it tests (often articulated elsewhere in the session). null when genuinely unattributable.",
-				}),
-			},
-			{
-				description:
-					"Quiz attribution — your only event judgment. Pass { quiz: {} } when the session has no quiz lines — never omit the field.",
-			},
-		),
-	),
 };
 
 const findingsSchema = Type.Object(findingsProps);
@@ -203,7 +169,7 @@ const auditProps = {
 			linkTo: Type.Optional(
 				Type.String({
 					description:
-						"The id of the EXISTING graph node this proposition IS — your identity verdict. Absent = create a new node. When unsure, omit: duplicates over wrong merges.",
+						"The id of the EXISTING graph node this proposition IS — your identity verdict. Absent = create a new node. EQUIVALENCE BIAS (2026-09-27): paraphrases, rewordings, and compressions of the same claim MERGE; only genuinely distinct propositions stay apart.",
 				}),
 			),
 		}),
@@ -211,34 +177,15 @@ const auditProps = {
 			description: "Every distinct proposition the session touched — true statements, misconception-free.",
 		},
 	),
-	dropped: Type.Optional(
-		Type.Array(
-			Type.Object({
-				ref: Type.String({
-					description: 'Proposition id, "from→to" for an edge, or attribution toolCallId.',
-				}),
-				reason: Type.String(),
-			}),
-			{
-				description:
-					"Everything you dropped, with the reason — the audit trail. Pass [] when you dropped nothing — never omit the field.",
-			},
-		),
-	),
 };
 
 const auditSchema = Type.Object(auditProps);
 
-// The notes front door's shapes: everything session findings have, minus
-// quiz attribution — raw notes have no quiz tool parts, so there is
-// nothing to attribute (and no event to build: outcomes inside the text
-// surface only through understanding observations, user-decided).
-const { attribution: _omitted, ...notesFindingsProps } = findingsProps;
-const notesFindingsSchema = Type.Object(notesFindingsProps);
-const { attribution: _omitted2, ...notesAuditProps } = auditProps;
-const notesAuditSchema = Type.Object(notesAuditProps);
-type NotesFindings = Omit<SessionFindings, "attribution">;
-type NotesAuditResult = Omit<AuditResult, "attribution">;
+// The notes front door's shapes are IDENTICAL to the session shapes now
+// (the only difference was quiz attribution, which no longer exists):
+// one schema, one findings type, both front doors.
+type NotesFindings = SessionFindings;
+type NotesAuditResult = AuditResult;
 
 // ── the weak-model ??-fills (the old zod defaults, applied at submit) ──
 
@@ -246,25 +193,14 @@ function fillFindings(raw: Static<typeof findingsSchema>): SessionFindings {
 	return {
 		propositions: raw.propositions,
 		edges: raw.edges ?? [],
-		attribution: raw.attribution ?? { quiz: {} },
 	};
-}
-
-function fillNotesFindings(raw: Static<typeof notesFindingsSchema>): NotesFindings {
-	return { propositions: raw.propositions, edges: raw.edges ?? [] };
 }
 
 function fillAudit(raw: Static<typeof auditSchema>): AuditResult {
 	return {
 		propositions: raw.propositions,
 		edges: raw.edges ?? [],
-		attribution: raw.attribution ?? { quiz: {} },
-		dropped: raw.dropped ?? [],
 	};
-}
-
-function fillNotesAudit(raw: Static<typeof notesAuditSchema>): NotesAuditResult {
-	return { propositions: raw.propositions, edges: raw.edges ?? [], dropped: raw.dropped ?? [] };
 }
 
 const NOTES_EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE source —
@@ -272,13 +208,11 @@ the user's own NOTES, in an ARBITRARY format (personal notes, an exported conver
 report what those notes show the author engaging with, as structured findings for their global knowledge graph.
 
 There is no session and no chat structure here: the source is raw text, the author's own material. Read it as such.
+You are the ONLY stage that sees this source — you are fully trusted; report carefully.
 
-Report, with verbatim evidence quotes for everything:
-
-NODE THEORY — the graph is a set of TRUE propositions about the world, full stop. A node is never anything about the
-author or the source. The author's relationship to a proposition is expressed ENTIRELY by your understanding note; it
-never leaks into the node itself. So no "the author understands X", no "mentioned in these notes": the node is just X.
-A misconception is NOT a node of its own wrong claim — state the TRUE correction as the proposition.
+The graph is a set of TRUE propositions about the world, full stop. A node is never anything about the author or the
+source — no "the author understands X", no "mentioned in these notes": the node is just X. A misconception is NOT a
+node of its own wrong claim — state the TRUE correction as the proposition.
 
 1. PROPOSITIONS — every distinct reasoning-step-sized proposition the notes actually engage with:
    - Each has a "name" — a VERY short label, a few words, a compact handle like a glossary headword ("Will to power",
@@ -288,20 +222,14 @@ A misconception is NOT a node of its own wrong claim — state the TRUE correcti
      one reasoning step each — never a topic blob, never a sub-step.
    - "messages": ALWAYS an empty list — provenance is the file itself.
    - "aliases": verbatim phrasings the notes used for the same proposition.
-   - "understanding": ONE word from the fixed scale — "solid", "shaky", "accepted", "resisted", or "not yet engaged" —
-     judging the AUTHOR's grasp of the proposition as the notes show it: their own commentary, self-assessments,
-     recorded quiz outcomes, the way they write about it. Strictly one word, no numbers, no justification (a
-     wrong-shaped note is rejected by the schema). When the notes give no signal, omit the field.
 
 2. EDGES between propositions:
    - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
    - "supports": from GROUNDS to without entailing it (helpful context, not a prerequisite).
    - Only relations the notes actually articulate — with evidence.
 
-There is no quiz attribution for notes — the source has no quiz events, and the schema has no attribution field.
-
-Evidence discipline: every quote must appear VERBATIM in the source. The auditor rejects anything unbacked. When in
-doubt, report; the auditor decides.
+Evidence discipline: every quote must appear VERBATIM in the source — this is your self-grounding, and the proof the
+statements come from the material rather than invention.
 
 Include EVERY top-level field of the call even when empty — "edges": [] when there are no relations. NEVER omit
 a field because it is empty.
@@ -309,19 +237,18 @@ a field because it is empty.
 Your entire deliverable is ONE submit_findings call.`;
 
 const EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE session
-transcript and report what was learned — as structured findings for the learner's global knowledge graph.
+rendering and report what that session teaches — as structured findings for the learner's global knowledge graph.
 
-The transcript view shows: the conversation verbatim (LEARNER / TEACHER lines, each tagged with its message id)
-and QUIZ outcome lines.
+The session is rendered as readable markdown: Teacher and Learner passages in order (each header carries its message
+id — the [id] anchor), Quiz / Recall-check / Question blocks for the embedded checks, and one-line notes where other
+tools ran. Read ALL of it as the session's teaching content.
 
-Report, with verbatim evidence quotes for everything:
+You are the ONLY stage that sees this source, and you are FULLY TRUSTED: nothing downstream re-checks your work.
+Extract carefully — the graph will hold exactly what you report.
 
-NODE THEORY — the graph is a set of TRUE propositions about the world, full stop. A node is never anything
-about the learner or the session. The learner's relationship to a proposition — whether they know it, missed
-it, resisted it — is expressed ENTIRELY by the quiz outcomes and your understanding note; it never leaks into
-the node itself. So no "the learner understands X", no "discussed in this session": the node is just X. A
-misconception is NOT a node of its own wrong claim — state the TRUE correction as the proposition, and let the
-quiz outcomes carry that the learner believed the wrong version.
+The graph is a set of TRUE propositions about the world, full stop. A node is never anything about the learner or the
+session — no "the learner understands X", no "discussed in this session": the node is just X. A misconception is NOT
+a node of its own wrong claim — state the TRUE correction as the proposition.
 
 1. PROPOSITIONS — every distinct reasoning-step-sized proposition the session touched:
    - Each has a "name" — a VERY short label, a few words, a compact handle like a glossary headword
@@ -332,26 +259,19 @@ quiz outcomes carry that the learner believed the wrong version.
      in the graph only as this one statement).
    - Include corrections of misconceptions the teacher articulated, and true facts explained in prose.
    - One reasoning step per proposition: never a topic blob, never a sub-step.
-   - "messages": the [id] tags of every message where the proposition came up — provenance, report it.
+   - "messages": the id from the header anchor of every passage where the proposition came up — provenance, report it.
    - "aliases": verbatim phrasings this session used for the same proposition.
-   - "understanding": ONE word from the fixed scale — "solid", "shaky", "accepted", "resisted", or
-     "not yet engaged" — judging the learner's grasp of the proposition in THIS session. Strictly one
-     word, no numbers, no justification, no explanation (a wrong-shaped note is rejected by the schema).
 
 2. EDGES between propositions:
    - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
    - "supports": from GROUNDS to without entailing it (helpful context, not a prerequisite).
-   - Only relations the transcript actually articulates — with evidence.
+   - Only relations the session actually articulates — with evidence.
 
-3. ATTRIBUTION — every QUIZ line gets a mapping: toolCallId → the proposition id it was really testing.
-   Attribute RETROACTIVELY — a quiz often tests a proposition the session only articulates later; the
-   question text is your guide. If you truly cannot tell, use null.
+Evidence discipline: every quote must appear VERBATIM in the source markdown (a Quiz block's question counts as the
+source). This is your self-grounding: the proof that statements come from the material rather than invention.
 
-Evidence discipline: every quote must appear VERBATIM in the transcript view (a QUIZ line counts as the
-transcript). The auditor rejects anything unbacked. When in doubt, report; the auditor decides.
-
-Include EVERY top-level field of the call even when empty — "edges": [], "attribution": { quiz: {} } when there
-are no quizzes. NEVER omit a field because it is empty.
+Include EVERY top-level field of the call even when empty — "edges": [] when there are no relations. NEVER omit a
+field because it is empty.
 
 Your entire deliverable is ONE submit_findings call.`;
 
@@ -375,10 +295,17 @@ async function runSubmitAgent<T>(opts: {
 	signal: AbortSignal | undefined;
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void;
 	neverSubmitted: string;
+	/** Extra tools beside the submit call (the auditor's graph-exploration
+	 *  set, 2026-09-27): a small agentic loop instead of a bare retry. */
+	extraTools?: Record<string, AgentTool<any>>;
+	/** Turn budget for the loop (default 4 = retry-only; the auditor runs
+	 *  an exploration loop instead — 16). */
+	maxTurns?: number;
 }): Promise<T> {
 	let submitted: T | undefined;
 	const result = await runSubagent(
 		[
+			...(opts.extraTools ? Object.values(opts.extraTools) : []),
 			{
 				name: opts.toolName,
 				label: opts.toolName,
@@ -395,7 +322,7 @@ async function runSubmitAgent<T>(opts: {
 			engine: opts.engine,
 			systemPrompt: opts.systemPrompt,
 			prompt: opts.prompt,
-			maxTurns: 4,
+			maxTurns: opts.maxTurns ?? 4,
 			abortSignal: opts.signal,
 			onAssistantMessage: (message, step) =>
 				opts.onStep(
@@ -450,8 +377,8 @@ function runNotesExtractor(
 		role: "extractor",
 		toolName: "submit_findings",
 		toolDescription: "Submit the notes findings.",
-		parameters: notesFindingsSchema,
-		fill: fillNotesFindings,
+		parameters: findingsSchema,
+		fill: fillFindings,
 		systemPrompt: NOTES_EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -464,68 +391,52 @@ function runNotesExtractor(
 // ─── the auditor ───────────────────────────────────────────────────────────
 
 
-const AUDITOR_INSTRUCTIONS = `You are the audit stage of a learning application's extraction pipeline. You receive
-ONE source — a session transcript, or the author's personal notes in an ARBITRARY format (the notes front door) — a
-set of proposed findings (propositions, edges, and quiz attribution where the source has quiz lines), and the
-CURRENT knowledge graph. Your jobs: the faithfulness net, and identity.
+const AUDITOR_INSTRUCTIONS = `You are the linking stage of a learning application's extraction pipeline. An extractor
+has read a source (a teaching session, or the author's personal notes) and reported findings: propositions and
+follows/supports edges. You NEVER see the source itself — the extractor is fully trusted, and you do not re-check
+its work. Your job is IDENTITY: connecting those findings to the CURRENT knowledge graph, preparing the merge.
 
-FAITHFULNESS — verify every candidate against the source text:
-- PROPOSITIONS: every evidence quote must appear (near-)verbatim in the transcript view, and the statement
-  must be a faithful reading of it. The node theory applies: a statement must be a TRUE, self-contained,
-  world-facing fact — reword learner- or session-relative statements ("the learner understands X" → "X"), state
-  misconceptions as the true correction, or drop them when no objective fact is backed. Drop invented or
-  bloated statements. Conservative: when two proposed propositions are really one, keep the better-stated one
-  and drop the other.
-- EDGES: the evidence must actually articulate the relation, in the direction claimed. Drop
-  direction-swapped or speculative edges.
-- ATTRIBUTION: the QUIZ line's question must genuinely test the attributed proposition. Drop wrong
-  attributions to null, or re-point them to the proposition the question actually tests. (Session
-  sources only — notes findings carry no attribution; there is nothing to verify.)
-- UNDERSTANDING levels: verify against the quiz outcomes and the session's evidence — or, for notes,
-  the author's own words; each note must be
-  exactly one word from the fixed scale ("solid", "shaky", "accepted", "resisted", "not yet engaged") —
-  reword or drop anything else. No justifications.
+You explore the graph through your tools: find (glob over names + statements + aliases), list_sessions, and
+list_propositions (full statement text, per session). The graph may be large — search, don't assume.
 
 IDENTITY — link-or-create, per proposition:
-- You see the current graph (every node: id, name, statement, aliases). For each verified proposition,
-  decide: does an EXISTING node already state this same proposition?
-- If yes: set "linkTo" to that node's id. The session's phrasings will join its aliases and its provenance;
-  the node keeps its existing name (labels stay stable across sessions — ignore your name for linked nodes).
-- If no: omit "linkTo" and a new node is created, with the extractor's name as its label. Reword only a
-  clearly unglanceable name (an unwieldy sentence of a name); keep it short.
-- When unsure, omit — duplicates are recoverable later; wrong merges are not.
+- For each proposition, search the graph (its key words, its synonyms, its phrasings). Does an EXISTING node already
+  state this same proposition?
+- If yes: set "linkTo" to that node's id. The session's phrasings join its aliases and its provenance; the node
+  keeps its existing name (labels stay stable — ignore your name for linked nodes).
+- If no: omit "linkTo" and a new node is created with the extractor's name as its label.
+- EQUIVALENCE BIAS (owner ruling): paraphrases, rewordings, and compressions of the same claim MERGE. When two
+  statements are the same claim at different precision or from different angles, LINK them. Only genuinely distinct
+  propositions — different claims about the world — stay apart. You are NOT guarding against wrong merges; you are
+  hunting for right ones.
 
-Also drop propositions not referenced by anything else ONLY if they have no other backing — an unreferenced but
-well-evidenced proposition is still knowledge.
+BRIDGING EDGES — the one place you create edges:
+- You may add edges whose endpoints are an EXISTING graph node id and one of the batch's propositions (use the
+  existing node's real id as "from" or "to"). This is how the new material gets welded into the old graph: when the
+  existing graph's content makes a proposition follow, or grounds it, draw the edge.
+- Keep edges typed like the extractor's: "follows" = derivable; "supports" = grounds without entailing.
+- NEVER drop or rewrite the extractor's own propositions or edges — pass them through unchanged (adding linkTo is
+  the only edit). Never invent propositions.
 
-Never invent new candidates. Your entire deliverable is ONE submit_review call containing the verified findings
-(the same shapes you received, with linkTo added) plus the dropped list.
+Reproduce every proposition and edge you received, with their evidence and messages verbatim. Your entire deliverable
+is ONE submit_review call.
 
-Include EVERY top-level field of the call even when empty — "edges": [], "dropped": []. NEVER omit a field
-because it is empty.`;
+Include EVERY top-level field of the call even when empty — "edges": []. NEVER omit a field because it is empty.`;
 
-/** The current graph, compact — the auditor's identity context. */
-function graphView(nodes: GraphNode[]): string {
-	if (nodes.length === 0) return "(the graph is currently empty — every proposition is a new node)";
-	const lines = nodes.map(
-		(n) =>
-			`- ${n.id} :: ${n.name}\n  statement: ${n.statement}` +
-			(n.aliases.length > 0 ? `\n  aliases: ${n.aliases.join(" | ")}` : ""),
-	);
-	return lines.join("\n");
-}
-
-/** The auditor over session findings (the chat front door). */
+/** The auditor — one shape for both front doors now (the notes schema was
+ *  identical once attribution died). An agentic loop: graph-exploration
+ *  tools plus the one submit call. */
 function runAuditor(
 	engine: PiEngine | undefined,
 	prompt: string,
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
+	tools: Record<string, AgentTool<any>>,
 ): Promise<AuditResult> {
 	return runSubmitAgent({
 		role: "auditor",
 		toolName: "submit_review",
-		toolDescription: "Submit the verified findings subset (with identity verdicts) + the dropped list.",
+		toolDescription: "Submit the findings with identity verdicts (linkTo) and any bridging edges — for the merge.",
 		parameters: auditSchema,
 		fill: fillAudit,
 		systemPrompt: AUDITOR_INSTRUCTIONS,
@@ -534,29 +445,8 @@ function runAuditor(
 		signal,
 		onStep,
 		neverSubmitted: "the auditor never submitted a review",
-	});
-}
-
-/** The auditor over notes findings (the format-agnostic front door): same
- *  faithfulness + identity job, notes-mode schema (no attribution). */
-function runNotesAuditor(
-	engine: PiEngine | undefined,
-	prompt: string,
-	signal: AbortSignal | undefined,
-	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
-): Promise<NotesAuditResult> {
-	return runSubmitAgent({
-		role: "auditor",
-		toolName: "submit_review",
-		toolDescription: "Submit the verified findings subset (with identity verdicts) + the dropped list.",
-		parameters: notesAuditSchema,
-		fill: fillNotesAudit,
-		systemPrompt: AUDITOR_INSTRUCTIONS,
-		prompt,
-		engine,
-		signal,
-		onStep,
-		neverSubmitted: "the auditor never submitted a review",
+		extraTools: tools,
+		maxTurns: 16,
 	});
 }
 
@@ -683,7 +573,7 @@ export interface ExtractionPipeline {
 	/** The format-agnostic front door (2026-09-13): run the same pipeline
 	 *  over ONE raw notes file. The source id is deterministic per file
 	 *  path, so re-importing the same file re-runs extraction against the
-	 *  same source identity (mappings + events dedupe by it). */
+	 *  same source identity (mappings dedupe by it). */
 	importNotes(input: NotesImportInput): Promise<EmissionStats>;
 }
 
@@ -770,12 +660,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	async function extract(chatId: string, view: string): Promise<SessionFindings> {
 		const signal = runningExtractions.get(chatId)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during a sync gap ends the run here
-		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} transcript lines)`);
+		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} markdown lines)`);
 		const t0 = performance.now();
 
 		const findings = await runExtractor(
 			stageEngine("extractor", deps.extractor),
-			`Transcript:\n\n${view}`,
+			view,
 			signal,
 			(usage, model, step, finishReason, tools) => {
 				recordStep(chatId, "extractor", callUsage(usage), model);
@@ -786,36 +676,36 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		return findings;
 	}
 
-	async function audit(chatId: string, findings: SessionFindings, view: string): Promise<AuditResult> {
+	async function audit(chatId: string, findings: SessionFindings): Promise<AuditResult> {
 		const signal = runningExtractions.get(chatId)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during the extract→audit gap ends here
 		const graph = getGraph(graphStore);
 		console.info(
 			`[extraction ${chatId}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
-				`${Object.keys(findings.attribution.quiz).length} attributions, ${graph.nodes.length} graph nodes)`,
+				`${graph.nodes.length} graph nodes)`,
 		);
 		const t0 = performance.now();
 
+		// The auditor NEVER sees the source (owner 2026-09-27): findings
+		// JSON + identity instructions, and the graph reached through
+		// exploration tools instead of an injected dump.
 		const auditResult = await runAuditor(
 			stageEngine("auditor", deps.auditor),
-			`Transcript:\n\n${view}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}\n\n` +
-				`Current knowledge graph (${graph.nodes.length} nodes):\n\n${graphView(graph.nodes)}`,
+			`Proposed findings from the extractor (the source itself is not available to you — the extractor is fully trusted):\n\n` +
+				`${JSON.stringify(findings, null, 2)}\n\n` +
+				`The current knowledge graph has ${graph.nodes.length} node(s). Explore it with your tools and link what links.`,
 			signal,
 			(usage, model, step, finishReason, tools) => {
 				recordStep(chatId, "auditor", callUsage(usage), model);
 				console.info(`[extraction] auditor step ${step}: ${finishReason}, tools: ${tools}`);
 			},
+			auditorGraphTools({ chatStore, graphStore }),
 		);
-		if (auditResult.dropped.length > 0) {
-			console.info(
-				`[extraction ${chatId}] audit dropped ${auditResult.dropped.length}: ` +
-					auditResult.dropped.map((d) => `${d.ref} (${d.reason})`).join("; "),
-			);
-		}
+		const bridged = auditResult.edges.filter((e) => !e.from.startsWith("p") || !e.to.startsWith("p")).length;
 		console.info(
-			`[extraction ${chatId}] audit kept ${auditResult.propositions.length}/${findings.propositions.length} propositions, ` +
-				`${auditResult.edges.length}/${findings.edges.length} edges, ` +
-				`${auditResult.propositions.filter((p) => p.linkTo !== undefined).length} linked to existing nodes`,
+			`[extraction ${chatId}] audit: ${auditResult.propositions.length} propositions through, ` +
+				`${auditResult.propositions.filter((p) => p.linkTo !== undefined).length} linked to existing nodes, ` +
+				`${auditResult.edges.length} edges (${bridged} bridging)`,
 		);
 		console.info(`[extraction ${chatId}] auditor done in ${Math.round(performance.now() - t0)}ms`);
 		return auditResult;
@@ -848,7 +738,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	}
 
 	async function runExtraction(chatId: string): Promise<EmissionStats> {
-		if (inFlight.has(chatId)) return { nodes: 0, edges: 0, events: 0 };
+		if (inFlight.has(chatId)) return { nodes: 0, edges: 0 };
 		inFlight.add(chatId);
 		const t0 = performance.now();
 		// COVERAGE (vision-extraction-coverage.md, 2026-09-15): extract ONLY
@@ -859,7 +749,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		// error below loses at most the in-flight batch — every earlier
 		// batch stays covered, the rest stays visibly uncovered.
 		let batchesDone = 0;
-		const total: EmissionStats = { nodes: 0, edges: 0, events: 0 };
+		const total: EmissionStats = { nodes: 0, edges: 0 };
 		try {
 			const record = chatStore.getChat(chatId);
 			if (!record) throw new Error(`Chat not found: ${chatId}`);
@@ -871,7 +761,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			const covered = coverageOf(record.messages, graphStore.readCoverage(), chatId);
 			if (covered.uncovered.length === 0) {
 				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
-				return { nodes: 0, edges: 0, events: 0 };
+				return { nodes: 0, edges: 0 };
 			}
 			const chunkTokens = deps.getChunkTokens?.() ?? FACTORY_SETTINGS.graph.extractionChunkTokens;
 			// The batcher's one rule (owner, Wave D): a tool-call message and
@@ -883,17 +773,19 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 					`${covered.uncoveredCount} messages, ${batches.length} batch(es) of ≤${chunkTokens} tok`,
 			);
 			for (const batch of batches) {
-				// The batch's prompt view: SESSION header + the batch's lines,
-				// same provenance [id] tags the fingerprints used (coverage
-				// and prompt share ONE line builder — core/coverage.ts).
-				const view = [
-					`SESSION: ${record.title}`,
-					...batch.flatMap((slot) => messageViewLines(slot.message, slot.message.id)),
-				].join("\n");
+				// The batch's source view: the ONE shared markdown engine
+				// (owner 2026-09-27) over the batch's messages — the same
+				// rendering the user-facing session export will use, id
+				// anchors preserved. The fingerprint's line format is
+				// separate and unchanged (no mass re-extraction).
+				const view = sessionMarkdown(
+					batch.map((slot) => slot.message),
+					{ title: record.title },
+				);
 				setPhase(chatId, "extracting", "chat");
 				const findings = await extract(chatId, view);
 				setPhase(chatId, "auditing", "chat");
-				const auditResult = await audit(chatId, findings, view);
+				const auditResult = await audit(chatId, findings);
 				setPhase(chatId, "merging", "chat");
 				// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
 				// merge. The deletion route aborts this run first and runs its purge
@@ -911,20 +803,17 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				// one and it re-opens: honest by construction.
 				const foldedAt = new Date().toISOString();
 				const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore }, {
-					messages: batch.map((slot) => slot.message),
 					foldedAt,
 					coverage: batch
 						.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
 						.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
-					batchTag: batchTag(batch),
 				});
 				total.nodes += stats.nodes;
 				total.edges += stats.edges;
-				total.events += stats.events;
 				batchesDone++;
 				console.info(
 					`[extraction ${chatId}] batch ${batchesDone}/${batches.length} merged: ` +
-						`${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events`,
+						`${stats.nodes} nodes, ${stats.edges} edges`,
 				);
 			}
 			const stats = total;
@@ -933,7 +822,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			settleGraphLayout(graphStore);
 			persistRunUsage(chatId, Math.round(performance.now() - t0), stats);
 			console.info(
-				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
+				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges ` +
 					`(${Math.round(performance.now() - t0)}ms total)`,
 			);
 			return stats;
@@ -989,42 +878,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		return findings;
 	}
 
-	async function notesAudit(input: { id: string; filePath: string; text: string }, findings: NotesFindings): Promise<NotesAuditResult> {
-		const signal = runningExtractions.get(input.id)?.controller.signal;
-		signal?.throwIfAborted(); // an abort during the extract→audit gap ends here
-		const graph = getGraph(graphStore);
-		console.info(
-			`[extraction ${input.id}] notes auditor starting (${findings.propositions.length} propositions, ` +
-				`${findings.edges.length} edges, ${graph.nodes.length} graph nodes)`,
-		);
-		const t0 = performance.now();
-		const auditResult = await runNotesAuditor(
-			stageEngine("auditor", deps.auditor),
-			`Source:\n\n${notesView(input)}\n\nProposed findings:\n\n${JSON.stringify(findings, null, 2)}\n\n` +
-				`Current knowledge graph (${graph.nodes.length} nodes):\n\n${graphView(graph.nodes)}`,
-			signal,
-			(usage, model, step, finishReason, tools) => {
-				recordStep(input.id, "auditor", callUsage(usage), model);
-				console.info(`[extraction] auditor step ${step}: ${finishReason}, tools: ${tools}`);
-			},
-		);
-		if (auditResult.dropped.length > 0) {
-			console.info(
-				`[extraction ${input.id}] audit dropped ${auditResult.dropped.length}: ` +
-					auditResult.dropped.map((d) => `${d.ref} (${d.reason})`).join("; "),
-			);
-		}
-		console.info(
-			`[extraction ${input.id}] audit kept ${auditResult.propositions.length}/${findings.propositions.length} propositions, ` +
-				`${auditResult.propositions.filter((p) => p.linkTo !== undefined).length} linked to existing nodes`,
-		);
-		console.info(`[extraction ${input.id}] notes auditor done in ${Math.round(performance.now() - t0)}ms`);
-		return auditResult;
-	}
+	// The notes auditor is the SAME identity-linker as the chat one (one
+	// schema now that attribution is gone) — audit() above, verbatim.
 
 	async function runNotesExtraction(input: { id: string; filePath: string; text: string; importedAt: string }): Promise<EmissionStats> {
 		const { id } = input;
-		if (inFlight.has(id)) return { nodes: 0, edges: 0, events: 0 };
+		if (inFlight.has(id)) return { nodes: 0, edges: 0 };
 		inFlight.add(id);
 		const t0 = performance.now();
 		try {
@@ -1036,18 +895,14 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			setPhase(id, "extracting", "notes", input.filePath);
 			const findings = await notesExtract(input);
 			setPhase(id, "auditing", "notes", input.filePath);
-			const notesResult = await notesAudit(input, findings);
+			const auditResult = await audit(id, findings);
 			setPhase(id, "merging", "notes", input.filePath);
-			// Normalize to the merger's findings shape: notes carry no quiz
-			// attribution, and the merger scans no quiz parts for notes
-			// (messages: null) — nothing to attribute, nothing to build.
-			const auditResult: AuditResult = { ...notesResult, attribution: { quiz: {} } };
-			const stats = mergeFindings(id, auditResult, { chatStore, graphStore }, { messages: null, foldedAt: input.importedAt });
+			const stats = mergeFindings(id, auditResult, { chatStore, graphStore }, { foldedAt: input.importedAt });
 			// Same post-merge settle as the chat path.
 			settleGraphLayout(graphStore);
 			persistRunUsage(id, Math.round(performance.now() - t0), stats);
 			console.info(
-				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events ` +
+				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.edges} edges ` +
 					`(${Math.round(performance.now() - t0)}ms total)`,
 			);
 			return stats;
@@ -1055,7 +910,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			persistRunUsage(id, Math.round(performance.now() - t0), undefined);
 			if (err instanceof Error && err.name === "AbortError") {
 				console.info(`[extraction ${id}] aborted (${Math.round(performance.now() - t0)}ms) — nothing merged, nothing checkpointed`);
-				return { nodes: 0, edges: 0, events: 0 };
+				return { nodes: 0, edges: 0 };
 			}
 			console.error(`[extraction ${id}] notes pipeline failed (${Math.round(performance.now() - t0)}ms):`, err);
 			throw err;

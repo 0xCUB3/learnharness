@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { GraphEdge, GraphNode, LedgerEvent, NotesSource, ChatSummary } from "../src/core/contracts.ts";
+import type { GraphEdge, GraphNode, NotesSource, ChatSummary } from "../src/core/contracts.ts";
 import type { ChatStore, GraphStore } from "../src/core/ports.ts";
 import {
 	graphSessionIndex,
@@ -36,7 +36,6 @@ const node = (id: string, name: string, provenance: Array<{ chatId: string; mess
 function fakeStores(
 	nodes: GraphNode[],
 	over: {
-		events?: LedgerEvent[];
 		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt">>;
 		sources?: Array<Pick<NotesSource, "id" | "filePath" | "importedAt">>;
 		mappings?: Array<{ chatId: string; sourceId: string; graphNodeId: string }>;
@@ -46,7 +45,6 @@ function fakeStores(
 	const graphStore: GraphStore = {
 		readNodes: () => nodes,
 		readEdges: () => edges,
-		readEvents: () => over.events ?? [],
 		readMappings: () => over.mappings ?? [],
 		readCheckpoints: () => [],
 		readCoverage: () => [],
@@ -160,12 +158,8 @@ describe("the notes mapping-line fallback", () => {
 		], "the file births under its src id; the childless chat has no entry (birth sessions only)");
 	});
 
-	it("graphSessionPropositions lists the file's births under the src id", () => {
-		const events: LedgerEvent[] = [
-			{ nodeId: "a", kind: "observation", chatId: "src_abc", at: "2026-09-22T00:00:00.000Z", note: "solid", ref: "obs:p1" },
-		];
+	it("graphSessionPropositions lists the file's births under the src id (a pure birth list, 2026-09-27)", () => {
 		const deps = fakeStores([node("a", "Alpha", []), node("b", "Beta", [])], {
-			events,
 			mappings: [
 				{ chatId: "src_abc", sourceId: "p1", graphNodeId: "a" },
 				{ chatId: "src_abc", sourceId: "p2", graphNodeId: "b" },
@@ -173,8 +167,8 @@ describe("the notes mapping-line fallback", () => {
 			sources: [{ id: "src_abc", filePath: "/vault/learn vim.md", importedAt: "2026-09-22T00:00:00.000Z" }],
 		});
 		assert.deepEqual(graphSessionPropositions(deps, "src_abc"), [
-			{ nodeId: "a", name: "Alpha", understanding: "solid", evaluatedAt: "2026-09-22T00:00:00.000Z" },
-			{ nodeId: "b", name: "Beta", understanding: null, evaluatedAt: null },
+			{ nodeId: "a", name: "Alpha" },
+			{ nodeId: "b", name: "Beta" },
 		]);
 	});
 });
@@ -272,34 +266,16 @@ describe("graphSessionIndex (the prober's session list)", () => {
 });
 
 describe("graphSessionPropositions (the per-session view)", () => {
-	it("birth propositions with the latest extractor evaluation AND that event's own timestamp", () => {
+	it("birth propositions — a pure list, no evaluations (2026-09-27 cleanup)", () => {
 		const nodes = [
 			node("a", "Alpha", [pt("chat1")]),
 			node("b", "Beta", [pt("chat1")]),
 			node("c", "Gamma", [pt("chat2")]), // born elsewhere — never listed under chat1
 		];
-		const events: LedgerEvent[] = [
-			{ nodeId: "a", kind: "observation", chatId: "chat1", at: "2026-09-20T00:00:00.000Z", note: "shaky", ref: "obs:p1" },
-			// A LATER evaluation supersedes the earlier one for (a, chat1).
-			{ nodeId: "a", kind: "observation", chatId: "chat1", at: "2026-09-21T00:00:00.000Z", note: "solid", ref: "obs:p2" },
-			// Quiz evidence (owner ruling 2026-09-23): recorded in the ledger
-			// but it NEVER moves the evaluation date.
-			{ nodeId: "a", kind: "correct", chatId: "chat1", at: "2026-09-22T00:00:00.000Z", note: "got it" },
-			// Another session's evaluation of the same node is not ours.
-			{ nodeId: "a", kind: "observation", chatId: "chat2", at: "2026-09-23T00:00:00.000Z", note: "resisted" },
-			// Same-at events: ledger order breaks the tie (the snapshot's rule).
-			{ nodeId: "b", kind: "observation", chatId: "chat1", at: "2026-09-20T00:00:00.000Z", note: "accepted", ref: "obs:p3" },
-			{ nodeId: "b", kind: "observation", chatId: "chat1", at: "2026-09-20T00:00:00.000Z", note: "not yet engaged", ref: "obs:p4" },
-		];
-		const deps = fakeStores(nodes, { events });
+		const deps = fakeStores(nodes);
 		assert.deepEqual(graphSessionPropositions(deps, "chat1"), [
-			{ nodeId: "a", name: "Alpha", understanding: "solid", evaluatedAt: "2026-09-21T00:00:00.000Z" },
-			{ nodeId: "b", name: "Beta", understanding: "not yet engaged", evaluatedAt: "2026-09-20T00:00:00.000Z" },
-		]);
-		// A node the session never evaluated shows nulls, never a guess.
-		const fresh = fakeStores([node("x", "X", [pt("chat1")])], { events });
-		assert.deepEqual(graphSessionPropositions(fresh, "chat1"), [
-			{ nodeId: "x", name: "X", understanding: null, evaluatedAt: null },
+			{ nodeId: "a", name: "Alpha" },
+			{ nodeId: "b", name: "Beta" },
 		]);
 	});
 });

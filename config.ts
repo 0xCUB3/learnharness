@@ -58,7 +58,6 @@ export type ModelRole =
 export const LEDGER_FILES = {
 	nodes: path.join(PATHS.graph, "nodes.jsonl"),
 	edges: path.join(PATHS.graph, "edges.jsonl"),
-	events: path.join(PATHS.graph, "events.jsonl"),
 	mappings: path.join(PATHS.graph, "mappings.jsonl"),
 	sessions: path.join(PATHS.graph, "sessions.jsonl"),
 	/** Per-message extraction coverage (contracts/graph.ts CoverageEntry;

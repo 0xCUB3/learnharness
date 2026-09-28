@@ -33,7 +33,7 @@ async function main() {
 		getChunkTokens: () => effectiveSettings().graph.extractionChunkTokens,
 	});
 	const queue = [...files];
-	const totals = { nodes: 0, edges: 0, events: 0, failed: 0 };
+	const totals = { nodes: 0, edges: 0, failed: 0 };
 	const workers = Array.from({ length: Math.min(limit, files.length) }, async () => {
 		for (;;) {
 			const file = queue.shift();
@@ -44,9 +44,8 @@ async function main() {
 				const stats = await pipeline.importNotes({ filePath, text: fs.readFileSync(filePath, "utf-8") });
 				totals.nodes += stats.nodes;
 				totals.edges += stats.edges;
-				totals.events += stats.events;
 				console.log(
-					`[import-notes] ${file}: ${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events in ${((Date.now() - t0) / 1000).toFixed(1)}s`,
+					`[import-notes] ${file}: ${stats.nodes} nodes, ${stats.edges} edges in ${((Date.now() - t0) / 1000).toFixed(1)}s`,
 				);
 			} catch (err) {
 				totals.failed++;
@@ -58,8 +57,8 @@ async function main() {
 
 	const graph = getGraph(stores.graphStore);
 	console.log(
-		`[import-notes] done: +${totals.nodes} nodes, +${totals.edges} edges, +${totals.events} events, ${totals.failed} failed — ` +
-			`graph now ${graph.nodes.length} nodes, ${graph.edges.length} edges, ${graph.events.length} events`,
+		`[import-notes] done: +${totals.nodes} nodes, +${totals.edges} edges, ${totals.failed} failed — ` +
+			`graph now ${graph.nodes.length} nodes, ${graph.edges.length} edges`,
 	);
 }
 

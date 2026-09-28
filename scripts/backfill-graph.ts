@@ -27,7 +27,7 @@ async function main() {
 			const stats = await pipeline.runExtraction(chat.id);
 			console.log(
 				`[backfill] ${chat.id} (${chat.title.slice(0, 40)}): ` +
-					`${stats.nodes} nodes, ${stats.edges} edges, ${stats.events} events in ${((Date.now() - t0) / 1000).toFixed(1)}s`,
+					`${stats.nodes} nodes, ${stats.edges} edges in ${((Date.now() - t0) / 1000).toFixed(1)}s`,
 			);
 		} catch (err) {
 			console.error(`[backfill] ${chat.id} FAILED:`, err);
@@ -35,7 +35,7 @@ async function main() {
 	}
 	const graph = getGraph(graphStore);
 	console.log(
-		`[backfill] done: ${graph.nodes.length} nodes, ${graph.edges.length} edges, ${graph.events.length} events`,
+		`[backfill] done: ${graph.nodes.length} nodes, ${graph.edges.length} edges`,
 	);
 }
 

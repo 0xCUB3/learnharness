@@ -2,45 +2,45 @@
  * The knowledge graph: merger (the deterministic final stage of the
  * extraction pipeline — vision §1 construction) + derivation (reads).
  *
- * The extraction pipeline is the SOLE graph writer, tree-blind and post-hoc:
+ * The extraction pipeline is the SOLE graph writer, tree-blind and post-hoc
+ * (2026-09-27 cleanup — clear separation of work):
  *
- *   extractor (LLM)  → SessionFindings: propositions, edges, quiz
- *                      attribution, per-proposition understanding notes —
- *                      each with verbatim evidence, from the transcript ALONE
- *   auditor (LLM)    → AuditResult: the verified subset, with the IDENTITY
- *                      VERDICT per proposition (linkTo an existing node, or
- *                      create), and the drops for the log
+ *   extractor (LLM)  → SessionFindings: the raw reasoning chains —
+ *                      propositions (lonely relevant ones included) and
+ *                      follows/supports edges, each with verbatim evidence,
+ *                      from the source ALONE (whole session as markdown,
+ *                      or raw notes). Fully trusted: no stage re-checks it.
+ *   auditor (LLM)    → AuditResult: identity verdicts (linkTo an existing
+ *                      node, or create) via graph-exploration tools, plus
+ *                      any BRIDGING edges it draws between existing graph
+ *                      nodes and the new propositions. Never sees the
+ *                      source; never drops.
  *   merger (HERE)    → mergeFindings(): deterministic ledger appends
  *
  * The merger is deliberately the ONLY stage that touches the ledgers, and it
  * is pure code: the LLM supplies exactly the judgment calls (what the
- * propositions are, what follows/supports what, which proposition a quiz
- * tested, whether a proposition IS an existing node), while event
- * kinds/timestamps/refs/provenance — anything the model could silently
- * mis-copy — are rebuilt deterministically from the transcript's tool parts
- * and the message ids in the findings. Idempotent + incremental: refs are
- * chat-scoped idempotency keys, edges dedupe by (from,to,type)-already-
- * asserted-by-this-chat, mapping lines dedupe by (chat, sourceId), and
- * sessions.jsonl checkpoints which chats have been extracted (never the
- * same turns twice).
+ * propositions are, what follows/supports what, whether a proposition IS an
+ * existing node), while timestamps/provenance — anything the model could
+ * silently mis-copy — are rebuilt deterministically. Idempotent +
+ * incremental: edges dedupe by (from,to,type)-already-asserted-by-this-chat,
+ * mapping lines dedupe by (chat, sourceId), and coverage entries /
+ * sessions.jsonl checkpoints which messages and chats have been extracted
+ * (never the same turns twice). No events: the events ledger is GONE
+ * (2026-09-27) — the graph carries propositions + edges, nothing else.
  *
- * Identity across re-encounters is the AUDITOR's judgment (link-or-create),
- * not string matching: the conservative v1 exact-statement merge was
- * replaced by the 2026-09-02 redesign. A re-extracted session's
- * propositions link to the existing nodes; the link appends a node line
- * whose phrasings join `aliases` and whose provenance unions (getGraph
- * merges lines by id).
+ * Identity across re-encounters is the AUDITOR's judgment (link-or-create
+ * with an equivalence bias — paraphrases merge), not string matching.
+ * A re-extracted session's propositions link to the existing nodes; the
+ * link appends a node line whose phrasings join `aliases` and whose
+ * provenance unions (getGraph merges lines by id).
  *
- * Derivation below (getGraph / deriveNodeStates / graphSnapshot) is reads
- * only — everything is recomputed from the ledgers. Every function takes
- * the storage ports (core/ports.ts) as explicit parameters — pure core, no
- * adapter imports; the composition root (src/server/stores.ts) wires the fs
- * adapters in.
+ * Derivation below (getGraph / graphSnapshot) is reads only — everything
+ * is recomputed from the ledgers. Every function takes the storage ports
+ * (core/ports.ts) as explicit parameters — pure core, no adapter imports;
+ * the composition root (src/server/stores.ts) wires the fs adapters in.
  */
 
 import { randomBytes } from "node:crypto";
-import type { LhMessage } from "./native-messages.ts";
-import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { CoverageEntry } from "./contracts/graph.ts";
 import type {
 	AuditResult,
@@ -50,13 +50,9 @@ import type {
 	GraphNode,
 	ProvenancePoint,
 	GraphSnapshot,
-	LedgerEvent,
-	LedgerEventKind,
-	UnderstandingLevel,
 } from "./contracts.ts";
 import { MIN_CLUSTER_SIZE } from "./clusters.ts";
 import { birthMappingIndex, birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
-import type { QuestionAnswerData } from "./question-core.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
 /** The storage ports every graph operation needs, passed explicitly. */
@@ -71,71 +67,22 @@ function newGraphNodeId(): string {
 }
 
 /** What one merge run merges FROM (the caller supplies it — the merger never
- *  reads the chat store): a session's transcript + its coverage checkpoint,
- *  or — for the format-agnostic notes front door (2026-09-13) — `messages:
- *  null`: raw notes carry no tool parts, so no quiz events are rebuilt (quiz
- *  outcomes inside notes surface only through the extractor's understanding
- *  observations), and the whole-file checkpoint stamps the import.
+ *  reads the chat store): the coverage checkpoint for a session batch, or —
+ *  for the format-agnostic notes front door (2026-09-13) — no coverage at
+ *  all: the whole-file checkpoint stamps the import.
  *
  *  Coverage (vision-extraction-coverage.md, settled 2026-09-15): a chat merge
  *  passes the BATCH it extracted — the caller computed the fingerprints
- *  before the run, from the same snapshot the merger sees — and step 4
- *  appends one CoverageEntry per message on success ("covered" means
- *  exactly this merge happened). `batchTag` prefixes the observation refs so
- *  re-runs of the SAME batch dedupe while a re-opened (mutated) message's
- *  fresh understanding observations land as new events; the notes path
- *  passes neither and keeps the whole-file checkpoint. */
+ *  before the run, from the same snapshot the merger sees — and the final
+ *  step appends one CoverageEntry per message on success ("covered" means
+ *  exactly this merge happened). The notes path passes neither and keeps
+ *  the whole-file checkpoint. */
 export interface MergeSource {
-	messages: LhMessage[] | null;
 	foldedAt: string;
-	/** The batch being merged (chat path): one entry per message in
-	 *  `messages`, same order — undefined (notes path / coverage-less
-	 *  callers) → the legacy whole-chat checkpoint is written instead. */
+	/** The batch being merged (chat path): one entry per message in the
+	 *  extracted batch — undefined (notes path / coverage-less callers) →
+	 *  the legacy whole-chat checkpoint is written instead. */
 	coverage?: CoverageEntry[];
-	/** The batch's deterministic tag (core/coverage.ts batchTag) — obs refs. */
-	batchTag?: string;
-}
-
-// ─── transcript scanning (shared by the merger + trigger) ─────────────────────
-
-/** A flattened, order-preserving view of every tool call (+ its result
- *  state) in a native transcript. Wave D: the pairing is native — calls
- *  come from assistant content blocks; a result map built from the
- *  toolResult messages carries the outcome (a dangling call is
- *  input-available, an error result is output-error). */
-interface ToolPartView {
-	name: string;
-	toolCallId: string;
-	state: string;
-	input: unknown;
-	output: unknown;
-}
-
-function toolParts(messages: LhMessage[]): ToolPartView[] {
-	const results = new Map<string, ToolResultMessage>();
-	for (const m of messages) {
-		if ((m as { role?: string }).role === "toolResult") {
-			results.set((m as ToolResultMessage).toolCallId, m as ToolResultMessage);
-		}
-	}
-	const out: ToolPartView[] = [];
-	for (const m of messages) {
-		if ((m as { role?: string }).role !== "assistant") continue;
-		const content = (m as { content?: unknown }).content;
-		if (!Array.isArray(content)) continue;
-		for (const block of content as Array<{ type?: string; id?: string; name?: string; arguments?: unknown }>) {
-			if (block.type !== "toolCall" || typeof block.id !== "string") continue;
-			const result = results.get(block.id);
-			out.push({
-				name: block.name ?? "",
-				toolCallId: block.id,
-				state: result ? (result.isError ? "output-error" : "output-available") : "input-available",
-				input: block.arguments,
-				output: result && !result.isError ? result.details : undefined,
-			});
-		}
-	}
-	return out;
 }
 
 /** (chatId, messageIds) → provenance points; order-preserving, deduped. */
@@ -167,21 +114,14 @@ const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
  * Mapping lines record each verdict: one per (chat, sourceId). Idempotent:
  * a proposition id already mapped for this chat reuses its resolution.
  *
- * Events are rebuilt deterministically from the transcript: quiz outcomes
- * (correct / miss / dont-know; kinds + timestamps + refs from the tool
- * parts, nodeId from the extractor's attribution through this run's
- * mapping) plus one observation event per proposition carrying an
- * understanding note (ref `obs:<sourceId>`). No taught events, ever.
- *
  * `chatId` is the run's source key: a real chat, or a notes source id
  * ("src_…") for the format-agnostic import path — same ledgers, same
- * idempotency, one graph. The `source` parameter carries the transcript
- * being merged (null messages = raw notes: no quiz events) and the
- * checkpoint stamp; the merger itself is chat-store-free.
+ * idempotency, one graph. The `source` parameter carries the checkpoint
+ * stamp; the merger itself is chat-store-free.
  */
 export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDeps, source: MergeSource): EmissionStats {
 	const { graphStore: ledgers } = deps;
-	const stats: EmissionStats = { nodes: 0, edges: 0, events: 0 };
+	const stats: EmissionStats = { nodes: 0, edges: 0 };
 
 	// 1. Resolution: this run's propositions → graph node ids. Existing
 	//    mapping lines for THIS chat are loaded first — the audit trail doubles
@@ -238,63 +178,41 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 		}
 	}
 
-	// 2. Edges. Resolve endpoints through the mapping; dedupe by
-	//    (from,to,type) already asserted by THIS chat (an existing assertion
-	//    by another chat stays untouched — provenance unions at read time).
+	// 2. Edges. Resolve endpoints through the mapping — with BRIDGING
+	//    (2026-09-27): an endpoint the extractor never proposed but that
+	//    names an EXISTING graph node is the auditor drawing a connection
+	//    between the graph it explored and this batch's propositions. Such
+	//    edges carry chat-scoped provenance with NO message anchor (nothing
+	//    in the transcript asserts them — the auditor is the asserter);
+	//    transcript-articulated edges keep message-granular provenance.
+	//    Dedupe by (from,to,type) already asserted by THIS chat (an existing
+	//    assertion by another chat stays untouched — provenance unions at
+	//    read time).
 	const assertedByChat = new Set<string>();
 	for (const line of ledgers.readEdges()) {
 		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
 		if (line.provenance.some((pt) => pt.chatId === chatId)) assertedByChat.add(key);
 	}
 	for (const edge of audit.edges) {
-		const from = mapping.get(edge.from);
-		const to = mapping.get(edge.to);
-		if (!from || !to || from === to) continue; // unmapped endpoint — skip
+		const resolve = (endpoint: string): string | undefined =>
+			mapping.get(endpoint) ?? (existingIds.has(endpoint) ? endpoint : undefined);
+		const from = resolve(edge.from);
+		const to = resolve(edge.to);
+		if (!from || !to || from === to) continue; // unresolvable endpoint — skip
+		const bridged = !mapping.has(edge.from) || !mapping.has(edge.to);
 		const key = `${from}\u0000${to}\u0000${edge.type}`;
 		if (assertedByChat.has(key)) continue;
-		ledgers.appendEdge({ from, to, type: edge.type, provenance: pointsOf(chatId, edge.messages) });
+		ledgers.appendEdge({
+			from,
+			to,
+			type: edge.type,
+			provenance: bridged ? [{ chatId, messageId: "" }] : pointsOf(chatId, edge.messages),
+		});
 		assertedByChat.add(key);
 		stats.edges++;
 	}
 
-	// 3. Events, rebuilt deterministically in transcript order. Refs are
-	//    chat-scoped idempotency keys (quiz toolCallId, obs:<sourceId>) —
-	//    a ref already in the ledger means this evidence was extracted before.
-	const seenRefs = new Set<string>();
-	for (const event of ledgers.readEvents()) {
-		if (event.chatId === chatId && event.ref) seenRefs.add(event.ref);
-	}
-	for (const part of source.messages ? toolParts(source.messages) : []) {
-		if (part.name !== "quiz" || part.state !== "output-available") continue;
-		const event = quizEvent(part, chatId, audit, mapping, now);
-		if (event?.ref !== undefined && !seenRefs.has(event.ref)) {
-			ledgers.appendEvent(event);
-			seenRefs.add(event.ref);
-			stats.events++;
-		}
-	}
-	// Understanding observations: one per proposition carrying a note,
-	// resolved to the node the verdict mapped it to. Refs carry the batch
-	// tag when there is one: run-local source ids ("p1"…) shift position
-	// between runs, so a bare obs:p1 could never both dedupe a re-run of
-	// the same batch AND let a re-opened message's fresh level through.
-	for (const p of audit.propositions) {
-		if (p.understanding === undefined || p.understanding.length === 0) continue;
-		const ref = source.batchTag !== undefined ? `obs:${source.batchTag}:${p.id}` : `obs:${p.id}`;
-		if (seenRefs.has(ref)) continue;
-		ledgers.appendEvent({
-			nodeId: mapping.get(p.id) ?? null,
-			kind: "observation",
-			chatId,
-			at: now,
-			ref,
-			note: p.understanding,
-		});
-		seenRefs.add(ref);
-		stats.events++;
-	}
-
-	// 4. Checkpoint — THE COVERAGE DISCIPLINE (vision-extraction-coverage.md):
+	// 3. Checkpoint — THE COVERAGE DISCIPLINE (vision-extraction-coverage.md):
 	//    only now, after every append succeeded, is the batch covered. The
 	//    chat path appends one CoverageEntry per message (per-batch atomic —
 	//    an abort or failure mid-run leaves earlier batches covered, this
@@ -308,50 +226,11 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 	return stats;
 }
 
-/** Build the ledger event for one answered quiz tool part (or null to skip).
- *  Deterministic in everything except the attribution-supplied nodeId. */
-function quizEvent(
-	part: ToolPartView,
-	chatId: string,
-	audit: AuditResult,
-	mapping: Map<string, string>,
-	now: string,
-): LedgerEvent | null {
-	const out = part.output;
-	if (typeof out !== "object" || out === null) return null;
-	const answer = out as Partial<QuestionAnswerData>;
-	if (answer.kind !== "quiz") return null; // ask questions are not graded
-	if (answer.dismissed === true) return null; // no answer — no evidence
-
-	let kind: LedgerEventKind;
-	if (answer.dontKnow === true) kind = "dont-know";
-	else if (answer.correct === true) kind = "correct";
-	else kind = "miss";
-
-	// Tree-blind: EVERY quiz attributes through the extractor's judgment —
-	// the vision's retroactive attribution, with no tree mapping to lean on.
-	const attributedId = audit.attribution.quiz[part.toolCallId];
-	const nodeId = attributedId ? (mapping.get(attributedId) ?? null) : null;
-
-	const event: LedgerEvent = {
-		nodeId,
-		kind,
-		chatId,
-		at: typeof answer.answeredAt === "string" ? answer.answeredAt : now,
-		ref: part.toolCallId,
-	};
-	if (typeof answer.note === "string" && answer.note.length > 0) event.note = answer.note;
-	// The question text is the attribution input for unattributed quizzes.
-	if (nodeId === null && typeof answer.questionText === "string") event.question = answer.questionText;
-	return event;
-}
-
 // ─── derivation (reads only — everything below is recomputable) ─────────────
 
 export interface DerivedGraph {
 	nodes: GraphNode[];
 	edges: GraphEdge[];
-	events: LedgerEvent[];
 }
 
 /**
@@ -396,14 +275,14 @@ export function getGraph(graphStore: GraphStore): DerivedGraph {
 			merged.push(edge);
 		}
 	}
-	return { nodes: [...byId.values()], edges: merged, events: graphStore.readEvents() };
+	return { nodes: [...byId.values()], edges: merged };
 }
 
 // ─── the /api/graph payload ──────────────────────────────────────────────────
 
 /** Everything the home graph view needs, in one fetch (shape: contracts). */
 export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
-	const { nodes, edges, events } = getGraph(deps.graphStore);
+	const { nodes, edges } = getGraph(deps.graphStore);
 
 	const nodeChats = new Map<string, Set<string>>();
 	const touch = (nodeId: string, chatId: string): void => {
@@ -423,9 +302,6 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 			touch(edge.from, pt.chatId);
 			touch(edge.to, pt.chatId);
 		}
-	}
-	for (const event of events) {
-		if (event.nodeId !== null) touch(event.nodeId, event.chatId);
 	}
 
 	// Labels for every source the graph can point back at: real chats
@@ -451,27 +327,6 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 	for (const [nodeId, chats] of nodeChats) {
 		const ids = [...chats].filter((id) => sessions[id] !== undefined || fileSources[id] !== undefined);
 		if (ids.length > 0) nodeSessions[nodeId] = ids;
-	}
-
-	// Understanding observations per (node, chat) — the extractor's
-	// session-relative note (latest wins within a chat). Read-time join for
-	// the detail card: the confidence history next to the session list.
-	const nodeObservations: Record<string, Record<string, string>> = {};
-	const latestObs = new Map<string, { at: string; note: string; index: number }>();
-	events.forEach((event, index) => {
-		if (event.kind !== "observation" || event.nodeId === null) return;
-		if (!event.note) return;
-		const key = `${event.nodeId}\u0000${event.chatId}`;
-		const current = latestObs.get(key);
-		if (!current || event.at > current.at || (event.at === current.at && index > current.index)) {
-			latestObs.set(key, { at: event.at, note: event.note, index });
-		}
-	});
-	for (const [key, { note }] of latestObs) {
-		const sep = key.indexOf("\u0000");
-		const nodeId = key.slice(0, sep);
-		const chatId = key.slice(sep + 1);
-		(nodeObservations[nodeId] ??= {})[chatId] = note;
 	}
 
 	// BIRTH-SESSION CLUSTERS (wave 7, owner-locked 2026-09-23): embeddings
@@ -502,7 +357,6 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		sessions,
 		fileSources,
 		nodeSessions,
-		nodeObservations,
 		clusters,
 		...(Object.keys(positions).length > 0 ? { positions } : {}),
 	};
@@ -577,48 +431,22 @@ export function graphSessionIndex(deps: GraphDeps): GraphSessionEntry[] {
 	);
 }
 
-/** One birth proposition of one session, for the prober's per-session
- *  view. `understanding` is the extractor's latest observation for
- *  (node, session) — the named-word scale (solid/shaky/accepted/resisted/
- *  not yet engaged) — and `evaluatedAt` is THAT event's own timestamp
- *  (owner ruling 2026-09-23: quiz outcomes are evidence in the ledger,
- *  but they never move the evaluation date — the level's event does). */
+/** One birth proposition of one session — WHAT WAS COVERED there (2026-09-27
+ *  cleanup: no understanding levels; assessment is practice-module
+ *  territory and nothing writes it until that module exists). */
 export interface GraphSessionProposition {
 	nodeId: string;
 	/** The compact handle — the same name the canvas shows. */
 	name: string;
-	understanding: UnderstandingLevel | null;
-	/** The `at` of the event that minted `understanding`; null when the
-	 *  session never evaluated this proposition. */
-	evaluatedAt: string | null;
 }
 
-/** The propositions BORN in one session, with the session's latest
- *  understanding of each. Latest observation wins by `at`, then by
- *  ledger order (the same tie rule the snapshot's nodeObservations
- *  uses). Members sorted by node id — deterministic. */
+/** The propositions BORN in one session — what that session first
+ *  articulated. Members sorted by node id — deterministic. */
 export function graphSessionPropositions(deps: GraphDeps, sessionId: string): GraphSessionProposition[] {
 	const mappingFallback = birthMappingIndex(deps.graphStore.readMappings());
 	const born = getGraph(deps.graphStore).nodes.filter((node) => birthSessionOf(node, mappingFallback) === sessionId);
-	const latest = new Map<string, { at: string; note: string; index: number }>();
-	deps.graphStore.readEvents().forEach((event, index) => {
-		if (event.kind !== "observation" || event.nodeId === null || event.chatId !== sessionId) return;
-		if (!event.note) return;
-		const current = latest.get(event.nodeId);
-		if (!current || event.at > current.at || (event.at === current.at && index > current.index)) {
-			latest.set(event.nodeId, { at: event.at, note: event.note, index });
-		}
-	});
 	return born
-		.map((node) => {
-			const observation = latest.get(node.id);
-			return {
-				nodeId: node.id,
-				name: node.name,
-				understanding: (observation?.note as UnderstandingLevel | undefined) ?? null,
-				evaluatedAt: observation?.at ?? null,
-			};
-		})
+		.map((node) => ({ nodeId: node.id, name: node.name }))
 		.sort((a, b) => (a.nodeId < b.nodeId ? -1 : 1));
 }
 

@@ -243,7 +243,7 @@ test("appendExtractionUsage: appends, idempotent per startedAt, not in list payl
 		startedAt,
 		at: "2026-09-09T00:00:00Z",
 		durationMs: 42_000,
-		stats: { nodes: 1, edges: 2, events: 3 },
+		stats: { nodes: 1, edges: 2 },
 		stages: {
 			extractor: { model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 100, outputTokens: 10 })] },
 			auditor: { model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 50, outputTokens: 5 })] },
@@ -280,7 +280,7 @@ test("appendSourceUsage: appends to the source record, idempotent per startedAt,
 			startedAt,
 			at: "2026-09-13T00:00:00Z",
 			durationMs: 42_000,
-			stats: { nodes: 1, edges: 2, events: 3 },
+			stats: { nodes: 1, edges: 2 },
 			stages: {
 				extractor: { model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 100, outputTokens: 10 })] },
 				auditor: { model: "openrouter:z-ai/glm-5.3-flash", steps: [call({ inputTokens: 50, outputTokens: 5 })] },

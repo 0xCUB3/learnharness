@@ -1,19 +1,21 @@
-// THE PROBER'S GRAPH TOOLS (wave 7) — pinned behaviors:
+// THE PROBER'S GRAPH TOOLS (wave 7; understanding levels removed
+// 2026-09-27) — pinned behaviors:
 // 1. REGISTRATION: the factory registers list_sessions/list_propositions
 //    on the prober ONLY when the composition root passes a graphStore
 //    (the graphToolsEnabled gate lives server-side; absent store = closed
 //    gate — the factory must not reach for settings itself).
-// 2. OUTPUT: names + levels + dating only — the owner ruling bars
-//    statement text and session contents from the prober's view of the map.
+// 2. OUTPUT: names only — the owner ruling bars statement text and session
+//    contents from the prober's view of the map.
 // 3. HONESTY: empty graph, unknown session id — the tools answer in
 //    their own voice, never throw, never guess.
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createProberTools } from "../src/agent/tools.ts";
+import { auditorGraphTools } from "../src/agent/tools/graph.ts";
 import type { ChatStore, GraphStore, JobStore } from "../src/core/ports.ts";
 import type { ChatSummary } from "../src/core/contracts/chat.ts";
-import type { GraphEdge, GraphNode, LedgerEvent } from "../src/core/contracts/graph.ts";
+import type { GraphEdge, GraphNode } from "../src/core/contracts/graph.ts";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -31,27 +33,18 @@ const node = (
 	provenance,
 });
 
-const observation = (
-	nodeId: string,
-	chatId: string,
-	note: string,
-	at: string,
-): LedgerEvent =>
-	({ kind: "observation", nodeId, chatId, note, at }) as unknown as LedgerEvent;
-
 function fakeStores(
 	nodes: GraphNode[],
 	over: {
-		events?: LedgerEvent[];
 		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt">>;
+		mappings?: Array<{ chatId: string; sourceId: string; graphNodeId: string }>;
 	} = {},
 ): { chatStore: ChatStore; graphStore: GraphStore } {
 	const edges: GraphEdge[] = [];
 	const graphStore: GraphStore = {
 		readNodes: () => nodes,
 		readEdges: () => edges,
-		readEvents: () => over.events ?? [],
-		readMappings: () => [],
+		readMappings: () => over.mappings ?? [],
 		readCheckpoints: () => [],
 		readCoverage: () => [],
 		readSources: () => [],
@@ -134,7 +127,6 @@ describe("list_sessions", () => {
 						updatedAt: "2026-09-21T10:00:00.000Z",
 					},
 				],
-				events: [],
 			},
 		);
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
@@ -157,38 +149,28 @@ describe("list_sessions", () => {
 });
 
 describe("list_propositions", () => {
-	it("names + latest understanding + that evaluation's date — the latest event wins", async () => {
-		const { chatStore, graphStore } = fakeStores(
-			[node("n1", "Water cycle", [pt("c1")]), node("n2", "Evaporation", [pt("c1")])],
-			{
-				events: [
-					// The birth session's OWN evaluations only — a later
-					// session's observation must not leak in here.
-					observation("n1", "c1", "shaky", "2026-09-20T12:00:00.000Z"),
-					observation("n1", "c1", "solid", "2026-09-22T12:00:00.000Z"),
-					observation("n1", "c2", "resisted", "2026-09-23T12:00:00.000Z"),
-					observation("n2", "c1", "not yet engaged", "2026-09-21T12:00:00.000Z"),
-				],
-			},
-		);
+	it("names only — what the session covered (2026-09-27: no levels, no dating)", async () => {
+		const { chatStore, graphStore } = fakeStores([
+			node("n1", "Water cycle", [pt("c1")]),
+			node("n2", "Evaporation", [pt("c1")]),
+		]);
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
 		const out = (await tools.list_propositions!.execute!("tc", { session: "c1" })).details as string;
-		assert.match(out, /2 proposition\(s\) born in this session:/);
-		assert.match(out, /- Water cycle — solid \(as of 2026-09-22T12:00:00.000Z\)/);
-		assert.match(out, /- Evaporation — not yet engaged \(as of 2026-09-21T12:00:00.000Z\)/);
-		// Never the other session's word, never the statement text.
-		assert.ok(!out.includes("resisted"));
+		assert.match(out, /2 proposition\(s\) covered in this session:/);
+		assert.match(out, /- Water cycle/);
+		assert.match(out, /- Evaporation/);
+		// The owner ruling: no levels, no dating, never the statement text.
+		assert.ok(!out.includes("as of"));
+		assert.ok(!out.includes("solid"));
 		assert.ok(!out.includes("statement of"));
 	});
 
-	it("a proposition with no observation reads 'never evaluated', undated", async () => {
-		const { chatStore, graphStore } = fakeStores([node("n1", "Water cycle", [pt("c1")])], {
-			events: [],
-		});
+	it("no evaluation machinery at all — the covered list is the whole output", async () => {
+		const { chatStore, graphStore } = fakeStores([node("n1", "Water cycle", [pt("c1")])]);
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
 		const out = (await tools.list_propositions!.execute!("tc", { session: "c1" })).details as string;
-		assert.match(out, /- Water cycle — never evaluated/);
-		assert.ok(!out.includes("(as of"));
+		assert.match(out, /- Water cycle/);
+		assert.ok(!out.includes("never evaluated"));
 	});
 
 	it("an unknown session id — honest redirect, not a throw", async () => {
@@ -196,5 +178,58 @@ describe("list_propositions", () => {
 		const tools = createProberTools({ ...baseCtx, chatStore, graphStore });
 		const out = (await tools.list_propositions!.execute!("tc", { session: "no-such" })).details as string;
 		assert.equal(out, 'No propositions born in session "no-such". Call list_sessions for the current ids.');
+	});
+});
+
+// ─── the auditor's toolset (2026-09-27 relink) ───────────────────────────────
+
+describe("auditor graph tools", () => {
+	const nodes = [
+		{ ...node("n1", "Will to power", [pt("c1")]), statement: "The will to power is Nietzsche's central drive.", aliases: ["power drive"] },
+		{ ...node("n2", "Eternal recurrence", [pt("c1")]), statement: "Eternal recurrence is the thought experiment of living again.", aliases: [] },
+	];
+	const { chatStore, graphStore } = fakeStores(nodes);
+
+	it("find: glob over names + statements + aliases, returning id + name + statement", async () => {
+		const tools = auditorGraphTools({ chatStore, graphStore });
+		const out = (await tools.find!.execute!("tc", { query: "*will to power*" })).details as string;
+		assert.match(out, /1 match\(es\):/);
+		assert.match(out, /- n1 :: Will to power/);
+		assert.match(out, /statement: The will to power is Nietzsche's central drive\./);
+		// Statements and aliases hit too — and a bare term gets implicit stars.
+		const byStatement = (await tools.find!.execute!("tc", { query: "living again" })).details as string;
+		assert.match(byStatement, /n2 :: Eternal recurrence/);
+		const byAlias = (await tools.find!.execute!("tc", { query: "power drive" })).details as string;
+		assert.match(byAlias, /n1/);
+		const miss = (await tools.find!.execute!("tc", { query: "*nothing matches this*" })).details as string;
+		assert.equal(miss, 'No existing proposition matches "*nothing matches this*".');
+	});
+
+	it("list_sessions: names, kinds, counts, ids — NO timestamps (identity work needs content, not chronology)", async () => {
+		const { chatStore: cs, graphStore: gs } = fakeStores(nodes, {
+			chats: [{ id: "c1", title: "Nietzsche seminar", createdAt: "2026-09-20T10:00:00.000Z", updatedAt: "2026-09-21T10:00:00.000Z" }],
+		});
+		const tools = auditorGraphTools({ chatStore: cs, graphStore: gs });
+		const out = (await tools.list_sessions!.execute!("tc", {})).details as string;
+		assert.match(out, /1 session\(s\):/);
+		assert.match(out, /Nietzsche seminar \(chat, 2 propositions\) — id: c1/);
+		assert.ok(!out.includes("2026-09-20"), "no dates in the auditor's view");
+	});
+
+	it("list_propositions: FULL statement text (identity work), no dates", async () => {
+		const { chatStore: cs, graphStore: gs } = fakeStores(nodes, {
+			mappings: [
+				{ chatId: "c1", sourceId: "p1", graphNodeId: "n1" },
+				{ chatId: "c1", sourceId: "p2", graphNodeId: "n2" },
+			],
+		});
+		const tools = auditorGraphTools({ chatStore: cs, graphStore: gs });
+		const out = (await tools.list_propositions!.execute!("tc", { session: "c1" })).details as string;
+		assert.match(out, /2 proposition\(s\) born in this session:/);
+		assert.match(out, /- n1 :: Will to power/);
+		assert.match(out, /statement: The will to power is Nietzsche's central drive\./);
+		assert.ok(!out.includes("2026-09"), "no dates in the auditor's view");
+		const miss = (await tools.list_propositions!.execute!("tc", { session: "no-such" })).details as string;
+		assert.equal(miss, 'No propositions born in session "no-such". Call list_sessions for the current ids.');
 	});
 });

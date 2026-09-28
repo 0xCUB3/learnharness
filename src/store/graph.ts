@@ -1,5 +1,5 @@
 /**
- * GraphStore — the fs JSONL adapter: five append-only ledgers at
+ * GraphStore — the fs JSONL adapter: four append-only ledgers at
  * config.LEDGER_FILES (contracts.ts "v1 emission").
  *   nodes.jsonl     GraphNode        — one line per node write: the FIRST
  *                                      line for an id defines it; a later
@@ -10,7 +10,6 @@
  *   edges.jsonl    GraphEdge        — one line per edge ASSERTION (a second
  *                                      session asserting the same (from,to,type)
  *                                      appends another line; reads merge)
- *   events.jsonl    LedgerEvent      — quiz outcomes + understanding observations
  *   mappings.jsonl  NodeMapping      — the session→graph identity map:
  *                                      (chatId, sourceId) → graphNodeId
  *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
@@ -34,8 +33,6 @@ import type {
 	GraphEdge,
 	GraphNode,
 	ExtractionRunUsage,
-	LedgerEvent,
-	LedgerEventKind,
 	NotesSource,
 	NodeMapping,
 	Position,
@@ -110,15 +107,6 @@ const isGraphEdge = (v: unknown): v is GraphEdge =>
 	Array.isArray(v.provenance) &&
 	v.provenance.every(isProvenancePoint);
 
-const EVENT_KINDS: readonly LedgerEventKind[] = ["correct", "miss", "dont-know", "observation"];
-
-const isLedgerEvent = (v: unknown): v is LedgerEvent =>
-	isRecord(v) &&
-	(v.nodeId === null || isString(v.nodeId)) &&
-	(EVENT_KINDS as readonly string[]).includes(v.kind as string) &&
-	isString(v.chatId) &&
-	isString(v.at);
-
 const isNodeMapping = (v: unknown): v is NodeMapping =>
 	isRecord(v) && isString(v.chatId) && isString(v.sourceId) && isString(v.graphNodeId);
 
@@ -147,13 +135,6 @@ export const graphStore: GraphStore = {
 	},
 	readEdges(): GraphEdge[] {
 		return readValid(LEDGER_FILES.edges, isGraphEdge);
-	},
-
-	appendEvent(event: LedgerEvent): void {
-		appendLine(LEDGER_FILES.events, event);
-	},
-	readEvents(): LedgerEvent[] {
-		return readValid(LEDGER_FILES.events, isLedgerEvent);
 	},
 
 	appendMapping(mapping: NodeMapping): void {
@@ -217,7 +198,6 @@ export const graphStore: GraphStore = {
 	rewriteLedgers(next: {
 		nodes?: GraphNode[];
 		edges?: GraphEdge[];
-		events?: LedgerEvent[];
 		mappings?: NodeMapping[];
 		coverage?: CoverageEntry[];
 		checkpoints?: SessionCheckpoint[];
@@ -225,7 +205,6 @@ export const graphStore: GraphStore = {
 		const files = {
 			nodes: LEDGER_FILES.nodes,
 			edges: LEDGER_FILES.edges,
-			events: LEDGER_FILES.events,
 			mappings: LEDGER_FILES.mappings,
 			coverage: LEDGER_FILES.coverage,
 			checkpoints: LEDGER_FILES.sessions,
@@ -324,6 +303,23 @@ function readSourceMap(): Record<string, NotesSource> {
 function writeSourceMap(map: Record<string, NotesSource>): void {
 	fs.mkdirSync(path.dirname(SOURCES_FILE), { recursive: true });
 	fs.writeFileSync(SOURCES_FILE, JSON.stringify(map, null, "\t"), "utf-8");
+}
+
+// ─── one-way migration: the events ledger is gone (2026-09-27) ────────────────
+// Quiz outcomes and understanding observations are no longer formalized in
+// the graph — the pipeline writes nodes + edges only. A stale events.jsonl
+// left by an earlier build is deleted once, here, at adapter load: dead
+// ledgers are exactly the confusion the cleanup removes (owner ruling).
+{
+	const legacyEvents = path.join(path.dirname(LEDGER_FILES.nodes), "events.jsonl");
+	try {
+		if (fs.existsSync(legacyEvents)) {
+			fs.rmSync(legacyEvents);
+			console.info(`[graph-store] purged legacy events ledger: ${legacyEvents}`);
+		}
+	} catch (err) {
+		console.warn(`[graph-store] could not purge legacy events ledger:`, err);
+	}
 }
 
 const isNotesSource = (v: unknown): v is NotesSource =>

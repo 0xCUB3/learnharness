@@ -5,10 +5,11 @@
  * 2026-09-02 redesign): every node is a TRUE proposition; edges are follows
  * (derivable) and supports (grounds without entailing); provenance is
  * message-granular; extraction is free-form and post-hoc, fully decoupled
- * from the session's plan tree; the event ledger records quiz outcomes plus
- * the extractor's per-proposition understanding observations. Anything not
- * yet decided (the state model, strength derivation, understanding
- * treatment, selection strategies) is deliberately NOT here — transitional
+ * from the session's plan tree. The graph is an extraction of the reasoning
+ * chains from all teaching sessions (and imported notes) — NOTHING else:
+ * no quiz outcomes, no understanding assessments (2026-09-27 cleanup —
+ * understanding becomes practice-module territory). Anything not
+ * yet decided (the state model, strength derivation, selection strategies) is deliberately NOT here — transitional
  * stubs carry the renderer until those land.
  *
  * Part of the domain-split contracts (src/core/contracts/): each domain file
@@ -31,13 +32,13 @@ export interface EmissionStats {
 	nodes: number;
 	/** New edge assertions appended. */
 	edges: number;
-	/** Ledger events rebuilt (quiz outcomes + observations). */
-	events: number;
 }
 
 /** One provenance point — message-granular (DECIDED 2026-09-02): nodes and
  *  edges record every (chat, message) where they came up, deep-linkable to
- *  the exact transcript point. */
+ *  the exact transcript point. Auditor-drawn bridging edges carry the chat
+ *  but NO message anchor (nothing in the transcript asserts them — the
+ *  auditor is the asserter); messageId is "" there. */
 export interface ProvenancePoint {
 	/** The chat this point anchors to — or a notes source id ("src_…"):
 	 *  imports carry no message anchors (provenance is the file itself,
@@ -50,11 +51,10 @@ export interface ProvenancePoint {
  *  (DECIDED 2026-09-13): personal notes in ARBITRARY formats run through the
  *  same extractor → auditor → merger pipeline, with the file itself as the
  *  provenance anchor. There is no chat: the detail card shows the file path
- *  as a STATIC entry (not a link), and understanding observations still
- *  apply (judged from the author's own voice in the notes). The run's usage
- *  log lives here, mirroring ChatRecord.extractions. Ids are "src_" + hash
- *  of the file path — deterministic, so re-importing the same file re-runs
- *  extraction against the same source id (mappings/events dedupe by it). */
+ *  as a STATIC entry (not a link). The run's usage log lives here,
+ *  mirroring ChatRecord.extractions. Ids are "src_" + hash of the file
+ *  path — deterministic, so re-importing the same file re-runs extraction
+ *  against the same source id (mappings dedupe by it). */
 export interface NotesSource {
 	id: string;
 	filePath: string;
@@ -150,38 +150,8 @@ export interface CoverageEntry {
 }
 
 /**
- * Event kinds (DECIDED 2026-09-02): quiz outcomes only — correct / miss /
- * dont-know — plus `observation`, the extractor's per-proposition
- * understanding note joining the ledger as a session-scoped observation
- * (named-word scale; treatment pending the state-model ideation). No
- * `taught` events at all; no misconception kind — a misconception is a
- * TRUE correction in the graph, and the wrongness lives here, in the
- * ledger, until the state model exists.
- */
-export type LedgerEventKind = "correct" | "miss" | "dont-know" | "observation";
-
-export interface LedgerEvent {
-	/** null = not yet attributed. */
-	nodeId: string | null;
-	kind: LedgerEventKind;
-	/** The chat that produced this evidence — or a notes source id
-	 *  ("src_…") for imported-notes observations. */
-	chatId: string;
-	at: string;
-	/** Idempotency key: the quiz part's toolCallId, or `obs:<sourceId>` for
-	 *  understanding observations — re-emission of the same chat must never
-	 *  double-record an event. */
-	ref?: string;
-	/** The learner's quiz note (diagnostic gold), or the understanding
-	 *  LEVEL word for observations — a session-relative judgment. */
-	note?: string;
-	/** The quiz question text, when nodeId is null (later attribution input). */
-	question?: string;
-}
-
-/**
  * Store format (src/store/graph.ts): JSONL ledgers at config.LEDGER_FILES
- * (nodes/edges/events/mappings/sessions), all append-only.
+ * (nodes/edges/mappings/sessions), all append-only.
  *
  *   nodes.jsonl    one line per node — the FIRST line for an id defines
  *                  name/statement/createdAt; later lines for the
@@ -198,26 +168,22 @@ export interface LedgerEvent {
  * (never extract the same turns twice).
  *
  * The EXTRACTION PIPELINE is the sole graph writer (extractor → auditor →
- * merger), tree-blind and post-hoc: the extractor reads only the transcript
- * and proposes propositions/edges/quiz-attribution with verbatim evidence;
- * the auditor sees the extractor's output PLUS the current graph, owns
- * faithfulness (evidence check) and identity (link-or-create: point each
- * proposition at the existing node it is, or let it be created — recording
- * the session's phrasings as aliases); the merger (core/graph.ts,
- * deterministic) applies the verdicts and appends.
+ * merger), tree-blind and post-hoc (2026-09-27 cleanup — clear separation
+ * of work): the extractor is the ONLY stage that sees the raw source
+ * (whole session as readable markdown, or raw notes) and extracts the
+ * reasoning chains — propositions (lonely relevant ones included) plus
+ * follows/supports edges, with verbatim evidence; the auditor NEVER sees
+ * the source — its job is preparing the merge: identity verdicts
+ * (link-or-create, merging equivalent forms of the same proposition) via
+ * graph-exploration tools (find / list_sessions / list_propositions), and
+ * it may draw BRIDGING edges from existing graph nodes to the new
+ * propositions; the merger (core/graph.ts, deterministic) applies the
+ * verdicts and appends. Quiz events and understanding observations are
+ * GONE — the pipeline is the only session→graph bridge, and it carries
+ * propositions + edges, nothing else.
  */
 
 // ─── Extraction findings (extractor output → audit → merger input) ───────────
-
-/**
- * The extractor's standardized per-session understanding scale (DECIDED
- * 2026-09-08): a CLOSED named-word list — no numbers, no prose, no
- * justifications (a justification, if the agent wants one, is dropped;
- * it is not stored). The level is session- and extraction-run-relative
- * judgment about the learner, shown next to its session — never a node
- * property.
- */
-export type UnderstandingLevel = "solid" | "shaky" | "accepted" | "resisted" | "not yet engaged";
 
 /** One proposed proposition — a node candidate (or a re-encounter of one). */
 export interface ExtractedProposition {
@@ -231,7 +197,8 @@ export interface ExtractedProposition {
 	/** The minimal proposition — a true, self-contained, world-facing
 	 *  statement, at full precision. No learner / teacher / session
 	 *  references: misconceptions are stated as the true correction, and
-	 *  wrongness lives in the event ledger, never in the node. */
+	 *  wrongness is never recorded in the graph (2026-09-27: the event
+	 *  ledger is gone). */
 	statement: string;
 	/** Verbatim phrasings the session used. */
 	aliases: string[];
@@ -239,17 +206,17 @@ export interface ExtractedProposition {
 	messages: string[];
 	/** Verbatim transcript quotes backing the proposition. */
 	evidence: string[];
-	/** The extractor's understanding level for this proposition IN THIS
-	 *  session — one word from the UnderstandingLevel scale. Joins the
-	 *  ledger as an observation event (note = the level word); treatment
-	 *  pending the state-model ideation. */
-	understanding?: UnderstandingLevel;
 }
 
-/** One proposed relation between two propositions. */
+/** One proposed relation. Endpoints are extractor-local proposition ids
+ *  ("p1", …); the AUDITOR may also emit bridging edges whose from/to is an
+ *  EXISTING graph node id (connecting the new content to what the graph
+ *  already holds) — the merger resolves both. */
 export interface ExtractedEdge {
-	/** Proposition id that is followed / supported. */
+	/** Proposition id (or, for auditor-drawn bridges, a graph node id)
+	 *  that is followed / supported. */
 	from: string;
+	/** Proposition id (or graph node id) that follows / is supported. */
 	to: string;
 	type: EdgeType;
 	/** The message ids where this relation was asserted — provenance. */
@@ -258,26 +225,10 @@ export interface ExtractedEdge {
 	evidence: string[];
 }
 
-/**
- * The extractor's quiz attribution — its ONLY say about quiz events. Event
- * kinds, timestamps, idempotency refs, notes and question texts are all
- * rebuilt deterministically by the merger from the transcript's quiz tool
- * parts; the LLM supplies exactly the judgment call: WHICH proposition each
- * quiz tested. Tree-blind, so EVERY quiz attributes here (there is no tree
- * mapping to lean on) — retroactively against the whole transcript.
- */
-export interface ExtractionAttribution {
-	/** quiz toolCallId → proposition id; null / missing = unattributed (the
-	 *  event lands with nodeId null + the question text, a later-
-	 *  attribution input). */
-	quiz: Record<string, string | null>;
-}
-
-/** The extractor's output shape. */
+/** The extractor's output shape: the raw reasoning chains. */
 export interface SessionFindings {
 	propositions: ExtractedProposition[];
 	edges: ExtractedEdge[];
-	attribution: ExtractionAttribution;
 }
 
 /** The auditor's verdict on one proposition: the findings, plus `linkTo` —
@@ -286,20 +237,19 @@ export interface AuditedProposition extends ExtractedProposition {
 	/** The existing GraphNode id this proposition IS — the auditor's
 	 *  identity verdict. On link, the session's phrasings (statement,
 	 *  aliases) join the node's aliases and the provenance unions.
-	 *  Conservative: when unsure, leave it out — duplicates over wrong
-	 *  merges. */
+	 *  EQUIVALENCE BIAS (2026-09-27): paraphrases, rewordings, and
+	 *  compressions of the same claim MERGE — do not create a duplicate
+	 *  because the wording differs. Only genuinely distinct propositions
+	 *  stay apart. */
 	linkTo?: string;
 }
 
-/** The auditor's output: the verified findings (with identity verdicts),
- * plus the drops (the audit trail of what was rejected and why). */
+/** The auditor's output: the findings with identity verdicts, plus any
+ *  bridging edges drawn to existing graph nodes. No drop channel — the
+ *  auditor never rejects; the extractor is fully trusted (2026-09-27). */
 export interface AuditResult {
 	propositions: AuditedProposition[];
 	edges: ExtractedEdge[];
-	attribution: ExtractionAttribution;
-	/** Dropped candidates: proposition id, edge "from→to", or attribution
-	 *  toolCallId — with the reason. */
-	dropped: { ref: string; reason: string }[];
 }
 
 /** The GET /api/graph payload — everything the home view's PURE renderer needs. */
@@ -328,11 +278,6 @@ export interface GraphSnapshot {
 	fileSources: Record<string, string>;
 	/** nodeId → chatIds that touched the node (click-through provenance). */
 	nodeSessions: Record<string, string[]>;
-	/** nodeId → chatId → that session's understanding observation (the
-	 *  extractor's per-session named-word note; session-relative data,
-	 *  shown next to the session list — the confidence history). Multiple
-	 *  notes for one (node, chat) collapse to the latest. */
-	nodeObservations: Record<string, Record<string, string>>;
 	/** Structural communities (Louvain over follows+supports), size ≥ 3,
 	 * joined with persisted LLM labelings. Purely structural — never
 	 * depends on layout. */

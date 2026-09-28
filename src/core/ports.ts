@@ -18,7 +18,6 @@ import type {
 	GraphNode,
 	JobKind,
 	JobRecord,
-	LedgerEvent,
 	ExtractionRunUsage,
 	NodeMapping,
 	PlanTree,
@@ -84,8 +83,6 @@ export interface GraphStore {
 	readEdges(): GraphEdge[];
 
 	/** Append one quiz outcome / understanding observation. */
-	appendEvent(event: LedgerEvent): void;
-	readEvents(): LedgerEvent[];
 
 	/** Append one identity-map line (chat's tree node → graph node). */
 	appendMapping(mapping: NodeMapping): void;
@@ -130,7 +127,6 @@ export interface GraphStore {
 	rewriteLedgers(next: {
 		nodes?: GraphNode[];
 		edges?: GraphEdge[];
-		events?: LedgerEvent[];
 		mappings?: NodeMapping[];
 		coverage?: CoverageEntry[];
 		checkpoints?: SessionCheckpoint[];

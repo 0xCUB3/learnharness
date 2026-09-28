@@ -1563,13 +1563,54 @@ export function GraphView() {
 				>
 					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
 					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
+					{(() => {
+						// EDGES (owner 2026-09-27): edge classification was entirely
+						// hidden in the UI — the card now shows every edge this node
+						// participates in, grouped by direction + type, above the
+						// sessions list. Only present groups render.
+						const id = selected.node.id;
+						const nodeById = new Map((snapshot?.nodes ?? []).map((n) => [n.id, n]));
+						const label = (nid: string) => nodeById.get(nid)?.name ?? nid;
+						const groups: { title: string; names: string[] }[] = [
+							{
+								title: "Follows from",
+								names: (snapshot?.edges ?? []).filter((e) => e.from === id && e.type === "follows").map((e) => label(e.to)),
+							},
+							{
+								title: "Supported by",
+								names: (snapshot?.edges ?? []).filter((e) => e.from === id && e.type === "supports").map((e) => label(e.to)),
+							},
+							{
+								title: "What follows from this",
+								names: (snapshot?.edges ?? []).filter((e) => e.to === id && e.type === "follows").map((e) => label(e.from)),
+							},
+							{
+								title: "What this supports",
+								names: (snapshot?.edges ?? []).filter((e) => e.to === id && e.type === "supports").map((e) => label(e.from)),
+							},
+						].filter((g) => g.names.length > 0);
+						if (groups.length === 0) return null;
+						return (
+							<div className="mt-3 flex flex-col gap-1">
+								{groups.map((g) => (
+									<div key={g.title} className="flex flex-col gap-0.5">
+										<div className="text-xs text-muted-foreground">{g.title}</div>
+										<div className="flex flex-wrap gap-1">
+											{g.names.map((name, i) => (
+												<span key={`${name}-${i}`} className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
+													{name}
+												</span>
+											))}
+										</div>
+									</div>
+								))}
+							</div>
+						);
+					})()}
 					{selected.sourceIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>
 							{selected.sourceIds.map((sourceId) => {
-								// That source's understanding observation — the
-								// extractor's named-word note (confidence history).
-								const note = snapshot?.nodeObservations?.[selected.node.id]?.[sourceId];
 								// An imported-notes file: a STATIC entry — the path,
 								// plain text, never a link (no session to open).
 								if (snapshot?.fileSources?.[sourceId] !== undefined) {
@@ -1579,11 +1620,6 @@ export function GraphView() {
 											<span className="min-w-0 flex-1 truncate px-1 py-1 text-sm text-muted-foreground">
 												{snapshot.fileSources[sourceId]}
 											</span>
-											{note && (
-												<span className="max-w-28 shrink-0 truncate whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
-													{note}
-												</span>
-											)}
 										</div>
 									);
 								}
@@ -1596,14 +1632,6 @@ export function GraphView() {
 										>
 											{snapshot?.sessions[sourceId] ?? sourceId}
 										</Link>
-										{/* The note is a fixed-scale word (solid/shaky/...) — the
-										    session name is the main thing; the chip is bounded so
-										    it can never push or overflow the row. */}
-										{note && (
-											<span className="max-w-28 shrink-0 truncate whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
-												{note}
-											</span>
-										)}
 									</div>
 								);
 							})}
