@@ -54,6 +54,11 @@ export interface GraphRenderSettings {
 	labelZoom: number;
 	/** Node + hover label font size, WORLD units (scales with camera). */
 	labelSize: number;
+	/** Draw `supports` edges at all (owner, 2026-09-29): off hides them
+	 *  from the canvas — a DRAW toggle only. The physics sim still feels
+	 *  them (settings never shift the graph: camera, one frame), and node
+	 *  detail cards still list them. */
+	showSupports: boolean;
 	/** Toggle for the cluster region labels (hulls always draw). */
 	clusterLabels: boolean;
 	/** Cluster label font size, px on screen (camera-compensated —
@@ -95,6 +100,8 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 		arrowLength: legacySizes ? DEFAULT_RENDER_SETTINGS.arrowLength : ladd(r.arrowLength, ARROW_LENGTH_LADDER, DEFAULT_RENDER_SETTINGS.arrowLength),
 		labelZoom: ladd(r.labelZoom, LABEL_ZOOM_LADDER, DEFAULT_RENDER_SETTINGS.labelZoom),
 		labelSize: legacySizes ? DEFAULT_RENDER_SETTINGS.labelSize : ladd(r.labelSize, LABEL_SIZE_LADDER, DEFAULT_RENDER_SETTINGS.labelSize),
+		showSupports:
+			typeof r.showSupports === "boolean" ? r.showSupports : DEFAULT_RENDER_SETTINGS.showSupports,
 		clusterLabels:
 			typeof r.clusterLabels === "boolean" ? r.clusterLabels : DEFAULT_RENDER_SETTINGS.clusterLabels,
 		clusterLabelSize: ladd(
@@ -262,6 +269,7 @@ export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 	arrowLength: 2,
 	labelZoom: 4,
 	labelSize: 3,
+	showSupports: true,
 	clusterLabels: true,
 	clusterLabelSize: 14,
 	regions: DEFAULT_REGION_TUNING,

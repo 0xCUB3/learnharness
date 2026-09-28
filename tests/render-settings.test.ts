@@ -118,12 +118,23 @@ describe("sanitizeRenderSettings", () => {
 			arrowLength: 3,
 			labelZoom: 2,
 			labelSize: 4,
+			showSupports: false,
 			clusterLabels: false,
 			clusterLabelSize: 20,
 			regions: DEFAULT_REGION_TUNING,
 			physics: DEFAULT_PHYSICS_TUNING,
 		};
 		assert.deepEqual(sanitizeRenderSettings(valid), valid); // every value a ladder member
+	});
+
+	test("showSupports (2026-09-29): boolean-only, default on — the draw toggle", () => {
+		// A render-only hide for supports edges: anything but a real boolean
+		// (missing key, legacy file, garbage) loads as ON (today's look); a
+		// real false round-trips untouched.
+		assert.equal(sanitizeRenderSettings({}).showSupports, true);
+		assert.equal(sanitizeRenderSettings({ showSupports: false }).showSupports, false);
+		assert.equal(sanitizeRenderSettings({ showSupports: "no" }).showSupports, true);
+		assert.equal(sanitizeRenderSettings({ showSupports: 0 }).showSupports, true);
 	});
 
 	test("the pre-2026-09-13 stored shape (flat, no regions/physics) still loads", () => {

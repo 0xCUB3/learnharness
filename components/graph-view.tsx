@@ -51,7 +51,9 @@
  *
  * Rendering settings (2026-09-13): the gear in the search panel reveals
  * five sliders (node size, edge width, arrowhead length, label size, the
- * zoom threshold) plus the cluster-labels checkbox. SERVER-persisted
+ * zoom threshold), the supports-edges draw toggle (2026-09-29: off hides
+ * supports edges from the canvas — draw-only; physics and detail cards
+ * still see them), and the cluster-labels checkbox. SERVER-persisted
  * (data/render-settings.json via /api/graph/render-settings): loaded
  * once after mount, saved debounced on every user change — one source
  * of truth shared by every browser. The label-zoom slider is log-scaled
@@ -528,6 +530,20 @@ function GraphSettingsControl({
 								onChange={(p) =>
 									changeSettings((cur) => ({ ...cur, labelZoom: fromLadderPosition(p, LABEL_ZOOM_LADDER) }))}
 							/>
+							{/* Supports draw toggle (owner, 2026-09-29): hides the single-line
+							    supports edges from the canvas — follows (⟹-meant) stay. Draw-only:
+							    physics + detail cards still see them. Last row of the FIRST
+							    section; the border-t below starts Regions. */}
+							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
+								<span>Supports edges</span>
+								<input
+									type="checkbox"
+									checked={settings.showSupports}
+									onChange={(e) =>
+										changeSettings((cur) => ({ ...cur, showSupports: e.target.checked }))}
+									className="accent-primary"
+								/>
+							</label>
 						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
 						    dropdown for the bitmap resolution (it's a discrete
 						    choice, not a free number). Server-persisted like the

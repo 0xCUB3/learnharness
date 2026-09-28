@@ -1232,11 +1232,14 @@ export class GraphCanvasRenderer {
 		// Edge shafts + arrowheads: tip lands on the target disc edge. Both
 		// relation types draw the same arrow for now — the double-shaft
 		// glyph was rejected (2026-09-15); differentiation is pending a new
-		// approach. CanvasEdge.type is plumbed for whatever comes next.
+		// approach. CanvasEdge.type is plumbed for whatever comes next —
+		// except the supports draw toggle (owner, 2026-09-29): off skips
+		// the paths entirely (a draw-only hide; the sim still feels them).
 		const arrowLen = settings.arrowLength;
 		const shafts = new Path2D();
 		const heads = new Path2D();
 		for (const e of data.edges) {
+			if (!settings.showSupports && e.type === "supports") continue;
 			if (!isVisible(e.from) || !isVisible(e.to)) continue;
 			const a = this.nodeById.get(e.from);
 			const b = this.nodeById.get(e.to);
