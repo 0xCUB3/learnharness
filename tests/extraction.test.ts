@@ -270,6 +270,31 @@ function submitModel(name: string, input: unknown, onCall?: () => void): PiEngin
 	]);
 }
 
+/** A submit model whose single response WAITS on a gate before answering —
+ *  the timing control for the serialized-audit tests (owner 2026-09-28):
+ *  the model call has STARTED (onCall fired, the run holds the audit
+ *  gate) but will not resolve until the test opens the gate. */
+function gatedSubmitModel(name: string, input: unknown, gate: Promise<void>, onCall?: () => void): PiEngine {
+	return fauxEngine([
+		async () => {
+			onCall?.();
+			await gate;
+			return fauxAssistantMessage(
+				[fauxToolCall(name, input as ToolCall["arguments"], { id: `${name}-call` })],
+				{ stopReason: "toolUse" },
+			);
+		},
+	]);
+}
+
+/** Poll until true — the queued-phase observations need real ticks. */
+async function until(cond: () => boolean, ms = 2000): Promise<void> {
+	for (const t0 = Date.now(); !cond(); ) {
+		if (Date.now() - t0 > ms) throw new Error("condition never became true in time");
+		await new Promise((r) => setTimeout(r, 2));
+	}
+}
+
 /** An engine whose model call never resolves until its abort signal fires
  *  — mimicking a cancelled provider request (the abort path). Like a real
  *  provider, an ALREADY-aborted signal resolves immediately (the abort can
@@ -598,6 +623,116 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		await pipeline.runExtraction(chatId);
 		assert.deepEqual(seen, ["extracting", "auditing"]);
 		assert.equal(extractionStatuses().length, 0, "the registry clears when the run ends");
+	});
+
+	it("serialized audit (owner 2026-09-28): a second run QUEUES at the gate; its auditor explores the graph only AFTER the first run's merge", async () => {
+		const a = fixtureChat();
+		const b = fixtureChat();
+		const ledgers = memoryLedgers();
+
+		const single = (id: string, name: string, statement: string): SessionFindings => ({
+			propositions: [{ id, name, statement, aliases: [], messages: ["a2"], evidence: ["e"] }],
+			edges: [],
+		});
+		const findingsA = single("pa", "Alpha claim", "Alpha statement, full precision");
+		const findingsB = single("pb", "Beta claim", "Beta statement, full precision");
+
+		let gateOpen!: () => void;
+		const gate = new Promise<void>((resolve) => (gateOpen = resolve));
+		let aAuditing = false;
+		const pipelineA = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", findingsA),
+			auditor: gatedSubmitModel("submit_review", findingsA, gate, () => {
+				aAuditing = true;
+			}),
+		});
+		const runA = pipelineA.runExtraction(a.chatId);
+		await until(() => extractionStatuses().some((r) => r.chatId === a.chatId && r.phase === "auditing"));
+		assert.ok(aAuditing, "run A holds the gate — its audit model call is in flight");
+
+		let bAuditorCalled = false;
+		let bSawAlphasMerge = false;
+		const pipelineB = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", findingsB),
+			// THE pin: when B's auditor is finally invoked, A's merge must
+			// already be in the ledgers — B explores the post-merge graph,
+			// which is the entire point of the gate.
+			auditor: submitModel("submit_review", findingsB, () => {
+				bAuditorCalled = true;
+				bSawAlphasMerge = ledgers.readNodes().some((n) => n.name === "Alpha claim");
+			}),
+		});
+		const runB = pipelineB.runExtraction(b.chatId);
+
+		await until(() => extractionStatuses().some((r) => r.chatId === b.chatId && r.phase === "waiting"));
+		assert.ok(!bAuditorCalled, "B's auditor has not been invoked — it queues behind A");
+		assert.equal(ledgers.readNodes().filter((n) => n.name === "Beta claim").length, 0, "nothing of B merged yet");
+		assert.equal(extractionStatuses().find((r) => r.chatId === a.chatId)?.phase, "auditing", "A still audits while B waits");
+
+		gateOpen();
+		assert.deepEqual(await runA, { nodes: 1, edges: 0 });
+		assert.deepEqual(await runB, { nodes: 1, edges: 0 });
+		assert.ok(bAuditorCalled);
+		assert.ok(bSawAlphasMerge, "B's auditor saw A's merged node — audit serialized after merge");
+		assert.equal(extractionStatuses().length, 0, "both runs left the registry");
+	});
+
+	it("serialized audit: a run ABORTED while waiting never audits — and the queue chain stays healthy for successors", async () => {
+		const a = fixtureChat();
+		const b = fixtureChat();
+		const c = fixtureChat();
+		const ledgers = memoryLedgers();
+
+		const single = (id: string, name: string, statement: string): SessionFindings => ({
+			propositions: [{ id, name, statement, aliases: [], messages: ["a2"], evidence: ["e"] }],
+			edges: [],
+		});
+
+		let gateOpen!: () => void;
+		const gate = new Promise<void>((resolve) => (gateOpen = resolve));
+		const pipelineA = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", single("pa", "Alpha claim", "Alpha statement")),
+			auditor: gatedSubmitModel("submit_review", single("pa", "Alpha claim", "Alpha statement"), gate),
+		});
+		const runA = pipelineA.runExtraction(a.chatId);
+		await until(() => extractionStatuses().some((r) => r.chatId === a.chatId && r.phase === "auditing"));
+
+		let bAuditorCalled = false;
+		const pipelineB = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", single("pb", "Beta claim", "Beta statement")),
+			auditor: submitModel("submit_review", single("pb", "Beta claim", "Beta statement"), () => {
+				bAuditorCalled = true;
+			}),
+		});
+		const runB = pipelineB.runExtraction(b.chatId);
+		await until(() => extractionStatuses().some((r) => r.chatId === b.chatId && r.phase === "waiting"));
+
+		// The dock's abort button, pressed while B queues.
+		assert.equal(abortExtraction(b.chatId), true);
+		assert.deepEqual(await runB, { nodes: 0, edges: 0 }, "aborted before auditing — zero emissions");
+		assert.ok(!bAuditorCalled, "B's auditor was never invoked");
+		assert.ok(!extractionStatuses().some((r) => r.chatId === b.chatId), "B left the registry");
+		assert.equal(ledgers.readCoverage().some((row) => row.chatId === b.chatId), false, "B checkpointed nothing");
+
+		// The chain link B abandoned still resolved: A finishes, and a
+		// THIRD run audits normally — no deadlock residue.
+		gateOpen();
+		assert.deepEqual(await runA, { nodes: 1, edges: 0 });
+		const pipelineC = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", single("pc", "Gamma claim", "Gamma statement")),
+			auditor: submitModel("submit_review", single("pc", "Gamma claim", "Gamma statement")),
+		});
+		assert.deepEqual(await pipelineC.runExtraction(c.chatId), { nodes: 1, edges: 0 });
 	});
 
 	it("captures per-stage usage live, persists the run's usage into the chat record", async () => {

@@ -480,8 +480,12 @@ function runAuditor(
  *  The post-batch embedding tail was its own phase (accuracy wave,
  *  2026-09-19) until wave 7 killed the embedder seam wholesale (this
  *  interlude) — birth-session clusters need no post-merge pass. The
- *  phases tell the truth about what the loop is actually waiting on. */
-export type ExtractionPhase = "extracting" | "auditing" | "merging";
+ *  phases tell the truth about what the loop is actually waiting on.
+ *  "waiting" (owner 2026-09-28): the serialized-audit gate — the run's
+ *  audit+merge critical section is queued behind another run's; the
+ *  extractor is done but the auditor may not start until the graph is
+ *  stable. */
+export type ExtractionPhase = "extracting" | "waiting" | "auditing" | "merging";
 
 /** One in-flight pipeline run. Module-level: one process, one registry.
  *  Exported for the status payload's consumer typing (the dock). */
@@ -517,6 +521,11 @@ interface LhExtractionGlobal {
 		 *  same millisecond never collide on the usage idempotency key. */
 		lastStartedAt: number;
 	};
+	/** The serialized-audit mutex (owner 2026-09-28): a FIFO promise
+	 *  chain — the audit+merge critical section runs one run at a time,
+	 *  process-wide. globalThis for the same module-instance reason as
+	 *  the run registries. */
+	__lhAuditLock?: { tail: Promise<void> };
 }
 
 /** THE RUN REGISTRIES live on globalThis, not module level — the
@@ -681,6 +690,46 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		run.usage[stage]!.steps.push(usage);
 	}
 
+	/** SERIALIZED AUDIT (owner 2026-09-28): the auditor explores the LIVE
+	 *  graph through its tools and stamps identity verdicts against what
+	 *  it finds — so the audit+merge section is a process-wide critical
+	 *  section. Two concurrent audits would each link into a graph the
+	 *  other is about to change: the structural mint of duplicate nodes.
+	 *  The extractor stays parallel (source-local, graph-blind). The
+	 *  check runs BEFORE any LLM is invoked or the graph read; the lock
+	 *  is FIFO, held through the merge, reacquired per batch, and
+	 *  abort-aware on both sides of the queue (a waiter that aborts
+	 *  leaves without auditing — its chain link still resolves, so
+	 *  successors never hang). */
+	async function withAuditLock<T>(chatId: string, kind: "chat" | "notes", label: string | undefined, critical: () => Promise<T>): Promise<T> {
+		setPhase(chatId, "waiting", kind, label);
+		const g = globalThis as typeof globalThis & LhExtractionGlobal;
+		const lock = (g.__lhAuditLock ??= { tail: Promise.resolve() });
+		const prev = lock.tail;
+		let release!: () => void;
+		lock.tail = new Promise<void>((resolve) => (release = resolve));
+		const signal = runningExtractions.get(chatId)?.controller.signal;
+		let onAbort: (() => void) | undefined;
+		const aborted = new Promise<never>((_, reject) => {
+			if (!signal) return;
+			onAbort = () => {
+				const err = new Error("extraction aborted while waiting for the audit gate");
+				err.name = "AbortError";
+				reject(err);
+			};
+			if (signal.aborted) onAbort();
+			else signal.addEventListener("abort", onAbort, { once: true });
+		});
+		try {
+			await Promise.race([prev, aborted]);
+			signal?.throwIfAborted(); // aborted exactly at handoff
+			return await critical();
+		} finally {
+			if (onAbort && signal && !signal.aborted) signal.removeEventListener("abort", onAbort);
+			release();
+		}
+	}
+
 	async function extract(chatId: string, view: string): Promise<SessionFindings> {
 		const signal = runningExtractions.get(chatId)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during a sync gap ends the run here
@@ -808,36 +857,44 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				);
 				setPhase(chatId, "extracting", "chat");
 				const findings = await extract(chatId, view);
-				setPhase(chatId, "auditing", "chat");
-				const auditResult = await audit(chatId, findings);
-				setPhase(chatId, "merging", "chat");
-				// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
-				// merge. The deletion route aborts this run first and runs its purge
-				// as one sync block; this closes the last window — a run that slipped
-				// past the wind-down finds the chat gone HERE and rides the existing
-				// abort path (info, not error): nothing merged, nothing checkpointed.
-				if (!chatStore.getChat(chatId)) {
-					const gone = new Error(`chat deleted mid-run: ${chatId}`);
-					gone.name = "AbortError";
-					throw gone;
-				}
-				// The batch's messages, snapshotted when the run computed
-				// coverage — if a message mutates mid-run (a quiz answer
-				// merges in), the stored fingerprint won't match its new
-				// one and it re-opens: honest by construction.
-				const foldedAt = new Date().toISOString();
-				const stats = mergeFindings(chatId, auditResult, { chatStore, graphStore }, {
-					foldedAt,
-					coverage: batch
-						.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
-						.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
+				// SERIALIZED AUDIT (owner 2026-09-28): audit + merge are the
+				// graph-mutating critical section — one run at a time,
+				// process-wide, so the auditor explores the graph as it
+				// stands AFTER every earlier run's merge. Reacquired per
+				// batch: interleaved runs each audit against the latest
+				// graph instead of starving each other.
+				await withAuditLock(chatId, "chat", undefined, async () => {
+					setPhase(chatId, "auditing", "chat");
+					const auditResult = await audit(chatId, findings);
+					setPhase(chatId, "merging", "chat");
+					// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
+					// merge. The deletion route aborts this run first and runs its purge
+					// as one sync block; this closes the last window — a run that slipped
+					// past the wind-down finds the chat gone HERE and rides the existing
+					// abort path (info, not error): nothing merged, nothing checkpointed.
+					if (!chatStore.getChat(chatId)) {
+						const gone = new Error(`chat deleted mid-run: ${chatId}`);
+						gone.name = "AbortError";
+						throw gone;
+					}
+					// The batch's messages, snapshotted when the run computed
+					// coverage — if a message mutates mid-run (a quiz answer
+					// merges in), the stored fingerprint won't match its new
+					// one and it re-opens: honest by construction.
+					const foldedAt = new Date().toISOString();
+					const batchStats = mergeFindings(chatId, auditResult, { chatStore, graphStore }, {
+						foldedAt,
+						coverage: batch
+							.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
+							.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
+					});
+					total.nodes += batchStats.nodes;
+					total.edges += batchStats.edges;
 				});
-				total.nodes += stats.nodes;
-				total.edges += stats.edges;
 				batchesDone++;
 				console.info(
 					`[extraction ${chatId}] batch ${batchesDone}/${batches.length} merged: ` +
-						`${stats.nodes} nodes, ${stats.edges} edges`,
+						`${total.nodes} nodes, ${total.edges} edges (cumulative)`,
 				);
 			}
 			const stats = total;
@@ -918,10 +975,15 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			console.info(`[extraction ${id}] notes pipeline start (${input.filePath})`);
 			setPhase(id, "extracting", "notes", input.filePath);
 			const findings = await notesExtract(input);
-			setPhase(id, "auditing", "notes", input.filePath);
-			const auditResult = await audit(id, findings);
-			setPhase(id, "merging", "notes", input.filePath);
-			const stats = mergeFindings(id, auditResult, { chatStore, graphStore }, { foldedAt: input.importedAt });
+			// SERIALIZED AUDIT (owner 2026-09-28): the same gate as the chat
+			// path — a notes import and a chat run may extract in parallel,
+			// but audit + merge one at a time, process-wide.
+			const stats = await withAuditLock(id, "notes", input.filePath, async () => {
+				setPhase(id, "auditing", "notes", input.filePath);
+				const auditResult = await audit(id, findings);
+				setPhase(id, "merging", "notes", input.filePath);
+				return mergeFindings(id, auditResult, { chatStore, graphStore }, { foldedAt: input.importedAt });
+			});
 			// Same post-merge settle as the chat path.
 			settleGraphLayout(graphStore);
 			persistRunUsage(id, Math.round(performance.now() - t0), stats);
