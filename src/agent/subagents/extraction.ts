@@ -142,12 +142,10 @@ const findingsProps = {
 	propositions: Type.Array(Type.Object(propositionProps), {
 		description: "Every distinct proposition the session touched — true statements, misconception-free.",
 	}),
-	edges: Type.Optional(
-		Type.Array(edgeSchema, {
-			description:
-				"Relations between propositions: follows (derivable) / supports (grounds without entailing). Pass [] when there are none — never omit the field.",
-		}),
-	),
+	edges: Type.Array(edgeSchema, {
+		description:
+			"Relations between propositions: follows (derivable) / supports (grounds without entailing). Pass [] when there are none — never omit the field.",
+	}),
 };
 
 const findingsSchema = Type.Object(findingsProps);
@@ -157,24 +155,20 @@ const findingsSchema = Type.Object(findingsProps);
 // edges are its entire deliverable. An order-of-magnitude smaller submit
 // than the old full-findings echo.
 const auditSchema = Type.Object({
-	links: Type.Optional(
-		Type.Array(
-			Type.Object({
-				id: Type.String({ description: 'The proposition id from the findings ("p1", …).' }),
-				linkTo: Type.String({
-					description:
-						"The id of the EXISTING graph node this proposition IS — your identity verdict. EQUIVALENCE BIAS (2026-09-27): paraphrases, rewordings, and compressions of the same claim MERGE; only genuinely distinct propositions stay apart.",
-				}),
+	links: Type.Array(
+		Type.Object({
+			id: Type.String({ description: 'The proposition id from the findings ("p1", …).' }),
+			linkTo: Type.String({
+				description:
+					"The id of the EXISTING graph node this proposition IS — your identity verdict. EQUIVALENCE BIAS (2026-09-27): paraphrases, rewordings, and compressions of the same claim MERGE; only genuinely distinct propositions stay apart.",
 			}),
-			{ description: "Identity verdicts — which findings propositions ARE existing graph nodes. A proposition absent from here = create a new node." },
-		),
-	),
-	edges: Type.Optional(
-		Type.Array(edgeSchema, {
-			description:
-				"BRIDGING edges ONLY — new edges welding this batch into the existing graph, with an EXISTING graph node id as one endpoint (or both) and/or a findings proposition id. NEVER restate the extractor's own edges.",
 		}),
+		{ description: "Identity verdicts — which findings propositions ARE existing graph nodes. A proposition absent from here = create a new node. Pass [] when none — never omit the field." },
 	),
+	edges: Type.Array(edgeSchema, {
+		description:
+			"BRIDGING edges ONLY — new edges welding this batch into the existing graph, with an EXISTING graph node id as one endpoint (or both) and/or a findings proposition id. NEVER restate the extractor's own edges. Pass [] when none — never omit the field.",
+	}),
 });
 
 // The notes front door's shapes are IDENTICAL to the session shapes now
@@ -209,19 +203,26 @@ function healStringifiedArrays(raw: unknown): unknown {
 	return out;
 }
 
-// ── the weak-model ??-fills (the old zod defaults, applied at submit) ──
+// ── the submit seam (owner, 2026-09-28) ──
+//
+// Both top-level fields on both submit tools are REQUIRED — a payload
+// missing `edges`/`links` fails validation instead of silently merging
+// edge-less (the degraded-retry hole: the model's first truncated
+// attempt failed validation, then the retry passed with propositions
+// only — optional edges ??-filled [] — merging a pile of nodes with no
+// structure). Only the per-item aliases stay optional with a ??-fill.
 
 function fillFindings(raw: Static<typeof findingsSchema>): SessionFindings {
 	return {
 		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
-		edges: raw.edges ?? [],
+		edges: raw.edges,
 	};
 }
 
 function fillAudit(raw: Static<typeof auditSchema>): AuditVerdicts {
 	return {
-		links: raw.links ?? [],
-		edges: raw.edges ?? [],
+		links: raw.links,
+		edges: raw.edges,
 	};
 }
 
@@ -231,6 +232,8 @@ report what those notes show the author engaging with, as structured findings fo
 
 There is no session and no chat structure here: the source is raw text, the author's own material. Read it as such.
 You are the ONLY stage that sees this source — you are fully trusted; report carefully.
+You may be seeing ONE PART of a longer file (large files are chunked): extract exactly what THIS part holds —
+the auditor links equivalent propositions across parts, so overlap worries are not yours.
 
 The graph is a set of TRUE propositions about the world, full stop. A node is never anything about the author or the
 source — no "the author understands X", no "mentioned in these notes": the node is just X. A misconception is NOT a
@@ -954,11 +957,34 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 
 	/** The raw source view the notes stages see: the file path + the text
 	 *  VERBATIM. No message ids — provenance is the file itself. */
-	function notesView(input: { filePath: string; text: string }): string {
-		return `SOURCE (the author's personal notes): ${input.filePath}\n\n${input.text}`;
+	function notesView(input: { filePath: string; text: string; part?: { i: number; n: number } }): string {
+		const part = input.part && input.part.n > 1 ? ` (part ${input.part.i}/${input.part.n})` : "";
+		return `SOURCE (the author's personal notes): ${input.filePath}${part}\n\n${input.text}`;
 	}
 
-	async function notesExtract(input: { id: string; filePath: string; text: string }): Promise<NotesFindings> {
+	/** Chunk the notes text under the same budget the chat path uses
+	 * (owner, 2026-09-28: the whole-file-in-one-call design collapsed a
+	 * weak model — 26 propositions, structure bleed mid-emission).
+	 * Greedy by line, chars/4 like every other estimate in the app; a
+	 * single over-budget line rides alone (never split a line). */
+	function chunkNotes(text: string, budget: number): string[] {
+		if (text.trim().length === 0) return [];
+		const out: string[] = [];
+		let current = "";
+		for (const line of text.split("\n")) {
+			const candidate = current.length === 0 ? line : current + "\n" + line;
+			if (current.length > 0 && Math.ceil(candidate.length / 4) > budget) {
+				out.push(current);
+				current = line;
+			} else {
+				current = candidate;
+			}
+		}
+		if (current.trim().length > 0) out.push(current);
+		return out;
+	}
+
+	async function notesExtract(input: { id: string; filePath: string; text: string; part?: { i: number; n: number } }): Promise<NotesFindings> {
 		const signal = runningExtractions.get(input.id)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during a sync gap ends the run here
 		const view = notesView(input);
@@ -990,18 +1016,32 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			// (2026-09-25): same refusal as the chat front door — no
 			// extractor/auditor engines, or a stage key gone, no run.
 			refuseIfStagesUnready();
-			console.info(`[extraction ${id}] notes pipeline start (${input.filePath})`);
-			setPhase(id, "extracting", "notes", input.filePath);
-			const findings = await notesExtract(input);
-			// SERIALIZED AUDIT (owner 2026-09-28): the same gate as the chat
-			// path — a notes import and a chat run may extract in parallel,
-			// but audit + merge one at a time, process-wide.
-			const stats = await withAuditLock(id, "notes", input.filePath, async () => {
-				setPhase(id, "auditing", "notes", input.filePath);
-				const auditResult = await audit(id, findings);
-				setPhase(id, "merging", "notes", input.filePath);
-				return mergeFindings(id, findings, auditResult, { chatStore, graphStore }, { foldedAt: input.importedAt });
-			});
+			// CHUNKED like the chat path (owner, 2026-09-28): each chunk is a
+			// standalone extract → audit → merge, so no single call carries a
+			// whole large file. Abort mid-run keeps earlier chunks merged
+			// (same doctrine as chat batches).
+			const chunkTokens = deps.getChunkTokens?.() ?? FACTORY_SETTINGS.graph.extractionChunkTokens;
+			const chunks = chunkNotes(input.text, chunkTokens);
+			console.info(
+				`[extraction ${id}] notes pipeline start (${input.filePath}) — ${chunks.length} chunk(s) of ≤${chunkTokens} tok`,
+			);
+			const stats: EmissionStats = { nodes: 0, edges: 0 };
+			for (const [i, chunk] of chunks.entries()) {
+				setPhase(id, "extracting", "notes", input.filePath);
+				const findings = await notesExtract({ ...input, text: chunk, part: { i: i + 1, n: chunks.length } });
+				// SERIALIZED AUDIT (owner, 2026-09-28): the same gate as the chat
+				// path — a notes import and a chat run may extract in parallel,
+				// but audit + merge one at a time, process-wide. Reacquired per
+				// chunk so multi-chunk runs interleave fairly.
+				const merged = await withAuditLock(id, "notes", input.filePath, async () => {
+					setPhase(id, "auditing", "notes", input.filePath);
+					const auditResult = await audit(id, findings);
+					setPhase(id, "merging", "notes", input.filePath);
+					return mergeFindings(id, findings, auditResult, { chatStore, graphStore }, { foldedAt: input.importedAt });
+				});
+				stats.nodes += merged.nodes;
+				stats.edges += merged.edges;
+			}
 			// Same post-merge settle as the chat path.
 			settleGraphLayout(graphStore);
 			persistRunUsage(id, Math.round(performance.now() - t0), stats);

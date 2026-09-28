@@ -598,7 +598,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: silentModel(),
-			auditor: submitModel("submit_review", FINDINGS),
+			auditor: submitModel("submit_review", { links: [], edges: [] }),
 		});
 		await assert.rejects(failingExtractor.runExtraction(chatId), /the extractor never submitted findings/);
 		assert.equal(ledgers.readCheckpoints().length, 0);
@@ -654,7 +654,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", findingsA),
-			auditor: gatedSubmitModel("submit_review", findingsA, gate, () => {
+			auditor: gatedSubmitModel("submit_review", { links: [], edges: [] }, gate, () => {
 				aAuditing = true;
 			}),
 		});
@@ -671,7 +671,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			// THE pin: when B's auditor is finally invoked, A's merge must
 			// already be in the ledgers — B explores the post-merge graph,
 			// which is the entire point of the gate.
-			auditor: submitModel("submit_review", findingsB, () => {
+			auditor: submitModel("submit_review", { links: [], edges: [] }, () => {
 				bAuditorCalled = true;
 				bSawAlphasMerge = ledgers.readNodes().some((n) => n.name === "Alpha claim");
 			}),
@@ -708,7 +708,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pa", "Alpha claim", "Alpha statement")),
-			auditor: gatedSubmitModel("submit_review", single("pa", "Alpha claim", "Alpha statement"), gate),
+			auditor: gatedSubmitModel("submit_review", { links: [], edges: [] }, gate),
 		});
 		const runA = pipelineA.runExtraction(a.chatId);
 		await until(() => extractionStatuses().some((r) => r.chatId === a.chatId && r.phase === "auditing"));
@@ -718,7 +718,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pb", "Beta claim", "Beta statement")),
-			auditor: submitModel("submit_review", single("pb", "Beta claim", "Beta statement"), () => {
+			auditor: submitModel("submit_review", { links: [], edges: [] }, () => {
 				bAuditorCalled = true;
 			}),
 		});
@@ -740,7 +740,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pc", "Gamma claim", "Gamma statement")),
-			auditor: submitModel("submit_review", single("pc", "Gamma claim", "Gamma statement")),
+			auditor: submitModel("submit_review", { links: [], edges: [] }),
 		});
 		assert.deepEqual(await pipelineC.runExtraction(c.chatId), { nodes: 1, edges: 0 });
 	});
@@ -806,7 +806,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: hangingModel(), // hangs until aborted — no step finishes
-			auditor: submitModel("submit_review", { propositions: [], edges: [] }),
+			auditor: submitModel("submit_review", { links: [], edges: [] }),
 		});
 		const runPromise = pipeline.runExtraction(chatId);
 
@@ -954,7 +954,7 @@ const NOTES_FINDINGS = {
 } as const;
 
 const NOTES_VERDICT = {
-	propositions: [NOTES_FINDINGS.propositions[0]],
+	links: [],
 	edges: [],
 } as const;
 
@@ -997,6 +997,75 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		assert.deepEqual(ledgers.readMappings(), [{ chatId: source.id, sourceId: "p1", graphNodeId: node.id }]);
 		// The checkpoint stamps the import.
 		assert.equal(ledgers.readCheckpoints()[0]!.chatId, source.id);
+	});
+
+	it("chunks a large file: one extract→audit→merge per chunk, part headers in each view (owner, 2026-09-28)", async () => {
+		const ledgers = memoryLedgers();
+		const views: string[] = [];
+		let calls = 0;
+		// Fresh engine PER CHUNK via the engineFor factory — same seam
+		// production uses (one scripted response per model call).
+		const extractorStep = () =>
+			fauxEngine([
+				(context) => {
+					calls++;
+					views.push(capturedView(context));
+					return fauxAssistantMessage(
+						[
+							fauxToolCall("submit_findings", NOTES_FINDINGS as unknown as ToolCall["arguments"], {
+								id: `findings-${calls}`,
+							}),
+						],
+						{ stopReason: "toolUse" },
+					);
+				},
+			]);
+		const text = Array.from({ length: 8 }, (_, i) => `note line ${i}: ${"x".repeat(30)}`).join("\n");
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			engineFor: (role) =>
+				role === "extractor"
+					? extractorStep()
+					: submitModel("submit_review", { links: [], edges: [] }),
+			getChunkTokens: () => 20, // 80 chars/line-groups → several chunks
+		});
+		const stats = await pipeline.importNotes({ filePath: "/vault/big.md", text });
+
+		assert.ok(calls >= 2, `expected ≥2 extractor calls, got ${calls}`);
+		assert.match(views[0]!, new RegExp(`part 1/${calls}`));
+		assert.match(views.at(-1)!, new RegExp(`part ${calls}/${calls}`));
+		// Same findings in every chunk → ONE node total (mapping dedupe
+		// across chunks), stats never double-count.
+		assert.deepEqual(stats, { nodes: 1, edges: 0 });
+		assert.equal(ledgers.readNodes().length, 1);
+	});
+
+	it("required top-level fields (owner, 2026-09-28): a findings submit MISSING edges fails validation — no silent edge-less merge", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		// The degraded-retry shape from the OpenRouter log: propositions
+		// only, edges omitted. Required schema → validation fails on every
+		// turn → the run rejects instead of merging a pile of structureless
+		// nodes. Four queued attempts exhaust the extractor's turn budget.
+		// Four queued attempts — one per turn of the extractor's budget.
+		const noEdges = () =>
+			fauxEngine(
+				Array.from({ length: 4 }, () => (context) => {
+					void context;
+					return fauxAssistantMessage(
+						[fauxToolCall("submit_findings", { propositions: FINDINGS.propositions } as unknown as ToolCall["arguments"])],
+						{ stopReason: "toolUse" },
+					);
+				}),
+			);
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			engineFor: (role) => (role === "extractor" ? noEdges() : submitModel("submit_review", { links: [], edges: [] })),
+		});
+		await assert.rejects(pipeline.runExtraction(chatId), /never submitted findings/);
+		assert.equal(ledgers.readNodes().length, 0);
 	});
 
 	it("re-importing the same file is idempotent: same source identity, refs dedupe, usage history grows", async () => {
@@ -1270,7 +1339,7 @@ describe("the session-deletion guard (chat deleted mid-run)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
-			auditor: submitModel("submit_review", { propositions: FINDINGS.propositions, edges: [] }, () => chatStore.deleteChat(chatId)),
+			auditor: submitModel("submit_review", { links: [], edges: [] }, () => chatStore.deleteChat(chatId)),
 		});
 		const stats = await pipeline.runExtraction(chatId);
 
