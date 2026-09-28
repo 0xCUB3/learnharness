@@ -68,9 +68,6 @@ export type EffectiveAppearance = FactorySettings["appearance"];
 /** The concrete view: every knob resolved, no absent fields. */
 export interface EffectiveSettings {
 	general: Required<GeneralSettings>;
-	/** The default ChatSettings for new sessions — passthrough delta
-	 *  ({} = no default = BYOK "no model" first boot). */
-	chat: ChatSettings;
 	agent: {
 		models: Record<BackgroundModelRole, EffectiveModelSpec | undefined>;
 		/** Delta map as stored — consumers resolve absent key → enabled. */
@@ -175,7 +172,6 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 		general: {
 			autoUpdate: record?.general?.autoUpdate ?? FACTORY_SETTINGS.general.autoUpdate,
 		},
-		chat: record?.chat ?? {},
 		agent: {
 			models,
 			tools: agent.tools ?? {},

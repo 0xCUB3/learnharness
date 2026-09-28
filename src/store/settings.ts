@@ -5,13 +5,11 @@
  * preferences only; secrets stay in auth.json / .env.local.
  *
  * This adapter OWNS the lazy migrations:
- *  1. first boot with a legacy default-settings.json (the 2026-09-18 wave's
- *     file) but no settings.json → fold it into the record's `chat` section,
- *     persist the new record, LEAVE the old file in place (inert, zero-risk
- *     rollback). Subsequent reads go straight to settings.json.
- *  2. schema-version bumps (CURRENT_SETTINGS_VERSION) slot in here — the
+ *  1. schema-version bumps (CURRENT_SETTINGS_VERSION) slot in here — the
  *     chain is empty today (v1 is the first shape); pure additions never
  *     bump, so an up-to-date file is always a no-op pass-through.
+ *    (The legacy default-settings.json fold died with the chat section —
+ *     per-session models, owner 2026-09-28.)
  *
  * Everything off disk is sanitized (core/settings.ts) before it reaches a
  * caller; everything written was already validated by the routes
@@ -21,14 +19,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_SETTINGS_FILE, SETTINGS_FILE } from "../../config.ts";
+import { SETTINGS_FILE } from "../../config.ts";
 import {
-	CURRENT_SETTINGS_VERSION,
 	sanitizeUserSettings,
 	type UserSettings,
 } from "../core/settings.ts";
 import type { SettingsStore } from "../core/ports.ts";
-import type { ChatSettings } from "../core";
 
 /** The persisted record, or null when none exists (first boot). Runs the
  *  migration chain on every read — cheap: a no-op file check when current. */
@@ -37,13 +33,7 @@ export function readSettings(): UserSettings | null {
 	try {
 		raw = fs.readFileSync(SETTINGS_FILE, "utf-8");
 	} catch {
-		// No settings.json yet — one-time legacy fold: the default-settings
-		// wave's record becomes our record's `chat` section verbatim.
-		const legacy = readLegacyDefaultSettings();
-		if (!legacy) return null;
-		const migrated: UserSettings = { version: CURRENT_SETTINGS_VERSION, chat: legacy };
-		writeSettings(migrated);
-		return migrated;
+		return null; // no settings.json yet — first boot, all factory defaults
 	}
 	let parsed: unknown;
 	try {
@@ -66,24 +56,6 @@ export function writeSettings(raw: unknown): UserSettings {
 	fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
 	fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, "\t"), "utf-8");
 	return settings;
-}
-
-/** The legacy default-settings.json contents, or null when absent/corrupt —
- *  same tolerance as the old store: unreadable = never saved, never crash. */
-function readLegacyDefaultSettings(): ChatSettings | null {
-	let raw: string;
-	try {
-		raw = fs.readFileSync(DEFAULT_SETTINGS_FILE, "utf-8");
-	} catch {
-		return null;
-	}
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-		return parsed as ChatSettings;
-	} catch {
-		return null;
-	}
 }
 
 /** The typed adapter (core/ports.ts SettingsStore), for the composition root. */

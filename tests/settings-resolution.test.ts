@@ -24,7 +24,6 @@ describe("resolveSettings", () => {
 	it("null record (first boot): non-model knobs land on factory defaults; every model view is EMPTY", () => {
 		const eff = resolveSettings(null);
 		assert.deepEqual(eff.general, { autoUpdate: true });
-		assert.deepEqual(eff.chat, {}); // BYOK: no default model, ever
 		assert.deepEqual(eff.agent.tools, {});
 		assert.deepEqual(eff.agent.prompts, {});
 		assert.deepEqual(eff.agent.search, {});
@@ -51,7 +50,6 @@ describe("resolveSettings", () => {
 		const record: UserSettings = {
 			version: 1,
 			general: { autoUpdate: false },
-			chat: { thinkingLevel: "high" },
 			agent: {
 				models: { researcher: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } } },
 				tools: { research: false },
@@ -63,7 +61,6 @@ describe("resolveSettings", () => {
 		};
 		const eff = resolveSettings(record);
 		assert.equal(eff.general.autoUpdate, false);
-		assert.deepEqual(eff.chat, { thinkingLevel: "high" });
 		assert.deepEqual(eff.agent.models.researcher, {
 			provider: "openrouter",
 			id: "qwen/qwen3.8-flash",

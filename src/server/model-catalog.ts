@@ -39,20 +39,24 @@ import { BACKGROUND_MODEL_ROLES, MODEL_SLOTS, type BackgroundModelRole, type Mod
 /** The picker's client-safe model entry (contract: core/contracts/models.ts). */
 export type ModelDto = ModelCatalogEntry;
 
-/** The conversation agents' resolved default (pure form — the record's chat
- *  section + the strong slot in, CatalogDefaults out; `catalogDefaults()`
- *  below is the fs wrapper). BYOK (owner, 2026-09-22): there is no factory
- *  floor — when neither the chat section nor the strong slot names a
- *  model, the default is NULL and the turn gate refuses with the 503
- *  models_not_configured envelope. An unset thinkingLevel resolves from
- *  DEFAULT_THINKING_ORDER at engine build (reported as absent here). */
+/**
+ * The conversation agents' resolved default (pure form — the strong slot
+ * in, CatalogDefaults out; `catalogDefaults()` below is the fs wrapper).
+ * PER-SESSION MODELS (owner, 2026-09-28): every session owns its model +
+ * thinking level from birth, stamped verbatim from the strong slot — the
+ * STRONG SLOT IS THE NEW-SESSION DEFAULT, and the resolve-time fallback
+ * for legacy settings-less records. BYOK (owner, 2026-09-22): there is no
+ * factory floor — when the strong slot names no model, the default is
+ * NULL and the turn gate refuses with the 503 models_not_configured
+ * envelope. An unset thinkingLevel resolves from DEFAULT_THINKING_ORDER at
+ * engine build (reported as absent here).
+ */
 export function catalogDefaultsFor(
-	chat: ChatSettings | undefined,
 	strong: EffectiveSlot | null,
 ): CatalogDefaults | null {
-	const model = chat?.model ?? (strong ? { provider: strong.provider, id: strong.id } : undefined);
+	const model = strong ? { provider: strong.provider, id: strong.id } : undefined;
 	if (!model) return null;
-	const level = chat?.thinkingLevel ?? strong?.thinkingLevel;
+	const level = strong?.thinkingLevel;
 	return {
 		model,
 		...(level !== undefined ? { thinkingLevel: level } : {}),
@@ -60,11 +64,9 @@ export function catalogDefaultsFor(
 }
 
 /** The conversation agents' resolved default — what a settings-less chat
- *  runs. (settings-storage wave, 2026-09-19): the user's picked default
- *  rides in the settings record's `chat` section; the picker's defaults
- *  row shows it once chosen. */
+ *  runs: the strong slot, i.e. the birth-default for new sessions. */
 export function catalogDefaults(): CatalogDefaults | null {
-	return catalogDefaultsFor(settingsStore.readSettings()?.chat, effectiveSettings().models.strong);
+	return catalogDefaultsFor(effectiveSettings().models.strong);
 }
 
 /** Project the resolved per-role specs to the client DTO (pure — the

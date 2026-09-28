@@ -1,4 +1,4 @@
-import { createChat, isTurnRunning, listChats, titleFromPrompt } from "@/src/server";
+import { createChat, isTurnRunning, listChats, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
 import type { ChatListItem } from "@/src/core";
 
 /** The session picker's list: record-derived summaries (phase, pending
@@ -20,5 +20,19 @@ export async function POST(req: Request) {
 	const body = (await req.json().catch(() => ({}))) as { title?: unknown };
 	const title = typeof body.title === "string" ? body.title : "";
 	const chat = createChat(titleFromPrompt(title || "Untitled session"));
+	// PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
+	// thinking level from birth — stamped verbatim from the STRONG slot,
+	// the new-session default. From here the strong slot never reaches
+	// this session again: in-session picks write the session's own record
+	// (PUT /api/chats/:id/settings). No strong slot configured (fresh BYOK
+	// boot) → no stamp; the turn gate's 503 models_not_configured envelope
+	// refuses honestly until the setup flow fills the slot.
+	const strong = readSettingsRecord()?.models?.strong;
+	if (strong?.model) {
+		stores.chatStore.saveSettings(chat.id, {
+			model: { provider: strong.model.provider, id: strong.model.id },
+			thinkingLevel: strong.thinkingLevel,
+		});
+	}
 	return Response.json({ id: chat.id, title: chat.title });
 }

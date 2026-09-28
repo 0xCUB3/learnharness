@@ -1,5 +1,5 @@
 import { NewSession } from "@/components/new-session";
-import { readDefaultSettings, readSettingsRecord } from "@/src/server";
+import { readSettingsRecord } from "@/src/server";
 import { slotsConfigured } from "@/src/core";
 
 export const dynamic = "force-dynamic";
@@ -11,16 +11,12 @@ export const dynamic = "force-dynamic";
  * the real page, whose initialPrompt path delivers the message as turn 1.
  * Static segment beats the dynamic [id] route — "new" is never a chat id.
  *
- * The default settings record is server-rendered in (readDefaultSettings →
- * initialSettings): the controls show truth on the first frame, no
- * default-model flash (the default IS the user's last choice — "no model"
- * only before the first-ever pick).
+ * The draft's model control binds the STRONG SLOT (the new-session
+ * default); the session the first send creates is stamped from it
+ * server-side (per-session models, owner 2026-09-28).
  */
 export default function NewSessionPage() {
 	return (
-		<NewSession
-			initialSettings={readDefaultSettings()}
-			initialConfigured={slotsConfigured(readSettingsRecord()?.models)}
-		/>
+		<NewSession initialConfigured={slotsConfigured(readSettingsRecord()?.models)} />
 	);
 }

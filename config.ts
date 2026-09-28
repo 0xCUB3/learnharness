@@ -84,19 +84,9 @@ export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
 export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");
 
 /**
- * DEFAULT settings — THE default model + thinking level + knowledge-context
- * budget (owner, 2026-09-18): the new-session surfaces' controls are the
- * settings page for the default model. There is NO baked-in default —
- * BYOK first boot shows "no model" until the user picks one, and their
- * last choice IS the default from then on. One small JSON blob,
- * read-modify-write, written only through app/api/settings/defaults.
- */
-export const DEFAULT_SETTINGS_FILE = path.join(DATA_ROOT, "default-settings.json");
-
-/**
  * THE USER SETTINGS RECORD (settings-storage wave, 2026-09-19): one
  * versioned, DELTA-shaped JSON blob at the data-dir seam holding every
- * non-secret product preference — general, chat defaults, agent (background
+ * non-secret product preference — general, agent (background
  * model/thinking overrides + tool toggles + prompt-override switches),
  * appearance, graph. Explicit user choices only: ABSENT keys resolve to the
  * factory defaults compiled into src/core/settings.ts (FACTORY_SETTINGS), so
@@ -105,9 +95,9 @@ export const DEFAULT_SETTINGS_FILE = path.join(DATA_ROOT, "default-settings.json
  * version field is a PRIVATE schema counter for breaking shape changes
  * only (field renamed/meaning changed), unrelated to the app release
  * version. Secrets (API keys, login tokens) NEVER live here — auth.json /
- * .env.local keep that role. Migrated FROM: default-settings.json folds
- * into the record's `chat` section on first read (the old file is left in
- * place, inert).
+ * .env.local keep that role. (The `chat` default-settings section died
+ * with per-session models, owner 2026-09-28 — sessions own their model
+ * from birth, stamped from the strong slot.)
  */
 export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
 

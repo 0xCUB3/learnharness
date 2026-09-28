@@ -86,11 +86,10 @@ describe("the model catalog projection", () => {
 		// the record is empty (defaults/slots NULL), on the owner's machine
 		// configured slots must surface exactly as configured.
 		const record = readSettings();
-		const chat = record?.chat;
 		const strong = effectiveSettings().models.strong;
-		if (chat?.model || strong) {
-			assert.ok(defaults, "a configured chain yields a default");
-			assert.deepEqual(defaults!.model, chat?.model ?? { provider: strong!.provider, id: strong!.id });
+		if (strong) {
+			assert.ok(defaults, "a configured strong slot yields a default");
+			assert.deepEqual(defaults!.model, { provider: strong.provider, id: strong.id });
 		} else {
 			assert.equal(defaults, null);
 		}
@@ -105,29 +104,15 @@ describe("the model catalog projection", () => {
 		}
 	});
 
-	it("defaults: the chat section over the strong slot; null when both empty (BYOK)", () => {
-		assert.equal(catalogDefaultsFor(undefined, null), null);
+	it("defaults: the strong slot verbatim; null when unset (BYOK, per-session models 2026-09-28)", () => {
+		assert.equal(catalogDefaultsFor(null), null);
 		const strong = { provider: "openrouter", id: "z-ai/glm-5.3-flash", thinkingLevel: "low" as const };
-		const d = catalogDefaultsFor(undefined, strong);
+		const d = catalogDefaultsFor(strong);
 		assert.deepEqual(d, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "low" });
-		assert.deepEqual(catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" }, strong), {
-			model: { provider: "openrouter", id: "qwen/qwen3.8-flash" },
-			thinkingLevel: "high",
-		});
-		// partial: only the model chosen → level falls back to the slot's
-		const partial = catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }, strong);
-		assert.ok(partial);
-		assert.equal(partial!.thinkingLevel, "low");
-		// thinkingLevel-only record: model untouched
-		assert.deepEqual(catalogDefaultsFor({ thinkingLevel: "minimal" }, strong), {
-			model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" },
-			thinkingLevel: "minimal",
-		});
-		// chat.model with NO strong slot: the conversation runs on it alone
-		assert.deepEqual(
-			catalogDefaultsFor({ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }, null),
-			{ model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } },
-		);
+		// No level stored → the model alone reports (the level resolves at
+		// engine build from DEFAULT_THINKING_ORDER).
+		const bare = catalogDefaultsFor({ provider: "openrouter", id: "qwen/qwen3.8-flash" });
+		assert.deepEqual(bare, { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } });
 	});
 
 	it("toModelDto projects the raw catalog model verbatim", () => {

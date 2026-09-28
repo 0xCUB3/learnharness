@@ -6,11 +6,10 @@ import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
-import { useDefaultSettings } from "@/components/default-settings";
 import { DictationBar, useDictation } from "@/components/dictation";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
-import type { ChatSettings, TurnUsage } from "@/src/core";
+import type { TurnUsage } from "@/src/core";
 
 /**
  * Home — the knowledge graph is the main view, full-bleed edge to edge
@@ -18,7 +17,7 @@ import type { ChatSettings, TurnUsage } from "@/src/core";
  * under the header and the new-session dock, both of which float over it
  * with no gradient scrims. Sessions live in the toggleable sidebar.
  */
-export function Home({ initialSettings, initialConfigured }: { initialSettings: ChatSettings | null; initialConfigured: boolean }) {
+export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 	const router = useRouter();
 	const [topic, setTopic] = useState("");
 	// First-run gate (model-slots wave, owner 2026-09-20): chats cannot
@@ -41,13 +40,6 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 		append: (t) => setTopic((v) => (v ? v.replace(/\s+$/, "") + " " + t : t)),
 	});
 	const [busy, setBusy] = useState(false);
-	// THE default settings (owner, 2026-09-18): this topic dock IS the
-	// settings page for the default model — no baked-in default exists; the
-	// user's last choice (server-rendered in via initialSettings, shared
-	// with /chat/new through data/default-settings.json) IS the default.
-	// Still carried to the chat POST then PUT-on-create (the model picker
-	// defers its save when chatId is empty; see components/model-picker).
-	const { settings, save: saveDraft } = useDefaultSettings(initialSettings);
 
 	const start = async (force = false) => {
 		const t = topic.trim();
@@ -79,14 +71,9 @@ export function Home({ initialSettings, initialConfigured }: { initialSettings: 
 				body: JSON.stringify({ title: t }),
 			});
 			const { id } = (await res.json()) as { id: string };
-			if (settings) {
-				// Best-effort persist — the selection was made pre-chat.
-				await fetch(`/api/chats/${id}/settings`, {
-					method: "PUT",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(settings),
-				}).catch(() => {});
-			}
+			// No settings PUT on create (per-session models, owner
+			// 2026-09-28): the SERVER stamps the newborn from the strong
+			// slot — the same default this surface's model control edits.
 			router.push(`/chat/${id}?prompt=${encodeURIComponent(t)}`);
 		} catch {
 			setBusy(false);

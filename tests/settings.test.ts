@@ -55,7 +55,6 @@ describe("sanitizeUserSettings", () => {
 		const record = {
 			version: 1,
 			general: { autoUpdate: false },
-			chat: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "low" },
 			agent: {
 				models: {
 					researcher: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" },

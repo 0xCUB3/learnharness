@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ModelCatalogEntry, ModelCatalogResponse, ModelsSettings, UserSettings } from "@/src/core";
+import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse, ModelsSettings, UserSettings } from "@/src/core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
@@ -77,23 +77,25 @@ export function catalogLimits(catalog: Pick<ModelCatalogResponse, "models">): Ma
 }
 
 /**
- * THE STRONG-SLOT CONTROL (fix wave, owner ruling: "one and the same").
- * The composer's model + thinking pills ARE the strong slot — the tier
- * that runs prober + teacher. Reads: the raw models section (GET
- * /api/settings) for the user's pick, plus the federated catalog for the
- * menus. Writes: PUT /api/settings/models via composeSlotModel — the same
- * seam the settings Agent section and the SetupDialog write, so there is
- * exactly one strong slot in the world and every surface edits it.
+ * THE CONVERSATION MODEL CONTROL — dual-bound (owner, per-session models,
+ * 2026-09-28). WITH a chatId (the in-session stats bar): the pills bind
+ * THE SESSION'S OWN record — reads GET /api/chats/:id (its settings field;
+ * a legacy unstamped record falls back to the strong slot's display,
+ * exactly what the engine resolves), writes PUT /api/chats/:id/settings
+ * (validated + level-clamped server-side). The session owns its model +
+ * thinking level from birth; the strong slot never reaches it again.
  *
- * Unpicked reads "—" (the no-factory-fallback language: the UI never
- * presents a default model; the engine-side pin still resolves, the UI
- * never claims it). Legacy per-chat model overrides on old records keep
- * resolving server-side — the UI simply no longer writes that field
- * anywhere.
+ * WITHOUT a chatId (the draft surfaces — home + /chat/new): the pills
+ * bind the STRONG SLOT (reads the raw models section, GET /api/settings;
+ * writes PUT /api/settings/models via composeSlotModel — the same seam
+ * the settings Agent section and the SetupDialog write): picking there IS
+ * changing the new-session default. Unpicked reads "—" (the
+ * no-factory-fallback language: the UI never presents a default model).
  */
-export function ModelControl() {
+export function ModelControl({ chatId }: { chatId?: string }) {
 	const { catalog, refresh } = useModelCatalog();
 	const [models, setModels] = useState<ModelsSettings | undefined>();
+	const [session, setSession] = useState<ChatSettings | undefined>();
 	const [open, setOpen] = useState<"model" | "thinking" | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -101,7 +103,19 @@ export function ModelControl() {
 	// The record read — BOTH mount and the cross-surface signal land
 	// here (fix wave: another surface's models write re-reads into the
 	// pill live; own writes also notify, and the refetch is idempotent).
+	// Dual-bound: chat mode reads BOTH the session record (the source of
+	// truth) and the models section (the display fallback for a legacy
+	// unstamped session — exactly what the engine resolves); draft mode
+	// reads the models section alone.
 	const readRecord = useCallback(() => {
+		if (chatId) {
+			fetch(`/api/chats/${chatId}`)
+				.then((r) => r.json() as Promise<{ settings?: ChatSettings }>)
+				.then((body) => setSession(body.settings))
+				.catch(() => {
+					/* same read-only posture as a models-section failure */
+				});
+		}
 		fetch("/api/settings")
 			.then((r) => r.json() as Promise<{ settings: { models?: ModelsSettings } | null }>)
 			.then((body) => setModels(body.settings?.models ?? undefined))
@@ -110,7 +124,7 @@ export function ModelControl() {
 				   ("—" triggers, closed menus) — same posture as a
 				   catalog failure */
 			});
-	}, []);
+	}, [chatId]);
 
 	useEffect(() => {
 		readRecord();
@@ -120,7 +134,17 @@ export function ModelControl() {
 		if (section === "models") readRecord();
 	});
 
-	const override = models?.strong;
+	// Dual-bound truth: chat mode displays the session's own record,
+	// falling back to the strong slot for legacy unstamped sessions —
+	// EXACTLY what resolveConversationSpec runs. Draft mode is the strong
+	// slot itself.
+	const strong = models?.strong;
+	const override: ChatSettings | undefined = chatId
+		? {
+				model: session?.model ?? strong?.model,
+				thinkingLevel: session?.thinkingLevel ?? strong?.thinkingLevel,
+			}
+		: strong;
 	const effectiveId = override?.model?.id;
 	const effectiveProvider = override?.model?.provider;
 	const storedLevel = override?.thinkingLevel;
@@ -200,6 +224,51 @@ export function ModelControl() {
 		[],
 	);
 
+	// The session write seam (chat mode): PUT the per-chat settings route
+	// — validated + level-clamped server-side; the response is the stored
+	// truth (a pick riding an unsupported level lands CLAMPED — the pill
+	// shows the stored value). No notifySettingsSaved: the write touches
+	// one session's record, not the slots — no other surface reads it.
+	const saveChat = useCallback(
+		async (next: ChatSettings) => {
+			setError(null);
+			try {
+				const res = await fetch(`/api/chats/${chatId}/settings`, {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(next),
+				});
+				if (!res.ok) {
+					const body = (await res.json().catch(() => ({}))) as { error?: string };
+					setError(body.error ?? `settings rejected (${res.status})`);
+					return;
+				}
+				const stored = (await res.json().catch(() => null)) as { settings?: ChatSettings } | null;
+				setSession(stored?.settings ?? next);
+				setOpen(null);
+			} catch {
+				setError("Could not reach the server — try again.");
+			}
+		},
+		[chatId],
+	);
+
+	// One apply seam over both write paths: a pick names provider + id +
+	// level; chat mode writes the session's own record (any pick pins it),
+	// draft mode composes the strong slot (siblings preserved,
+	// replace-whole-section discipline).
+	const apply = useCallback(
+		(provider: string, id: string, level: ThinkingLevel | undefined) => {
+			if (chatId) {
+				void saveChat({ model: { provider, id }, thinkingLevel: level });
+			} else {
+				// composeSlotModel's empty-string convention: no level = unset.
+				void save(composeSlotModel(models, "strong", provider, id, level ?? ""));
+			}
+		},
+		[chatId, models, save, saveChat],
+	);
+
 	// Shortcut seams (keyboard wave A): ⌘K opens the model menu (the
 	// universal command convention); Shift+Tab cycles the thinking level
 	// up the ladder (wrapping) — the owner's replacement for browser
@@ -220,11 +289,11 @@ export function ModelControl() {
 			const idx = effectiveLevel === undefined ? -1 : levels.indexOf(effectiveLevel);
 			const next = levels[(idx + 1) % levels.length];
 			if (next === undefined) return;
-			void save(composeSlotModel(models, "strong", effectiveProvider ?? "", effectiveId ?? "", next));
+			apply(effectiveProvider ?? "", effectiveId ?? "", next);
 		};
 		window.addEventListener("lh:kbd-cycle-thinking", onCycleThinking);
 		return () => window.removeEventListener("lh:kbd-cycle-thinking", onCycleThinking);
-	}, [levels, effectiveLevel, effectiveProvider, effectiveId, models, save]);
+	}, [levels, effectiveLevel, effectiveProvider, effectiveId, apply]);
 
 	// Selecting a model (click and Enter share one path): keep the
 	// thinking level only when the new model supports it — otherwise
@@ -239,7 +308,7 @@ export function ModelControl() {
 		// rides — it belongs to the OLD model; the fresh pick's level comes
 		// from the fresh model's own ladder.)
 		const nextLevel = populateLevel(storedLevel, m.supportedLevels);
-		void save(composeSlotModel(models, "strong", m.provider, m.id, nextLevel));
+		apply(m.provider, m.id, nextLevel);
 	};
 
 	// Stale-while-revalidate on manual open too (⌘K covers the keyboard
@@ -328,7 +397,9 @@ export function ModelControl() {
 						footer={
 							catalog && catalog.models.length === 0
 								? "No models — add a provider key in Keys"
-								: "Strong tier — runs prober + teacher, app-wide"
+								: chatId
+									? "This session's model"
+									: "Strong tier — the default for new sessions"
 						}
 					/>
 				</MenuShell>
@@ -344,9 +415,7 @@ export function ModelControl() {
 					<ThinkingMenuList
 						levels={catalog ? levels : []}
 						effectiveLevel={effectiveLevel}
-						onPick={(level) =>
-							void save(composeSlotModel(models, "strong", effectiveProvider ?? "", effectiveId ?? "", level as ThinkingLevel))
-						}
+						onPick={(level) => apply(effectiveProvider ?? "", effectiveId ?? "", level as ThinkingLevel)}
 						empty={catalog ? (effectiveId ? `${prettyModel(effectiveId)} has no thinking levels.` : "Pick a model first.") : "Loading…"}
 						footer="Levels this model actually supports"
 					/>

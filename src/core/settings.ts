@@ -333,9 +333,6 @@ export interface GraphSettings {
 export interface UserSettings {
 	version: number;
 	general?: GeneralSettings;
-	/** Today's default-settings.json content — the new-session surfaces'
-	 *  controls. NOT shown in the settings panel (owner decision). */
-	chat?: ChatSettings;
 	agent?: AgentSettings;
 	/** The strong/cheap/vision model slots (model slots wave, 2026-09-20). */
 	models?: ModelsSettings;
@@ -570,13 +567,6 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 	if (r.general !== null && typeof r.general === "object" && !Array.isArray(r.general)) {
 		out.general = sanitizeGeneral(r.general as Record<string, unknown>);
 	}
-	if (r.chat !== null && typeof r.chat === "object" && !Array.isArray(r.chat)) {
-		// The chat section is ChatSettings — its fields are plain and the
-		// section is written exclusively through the validated route
-		// (parseSettingsBody + validateChatSettings), so pass through as-is;
-		// a hand-corrupted value fails loudly downstream, same as today.
-		out.chat = r.chat as ChatSettings;
-	}
 	if (r.agent !== null && typeof r.agent === "object" && !Array.isArray(r.agent)) {
 		out.agent = sanitizeAgent(r.agent as Record<string, unknown>);
 	}
@@ -590,8 +580,13 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 	if (r.graph !== null && typeof r.graph === "object" && !Array.isArray(r.graph)) {
 		out.graph = sanitizeGraph(r.graph as Record<string, unknown>);
 	}
-	// Unknown top-level keys ride along untouched (forward-compat).
+	// Unknown top-level keys ride along untouched (forward-compat). One
+	// known-DEAD key is stripped instead of riding: `chat` (the old
+	// default-settings section) died with per-session models (owner,
+	// 2026-09-28) — a fossil copy on disk must never resurrect through
+	// reads (and any later write flushes it from the file for good).
 	for (const [key, value] of Object.entries(r)) {
+		if (key === "chat") continue;
 		if (!(key in out)) out[key] = value;
 	}
 	return out;

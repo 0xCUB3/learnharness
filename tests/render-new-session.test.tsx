@@ -5,7 +5,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { DraftShell, startDraftSession } from "../components/new-session.tsx";
-import type { ChatSettings } from "../src/core/index.ts";
 
 /**
  * The sessionless draft view (/chat/new, owner 2026-09-13): "+ New session"
@@ -28,7 +27,7 @@ function fakeFetch(id: string) {
 describe("startDraftSession — the create-on-send contract", () => {
 	it("creates the session titled with the first message, returns the prompt redirect", async () => {
 		const { f, calls } = fakeFetch("c_new");
-		const target = await startDraftSession("teach me orbital mechanics", undefined, f);
+		const target = await startDraftSession("teach me orbital mechanics", f);
 		assert.equal(target, "/chat/c_new?prompt=teach%20me%20orbital%20mechanics");
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0]!.url, "/api/chats");
@@ -36,26 +35,16 @@ describe("startDraftSession — the create-on-send contract", () => {
 		assert.deepEqual(calls[0]!.body, { title: "teach me orbital mechanics" });
 	});
 
-	it("persists the lifted pre-chat settings after creation", async () => {
-		const { f, calls } = fakeFetch("c_2");
-		const settings: ChatSettings = { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "medium" };
-		await startDraftSession("hello", settings, f);
-		assert.equal(calls.length, 2);
-		assert.equal(calls[1]!.url, "/api/chats/c_2/settings");
-		assert.equal(calls[1]!.method, "PUT");
-		assert.deepEqual(calls[1]!.body, settings);
-	});
-
-	it("no settings lift → no settings write (a single create call)", async () => {
+	it("no settings PUT on create — the server stamps the newborn (per-session models, owner 2026-09-28)", async () => {
 		const { f, calls } = fakeFetch("c_3");
-		await startDraftSession("hello", undefined, f);
-		assert.equal(calls.length, 1);
+		await startDraftSession("hello", f);
+		assert.equal(calls.length, 1, "a single create call — the birth stamp is server-side");
 	});
 
 	it("empty or whitespace text never creates anything", async () => {
 		const { f, calls } = fakeFetch("never");
-		assert.equal(await startDraftSession("", undefined, f), null);
-		assert.equal(await startDraftSession("   ", undefined, f), null);
+		assert.equal(await startDraftSession("", f), null);
+		assert.equal(await startDraftSession("   ", f), null);
 		assert.equal(calls.length, 0);
 	});
 });
@@ -68,14 +57,12 @@ describe("DraftShell — the sessionless surface", () => {
 				text=""
 				onChange={() => {}}
 				onSend={() => {}}
-				settings={undefined}
-				onSettingsSaved={() => {}}
 			/>,
 		);
 		// The chat composer, ready for the first message.
 		assert.ok(html.includes('data-testid="composer"'));
-		// The pre-chat model control (fix wave: the strong-slot control —
-		// app-wide, no per-chat write, no empty-chatId defer).
+		// The draft's model control binds the strong slot — the
+		// new-session default (per-session models, owner 2026-09-28).
 		assert.ok(html.includes('data-testid="stats-model"'));
 		// No CTA by default: a configured surface stays quiet.
 		assert.ok(!html.includes('data-testid="setup-cta"'));
@@ -94,8 +81,6 @@ describe("DraftShell — the sessionless surface", () => {
 				text=""
 				onChange={() => {}}
 				onSend={() => {}}
-				settings={undefined}
-				onSettingsSaved={() => {}}
 				setupCta={
 					<button type="button" data-testid="setup-cta">
 						Set up your models — chats start after the three picks
@@ -118,8 +103,6 @@ describe("DraftShell — the sessionless surface", () => {
 				text=""
 				onChange={() => {}}
 				onSend={() => {}}
-				settings={undefined}
-				onSettingsSaved={() => {}}
 			/>,
 		);
 		assert.ok(!/\/chat\/c[a-z0-9_]+/.test(html));

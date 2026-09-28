@@ -29,8 +29,14 @@ import { ModelControl, catalogLimits, useModelCatalog } from "@/components/model
 export function StatsBar({
 	turns,
 	dictationSlot,
+	chatId,
 }: {
 	turns: TurnUsage[];
+	/** The bound session (per-session models, owner 2026-09-28): present
+	 *  on the in-session bar — the model control binds THE SESSION'S own
+	 *  record; absent on the draft surfaces, where it binds the strong
+	 *  slot (the new-session default). */
+	chatId?: string;
 	/** The dictation strip (STT wave, 2026-09-17): the row's middle is dead
 	 *  space between the session data and the model control — the mic
 	 *  button lives there, and while recording the meter unfurls to fill
@@ -169,7 +175,7 @@ export function StatsBar({
 			{/* The model + thinking control — one controller for the conversation
 			    agents (prober/teacher); the record's `turns` above still folds
 			    the ACTUAL models billed, regardless of what the picker says. */}
-			<ModelControl />
+			<ModelControl chatId={chatId} />
 		</div>
 	);
 }

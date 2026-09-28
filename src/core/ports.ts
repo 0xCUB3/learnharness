@@ -170,8 +170,9 @@ export interface JobStore {
  * UserSettings — delta semantics, see that module's doc). The store is
  * replace-whole on the RECORD; per-section scoping is a server-band concern
  * (single process, no stale-client hazard to defend against at this seam).
- * Lazy migration (default-settings.json → the record's chat section, schema
- * version bumps) happens inside readSettings, never in the callers.
+ * Schema-version lazy migration happens inside readSettings, never in
+ * the callers. (The legacy default-settings.json fold died with the chat
+ * section — per-session models, owner 2026-09-28.)
  */
 export interface SettingsStore {
 	/** The sanitized record, or null when none exists yet (first boot). */

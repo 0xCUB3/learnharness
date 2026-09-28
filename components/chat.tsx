@@ -1672,6 +1672,7 @@ function DockOverlay({
 					<StatsBar
 						turns={turns}
 						dictationSlot={dictationSlot}
+						chatId={chatId}
 					/>
 					{/* The scroll-down disc (moved here from the Conversation,
 					    owner refinement round 2026-09-24): anchored to the BLOCK's

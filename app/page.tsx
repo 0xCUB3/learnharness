@@ -1,11 +1,10 @@
 import { Home } from "@/components/home";
-import { readDefaultSettings, readSettingsRecord } from "@/src/server";
+import { readSettingsRecord } from "@/src/server";
 import { slotsConfigured } from "@/src/core";
 
-// Dynamic: the default settings record is server-rendered into the page —
-// the model + thinking + context controls show truth on the FIRST frame
-// (no default-model flash), and every navigation re-reads the record
-// (dynamic routes aren't cached client-side).
+// Dynamic: the configured state is server-rendered into the page (the
+// setup CTA's truth on the first frame), and every navigation re-reads
+// the record (dynamic routes aren't cached client-side).
 export const dynamic = "force-dynamic";
 
 export default function HomePage() {
@@ -14,6 +13,6 @@ export default function HomePage() {
 	// record's models section lacks any slot pin.
 	const record = readSettingsRecord();
 	return (
-		<Home initialSettings={readDefaultSettings()} initialConfigured={slotsConfigured(record?.models)} />
+		<Home initialConfigured={slotsConfigured(record?.models)} />
 	);
 }

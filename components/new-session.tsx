@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
 import { DictationBar, useDictation } from "@/components/dictation";
-import { useDefaultSettings } from "@/components/default-settings";
 import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
@@ -19,9 +18,9 @@ import type { ChatSettings } from "@/src/core";
  * the session's title (the exact create-then-redirect contract the home
  * composer established). Visually identical to a fresh chat: same header
  * (title + probe chip), the same empty state, the same composer blob +
- * stats dock. The model picker's empty-chatId branch defers its save and
- * lifts the selection here, so the pre-chat model/thinking choice rides
- * the creation.
+ * stats dock. The draft's model control binds the strong slot (the
+ * new-session default); the created session is stamped from it
+ * server-side (per-session models, owner 2026-09-28).
  */
 
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -36,7 +35,6 @@ const DOCK = "mx-auto w-full max-w-[46rem] px-4";
  */
 export async function startDraftSession(
 	text: string,
-	settings: ChatSettings | undefined,
 	fetchLike: typeof fetch,
 ): Promise<string | null> {
 	const t = text.trim();
@@ -47,14 +45,8 @@ export async function startDraftSession(
 		body: JSON.stringify({ title: t }),
 	});
 	const { id } = (await res.json()) as { id: string };
-	if (settings) {
-		// Best-effort persist — the selection was made pre-chat.
-		await fetchLike(`/api/chats/${id}/settings`, {
-			method: "PUT",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(settings),
-		}).catch(() => {});
-	}
+	// No settings PUT on create (per-session models, owner 2026-09-28):
+	// the SERVER stamps the newborn from the strong slot.
 	return `/chat/${id}?prompt=${encodeURIComponent(t)}`;
 }
 
@@ -65,16 +57,12 @@ export function DraftShell({
 	text,
 	onChange,
 	onSend,
-	settings,
-	onSettingsSaved,
 	setupCta,
 }: {
 	busy: boolean;
 	text: string;
 	onChange: (v: string) => void;
 	onSend: () => void;
-	settings: ChatSettings | undefined;
-	onSettingsSaved: (s: ChatSettings) => void;
 	/** The first-run CTA (fix wave chunk B): the same "Set up your models"
 	 *  affordance home carries, rendered above the draft shell — passed by
 	 *  NewSession, which owns the configured state and the SetupDialog. */
@@ -143,22 +131,10 @@ export function DraftShell({
 	);
 }
 
-export function NewSession({
-	initialSettings,
-	initialConfigured,
-}: {
-	initialSettings: ChatSettings | null;
-	initialConfigured: boolean;
-}) {
+export function NewSession({ initialConfigured }: { initialConfigured: boolean }) {
 	const router = useRouter();
 	const [text, setText] = useState("");
 	const [busy, setBusy] = useState(false);
-	// THE default settings (owner, 2026-09-18): this surface and the home
-	// topic dock carries only the knowledge-context budget now (fix
-	// wave): the model pills ARE the strong slot (PUT /api/settings/models,
-	// app-wide) — the per-chat model pick is retired. saveDraft still
-	// lifts the context budget so it rides the session POST.
-	const { settings, save: saveDraft } = useDefaultSettings(initialSettings);
 
 	// First-run gate (model-slots wave, owner 2026-09-20): the send
 	// INTERCEPTS into the setup flow while unconfigured — no defaults for
@@ -193,13 +169,13 @@ export function NewSession({
 			return;
 		}
 		setBusy(true);
-		void startDraftSession(text, settings, fetch)
+		void startDraftSession(text, fetch)
 			.then((target) => {
 				if (target) router.push(target);
 				else setBusy(false);
 			})
 			.catch(() => setBusy(false));
-	}, [text, busy, settings, router, configured, zeroKeys, strongKeyless]);
+	}, [text, busy, router, configured, zeroKeys, strongKeyless]);
 
 	return (
 		<>
@@ -208,8 +184,6 @@ export function NewSession({
 				text={text}
 				onChange={setText}
 				onSend={send}
-				settings={settings}
-				onSettingsSaved={saveDraft}
 				setupCta={
 					zeroKeys ? (
 						<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
