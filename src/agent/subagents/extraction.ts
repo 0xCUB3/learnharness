@@ -15,7 +15,7 @@ import {
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import type {
-	AuditResult,
+	AuditVerdicts,
 	CallUsage,
 	ChatRecord,
 	ExtractionRunUsage,
@@ -152,31 +152,36 @@ const findingsProps = {
 
 const findingsSchema = Type.Object(findingsProps);
 
-const auditProps = {
-	...findingsProps,
-	propositions: Type.Array(
-		Type.Object({
-			...propositionProps,
-			linkTo: Type.Optional(
-				Type.String({
+// VERDICTS-ONLY (owner, 2026-09-28): the auditor never alters the
+// extractor's findings, so it does not restate them — links + bridging
+// edges are its entire deliverable. An order-of-magnitude smaller submit
+// than the old full-findings echo.
+const auditSchema = Type.Object({
+	links: Type.Optional(
+		Type.Array(
+			Type.Object({
+				id: Type.String({ description: 'The proposition id from the findings ("p1", …).' }),
+				linkTo: Type.String({
 					description:
-						"The id of the EXISTING graph node this proposition IS — your identity verdict. Absent = create a new node. EQUIVALENCE BIAS (2026-09-27): paraphrases, rewordings, and compressions of the same claim MERGE; only genuinely distinct propositions stay apart.",
+						"The id of the EXISTING graph node this proposition IS — your identity verdict. EQUIVALENCE BIAS (2026-09-27): paraphrases, rewordings, and compressions of the same claim MERGE; only genuinely distinct propositions stay apart.",
 				}),
-			),
-		}),
-		{
-			description: "Every distinct proposition the session touched — true statements, misconception-free.",
-		},
+			}),
+			{ description: "Identity verdicts — which findings propositions ARE existing graph nodes. A proposition absent from here = create a new node." },
+		),
 	),
-};
-
-const auditSchema = Type.Object(auditProps);
+	edges: Type.Optional(
+		Type.Array(edgeSchema, {
+			description:
+				"BRIDGING edges ONLY — new edges welding this batch into the existing graph, with an EXISTING graph node id as one endpoint (or both) and/or a findings proposition id. NEVER restate the extractor's own edges.",
+		}),
+	),
+});
 
 // The notes front door's shapes are IDENTICAL to the session shapes now
 // (the only difference was quiz attribution, which no longer exists):
 // one schema, one findings type, both front doors.
 type NotesFindings = SessionFindings;
-type NotesAuditResult = AuditResult;
+type NotesAuditResult = AuditVerdicts;
 
 // ── the weak-model string-heal (owner, 2026-09-28) ──
 //
@@ -213,9 +218,9 @@ function fillFindings(raw: Static<typeof findingsSchema>): SessionFindings {
 	};
 }
 
-function fillAudit(raw: Static<typeof auditSchema>): AuditResult {
+function fillAudit(raw: Static<typeof auditSchema>): AuditVerdicts {
 	return {
-		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
+		links: raw.links ?? [],
 		edges: raw.edges ?? [],
 	};
 }
@@ -437,12 +442,12 @@ its work. Your job is IDENTITY: connecting those findings to the CURRENT knowled
 You explore the graph through your tools: find (glob over names + statements + aliases), list_sessions, and
 list_propositions (full statement text, per session). The graph may be large — search, don't assume.
 
-IDENTITY — link-or-create, per proposition:
+IDENTITY — links, per proposition:
 - For each proposition, search the graph (its key words, its synonyms, its phrasings). Does an EXISTING node already
   state this same proposition?
-- If yes: set "linkTo" to that node's id. The session's phrasings join its aliases and its provenance; the node
-  keeps its existing name (labels stay stable — ignore your name for linked nodes).
-- If no: omit "linkTo" and a new node is created with the extractor's name as its label.
+- If yes: add { "id": <its proposition id>, "linkTo": <that node's id> } to "links". The session's phrasings join
+  its aliases and its provenance; the node keeps its existing name.
+- If no: add nothing — a new node is created with the extractor's name as its label.
 - EQUIVALENCE BIAS (owner ruling): paraphrases, rewordings, and compressions of the same claim MERGE. When two
   statements are the same claim at different precision or from different angles, LINK them. Only genuinely distinct
   propositions — different claims about the world — stay apart. You are NOT guarding against wrong merges; you are
@@ -453,13 +458,13 @@ BRIDGING EDGES — the one place you create edges:
   existing node's real id as "from" or "to"). This is how the new material gets welded into the old graph: when the
   existing graph's content makes a proposition follow, or grounds it, draw the edge.
 - Keep edges typed like the extractor's: "follows" = derivable; "supports" = grounds without entailing.
-- NEVER drop or rewrite the extractor's own propositions or edges — pass them through unchanged (adding linkTo is
-  the only edit). Never invent propositions.
+- Never invent propositions. NEVER restate the extractor's own edges — they merge as-is.
 
-Reproduce every proposition and edge you received verbatim. Your entire deliverable
-is ONE submit_review call.
+Your deliverable is ONLY the verdicts: "links" + "edges" (bridging ONLY). NEVER restate the propositions or the
+extractor's edges — the merger already has them. Your entire deliverable is ONE submit_review call.
 
-Include EVERY top-level field of the call even when empty — "edges": []. NEVER omit a field because it is empty.`;
+Include EVERY top-level field of the call even when empty — "links": [] when nothing links, "edges": [] when there
+are no bridges. NEVER omit a field because it is empty.`;
 
 /** The auditor — one shape for both front doors now (the notes schema was
  *  identical once attribution died). An agentic loop: graph-exploration
@@ -470,11 +475,11 @@ function runAuditor(
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
 	tools: Record<string, AgentTool<any>>,
-): Promise<AuditResult> {
+): Promise<AuditVerdicts> {
 	return runSubmitAgent({
 		role: "auditor",
 		toolName: "submit_review",
-		toolDescription: "Submit the findings with identity verdicts (linkTo) and any bridging edges — for the merge.",
+		toolDescription: "Submit the verdicts ONLY: identity links + bridging edges — never the propositions themselves.",
 		parameters: auditSchema,
 		fill: fillAudit,
 		systemPrompt: AUDITOR_INSTRUCTIONS,
@@ -763,7 +768,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		return findings;
 	}
 
-	async function audit(chatId: string, findings: SessionFindings): Promise<AuditResult> {
+	async function audit(chatId: string, findings: SessionFindings): Promise<AuditVerdicts> {
 		const signal = runningExtractions.get(chatId)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during the extract→audit gap ends here
 		const graph = getGraph(graphStore);
@@ -788,11 +793,9 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			},
 			auditorGraphTools({ chatStore, graphStore }),
 		);
-		const bridged = auditResult.edges.filter((e) => !e.from.startsWith("p") || !e.to.startsWith("p")).length;
 		console.info(
-			`[extraction ${chatId}] audit: ${auditResult.propositions.length} propositions through, ` +
-				`${auditResult.propositions.filter((p) => p.linkTo !== undefined).length} linked to existing nodes, ` +
-				`${auditResult.edges.length} edges (${bridged} bridging)`,
+			`[extraction ${chatId}] audit: ${findings.propositions.length} propositions through, ` +
+				`${auditResult.links.length} linked to existing nodes, ${auditResult.edges.length} bridging edges`,
 		);
 		console.info(`[extraction ${chatId}] auditor done in ${Math.round(performance.now() - t0)}ms`);
 		return auditResult;
@@ -861,13 +864,14 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			);
 			for (const batch of batches) {
 				// The batch's source view: the ONE shared markdown engine
-				// (owner 2026-09-27) over the batch's messages — the same
-				// rendering the user-facing session export will use, id
-				// anchors preserved. The fingerprint's line format is
-				// separate and unchanged (no mass re-extraction).
+				// (owner 2026-09-27) over the batch's messages. Anchors OFF
+				// (2026-09-28): propositions report no message ids, so the
+				// [id] anchors are noise — same as transcriptView. The
+				// fingerprint's line format is separate and unchanged (no
+				// mass re-extraction).
 				const view = sessionMarkdown(
 					batch.map((slot) => slot.message),
-					{ title: record.title },
+					{ title: record.title, anchors: false },
 				);
 				setPhase(chatId, "extracting", "chat");
 				const findings = await extract(chatId, view);
@@ -896,7 +900,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 					// merges in), the stored fingerprint won't match its new
 					// one and it re-opens: honest by construction.
 					const foldedAt = new Date().toISOString();
-					const batchStats = mergeFindings(chatId, auditResult, { chatStore, graphStore }, {
+					const batchStats = mergeFindings(chatId, findings, auditResult, { chatStore, graphStore }, {
 						foldedAt,
 						coverage: batch
 							.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
@@ -996,7 +1000,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				setPhase(id, "auditing", "notes", input.filePath);
 				const auditResult = await audit(id, findings);
 				setPhase(id, "merging", "notes", input.filePath);
-				return mergeFindings(id, auditResult, { chatStore, graphStore }, { foldedAt: input.importedAt });
+				return mergeFindings(id, findings, auditResult, { chatStore, graphStore }, { foldedAt: input.importedAt });
 			});
 			// Same post-merge settle as the chat path.
 			settleGraphLayout(graphStore);

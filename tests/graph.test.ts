@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
-import type { AuditResult } from "../src/core/contracts.ts";
+import type { AuditVerdicts, SessionFindings } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { projectView as projectNative } from "../src/core/view.ts";
@@ -214,9 +214,9 @@ function fixtureMessages(): LhMessage[] {
 	].flat();
 }
 
-/** The auditor's verdict for the fixture chat: three propositions
- *  (no linkTo — the graph starts empty), one follows edge. */
-function fixtureAudit(): AuditResult {
+/** The extractor's findings for the fixture chat: three propositions,
+ *  one follows edge (the graph starts empty — no links). */
+function fixtureFindings(): SessionFindings {
 	return {
 		propositions: [
 			{
@@ -248,6 +248,12 @@ function fixtureAudit(): AuditResult {
 	};
 }
 
+/** The auditor's verdicts when nothing links: an empty verdict set is a
+ *  valid full review (verdicts-only, owner 2026-09-28). */
+function fixtureVerdicts(): AuditVerdicts {
+	return { links: [], edges: [] };
+}
+
 /** The chat every merger test folds (shared, so ordering is intentional). */
 const chat1 = fixtureChat("Graph fixture", fixtureMessages());
 
@@ -275,7 +281,7 @@ function scopedGraph(chatIds: string[]) {
 
 describe("the merger (mergeFindings)", () => {
 	it("creates nodes from the verdicts with chat-level provenance", () => {
-		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps, sessionSource(chat1.id));
+		const stats = mergeFindings(chat1.id, fixtureFindings(), fixtureVerdicts(), graphDeps, sessionSource(chat1.id));
 		assert.deepEqual(stats, { nodes: 3, edges: 1 });
 
 		const graph = scopedGraph([chat1.id]);
@@ -309,7 +315,7 @@ describe("the merger (mergeFindings)", () => {
 	});
 
 	it("is idempotent — re-merging the same verdicts appends nothing", () => {
-		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps, sessionSource(chat1.id));
+		const stats = mergeFindings(chat1.id, fixtureFindings(), fixtureVerdicts(), graphDeps, sessionSource(chat1.id));
 		assert.deepEqual(stats, { nodes: 0, edges: 0 });
 		const graph = scopedGraph([chat1.id]);
 		assert.equal(graph.nodes.length, 3);
@@ -342,11 +348,13 @@ describe("the merger (mergeFindings)", () => {
 						name: "Alpha",
 						statement: "Alpha feel", // a DIFFERENT phrasing — identity is the verdict, not strings
 						aliases: ["alpha intuition"],
-						linkTo: alphaId,
 					},
 				],
 				edges: [],
 			},
+			// VERDICTS-ONLY: the identity call is a link entry, not a field
+			// on the proposition (owner, 2026-09-28).
+			{ links: [{ id: "q1", linkTo: alphaId }], edges: [] },
 			graphDeps,
 			sessionSource(chat2.id),
 		);
@@ -384,6 +392,7 @@ describe("the merger (mergeFindings)", () => {
 				],
 				edges: [],
 			},
+			{ links: [], edges: [] },
 			graphDeps,
 			{ foldedAt: "2026-09-13T00:00:00.000Z" },
 		);
@@ -408,7 +417,7 @@ describe("the merger (mergeFindings)", () => {
 					id: `p${i + 1}`,
 					name: `Cluster node ${i + 1}`,
 					statement,
-					aliases: [], // birth provenance — the message anchors
+					aliases: [],
 				})),
 				edges: [
 					{ from: "p1", to: "p2", type: "follows", },
@@ -416,6 +425,7 @@ describe("the merger (mergeFindings)", () => {
 					{ from: "p1", to: "p3", type: "follows", },
 				],
 			},
+			{ links: [], edges: [] },
 			graphDeps,
 			{ foldedAt: "2026-09-13T00:00:00.000Z" },
 		);
@@ -462,11 +472,12 @@ describe("the merger (mergeFindings)", () => {
 						name: "Alpha",
 						statement: "Alpha intuition", // IDENTICAL to the existing node's statement
 						aliases: [],
-						// no linkTo — identity is the auditor's call alone
 					},
 				],
 				edges: [],
 			},
+			// empty verdicts — identity is the auditor's call alone
+			{ links: [], edges: [] },
 			graphDeps,
 			sessionSource(chat3.id),
 		);
@@ -485,11 +496,12 @@ describe("the merger (mergeFindings)", () => {
 						id: "p1",
 						name: "Vim normal mode",
 						statement: "Vim starts in Normal mode, where keys are commands.",
-						aliases: [], // notes carry no message anchors — the file is the provenance
+						aliases: [],
 					},
 				],
 				edges: [],
 			},
+			{ links: [], edges: [] },
 			graphDeps,
 			{ foldedAt: "2026-09-13T00:00:00.000Z" },
 		);
@@ -586,14 +598,14 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 				),
 			]),
 		].flat());
-		const auditA: AuditResult = {
+		const findingsA: SessionFindings = {
 			propositions: [
 				{ id: "p1", name: "Shared core", statement: "Shared core statement", aliases: ["shared feel"], },
 				{ id: "p2", name: "Solo fact", statement: "Solo fact statement", aliases: ["solo feel"], },
 			],
 			edges: [{ from: "p1", to: "p2", type: "follows", }],
 		};
-		mergeFindings(dA.id, auditA, graphDeps, sessionSource(dA.id));
+		mergeFindings(dA.id, findingsA, { links: [], edges: [] }, graphDeps, sessionSource(dA.id));
 		// Resolve through THIS session's mappings — the shared ledger holds
 		// lookalike statements from earlier tests, so statement-lookup would
 		// link dB to the wrong node.
@@ -612,14 +624,14 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 				),
 			]),
 		].flat());
-		const auditB: AuditResult = {
+		const findingsB: SessionFindings = {
 			propositions: [
-				{ id: "q1", name: "Shared again", statement: "Shared core, rephrased", aliases: ["B phrasing"], linkTo: xId },
+				{ id: "q1", name: "Shared again", statement: "Shared core, rephrased", aliases: ["B phrasing"] },
 				{ id: "q2", name: "B extra", statement: "B extra statement", aliases: ["b extra feel"], },
 			],
 			edges: [{ from: "q1", to: "q2", type: "follows", }],
 		};
-		mergeFindings(dB.id, auditB, graphDeps, sessionSource(dB.id));
+		mergeFindings(dB.id, findingsB, { links: [{ id: "q1", linkTo: xId }], edges: [] }, graphDeps, sessionSource(dB.id));
 		const zId = graphStore.readMappings().find((m) => m.chatId === dB.id && m.sourceId === "q2")!.graphNodeId;
 
 		// Coverage rows (both chats) + positions garnish — the deletion

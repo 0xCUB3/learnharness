@@ -229,24 +229,28 @@ export interface SessionFindings {
 	edges: ExtractedEdge[];
 }
 
-/** The auditor's verdict on one proposition: the findings, plus `linkTo` —
- *  the identity judgment. Absent = create a new node. */
-export interface AuditedProposition extends ExtractedProposition {
-	/** The existing GraphNode id this proposition IS — the auditor's
-	 *  identity verdict. On link, the session's phrasings (statement,
-	 *  aliases) join the node's aliases and the provenance unions.
-	 *  EQUIVALENCE BIAS (2026-09-27): paraphrases, rewordings, and
-	 *  compressions of the same claim MERGE — do not create a duplicate
-	 *  because the wording differs. Only genuinely distinct propositions
-	 *  stay apart. */
-	linkTo?: string;
+/** One identity verdict: the extractor's local proposition id → the
+ *  EXISTING graph node that proposition IS. On link, the session's
+ *  phrasings (statement, aliases) join the node's aliases and the
+ *  provenance unions. EQUIVALENCE BIAS (2026-09-27): paraphrases,
+ *  rewordings, and compressions of the same claim MERGE — do not create
+ *  a duplicate because the wording differs. Only genuinely distinct
+ *  propositions stay apart. */
+export interface IdentityLink {
+	id: string;
+	linkTo: string;
 }
 
-/** The auditor's output: the findings with identity verdicts, plus any
- *  bridging edges drawn to existing graph nodes. No drop channel — the
- *  auditor never rejects; the extractor is fully trusted (2026-09-27). */
-export interface AuditResult {
-	propositions: AuditedProposition[];
+/** The auditor's output — VERDICTS ONLY (owner, 2026-09-28): the auditor
+ *  never alters the extractor's findings, so it does not restate them;
+ *  the deterministic merger joins findings + verdicts. `links` = the
+ *  identity verdicts (local id ⇄ existing node); `edges` = BRIDGING
+ *  edges the auditor draws from existing graph nodes to the batch's
+ *  propositions (endpoints: existing node ids and/or local proposition
+ *  ids). No drop channel — the auditor never rejects; the extractor is
+ *  fully trusted (2026-09-27). */
+export interface AuditVerdicts {
+	links: IdentityLink[];
 	edges: ExtractedEdge[];
 }
 

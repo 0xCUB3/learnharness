@@ -30,7 +30,7 @@ import type { LhMessage } from "../src/core/native-messages.ts";
 import { newPlanBlockMessage } from "../src/core/native-messages.ts";
 import { projectView as projectNative } from "../src/core/view.ts";
 import type {
-	AuditResult,
+	AuditVerdicts,
 	CoverageEntry,
 	ExtractionRunUsage,
 	GraphEdge,
@@ -371,7 +371,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 	it("stringified-payload heal (owner, 2026-09-28): propositions arriving as ONE JSON string still validate and merge", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
-		const verdict: AuditResult = { propositions: FINDINGS.propositions, edges: FINDINGS.edges };
+		const verdict: AuditVerdicts = { links: [], edges: [] };
 
 		// The weak-model failure from the OpenRouter log: the whole array
 		// emitted as a JSON-STRING ("propositions.0: must be object").
@@ -402,10 +402,8 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			createdAt: "2026-08-01T00:00:00.000Z",
 			provenance: [],
 		});
-		const verdict: AuditResult = {
-			propositions: [
-				{ ...FINDINGS.propositions[0]!, linkTo: existingId },
-			],
+		const verdict: AuditVerdicts = {
+			links: [{ id: FINDINGS.propositions[0]!.id, linkTo: existingId }],
 			edges: [],
 		};
 
@@ -417,13 +415,20 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		});
 		const stats = await pipeline.runExtraction(chatId);
 
-		// The linked proposition created NO new node.
-		assert.deepEqual(stats, { nodes: 0, edges: 0 });
+		// VERDICTS-ONLY (2026-09-28): findings merge in FULL — the linked
+		// p1 creates no node, p2 creates one, and the extractor's edge
+		// resolves through them. (The old echo form could silently drop
+		// content by omitting it; that accidental drop channel is gone.)
+		assert.deepEqual(stats, { nodes: 1, edges: 1 });
 
 		// Link-append: the phrasing joined the existing node's aliases and
-		// the provenance unioned; no second node line defines a new node.
-		assert.equal(ledgers.readNodes().length, 2); // the pre-seeded line + the link line
-		assert.deepEqual(ledgers.readMappings(), [{ chatId, sourceId: "p1", graphNodeId: existingId }]);
+		// the provenance unioned; p2's create line is its own node.
+		assert.equal(ledgers.readNodes().length, 3); // pre-seeded + link line + p2's create
+		const mappings = ledgers.readMappings();
+		assert.equal(mappings.length, 2);
+		assert.deepEqual(mappings[0], { chatId, sourceId: "p1", graphNodeId: existingId });
+		assert.equal(mappings[1]!.sourceId, "p2");
+		assert.match(mappings[1]!.graphNodeId, /^n_/);
 
 		// COVERAGE checkpointed per message (not a whole-chat checkpoint):
 		// one entry per transcript message, fingerprinted content each —
@@ -513,11 +518,8 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 	it("the LLM cluster-namer is DEAD (wave 7): a merge mints no naming runs — labels are session names now", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
-		// Identity-pass verdict: p1 becomes a new node, p2 unlinked.
-		const verdict: AuditResult = {
-			propositions: [{ ...FINDINGS.propositions[0]! }],
-			edges: [],
-		};
+		// Empty verdicts: everything creates (verdicts-only, 2026-09-28).
+		const verdict: AuditVerdicts = { links: [], edges: [] };
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
@@ -525,7 +527,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			auditor: submitModel("submit_review", verdict),
 		});
 		const stats = await pipeline.runExtraction(chatId);
-		assert.deepEqual(stats, { nodes: 1, edges: 0 });
+		assert.deepEqual(stats, { nodes: 2, edges: 1 }); // full findings merge (verdicts-only)
 		// Wave 7 (950ddfd): birth-session clusters carry session-name labels,
 		// so the post-merge naming garnish is gone — no model spend, no
 		// naming-run records, no label writes.
@@ -536,10 +538,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 	it("engineFor fills the stages (model slots wave): the chain replaces config pins", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
-		const verdict: AuditResult = {
-			propositions: FINDINGS.propositions,
-			edges: [],
-		};
+		const verdict: AuditVerdicts = { links: [], edges: [] };
 		const consulted: string[] = [];
 		const pipeline = createExtractionPipeline({
 			chatStore,
@@ -566,10 +565,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 	it("direct test values still WIN over engineFor (the priority pin)", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
-		const verdict: AuditResult = {
-			propositions: FINDINGS.propositions,
-			edges: [],
-		};
+		const verdict: AuditVerdicts = { links: [], edges: [] };
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
@@ -622,8 +618,8 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		});
 		const seen: (string | undefined)[] = [];
 		const phaseOf = () => extractionStatuses().find((r) => r.chatId === chatId)?.phase;
-		const verdict: AuditResult = {
-			propositions: [{ ...FINDINGS.propositions[0]!, linkTo: existingId }],
+		const verdict: AuditVerdicts = {
+			links: [{ id: FINDINGS.propositions[0]!.id, linkTo: existingId }],
 			edges: [],
 		};
 		const pipeline = createExtractionPipeline({
@@ -762,8 +758,8 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			provenance: [],
 		});
 		const usageSeen: (number | undefined)[] = [];
-		const verdict: AuditResult = {
-			propositions: [{ ...FINDINGS.propositions[0]!, linkTo: existingId }],
+		const verdict: AuditVerdicts = {
+			links: [{ id: FINDINGS.propositions[0]!.id, linkTo: existingId }],
 			edges: [],
 		};
 		const pipeline = createExtractionPipeline({
@@ -789,7 +785,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const record = chatStore.getChat(chatId)!;
 		assert.equal(record.extractions?.length, 1);
 		const run = record.extractions![0]!;
-		assert.equal(run.stats?.nodes, 0); // linked, not created
+		assert.equal(run.stats?.nodes, 1); // p2 created; p1 linked, not created
 		// the scripted engine's model, provider-qualified (model slots wave)
 		assert.equal(run.stages.extractor.model, "faux:faux-1");
 		assert.equal(run.stages.extractor.steps.length, 1); // the submit call — the run STOPS after a clean submit
@@ -1073,7 +1069,7 @@ function passThroughAuditStep(): FauxResponseStep {
 				fauxToolCall(
 					"submit_review",
 					{
-						propositions: [{ ...FINDINGS.propositions[0]! }],
+						links: [],
 						edges: [],
 					} as unknown as ToolCall["arguments"],
 					{ id: "review-call" },
@@ -1122,9 +1118,10 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		// The document header is the session title.
 		assert.ok(views[0]!.startsWith("# Chunky coverage fixture"));
 
-		// p1 was a fresh node in batch 1; batch 2's p1 mapped to the same
-		// node (chat-scoped mapping).
-		assert.deepEqual(stats, { nodes: 1, edges: 0 });
+		// Batch 1 merged the full findings (verdicts-only: the extractor's
+		// output always fully merges); batch 2's identical ids mapped to
+		// the same nodes (chat-scoped mapping) — nothing new.
+		assert.deepEqual(stats, { nodes: 2, edges: 1 });
 
 		// Per-batch coverage: every message checkpointed, nothing legacy.
 		const coverage = ledgers.readCoverage();
@@ -1181,7 +1178,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const stats = await runPromise;
 
 		// Batch 1's emissions are kept and its messages stay covered.
-		assert.deepEqual(stats, { nodes: 1, edges: 0 });
+		assert.deepEqual(stats, { nodes: 2, edges: 1 });
 		assert.equal(ledgers.readCoverage().length, 3, "batch 1 checkpointed its three messages");
 		const cov = coverageOf(record.messages, ledgers.readCoverage(), chatId);
 		assert.equal(cov.uncoveredCount, 2, "the in-flight batch's messages stay uncovered");
@@ -1254,7 +1251,8 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		});
 		await reOpener.runExtraction(chatId);
 		assert.equal(reRunViews.length, 1, "one batch: the single re-opened message");
-		assert.ok(reRunViews[0]!.includes("### Learner · s1") && !reRunViews[0]!.includes("### Learner · s2"));
+		assert.ok(reRunViews[0]!.includes("the answer merged in late") && !reRunViews[0]!.includes("### Learner · s2"));
+		assert.ok(reRunViews[0]!.includes("### Learner"), "the re-opened message renders");
 		assert.equal(coverageOf(messages(), ledgers.readCoverage(), chatId).uncoveredCount, 0, "re-covered");
 	});
 });

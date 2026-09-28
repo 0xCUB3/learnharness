@@ -7,10 +7,10 @@
  *
  *   extractor (LLM)  → SessionFindings: the raw reasoning chains —
  *                      propositions (lonely relevant ones included) and
- *                      follows/supports edges, each with verbatim evidence,
+ *                      follows/supports edges,
  *                      from the source ALONE (whole session as markdown,
  *                      or raw notes). Fully trusted: no stage re-checks it.
- *   auditor (LLM)    → AuditResult: identity verdicts (linkTo an existing
+ *   auditor (LLM)    → AuditVerdicts: identity links (local id → an existing
  *                      node, or create) via graph-exploration tools, plus
  *                      any BRIDGING edges it draws between existing graph
  *                      nodes and the new propositions. Never sees the
@@ -43,7 +43,9 @@
 import { randomBytes } from "node:crypto";
 import type { CoverageEntry } from "./contracts/graph.ts";
 import type {
-	AuditResult,
+	AuditVerdicts,
+	ExtractedEdge,
+	SessionFindings,
 	Cluster,
 	EmissionStats,
 	GraphEdge,
@@ -114,7 +116,13 @@ const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
  * idempotency, one graph. The `source` parameter carries the checkpoint
  * stamp; the merger itself is chat-store-free.
  */
-export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDeps, source: MergeSource): EmissionStats {
+export function mergeFindings(
+	chatId: string,
+	findings: SessionFindings,
+	verdicts: AuditVerdicts,
+	deps: GraphDeps,
+	source: MergeSource,
+): EmissionStats {
 	const { graphStore: ledgers } = deps;
 	const stats: EmissionStats = { nodes: 0, edges: 0 };
 
@@ -132,16 +140,20 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 		seenMappingKeys.add(m.sourceId);
 	}
 	const now = new Date().toISOString();
+	const linkOf = new Map(verdicts.links.map((l) => [l.id, l.linkTo]));
 
-	for (const p of audit.propositions) {
+	// VERDICTS-ONLY (owner, 2026-09-28): the propositions come from the
+	// extractor's findings verbatim; the auditor's links join here by id.
+	for (const p of findings.propositions) {
 		if (mapping.has(p.id)) continue; // already resolved for this chat — idempotent
 		const points = pointOf(chatId);
+		const linkTo = linkOf.get(p.id);
 		let graphNodeId: string;
-		if (p.linkTo !== undefined && existingIds.has(p.linkTo)) {
+		if (linkTo !== undefined && existingIds.has(linkTo)) {
 			// Identity verdict: this proposition IS that node. Append a link
 			// line — the session's phrasings (statement + aliases) join the
 			// node's aliases, the provenance unions. Reads merge by id.
-			graphNodeId = p.linkTo;
+			graphNodeId = linkTo;
 			// Link-append: phrasings + provenance join at read time (the
 			// first line's name/statement/createdAt stand).
 			ledgers.appendNode({
@@ -173,42 +185,33 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 		}
 	}
 
-	// 2. Edges. Resolve endpoints through the mapping — with BRIDGING
-	//    (2026-09-27): an endpoint the extractor never proposed but that
-	//    names an EXISTING graph node is the auditor drawing a connection
-	//    between the graph it explored and this batch's propositions. Such
-	//    edges carry chat-scoped provenance with NO message anchor (nothing
-	//    in the transcript asserts them — the auditor is the asserter);
-	//    transcript-articulated edges keep message-granular provenance.
-	//    Dedupe by (from,to,type) already asserted by THIS chat (an existing
-	//    assertion by another chat stays untouched — provenance unions at
-	//    read time).
+	// 2. Edges — the extractor's own first, then the auditor's BRIDGING
+	//    edges (endpoints may be local ids and/or EXISTING graph node ids —
+	//    the auditor welding the batch into the graph it explored). Both
+	//    resolve through the mapping, both carry the run's chat-level
+	//    provenance point, and both dedupe by (from,to,type) already
+	//    asserted by THIS chat: an echoed duplicate (a weak auditor
+	//    restating an extractor edge) merges to one append; an assertion
+	//    by another chat stays untouched (provenance unions at read time).
 	const assertedByChat = new Set<string>();
 	for (const line of ledgers.readEdges()) {
 		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
 		if (line.provenance.some((pt) => pt.chatId === chatId)) assertedByChat.add(key);
 	}
-	for (const edge of audit.edges) {
+	const emitEdge = (edge: ExtractedEdge): void => {
 		const resolve = (endpoint: string): string | undefined =>
 			mapping.get(endpoint) ?? (existingIds.has(endpoint) ? endpoint : undefined);
 		const from = resolve(edge.from);
 		const to = resolve(edge.to);
-		if (!from || !to || from === to) continue; // unresolvable endpoint — skip
-		const bridged = !mapping.has(edge.from) || !mapping.has(edge.to);
+		if (!from || !to || from === to) return; // unresolvable endpoint — skip
 		const key = `${from}\u0000${to}\u0000${edge.type}`;
-		if (assertedByChat.has(key)) continue;
-		ledgers.appendEdge({
-			from,
-			to,
-			type: edge.type,
-			// bridged vs transcript edges both carry the run's chat-level
-			// point now; the distinction lives in the endpoint resolution
-			// above (mapping vs existing node id), not in the provenance.
-			provenance: pointOf(chatId),
-		});
+		if (assertedByChat.has(key)) return;
+		ledgers.appendEdge({ from, to, type: edge.type, provenance: pointOf(chatId) });
 		assertedByChat.add(key);
 		stats.edges++;
-	}
+	};
+	for (const edge of findings.edges) emitEdge(edge);
+	for (const edge of verdicts.edges) emitEdge(edge);
 
 	// 3. Checkpoint — THE COVERAGE DISCIPLINE (vision-extraction-coverage.md):
 	//    only now, after every append succeeded, is the batch covered. The
