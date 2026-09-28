@@ -10,8 +10,6 @@
  *   edges.jsonl    GraphEdge        — one line per edge ASSERTION (a second
  *                                      session asserting the same (from,to,type)
  *                                      appends another line; reads merge)
- *   mappings.jsonl  NodeMapping      — the session→graph identity map:
- *                                      (chatId, sourceId) → graphNodeId
  *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
  *
  * Plus config.SOURCES_FILE (sources.json): the imported-notes bookkeeping
@@ -34,7 +32,6 @@ import type {
 	GraphNode,
 	ExtractionRunUsage,
 	NotesSource,
-	NodeMapping,
 	Position,
 	ProvenancePoint,
 	CoverageEntry,
@@ -107,9 +104,6 @@ const isGraphEdge = (v: unknown): v is GraphEdge =>
 	Array.isArray(v.provenance) &&
 	v.provenance.every(isProvenancePoint);
 
-const isNodeMapping = (v: unknown): v is NodeMapping =>
-	isRecord(v) && isString(v.chatId) && isString(v.sourceId) && isString(v.graphNodeId);
-
 const isCheckpoint = (v: unknown): v is SessionCheckpoint =>
 	isRecord(v) && isString(v.chatId) && isString(v.foldedAt);
 
@@ -135,13 +129,6 @@ export const graphStore: GraphStore = {
 	},
 	readEdges(): GraphEdge[] {
 		return readValid(LEDGER_FILES.edges, isGraphEdge);
-	},
-
-	appendMapping(mapping: NodeMapping): void {
-		appendLine(LEDGER_FILES.mappings, mapping);
-	},
-	readMappings(): NodeMapping[] {
-		return readValid(LEDGER_FILES.mappings, isNodeMapping);
 	},
 
 	appendCheckpoint(checkpoint: SessionCheckpoint): void {
@@ -198,14 +185,12 @@ export const graphStore: GraphStore = {
 	rewriteLedgers(next: {
 		nodes?: GraphNode[];
 		edges?: GraphEdge[];
-		mappings?: NodeMapping[];
 		coverage?: CoverageEntry[];
 		checkpoints?: SessionCheckpoint[];
 	}): void {
 		const files = {
 			nodes: LEDGER_FILES.nodes,
 			edges: LEDGER_FILES.edges,
-			mappings: LEDGER_FILES.mappings,
 			coverage: LEDGER_FILES.coverage,
 			checkpoints: LEDGER_FILES.sessions,
 		} as const;

@@ -1221,11 +1221,19 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 
 	/** Import ONE raw notes file: register the source (deterministic id per
 	 *  file path — re-import keeps the same identity and its usage history)
-	 *  and run the pipeline over it. */
+	 *  and run the pipeline over it. Re-import guard (owner, 2026-09-29):
+	 *  the file's content fingerprint decides — unchanged text is a TRUE
+	 *  no-op (the mappings ledger used to dedupe this at merge time by
+	 *  accident); changed text re-runs the whole file. */
 	async function importNotes(input: NotesImportInput): Promise<EmissionStats> {
 		const id = `src_${crypto.createHash("sha256").update(input.filePath).digest("hex").slice(0, 12)}`;
+		const contentFp = crypto.createHash("sha256").update(input.text).digest("hex").slice(0, 16);
+		if (graphStore.readSources().find((s) => s.id === id)?.contentFp === contentFp) {
+			console.info(`[extraction ${id}] re-import with unchanged content (fp match) — skipping`);
+			return { nodes: 0, edges: 0 };
+		}
 		const importedAt = new Date().toISOString();
-		graphStore.upsertSource({ id, filePath: input.filePath, importedAt });
+		graphStore.upsertSource({ id, filePath: input.filePath, importedAt, contentFp });
 		return runNotesExtraction({ id, ...input, importedAt });
 	}
 

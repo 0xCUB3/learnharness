@@ -58,6 +58,12 @@ export interface NotesSource {
 	filePath: string;
 	/** ISO — when this file was imported (the checkpoint's foldedAt). */
 	importedAt: string;
+	/** sha256 of the imported text at the last EXTRACTION run — the
+	 *  same-path re-import guard (owner, 2026-09-29): a matching
+	 *  fingerprint is a TRUE no-op (no model calls, no usage record);
+	 *  a mismatch or a legacy missing stamp re-runs the whole file.
+	 *  The mappings ledger used to give this idempotency by accident. */
+	contentFp?: string;
 	/** The run's usage log — same append-only discipline as
 	 *  ChatRecord.extractions, idempotent per startedAt. */
 	extractions?: ExtractionRunUsage[];
@@ -107,18 +113,6 @@ export interface GraphEdge {
 	type: EdgeType;
 	/** Every (chat, message) point where this relation was asserted. */
 	provenance: ProvenancePoint[];
-}
-
-/** mappings.jsonl line — the session→graph identity map: the extraction
- *  pipeline's proposition (identified by its run-local source id) → the
- *  graph node it resolved to (created or linked). The audit trail of the
- *  auditor's identity verdicts; also the chat-scoped resolution table the
- *  merger uses to point events and edges at node ids. */
-export interface NodeMapping {
-	chatId: string;
-	/** The extractor's run-local proposition id ("p1", …). */
-	sourceId: string;
-	graphNodeId: string;
 }
 
 /** sessions.jsonl line — the emission checkpoint for one chat (which chats

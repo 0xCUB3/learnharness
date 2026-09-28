@@ -37,14 +37,12 @@ function fakeStores(
 	nodes: GraphNode[],
 	over: {
 		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt">>;
-		mappings?: Array<{ chatId: string; sourceId: string; graphNodeId: string }>;
 	} = {},
 ): { chatStore: ChatStore; graphStore: GraphStore } {
 	const edges: GraphEdge[] = [];
 	const graphStore: GraphStore = {
 		readNodes: () => nodes,
 		readEdges: () => edges,
-		readMappings: () => over.mappings ?? [],
 		readCheckpoints: () => [],
 		readCoverage: () => [],
 		readSources: () => [],
@@ -217,12 +215,7 @@ describe("auditor graph tools", () => {
 	});
 
 	it("list_propositions: FULL statement text (identity work), no dates", async () => {
-		const { chatStore: cs, graphStore: gs } = fakeStores(nodes, {
-			mappings: [
-				{ chatId: "c1", sourceId: "p1", graphNodeId: "n1" },
-				{ chatId: "c1", sourceId: "p2", graphNodeId: "n2" },
-			],
-		});
+		const { chatStore: cs, graphStore: gs } = fakeStores(nodes);
 		const tools = auditorGraphTools({ chatStore: cs, graphStore: gs });
 		const out = (await tools.list_propositions!.execute!("tc", { session: "c1" })).details as string;
 		assert.match(out, /2 proposition\(s\) born in this session:/);

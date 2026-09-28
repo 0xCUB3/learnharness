@@ -57,7 +57,6 @@ export function graphRevision(): number {
 	for (const file of [
 		LEDGER_FILES.nodes,
 		LEDGER_FILES.edges,
-		LEDGER_FILES.mappings,
 		LEDGER_FILES.sessions,
 		LEDGER_FILES.coverage,
 		POSITIONS_FILE,

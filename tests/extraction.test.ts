@@ -35,7 +35,7 @@ import type {
 	ExtractionRunUsage,
 	GraphEdge,
 	GraphNode,
-	NodeMapping,
+
 	NotesSource,
 	SessionCheckpoint,
 	SessionFindings,
@@ -65,7 +65,6 @@ function fauxEngine(steps: FauxResponseStep[]): PiEngine {
 function memoryLedgers() {
 	const nodes: GraphNode[] = [];
 	const edges: GraphEdge[] = [];
-	const mappings: NodeMapping[] = [];
 	const checkpoints: SessionCheckpoint[] = [];
 	const coverage: CoverageEntry[] = [];
 	const sources = new Map<string, NotesSource>();
@@ -75,8 +74,6 @@ function memoryLedgers() {
 		readNodes: () => nodes.map((n) => ({ ...n })),
 		appendEdge: (e: GraphEdge) => void edges.push(e),
 		readEdges: () => edges.map((e) => ({ ...e })),
-		appendMapping: (m: NodeMapping) => void mappings.push(m),
-		readMappings: () => mappings.map((m) => ({ ...m })),
 		appendCheckpoint: (c: SessionCheckpoint) => void checkpoints.push(c),
 		readCheckpoints: () => checkpoints.map((c) => ({ ...c })),
 		// Extraction coverage (vision-extraction-coverage.md) — append-only;
@@ -108,7 +105,6 @@ function memoryLedgers() {
 		rewriteLedgers: (next) => {
 			if (next.nodes) nodes.splice(0, nodes.length, ...next.nodes.map((n) => ({ ...n, provenance: [...n.provenance], aliases: [...n.aliases] })));
 			if (next.edges) edges.splice(0, edges.length, ...next.edges.map((e) => ({ ...e, provenance: [...e.provenance] })));
-			if (next.mappings) mappings.splice(0, mappings.length, ...next.mappings.map((m) => ({ ...m })));
 			if (next.coverage) coverage.splice(0, coverage.length, ...next.coverage.map((c) => ({ ...c })));
 			if (next.checkpoints) checkpoints.splice(0, checkpoints.length, ...next.checkpoints.map((c) => ({ ...c })));
 		},
@@ -419,11 +415,11 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// Link-append: the phrasing joined the existing node's aliases and
 		// the provenance unioned; p2's create line is its own node.
 		assert.equal(ledgers.readNodes().length, 3); // pre-seeded + link line + p2's create
-		const mappings = ledgers.readMappings();
-		assert.equal(mappings.length, 2);
-		assert.deepEqual(mappings[0], { chatId, sourceId: "p1", graphNodeId: existingId });
-		assert.equal(mappings[1]!.sourceId, "p2");
-		assert.match(mappings[1]!.graphNodeId, /^n_/);
+		const linkedLines = ledgers.readNodes().filter((n) => n.id === existingId);
+		assert.ok(
+			linkedLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId)),
+			"the link-append unions provenance",
+		);
 
 		// COVERAGE checkpointed per message (not a whole-chat checkpoint):
 		// one entry per transcript message, fingerprinted content each —
@@ -1021,7 +1017,6 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		const node = ledgers.readNodes()[0]!;
 		assert.equal(node.statement, "Vim starts in Normal mode, where keys are commands.");
 		assert.deepEqual(node.provenance, [{ chatId: source.id, messageId: "" }]);
-		assert.deepEqual(ledgers.readMappings(), [{ chatId: source.id, sourceId: "p1", graphNodeId: node.id }]);
 		// The checkpoint stamps the import.
 		assert.equal(ledgers.readCheckpoints()[0]!.chatId, source.id);
 	});
@@ -1062,10 +1057,12 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		assert.ok(calls >= 2, `expected ≥2 extractor calls, got ${calls}`);
 		assert.match(views[0]!, new RegExp(`part 1/${calls}`));
 		assert.match(views.at(-1)!, new RegExp(`part ${calls}/${calls}`));
-		// Same findings in every chunk → ONE node total (mapping dedupe
-		// across chunks), stats never double-count.
-		assert.deepEqual(stats, { nodes: 1, edges: 0 });
-		assert.equal(ledgers.readNodes().length, 1);
+		// Same findings in every chunk → one node PER CHUNK: jobs merge
+		// independently (owner, 2026-09-29 — the mappings ledger is gone);
+		// cross-chunk identity is the auditor's linkTo verdict, and these
+		// fixtures submit none.
+		assert.deepEqual(stats, { nodes: calls, edges: 0 });
+		assert.equal(ledgers.readNodes().length, calls);
 	});
 
 	it("required top-level fields (owner, 2026-09-28): a findings submit MISSING edges fails validation — no silent edge-less merge", async () => {
@@ -1098,7 +1095,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		assert.equal(ledgers.readCoverage().length, 0, "nothing checkpointed — the messages stay re-runnable");
 	});
 
-	it("re-importing the same file is idempotent: same source identity, refs dedupe, usage history grows", async () => {
+	it("re-importing is fingerprint-guarded: unchanged text is a TRUE no-op; changed text re-runs (owner, 2026-09-29)", async () => {
 		const ledgers = memoryLedgers();
 		const mk = () =>
 			createExtractionPipeline({
@@ -1110,12 +1107,23 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		const first = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
 		assert.deepEqual(first, { nodes: 1, edges: 0 });
 
+		// Unchanged text: the content fingerprint matches — no extraction
+		// at all (no model calls, no usage record; the mappings ledger
+		// used to give this no-op at merge time by accident).
 		const second = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
-		assert.deepEqual(second, { nodes: 0, edges: 0 }, "the same source id dedupes everything");
+		assert.deepEqual(second, { nodes: 0, edges: 0 }, "unchanged content is a true no-op");
 
 		assert.equal(ledgers.readSources().length, 1, "one source identity — the path hashes to the same id");
-		assert.equal(ledgers.readSources()[0]!.extractions?.length, 2, "both runs billed their usage");
+		assert.equal(ledgers.readSources()[0]!.extractions?.length, 1, "only the real run billed its usage");
 		assert.equal(ledgers.readNodes().length, 1, "no duplicate node");
+
+		// Changed text under the same path: the fingerprint misses — the
+		// whole file re-runs (fresh merge; the auditor's links would dedupe
+		// identity on a real model).
+		const third = await mk().importNotes({ filePath: "/vault/learn vim.md", text: `${NOTES_TEXT}\nA new closing line.` });
+		assert.deepEqual(third, { nodes: 1, edges: 0 }, "changed content re-extracts");
+		assert.equal(ledgers.readSources()[0]!.extractions?.length, 2, "the re-run bills its usage");
+		assert.equal(ledgers.readNodes().length, 2);
 	});
 
 	it("aborts like a chat run: true cancellation, nothing merged, partial usage in the source record", async () => {
@@ -1221,9 +1229,11 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		assert.ok(views[0]!.startsWith("# Chunky coverage fixture"));
 
 		// Batch 1 merged the full findings (verdicts-only: the extractor's
-		// output always fully merges); batch 2's identical ids mapped to
-		// the same nodes (chat-scoped mapping) — nothing new.
-		assert.deepEqual(stats, { nodes: 2, edges: 1 });
+		// output always fully merges); batch 2's identical ids are a
+		// SEPARATE job's namespace (owner, 2026-09-29 — no mapping table)
+		// — its propositions merge again as fresh nodes. Cross-batch
+		// identity is the auditor's linkTo verdict, never the merger's.
+		assert.deepEqual(stats, { nodes: 4, edges: 2 });
 
 		// Per-batch coverage: every message checkpointed, nothing legacy.
 		const coverage = ledgers.readCoverage();
@@ -1464,10 +1474,11 @@ describe("per-chunk parallel jobs (owner, 2026-09-28)", () => {
 
 		assert.equal(extractPeak, 3, "8 chunks, 3 permits — the peak pins both the fan-out and the cap");
 		assert.equal(auditPeak, 1, "audits serialize behind the gate — never two at once");
-		// Identical findings in every chunk: one merge, then dedupe — the
-		// aggregate counts real emissions, never double.
-		assert.deepEqual(stats, { nodes: 2, edges: 1 });
-		assert.equal(ledgers.readNodes().length, 2);
+		// Identical findings in every chunk, one merge PER chunk (jobs are
+		// independent — owner, 2026-09-29): 8 chunks × 2 propositions,
+		// 8 × 1 edge. The auditor's links, not the merger, dedupe identity.
+		assert.deepEqual(stats, { nodes: 16, edges: 8 });
+		assert.equal(ledgers.readNodes().length, 16);
 	});
 });
 
@@ -1496,7 +1507,6 @@ describe("the session-deletion guard (chat deleted mid-run)", () => {
 		// trace for a later snapshot to resurrect.
 		assert.equal(ledgers.readNodes().length, 0);
 		assert.equal(ledgers.readEdges().length, 0);
-		assert.equal(ledgers.readMappings().length, 0);
 		assert.equal(ledgers.readCoverage().length, 0);
 		assert.equal(ledgers.readCheckpoints().length, 0);
 

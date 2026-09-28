@@ -19,7 +19,7 @@ const depthMode: "off" | "vertical" | "radial" =
 	depthArg === "--depth=vertical" ? "vertical" : depthArg === "--depth=radial" ? "radial" : "off";
 import { incrementalLayout } from "../src/core/layout.ts";
 import { birthSessionPartition } from "../src/core/session-clusters.ts";
-import type { GraphNode, NodeMapping, Position } from "../src/core/contracts.ts";
+import type { GraphNode, Position } from "../src/core/contracts.ts";
 
 function main() {
 	const t0 = Date.now();
@@ -35,17 +35,17 @@ function main() {
 	const edges = graphStore.readEdges();
 	// The cluster source (wave 7): the birth-session partition, derived on
 	// read — same as the real settle (core/layout-settle.ts).
-	const birthClusters = birthSessionPartition(nodes, graphStore.readMappings());
+	const birthClusters = birthSessionPartition(nodes);
 
 	// Batches: each imported file, in real import order (sources.json
-	// importedAt). A node belongs to the file whose mapping first claims it
-	// (mapping line order = arrival); nodes no mapping covers (legacy) ride
+	// importedAt). A node belongs to the session of its FIRST provenance
+	// point (line order = arrival); nodes with no provenance (legacy) ride
 	// the final batch.
 	const sources = [...graphStore.readSources()].sort((a, b) => a.importedAt.localeCompare(b.importedAt));
-	const mappings: NodeMapping[] = graphStore.readMappings();
 	const batchOf = new Map<string, string>(); // nodeId → srcId
-	for (const m of mappings) {
-		if (!batchOf.has(m.graphNodeId)) batchOf.set(m.graphNodeId, m.chatId);
+	for (const node of nodes) {
+		const birth = node.provenance[0]?.chatId;
+		if (birth !== undefined && !batchOf.has(node.id)) batchOf.set(node.id, birth);
 	}
 
 	const delivered = new Set<string>();

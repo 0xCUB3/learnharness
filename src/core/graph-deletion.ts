@@ -13,7 +13,7 @@
  *
  *   preserve-graph  the chat's extraction bookkeeping dies — its coverage
  *                   rows and its legacy checkpoint lines — and NOTHING else:
- *                   nodes, edges, mappings stay byte-identical.
+ *                   nodes and edges stay byte-identical.
  *                   The graph keeps the session's contributions; the
  *                   snapshot simply no longer resolves the dead chatId to
  *                   a title (nodeSessions filters unknown ids at read
@@ -22,8 +22,8 @@
  *   delete-nodes    "this session never happened": every trace of the
  *                   chat leaves the ledgers — its provenance points on
  *                   every node and edge line, its link lines (their
- *                   phrasings die with them), its mapping lines (the audit trail), its
- *                   coverage/checkpoint rows — and orphans die: a node
+ *                   phrasings die with them), its coverage/checkpoint
+ *                   rows — and orphans die: a node
  *                   whose references all came from this chat disappears
  *                   entirely, pruned from the positions and embedding
  *                   ledgers too (dead members would break cluster hulls).
@@ -57,7 +57,6 @@ import type {
 	CoverageEntry,
 	GraphEdge,
 	GraphNode,
-	NodeMapping,
 	SessionCheckpoint,
 } from "./contracts.ts";
 import type { GraphStore } from "./ports.ts";
@@ -74,8 +73,6 @@ export interface ChatDeletionStats {
 	nodesRemoved: number;
 	/** Edge assertion LINES removed (empty-provenance or dead endpoint). */
 	edgesRemoved: number;
-	/** Mapping lines removed (the chat's audit trail). */
-	mappingsRemoved: number;
 	/** Coverage rows removed. */
 	coverageRemoved: number;
 	/** Checkpoint lines removed. */
@@ -85,7 +82,6 @@ export interface ChatDeletionStats {
 const EMPTY_STATS: ChatDeletionStats = {
 	nodesRemoved: 0,
 	edgesRemoved: 0,
-	mappingsRemoved: 0,
 	coverageRemoved: 0,
 	checkpointsRemoved: 0,
 };
@@ -121,7 +117,6 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 	// ── delete-nodes: the full purge ──────────────────────────────────────
 	const nodeLines = graphStore.readNodes();
 	const edgeLines = graphStore.readEdges();
-	const mappings = graphStore.readMappings();
 
 	// Does the chat touch the graph at all? (A never-extracted chat still
 	// needs its coverage rows dropped above, but no ledger rewrite — keeps
@@ -129,8 +124,7 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 	// changed.)
 	const touched =
 		nodeLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId)) ||
-		edgeLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId)) ||
-		mappings.some((m) => m.chatId === chatId);
+		edgeLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId));
 	if (!touched) {
 		if (stats.coverageRemoved > 0 || stats.checkpointsRemoved > 0) {
 			graphStore.rewriteLedgers({ coverage, checkpoints });
@@ -152,9 +146,6 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 	const live = new Set<string>();
 	for (const line of nodeLines) {
 		if (survives(line.provenance)) live.add(line.id);
-	}
-	for (const mapping of mappings) {
-		if (mapping.chatId !== chatId) live.add(mapping.graphNodeId);
 	}
 
 	// 2. Node lines. Per-line (each line is ONE extraction run's append, so
@@ -209,17 +200,12 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 		outEdges.push(points.length === line.provenance.length ? line : { ...line, provenance: points });
 	}
 
-	// 4. Mappings: the chat's rows die outright.
-	const outMappings = mappings.filter((m) => m.chatId !== chatId);
-
 	stats.nodesRemoved = [...new Set(nodeLines.map((line) => line.id))].filter((id) => !live.has(id)).length;
 	stats.edgesRemoved = edgeLines.length - outEdges.length;
-	stats.mappingsRemoved = mappings.length - outMappings.length;
 
 	graphStore.rewriteLedgers({
 		nodes: outNodes,
 		edges: outEdges,
-		mappings: outMappings,
 		coverage,
 		checkpoints,
 	});
@@ -272,14 +258,11 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 export interface NodeDeletionStats {
 	/** Edge assertion LINES removed (every edge touching the node). */
 	edgesRemoved: number;
-	/** Mapping lines removed (the node's audit trail). */
-	mappingsRemoved: number;
 }
 
 /** The confirm dialog's pre-flight facts (the GET on the same node id):
  * what full death would take with it. sessions is the deduped set of
- * chats/notes sources that reference the node — provenance points and
- * mapping lines count. */
+ * chats/notes sources that reference the node — provenance points count. */
 export interface NodeDeletionImpact {
 	edges: number;
 	sessions: string[];
@@ -298,9 +281,6 @@ export function nodeDeletionImpact(graphStore: GraphStore, nodeId: string): Node
 	for (const line of nodeLinesOf(graphStore, nodeId)) {
 		for (const pt of line.provenance) sessions.add(pt.chatId);
 	}
-	for (const mapping of graphStore.readMappings()) {
-		if (mapping.graphNodeId === nodeId) sessions.add(mapping.chatId);
-	}
 	return {
 		edges: edges.length,
 		sessions: [...sessions].sort(),
@@ -318,10 +298,7 @@ export function deleteNodeTraces(graphStore: GraphStore, nodeId: string): NodeDe
 	if (nodeLines.length === 0) return null;
 
 	const edgeLines = graphStore.readEdges();
-	const mappings = graphStore.readMappings();
-
 	const outEdges = edgeLines.filter((line) => line.from !== nodeId && line.to !== nodeId);
-	const outMappings = mappings.filter((m) => m.graphNodeId !== nodeId);
 
 	// Only the touched ledgers: the node's own lines always die (its file
 	// must move), everything else rewrites only when rows actually drop.
@@ -329,7 +306,6 @@ export function deleteNodeTraces(graphStore: GraphStore, nodeId: string): NodeDe
 	graphStore.rewriteLedgers({
 		nodes: outNodes,
 		...(outEdges.length !== edgeLines.length ? { edges: outEdges } : {}),
-		...(outMappings.length !== mappings.length ? { mappings: outMappings } : {}),
 	});
 
 	// The resting position dies with the node.
@@ -341,6 +317,5 @@ export function deleteNodeTraces(graphStore: GraphStore, nodeId: string): NodeDe
 
 	return {
 		edgesRemoved: edgeLines.length - outEdges.length,
-		mappingsRemoved: mappings.length - outMappings.length,
 	};
 }

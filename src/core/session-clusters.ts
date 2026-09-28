@@ -21,24 +21,18 @@
  *
  * Notes imports are birth-sessions too (owner ruling 2026-09-23): their
  * nodes carry a "src_…" source id instead of a chat id; the caller labels
- * them with the file's path (kind: file in the session views). The
- * mapping-line fallback (owner-approved 2026-09-23, surfaced by the
- * interlude's live smoke): production notes imports create provenance-
- * EMPTY nodes (the notes front door passes messages: null — the file's
- * anchor is the mapping line), so a provenance-empty node's birth session
- * is its FIRST mapping line's chatId in ledger order. Only notes-born
- * nodes ever hit the fallback — chat extraction always writes provenance
- * points, and a re-encountered node's link-append adds one, which
- * re-opens the provenance rule above. Deletion-safe: a deleted chat's
- * mapping lines are stripped alongside its provenance; notes mappings
- * survive because files are never deleted.
+ * them with the file's path (kind: file in the session views). The old
+ * mapping-line fallback for provenance-empty notes nodes is GONE (owner,
+ * 2026-09-29): every merge writes provenance points, and the mappings
+ * ledger itself died with per-job in-memory resolution — provenance is
+ * the one birth record.
  *
  * Browser-safe pure logic (no node builtins, no fs): same contract style
  * as the rest of the core graph derivation. Not re-exported through the
  * core barrel — the shell reads clusters from the snapshot; only the
  * server-side derivations (snapshot, settle) and tests import this.
  */
-import type { GraphNode, NodeMapping } from "./contracts.ts";
+import type { GraphNode } from "./contracts.ts";
 
 /** One birth-session cluster: the session id + the SORTED member node
  *  ids born in it. The shape is deliberately the { members } contract
@@ -51,44 +45,26 @@ export interface BirthSessionCluster {
 	members: string[];
 }
 
-/** A node's birth session: its first surviving provenance point's chatId;
- *  for a provenance-empty node, its first mapping line's chatId (the notes
- *  fallback — see the module doc). null when neither exists. */
-export function birthSessionOf(node: GraphNode, mappingFallback?: ReadonlyMap<string, string>): string | null {
-	const first = node.provenance[0];
-	if (first !== undefined) return first.chatId;
-	return mappingFallback?.get(node.id) ?? null;
-}
-
-/** The notes fallback index: nodeId → the chatId of the node's FIRST
- *  mapping line in ledger order. */
-export function birthMappingIndex(mappings: readonly NodeMapping[]): Map<string, string> {
-	const index = new Map<string, string>();
-	for (const mapping of mappings) {
-		if (!index.has(mapping.graphNodeId)) index.set(mapping.graphNodeId, mapping.chatId);
-	}
-	return index;
+/** A node's birth session: its first surviving provenance point's chatId.
+ *  null when the node carries no provenance at all (legacy data). */
+export function birthSessionOf(node: GraphNode): string | null {
+	return node.provenance[0]?.chatId ?? null;
 }
 
 /**
  * The birth-session partition over the given node LINES: dedupes by id
  * (first line defines — the getGraph rule), groups by birth session, and
  * returns the groups size-desc with members sorted (deterministic output:
- * ties break by session id ascending). Nodes with no surviving provenance
- * fall back to their first mapping line (notes-born); a node with neither
- * is left unclustered — it belongs to no session the graph can name.
+ * ties break by session id ascending). A node with no provenance is left
+ * unclustered — it belongs to no session the graph can name.
  */
-export function birthSessionPartition(
-	nodes: readonly GraphNode[],
-	mappings: readonly NodeMapping[] = [],
-): BirthSessionCluster[] {
-	const mappingFallback = birthMappingIndex(mappings);
+export function birthSessionPartition(nodes: readonly GraphNode[]): BirthSessionCluster[] {
 	const members = new Map<string, string[]>();
 	const seen = new Set<string>();
 	for (const node of nodes) {
 		if (seen.has(node.id)) continue;
 		seen.add(node.id);
-		const birth = birthSessionOf(node, mappingFallback);
+		const birth = birthSessionOf(node);
 		if (birth === null) continue;
 		const bucket = members.get(birth);
 		if (bucket) bucket.push(node.id);

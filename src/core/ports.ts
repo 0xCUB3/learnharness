@@ -19,7 +19,6 @@ import type {
 	JobKind,
 	JobRecord,
 	ExtractionRunUsage,
-	NodeMapping,
 	PlanTree,
 	Position,
 	CoverageEntry,
@@ -84,10 +83,6 @@ export interface GraphStore {
 
 	/** Append one quiz outcome / understanding observation. */
 
-	/** Append one identity-map line (chat's tree node → graph node). */
-	appendMapping(mapping: NodeMapping): void;
-	readMappings(): NodeMapping[];
-
 	/** Append one emission checkpoint. */
 	appendCheckpoint(checkpoint: SessionCheckpoint): void;
 	readCheckpoints(): SessionCheckpoint[];
@@ -127,7 +122,6 @@ export interface GraphStore {
 	rewriteLedgers(next: {
 		nodes?: GraphNode[];
 		edges?: GraphEdge[];
-		mappings?: NodeMapping[];
 		coverage?: CoverageEntry[];
 		checkpoints?: SessionCheckpoint[];
 	}): void;

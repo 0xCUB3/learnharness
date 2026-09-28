@@ -38,14 +38,12 @@ function fakeStores(
 	over: {
 		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt">>;
 		sources?: Array<Pick<NotesSource, "id" | "filePath" | "importedAt">>;
-		mappings?: Array<{ chatId: string; sourceId: string; graphNodeId: string }>;
 	} = {},
 ): GraphDeps {
 	const edges: GraphEdge[] = [];
 	const graphStore: GraphStore = {
 		readNodes: () => nodes,
 		readEdges: () => edges,
-		readMappings: () => over.mappings ?? [],
 		readCheckpoints: () => [],
 		readCoverage: () => [],
 		readSources: () =>
@@ -103,46 +101,15 @@ describe("birthSessionPartition", () => {
 	});
 });
 
-// ─── the notes mapping fallback (owner-approved 2026-09-23) ─────────────────
+// ─── notes files as birth sessions (production shape) ────────────────────────
 
-describe("the notes mapping-line fallback", () => {
-	// The PRODUCTION notes shape: importNotes passes messages: null, so
-	// nodes are born with EMPTY provenance — the file's anchor is the
-	// mapping line (interlude live-smoke finding: the provenance-only rule
-	// left every imported file unclustered and invisible to the prober).
-	it("empty-provenance nodes birth under their first mapping line's session", () => {
-		const nodes = [
-			node("a", "Alpha", []),
-			node("b", "Beta", []),
-			node("c", "Gamma", []),
-			node("d", "Delta", [pt("chat1")]), // provenance wins — mapping ignored
-		];
-		const mappings = [
-			{ chatId: "src_notes", sourceId: "p1", graphNodeId: "a" },
-			{ chatId: "src_notes", sourceId: "p2", graphNodeId: "b" },
-			{ chatId: "src_notes", sourceId: "p3", graphNodeId: "c" },
-			// A chat mapping for a node that ALSO has provenance: never consulted.
-			{ chatId: "chat2", sourceId: "p4", graphNodeId: "d" },
-			// A mapping for a node that does not exist: ignored.
-			{ chatId: "src_notes", sourceId: "p5", graphNodeId: "ghost" },
-		];
-		const clusters = birthSessionPartition(nodes, mappings);
-		assert.deepEqual(clusters, [
-			{ id: "src_notes", members: ["a", "b", "c"] },
-			{ id: "chat1", members: ["d"] },
-		], "size-desc, then id asc — src_notes first");
-		// No mapping and no provenance: unclustered.
-		assert.deepEqual(birthSessionPartition([node("x", "X", [])], mappings), []);
-	});
-
+describe("notes files as birth sessions", () => {
+	// The mapping-line fallback is GONE (owner, 2026-09-29): the mappings
+	// ledger itself died with per-job in-memory resolution, and every merge
+	// writes provenance points — the src id IS the birth session.
 	it("graphSessionIndex lists imported files as kind:file with birth counts (production shape)", () => {
-		const nodes = [node("a", "Alpha", []), node("b", "Beta", []), node("c", "Gamma", [])];
+		const nodes = [node("a", "Alpha", [pt("src_abc")]), node("b", "Beta", [pt("src_abc")]), node("c", "Gamma", [pt("src_abc")])];
 		const deps = fakeStores(nodes, {
-			mappings: [
-				{ chatId: "src_abc", sourceId: "p1", graphNodeId: "a" },
-				{ chatId: "src_abc", sourceId: "p2", graphNodeId: "b" },
-				{ chatId: "src_abc", sourceId: "p3", graphNodeId: "c" },
-			],
 			sources: [{ id: "src_abc", filePath: "/vault/learn vim.md", importedAt: "2026-09-22T00:00:00.000Z" }],
 		});
 		const index = graphSessionIndex(deps);
@@ -159,11 +126,7 @@ describe("the notes mapping-line fallback", () => {
 	});
 
 	it("graphSessionPropositions lists the file's births under the src id (a pure birth list, 2026-09-27)", () => {
-		const deps = fakeStores([node("a", "Alpha", []), node("b", "Beta", [])], {
-			mappings: [
-				{ chatId: "src_abc", sourceId: "p1", graphNodeId: "a" },
-				{ chatId: "src_abc", sourceId: "p2", graphNodeId: "b" },
-			],
+		const deps = fakeStores([node("a", "Alpha", [pt("src_abc")]), node("b", "Beta", [pt("src_abc")])], {
 			sources: [{ id: "src_abc", filePath: "/vault/learn vim.md", importedAt: "2026-09-22T00:00:00.000Z" }],
 		});
 		assert.deepEqual(graphSessionPropositions(deps, "src_abc"), [

@@ -55,7 +55,7 @@ import type {
 	GraphSnapshot,
 } from "./contracts.ts";
 import { MIN_CLUSTER_SIZE } from "./clusters.ts";
-import { birthMappingIndex, birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
+import { birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
 /** The storage ports every graph operation needs, passed explicitly. */
@@ -101,21 +101,23 @@ const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
 // ─── the merger (extraction pipeline stage 3 — deterministic) ────────────────
 
 /**
- * Merge one chat's audited findings into the graph ledgers — the pipeline's
- * apply stage. Deterministic + idempotent: re-merging the same verdicts (or
- * a later re-extraction of the same chat) appends nothing but the new.
+ * Merge one job's audited findings into the graph ledgers — the pipeline's
+ * apply stage. Deterministic. Each chunk/batch job merges INDEPENDENTLY
+ * (owner, 2026-09-29): resolution is a job-local in-memory map from this
+ * submit's proposition ids to graph node ids — nothing persists between
+ * jobs, so no job can see (or collide with) another's ids. Cross-job
+ * identity is the auditor's alone: it links this job's propositions to
+ * existing nodes before this function is ever called.
  *
- * Identity is the auditor's link-or-create verdict: `linkTo` an existing
- * node (validated against the ledger — an unknown id falls back to create)
- * appends a LINK line (the session's phrasings join the node's aliases and
- * the provenance unions; getGraph merges lines by id); absent → a new node.
- * Mapping lines record each verdict: one per (chat, sourceId). Idempotent:
- * a proposition id already mapped for this chat reuses its resolution.
+ * Identity inside the job is the auditor's link-or-create verdict: `linkTo`
+ * an existing node (validated against the ledger — an unknown id falls
+ * back to create) appends a LINK line (the job's phrasings join the node's
+ * aliases and the provenance unions; getGraph merges lines by id);
+ * absent → a new node.
  *
- * `chatId` is the run's source key: a real chat, or a notes source id
- * ("src_…") for the format-agnostic import path — same ledgers, same
- * idempotency, one graph. The `source` parameter carries the checkpoint
- * stamp; the merger itself is chat-store-free.
+ * `chatId` is the job's source key: a real chat, or a notes source id
+ * ("src_…") for the format-agnostic import path. The `source` parameter
+ * carries the checkpoint stamp; the merger itself is chat-store-free.
  */
 export function mergeFindings(
 	chatId: string,
@@ -127,26 +129,22 @@ export function mergeFindings(
 	const { graphStore: ledgers } = deps;
 	const stats: EmissionStats = { nodes: 0, edges: 0 };
 
-	// 1. Resolution: this run's propositions → graph node ids. Existing
-	//    mapping lines for THIS chat are loaded first — the audit trail doubles
-	//    as the resolution table, which makes re-merging the same chat
-	//    idempotent (a re-extraction re-merges through the auditor's linkTo
-	//    verdicts instead). Fresh sourceIds resolve as the verdicts say.
+	// 1. Resolution: THIS job's propositions → graph node ids, built
+	//    in-memory as the propositions resolve (owner, 2026-09-29: the
+	//    mappings ledger is gone — a persisted table was a shared namespace
+	//    across independent jobs, and cross-job id collisions silently
+	//    dropped propositions and welded wrong edges). Dedupe across runs
+	//    is the coverage ledger (nothing re-extracts) and the auditor's
+	//    equivalence links (re-encountered knowledge merges in).
 	const existingIds = new Set(ledgers.readNodes().map((n) => n.id));
 	const mapping = new Map<string, string>();
-	const seenMappingKeys = new Set<string>();
-	for (const m of ledgers.readMappings()) {
-		if (m.chatId !== chatId) continue;
-		mapping.set(m.sourceId, m.graphNodeId);
-		seenMappingKeys.add(m.sourceId);
-	}
 	const now = new Date().toISOString();
 	const linkOf = new Map(verdicts.links.map((l) => [l.id, l.linkTo]));
 
 	// VERDICTS-ONLY (owner, 2026-09-28): the propositions come from the
 	// extractor's findings verbatim; the auditor's links join here by id.
 	for (const p of findings.propositions) {
-		if (mapping.has(p.id)) continue; // already resolved for this chat — idempotent
+		if (mapping.has(p.id)) continue; // duplicate id WITHIN this submit — first resolution stands
 		const points = pointOf(chatId);
 		const linkTo = linkOf.get(p.id);
 		let graphNodeId: string;
@@ -180,20 +178,14 @@ export function mergeFindings(
 			existingIds.add(graphNodeId);
 		}
 		mapping.set(p.id, graphNodeId);
-		if (!seenMappingKeys.has(p.id)) {
-			ledgers.appendMapping({ chatId, sourceId: p.id, graphNodeId });
-			seenMappingKeys.add(p.id);
-		}
 	}
 
-	// 2. Edges — the extractor's own first, then the auditor's BRIDGING
-	//    edges (endpoints may be local ids and/or EXISTING graph node ids —
-	//    the auditor welding the batch into the graph it explored). Both
-	//    resolve through the mapping, both carry the run's chat-level
-	//    provenance point, and both dedupe by (from,to,type) already
-	//    asserted by THIS chat: an echoed duplicate (a weak auditor
-	//    restating an extractor edge) merges to one append; an assertion
-	//    by another chat stays untouched (provenance unions at read time).
+	// 2. Edges — the extractor's own, the ONLY edge source (the auditor's
+	//    edges argument is gone, owner 2026-09-28 evening). Endpoints are
+	//    this job's local proposition ids and resolve through the job-local
+	//    map; edges carry the run's chat-level provenance point and dedupe
+	//    by (from,to,type) already asserted by THIS chat — an assertion by
+	//    another chat stays untouched (provenance unions at read time).
 	const assertedByChat = new Set<string>();
 	for (const line of ledgers.readEdges()) {
 		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
@@ -295,7 +287,6 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		}
 		chats.add(chatId);
 	};
-	for (const m of deps.graphStore.readMappings()) touch(m.graphNodeId, m.chatId);
 	for (const node of nodes) {
 		for (const pt of node.provenance) touch(node.id, pt.chatId);
 	}
@@ -339,7 +330,7 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 	// presentation rule (a region needs >= 3 propositions for a hull). A
 	// birth session whose record is gone (deleted chat) keeps its members
 	// but renders unlabeled — honest, never guessed.
-	const communities = birthSessionPartition(nodes, deps.graphStore.readMappings());
+	const communities = birthSessionPartition(nodes);
 	const clusters: Cluster[] = communities
 		.filter((community) => community.members.length >= MIN_CLUSTER_SIZE)
 		.map((community) => ({
@@ -396,8 +387,7 @@ export interface GraphSessionEntry {
 export function graphSessionIndex(deps: GraphDeps): GraphSessionEntry[] {
 	const counts = new Map<string, number>();
 	const born = getGraph(deps.graphStore);
-	const mappingFallback = birthMappingIndex(deps.graphStore.readMappings());
-	for (const cluster of birthSessionPartition(born.nodes, deps.graphStore.readMappings())) {
+	for (const cluster of birthSessionPartition(born.nodes)) {
 		counts.set(cluster.id, cluster.members.length);
 	}
 	const chats = new Map(deps.chatStore.listChats().map((chat) => [chat.id, chat]));
@@ -445,8 +435,7 @@ export interface GraphSessionProposition {
 /** The propositions BORN in one session — what that session first
  *  articulated. Members sorted by node id — deterministic. */
 export function graphSessionPropositions(deps: GraphDeps, sessionId: string): GraphSessionProposition[] {
-	const mappingFallback = birthMappingIndex(deps.graphStore.readMappings());
-	const born = getGraph(deps.graphStore).nodes.filter((node) => birthSessionOf(node, mappingFallback) === sessionId);
+	const born = getGraph(deps.graphStore).nodes.filter((node) => birthSessionOf(node) === sessionId);
 	return born
 		.map((node) => ({ nodeId: node.id, name: node.name }))
 		.sort((a, b) => (a.nodeId < b.nodeId ? -1 : 1));
