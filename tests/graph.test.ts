@@ -256,7 +256,7 @@ function fixtureFindings(): SessionFindings {
 /** The auditor's verdicts when nothing links: an empty verdict set is a
  *  valid full review (verdicts-only, owner 2026-09-28). */
 function fixtureVerdicts(): AuditVerdicts {
-	return { links: [], edges: [] };
+	return { links: [] };
 }
 
 /** The chat every merger test folds (shared, so ordering is intentional). */
@@ -359,7 +359,7 @@ describe("the merger (mergeFindings)", () => {
 			},
 			// VERDICTS-ONLY: the identity call is a link entry, not a field
 			// on the proposition (owner, 2026-09-28).
-			{ links: [{ id: "q1", linkTo: alphaId }], edges: [] },
+			{ links: [{ id: "q1", linkTo: alphaId }] },
 			graphDeps,
 			sessionSource(chat2.id),
 		);
@@ -397,7 +397,7 @@ describe("the merger (mergeFindings)", () => {
 				],
 				edges: [],
 			},
-			{ links: [], edges: [] },
+			{ links: [] },
 			graphDeps,
 			{ foldedAt: "2026-09-13T00:00:00.000Z" },
 		);
@@ -430,7 +430,7 @@ describe("the merger (mergeFindings)", () => {
 					{ from: "p1", to: "p3", type: "follows", },
 				],
 			},
-			{ links: [], edges: [] },
+			{ links: [] },
 			graphDeps,
 			{ foldedAt: "2026-09-13T00:00:00.000Z" },
 		);
@@ -482,7 +482,7 @@ describe("the merger (mergeFindings)", () => {
 				edges: [],
 			},
 			// empty verdicts — identity is the auditor's call alone
-			{ links: [], edges: [] },
+			{ links: [] },
 			graphDeps,
 			sessionSource(chat3.id),
 		);
@@ -506,7 +506,7 @@ describe("the merger (mergeFindings)", () => {
 				],
 				edges: [],
 			},
-			{ links: [], edges: [] },
+			{ links: [] },
 			graphDeps,
 			{ foldedAt: "2026-09-13T00:00:00.000Z" },
 		);
@@ -610,7 +610,7 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 			],
 			edges: [{ from: "p1", to: "p2", type: "follows", }],
 		};
-		mergeFindings(dA.id, findingsA, { links: [], edges: [] }, graphDeps, sessionSource(dA.id));
+		mergeFindings(dA.id, findingsA, { links: [] }, graphDeps, sessionSource(dA.id));
 		// Resolve through THIS session's mappings — the shared ledger holds
 		// lookalike statements from earlier tests, so statement-lookup would
 		// link dB to the wrong node.
@@ -636,7 +636,7 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 			],
 			edges: [{ from: "q1", to: "q2", type: "follows", }],
 		};
-		mergeFindings(dB.id, findingsB, { links: [{ id: "q1", linkTo: xId }], edges: [] }, graphDeps, sessionSource(dB.id));
+		mergeFindings(dB.id, findingsB, { links: [{ id: "q1", linkTo: xId }] }, graphDeps, sessionSource(dB.id));
 		const zId = graphStore.readMappings().find((m) => m.chatId === dB.id && m.sourceId === "q2")!.graphNodeId;
 
 		// Coverage rows (both chats) + positions garnish — the deletion

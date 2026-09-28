@@ -11,10 +11,11 @@
  *                      from the source ALONE (whole session as markdown,
  *                      or raw notes). Fully trusted: no stage re-checks it.
  *   auditor (LLM)    → AuditVerdicts: identity links (local id → an existing
- *                      node, or create) via graph-exploration tools, plus
- *                      any BRIDGING edges it draws between existing graph
- *                      nodes and the new propositions. Never sees the
- *                      source; never drops.
+ *                      node, or create) via graph-exploration tools —
+ *                      links ONLY (owner, 2026-09-28 evening: the auditor
+ *                      never mints edges; cross-source connection happens
+ *                      solely through identified equivalences). Never sees
+ *                      the source; never drops.
  *   merger (HERE)    → mergeFindings(): deterministic ledger appends
  *
  * The merger is deliberately the ONLY stage that touches the ledgers, and it
@@ -199,8 +200,9 @@ export function mergeFindings(
 		if (line.provenance.some((pt) => pt.chatId === chatId)) assertedByChat.add(key);
 	}
 	const emitEdge = (edge: ExtractedEdge): void => {
-		const resolve = (endpoint: string): string | undefined =>
-			mapping.get(endpoint) ?? (existingIds.has(endpoint) ? endpoint : undefined);
+		// Extractor-local ids only — the auditor's bridging edges are gone
+		// (owner, 2026-09-28 evening), so raw node-id endpoints no longer occur.
+		const resolve = (endpoint: string): string | undefined => mapping.get(endpoint);
 		const from = resolve(edge.from);
 		const to = resolve(edge.to);
 		if (!from || !to || from === to) return; // unresolvable endpoint — skip
@@ -210,8 +212,7 @@ export function mergeFindings(
 		assertedByChat.add(key);
 		stats.edges++;
 	};
-	for (const edge of findings.edges) emitEdge(edge);
-	for (const edge of verdicts.edges) emitEdge(edge);
+	for (const edge of findings.edges) emitEdge(edge); // the extractor's edges — the ONLY edge source
 
 	// 3. Checkpoint — THE COVERAGE DISCIPLINE (vision-extraction-coverage.md):
 	//    only now, after every append succeeded, is the batch covered. The

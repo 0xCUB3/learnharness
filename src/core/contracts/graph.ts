@@ -36,9 +36,7 @@ export interface EmissionStats {
 
 /** One provenance point — message-granular (DECIDED 2026-09-02): nodes and
  *  edges record every (chat, message) where they came up, deep-linkable to
- *  the exact transcript point. Auditor-drawn bridging edges carry the chat
- *  but NO message anchor (nothing in the transcript asserts them — the
- *  auditor is the asserter); messageId is "" there. */
+ *  the exact transcript point. */
 export interface ProvenancePoint {
 	/** The chat this point anchors to — or a notes source id ("src_…"):
 	 *  imports carry no message anchors (provenance is the file itself,
@@ -211,14 +209,12 @@ export interface ExtractedProposition {
 }
 
 /** One proposed relation. Endpoints are extractor-local proposition ids
- *  ("p1", …); the AUDITOR may also emit bridging edges whose from/to is an
- *  EXISTING graph node id (connecting the new content to what the graph
- *  already holds) — the merger resolves both. */
+ *  ("p1", …) — the extractor is the ONLY stage that ever proposes edges
+ *  (the auditor's edges argument is gone, owner 2026-09-28 evening). */
 export interface ExtractedEdge {
-	/** Proposition id (or, for auditor-drawn bridges, a graph node id)
-	 *  that is followed / supported. */
+	/** Proposition id that is followed / supported. */
 	from: string;
-	/** Proposition id (or graph node id) that follows / is supported. */
+	/** Proposition id that follows / is supported. */
 	to: string;
 	type: EdgeType;
 }
@@ -244,14 +240,13 @@ export interface IdentityLink {
 /** The auditor's output — VERDICTS ONLY (owner, 2026-09-28): the auditor
  *  never alters the extractor's findings, so it does not restate them;
  *  the deterministic merger joins findings + verdicts. `links` = the
- *  identity verdicts (local id ⇄ existing node); `edges` = BRIDGING
- *  edges the auditor draws from existing graph nodes to the batch's
- *  propositions (endpoints: existing node ids and/or local proposition
- *  ids). No drop channel — the auditor never rejects; the extractor is
- *  fully trusted (2026-09-27). */
+ *  identity verdicts (local id ⇄ existing node) — the auditor's ENTIRE
+ *  deliverable (owner, 2026-09-28 evening: the edges argument is GONE —
+ *  the auditor never mints edges; the graph connects across sources
+ *  solely through identified equivalences). No drop channel — the
+ *  auditor never rejects; the extractor is fully trusted (2026-09-27). */
 export interface AuditVerdicts {
 	links: IdentityLink[];
-	edges: ExtractedEdge[];
 }
 
 /** The GET /api/graph payload — everything the home view's PURE renderer needs. */

@@ -367,7 +367,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 	it("stringified-payload heal (owner, 2026-09-28): propositions arriving as ONE JSON string still validate and merge", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
-		const verdict: AuditVerdicts = { links: [], edges: [] };
+		const verdict: AuditVerdicts = { links: [] };
 
 		// The weak-model failure from the OpenRouter log: the whole array
 		// emitted as a JSON-STRING ("propositions.0: must be object").
@@ -400,7 +400,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		});
 		const verdict: AuditVerdicts = {
 			links: [{ id: FINDINGS.propositions[0]!.id, linkTo: existingId }],
-			edges: [],
 		};
 
 		const pipeline = createExtractionPipeline({
@@ -515,7 +514,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
 		// Empty verdicts: everything creates (verdicts-only, 2026-09-28).
-		const verdict: AuditVerdicts = { links: [], edges: [] };
+		const verdict: AuditVerdicts = { links: [] };
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
@@ -534,7 +533,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 	it("engineFor fills the stages (model slots wave): the chain replaces config pins", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
-		const verdict: AuditVerdicts = { links: [], edges: [] };
+		const verdict: AuditVerdicts = { links: [] };
 		const consulted: string[] = [];
 		const pipeline = createExtractionPipeline({
 			chatStore,
@@ -561,7 +560,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 	it("direct test values still WIN over engineFor (the priority pin)", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
-		const verdict: AuditVerdicts = { links: [], edges: [] };
+		const verdict: AuditVerdicts = { links: [] };
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
@@ -597,7 +596,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: silentModel(),
-			auditor: submitModel("submit_review", { links: [], edges: [] }),
+			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await failingExtractor.runExtraction(chatId), { nodes: 0, edges: 0 });
 		assert.equal(ledgers.readCheckpoints().length, 0);
@@ -619,7 +618,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			engineFor: (role) =>
-				role === "extractor" ? fauxEngine([countingStep]) : submitModel("submit_review", { links: [], edges: [] }),
+				role === "extractor" ? fauxEngine([countingStep]) : submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await mixed.runExtraction(chunkyId), { nodes: 2, edges: 1 }, "batch 1's merge survives batch 2's failure");
 		assert.equal(invocations, 2);
@@ -647,7 +646,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const phaseOf = () => extractionStatuses().find((r) => r.chatId === chatId)?.phase;
 		const verdict: AuditVerdicts = {
 			links: [{ id: FINDINGS.propositions[0]!.id, linkTo: existingId }],
-			edges: [],
 		};
 		const pipeline = createExtractionPipeline({
 			chatStore,
@@ -681,7 +679,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", findingsA),
-			auditor: gatedSubmitModel("submit_review", { links: [], edges: [] }, gate, () => {
+			auditor: gatedSubmitModel("submit_review", { links: [] }, gate, () => {
 				aAuditing = true;
 			}),
 		});
@@ -698,7 +696,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			// THE pin: when B's auditor is finally invoked, A's merge must
 			// already be in the ledgers — B explores the post-merge graph,
 			// which is the entire point of the gate.
-			auditor: submitModel("submit_review", { links: [], edges: [] }, () => {
+			auditor: submitModel("submit_review", { links: [] }, () => {
 				bAuditorCalled = true;
 				bSawAlphasMerge = ledgers.readNodes().some((n) => n.name === "Alpha claim");
 			}),
@@ -735,7 +733,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pa", "Alpha claim", "Alpha statement")),
-			auditor: gatedSubmitModel("submit_review", { links: [], edges: [] }, gate),
+			auditor: gatedSubmitModel("submit_review", { links: [] }, gate),
 		});
 		const runA = pipelineA.runExtraction(a.chatId);
 		await until(() => extractionStatuses().some((r) => r.chatId === a.chatId && r.phase === "auditing"));
@@ -745,7 +743,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pb", "Beta claim", "Beta statement")),
-			auditor: submitModel("submit_review", { links: [], edges: [] }, () => {
+			auditor: submitModel("submit_review", { links: [] }, () => {
 				bAuditorCalled = true;
 			}),
 		});
@@ -767,7 +765,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pc", "Gamma claim", "Gamma statement")),
-			auditor: submitModel("submit_review", { links: [], edges: [] }),
+			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await pipelineC.runExtraction(c.chatId), { nodes: 1, edges: 0 });
 	});
@@ -787,7 +785,6 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const usageSeen: (number | undefined)[] = [];
 		const verdict: AuditVerdicts = {
 			links: [{ id: FINDINGS.propositions[0]!.id, linkTo: existingId }],
-			edges: [],
 		};
 		const pipeline = createExtractionPipeline({
 			chatStore,
@@ -833,7 +830,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: hangingModel(), // hangs until aborted — no step finishes
-			auditor: submitModel("submit_review", { links: [], edges: [] }),
+			auditor: submitModel("submit_review", { links: [] }),
 		});
 		const runPromise = pipeline.runExtraction(chatId);
 
@@ -1057,7 +1054,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 			engineFor: (role) =>
 				role === "extractor"
 					? extractorStep()
-					: submitModel("submit_review", { links: [], edges: [] }),
+					: submitModel("submit_review", { links: [] }),
 			getChunkTokens: () => 20, // 80 chars/line-groups → several chunks
 		});
 		const stats = await pipeline.importNotes({ filePath: "/vault/big.md", text });
@@ -1092,7 +1089,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			engineFor: (role) => (role === "extractor" ? noEdges() : submitModel("submit_review", { links: [], edges: [] })),
+			engineFor: (role) => (role === "extractor" ? noEdges() : submitModel("submit_review", { links: [] })),
 		});
 		// Isolated job failure (per-chunk jobs, owner 2026-09-28): the run
 		// resolves zeros — no throw — and still nothing merged.
@@ -1398,7 +1395,7 @@ describe("per-chunk parallel jobs (owner, 2026-09-28)", () => {
 			chatStore,
 			graphStore: ledgers,
 			engineFor: (role) =>
-				role === "extractor" ? fauxEngine([abortingStep]) : submitModel("submit_review", { links: [], edges: [] }),
+				role === "extractor" ? fauxEngine([abortingStep]) : submitModel("submit_review", { links: [] }),
 			getChunkTokens: () => 20,
 		});
 		const runPromise = pipeline.importNotes({ filePath: "/vault/parallel.md", text: wideText() });
@@ -1440,7 +1437,7 @@ describe("per-chunk parallel jobs (owner, 2026-09-28)", () => {
 			{ stopReason: "toolUse" },
 		);
 		const reviewMessage = fauxAssistantMessage(
-			[fauxToolCall("submit_review", { links: [], edges: [] } as unknown as ToolCall["arguments"], { id: "review-call" })],
+			[fauxToolCall("submit_review", { links: [] } as unknown as ToolCall["arguments"], { id: "review-call" })],
 			{ stopReason: "toolUse" },
 		);
 		const slowExtract: FauxResponseStep = async () => {
@@ -1485,7 +1482,7 @@ describe("the session-deletion guard (chat deleted mid-run)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
-			auditor: submitModel("submit_review", { links: [], edges: [] }, () => chatStore.deleteChat(chatId)),
+			auditor: submitModel("submit_review", { links: [] }, () => chatStore.deleteChat(chatId)),
 		});
 		const stats = await pipeline.runExtraction(chatId);
 

@@ -45,9 +45,10 @@ import { auditorGraphTools } from "../tools/graph.ts";
  *                    proposition, linkTo an existing graph node or create —
  *                    decided by EXPLORING the graph through tools (find /
  *                    list_sessions / list_propositions), not by an injected
- *                    graph dump (context bloat, owner 2026-09-27). It may
- *                    also draw BRIDGING edges from existing graph nodes to
- *                    the batch's propositions.
+ *                    graph dump (context bloat, owner 2026-09-27). Links are
+ *                    its ONLY deliverable — it never mints edges (owner
+ *                    2026-09-28: the graph connects across sources solely
+ *                    through identified equivalences).
  *   merger (core)    mergeFindings() → deterministic ledger appends
  *
  * The events ledger is GONE (2026-09-27): quiz outcomes and understanding
@@ -159,9 +160,10 @@ const findingsProps = {
 const findingsSchema = Type.Object(findingsProps);
 
 // VERDICTS-ONLY (owner, 2026-09-28): the auditor never alters the
-// extractor's findings, so it does not restate them — links + bridging
-// edges are its entire deliverable. An order-of-magnitude smaller submit
-// than the old full-findings echo.
+// extractor's findings, so it does not restate them — links are its
+// ENTIRE deliverable (owner, 2026-09-28 evening: the edges argument is
+// GONE; the auditor never mints edges. The graph connects across sources
+// solely through identified equivalences — a link, never an inference).
 const auditSchema = Type.Object({
 	links: Type.Array(
 		Type.Object({
@@ -173,10 +175,6 @@ const auditSchema = Type.Object({
 		}),
 		{ description: "Identity verdicts — which findings propositions ARE existing graph nodes. A proposition absent from here = create a new node. Pass [] when none — never omit the field." },
 	),
-	edges: Type.Array(edgeSchema, {
-		description:
-			"BRIDGING edges ONLY — new edges welding this batch into the existing graph, with an EXISTING graph node id as one endpoint (or both) and/or a findings proposition id. NEVER restate the extractor's own edges. Pass [] when none — never omit the field.",
-	}),
 });
 
 // The notes front door's shapes are IDENTICAL to the session shapes now
@@ -213,8 +211,9 @@ function healStringifiedArrays(raw: unknown): unknown {
 
 // ── the submit seam (owner, 2026-09-28) ──
 //
-// Both top-level fields on both submit tools are REQUIRED — a payload
-// missing `edges`/`links` fails validation instead of silently merging
+// Every top-level field on each submit tool is REQUIRED — a payload
+// missing `edges` (findings) or `links` (review) fails validation instead
+// of silently merging
 // edge-less (the degraded-retry hole: the model's first truncated
 // attempt failed validation, then the retry passed with propositions
 // only — optional edges ??-filled [] — merging a pile of nodes with no
@@ -230,7 +229,6 @@ function fillFindings(raw: Static<typeof findingsSchema>): SessionFindings {
 function fillAudit(raw: Static<typeof auditSchema>): AuditVerdicts {
 	return {
 		links: raw.links,
-		edges: raw.edges,
 	};
 }
 
@@ -464,18 +462,12 @@ IDENTITY — links, per proposition:
   propositions — different claims about the world — stay apart. You are NOT guarding against wrong merges; you are
   hunting for right ones.
 
-BRIDGING EDGES — the one place you create edges:
-- You may add edges whose endpoints are an EXISTING graph node id and one of the batch's propositions (use the
-  existing node's real id as "from" or "to"). This is how the new material gets welded into the old graph: when the
-  existing graph's content makes a proposition follow, or grounds it, draw the edge.
-- Keep edges typed like the extractor's: "follows" = derivable; "supports" = grounds without entailing.
-- Never invent propositions. NEVER restate the extractor's own edges — they merge as-is.
+Your deliverable is ONLY the identity verdicts: "links". NEVER restate the propositions or the extractor's edges —
+the merger already has them. You NEVER create edges — relations between the new propositions come from the
+extractor alone, and the batch connects to the existing graph ONLY through the equivalences you identify. Your
+entire deliverable is ONE submit_review call.
 
-Your deliverable is ONLY the verdicts: "links" + "edges" (bridging ONLY). NEVER restate the propositions or the
-extractor's edges — the merger already has them. Your entire deliverable is ONE submit_review call.
-
-Include EVERY top-level field of the call even when empty — "links": [] when nothing links, "edges": [] when there
-are no bridges. NEVER omit a field because it is empty.`;
+Include the "links" field even when empty — "links": [] when nothing links. NEVER omit it because it is empty.`;
 
 /** The auditor — one shape for both front doors now (the notes schema was
  *  identical once attribution died). An agentic loop: graph-exploration
@@ -490,7 +482,7 @@ function runAuditor(
 	return runSubmitAgent({
 		role: "auditor",
 		toolName: "submit_review",
-		toolDescription: "Submit the verdicts ONLY: identity links + bridging edges — never the propositions themselves.",
+		toolDescription: "Submit the identity verdicts ONLY (links) — never the propositions themselves.",
 		parameters: auditSchema,
 		fill: fillAudit,
 		systemPrompt: AUDITOR_INSTRUCTIONS,
@@ -834,7 +826,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		);
 		console.info(
 			`[extraction ${jobKey}] audit: ${findings.propositions.length} propositions through, ` +
-				`${auditResult.links.length} linked to existing nodes, ${auditResult.edges.length} bridging edges`,
+				`${auditResult.links.length} linked to existing nodes`,
 		);
 		console.info(`[extraction ${jobKey}] auditor done in ${Math.round(performance.now() - t0)}ms`);
 		return auditResult;
