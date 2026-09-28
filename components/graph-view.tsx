@@ -1567,25 +1567,28 @@ export function GraphView() {
 						// EDGES (owner 2026-09-27): edge classification was entirely
 						// hidden in the UI — the card now shows every edge this node
 						// participates in, grouped by direction + type, above the
-						// sessions list. Only present groups render.
+						// sessions list. Semantics (owner 2026-09-28): an edge A→B means A implies/
+						// supports B — OUTGOING edges list under "What follows from this" /
+						// "What this supports", INCOMING under "Follows from" / "Supported by".
+						// Only present groups render.
 						const id = selected.node.id;
 						const nodeById = new Map((snapshot?.nodes ?? []).map((n) => [n.id, n]));
 						const label = (nid: string) => nodeById.get(nid)?.name ?? nid;
 						const groups: { title: string; names: string[] }[] = [
 							{
-								title: "Follows from",
+								title: "What follows from this",
 								names: (snapshot?.edges ?? []).filter((e) => e.from === id && e.type === "follows").map((e) => label(e.to)),
 							},
 							{
-								title: "Supported by",
+								title: "What this supports",
 								names: (snapshot?.edges ?? []).filter((e) => e.from === id && e.type === "supports").map((e) => label(e.to)),
 							},
 							{
-								title: "What follows from this",
+								title: "Follows from",
 								names: (snapshot?.edges ?? []).filter((e) => e.to === id && e.type === "follows").map((e) => label(e.from)),
 							},
 							{
-								title: "What this supports",
+								title: "Supported by",
 								names: (snapshot?.edges ?? []).filter((e) => e.to === id && e.type === "supports").map((e) => label(e.from)),
 							},
 						].filter((g) => g.names.length > 0);

@@ -215,18 +215,31 @@ source — no "the author understands X", no "mentioned in these notes": the nod
 node of its own wrong claim — state the TRUE correction as the proposition.
 
 1. PROPOSITIONS — every distinct reasoning-step-sized proposition the notes actually engage with:
-   - Each has a "name" — a VERY short label, a few words, a compact handle like a glossary headword ("Will to power",
-     "Divine command theory"). Not a sentence; it becomes the node's label in the graph, so keep it glanceable.
+   - Each has a "name" — a VERY short label, a few words: ESTABLISHED terminology, the term the discipline
+     itself uses, a glossary headword a textbook would print ("Will to power", "Divine command theory").
+     NEVER source-local bookkeeping — no letters, numbering, or positional labels ("F1", "criterion C",
+     "the second objection"): the name becomes a GLOBAL graph label that someone who never saw these
+     notes must parse. If the notes used a local shorthand for an established idea, name the node by the
+     established term and put the shorthand in "aliases".
    - And a "statement" — the self-contained TRUE proposition at full precision.
+   - MERGE YOUR OWN OUTPUT before submitting: two propositions stating the SAME claim at different
+     precision, granularity, or angle are ONE proposition — one statement at full precision, the other
+     phrasings in "aliases". Nothing downstream dedupes you; duplicates become duplicate graph nodes.
+   - Closely related but genuinely distinct propositions stay separate — and MUST be connected by an
+     edge (see 2).
    - Notes may explain things at length or quote material the author is studying: extract the propositions themselves,
      one reasoning step each — never a topic blob, never a sub-step.
    - "messages": ALWAYS an empty list — provenance is the file itself.
    - "aliases": verbatim phrasings the notes used for the same proposition.
 
-2. EDGES between propositions:
+2. EDGES between propositions — the connective tissue; a graph of lonely nodes is a failed extraction:
    - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
-   - "supports": from GROUNDS to without entailing it (helpful context, not a prerequisite).
-   - Only relations the notes actually articulate — with evidence.
+   - "supports": from GROUNDS to without entailing it (evidence, motivation, context — helpful, not a
+     prerequisite).
+   - COMPLETENESS: whenever these notes present one proposition as evidence for, consequence of, or
+     prerequisite of another, that edge MUST be in your findings. Omitting a real relation is the main
+     way extraction fails — do not leave obviously related propositions unconnected.
+   - Every edge cites evidence: a quote appearing VERBATIM in the source.
 
 Evidence discipline: every quote must appear VERBATIM in the source — this is your self-grounding, and the proof the
 statements come from the material rather than invention.
@@ -251,21 +264,32 @@ session — no "the learner understands X", no "discussed in this session": the 
 a node of its own wrong claim — state the TRUE correction as the proposition.
 
 1. PROPOSITIONS — every distinct reasoning-step-sized proposition the session touched:
-   - Each has a "name" — a VERY short label, a few words, a compact handle like a glossary headword
-     ("Will to power", "Divine command theory"). Not a sentence; needn't be unique or self-contained.
-     It becomes the node's label in the graph, so keep it glanceable: names are what one reads on
-     the graph, statements are what one reads on the node.
+   - Each has a "name" — a VERY short label, a few words: ESTABLISHED terminology, the term the discipline
+     itself uses, a glossary headword a textbook would print ("Will to power", "Divine command theory").
+     NEVER session-local bookkeeping — no letters, numbering, or positional labels ("F1", "criterion C",
+     "the second objection"): the name becomes a GLOBAL graph label that someone who never saw this
+     session must parse. If the session used a local shorthand for an established idea, name the node by
+     the established term and put the shorthand in "aliases".
    - And a "statement" — the self-contained TRUE proposition at full precision (the elaboration lives
      in the graph only as this one statement).
+   - MERGE YOUR OWN OUTPUT before submitting: two propositions stating the SAME claim at different
+     precision, granularity, or angle are ONE proposition — one statement at full precision, the other
+     phrasings in "aliases". Nothing downstream dedupes you; duplicates become duplicate graph nodes.
+   - Closely related but genuinely distinct propositions stay separate — and MUST be connected by an
+     edge (see 2).
    - Include corrections of misconceptions the teacher articulated, and true facts explained in prose.
    - One reasoning step per proposition: never a topic blob, never a sub-step.
    - "messages": the id from the header anchor of every passage where the proposition came up — provenance, report it.
    - "aliases": verbatim phrasings this session used for the same proposition.
 
-2. EDGES between propositions:
+2. EDGES between propositions — the connective tissue; a graph of lonely nodes is a failed extraction:
    - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
-   - "supports": from GROUNDS to without entailing it (helpful context, not a prerequisite).
-   - Only relations the session actually articulates — with evidence.
+   - "supports": from GROUNDS to without entailing it (evidence, motivation, context — helpful, not a
+     prerequisite).
+   - COMPLETENESS: whenever this session presents one proposition as evidence for, consequence of, or
+     prerequisite of another, that edge MUST be in your findings. Omitting a real relation is the main
+     way extraction fails — do not leave obviously related propositions unconnected.
+   - Every edge cites evidence: a quote appearing VERBATIM in the source markdown.
 
 Evidence discipline: every quote must appear VERBATIM in the source markdown (a Quiz block's question counts as the
 source). This is your self-grounding: the proof that statements come from the material rather than invention.

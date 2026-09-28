@@ -346,7 +346,7 @@ flowchart TB
 
 **Two front doors, one pipeline**: chat transcripts (quiz-triggered) and raw personal notes (`POST /api/graph/import` — each file becomes a `NotesSource` playing the `chatId` role, deterministic id from the path hash).
 
-**The read channel is pure derivation.** `GET /api/graph` reads the ledgers (`graphSnapshot`: merged nodes/edges, birth-session clusters, positions) — the home view never triggers a write. Node detail cards show a node's edges (follows-from / supported-by / what-follows / what-it-supports) and its birth sessions.
+**The read channel is pure derivation.** `GET /api/graph` reads the ledgers (`graphSnapshot`: merged nodes/edges, birth-session clusters, positions) — the home view never triggers a write. Node detail cards show a node's edges — outgoing under "What follows from this" / "What this supports", incoming under "Follows from" / "Supported by" (an edge A→B means A implies or supports B, owner semantics 2026-09-28) — and its birth sessions.
 
 **The teacher probes, nothing is injected** (supersedes the semantic-injection experiment, killed 2026-09-23): the teacher reaches the graph on its own terms through two read-only prober tools — `list_sessions` (birth sessions, the learner's files) and `list_propositions` (the names of what a session covered) — gated by the `agent.graphTools` setting (composing with `graph.enabled`). No topic embedding, no top-K selection, no session-start steer; the agent decides what to look at, and the graph never writes into a lesson unbidden.
 
