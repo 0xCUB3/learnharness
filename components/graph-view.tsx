@@ -1067,7 +1067,10 @@ export function GraphView() {
 	// merge is its own graph change and must surface immediately, not wait
 	// for the whole feed to drain. A redundant fetch on aborted runs is
 	// free — the same doctrine as the deletion-refresh path below.
-	const [pipelineRuns, setPipelineRuns] = useState<{ chatId: string; title: string; phase: string; startedAt: number }[]>([]);
+	// Row ids are the registry JOB keys (source id, or "src#i" for chunk
+	// jobs) — unique per pill; chatId stays the SOURCE id (reveal/cost
+	// tracking is source-scoped).
+	const [pipelineRuns, setPipelineRuns] = useState<{ id: string; chatId: string; title: string; phase: string; startedAt: number }[]>([]);
 	useEffect(() => {
 		let cancelled = false;
 		let prevIds = new Set<string>();
@@ -1552,7 +1555,7 @@ export function GraphView() {
 			{costs && costs.runs.length > 0 && <GraphCostControl costs={costs} />}
 			{pipelineRuns.map((run) => (
 				<div
-					key={run.chatId}
+					key={run.id}
 					className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
 				>
 					<Loader2Icon className="size-3.5 shrink-0 animate-spin" />

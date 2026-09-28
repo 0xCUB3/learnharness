@@ -13,6 +13,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
 	const runs = extractionStatuses().map((run) => ({
+		// Unique row id (the registry job key: source id, or "src#i" for
+		// chunk jobs) — one source's rows share chatId, and React keys on
+		// it would collide. chatId stays the SOURCE id: reveal/cost
+		// tracking in the view is source-scoped by design.
+		id: run.part ? `${run.chatId}#${run.part.i}` : run.chatId,
 		chatId: run.chatId,
 		// The run's own label (the file path for notes imports) wins; chat
 		// runs fall back to the chat store's title. Chunk jobs append their
