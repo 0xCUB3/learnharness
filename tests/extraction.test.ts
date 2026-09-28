@@ -221,7 +221,7 @@ after(() => {
 });
 
 /** What the extractor would produce for the fixture session — tree-blind,
- *  free-form, with message-granular provenance. */
+ *  free-form, with chat-level provenance. */
 const FINDINGS: SessionFindings = {
 	propositions: [
 		{
@@ -229,16 +229,12 @@ const FINDINGS: SessionFindings = {
 			name: "Derivative",
 			statement: "The derivative measures how fast a function changes",
 			aliases: [],
-			messages: ["a2"],
-			evidence: ["The derivative measures how fast a function changes."],
 		},
 		{
 			id: "p2",
 			name: "Chain rule",
 			statement: "The chain rule differentiates composed functions by multiplying local rates.",
 			aliases: [],
-			messages: ["a2"],
-			evidence: ["teach me the chain rule"],
 		},
 	],
 	edges: [
@@ -246,8 +242,6 @@ const FINDINGS: SessionFindings = {
 			from: "p1",
 			to: "p2",
 			type: "follows",
-			messages: ["a2"],
-			evidence: ["teach me the chain rule"],
 		},
 	],
 };
@@ -322,20 +316,21 @@ function silentModel(): PiEngine {
 // ─── transcriptView (pure) ───────────────────────────────────────────────────
 
 describe("transcriptView (pure — the shared markdown engine, owner 2026-09-27)", () => {
-	it("renders id-anchored speaker blocks + check blocks — tree-blind, plan ops folded", () => {
+	it("renders anchorless speaker blocks + check blocks — tree-blind, plan ops folded", () => {
 		const { record } = fixtureChat();
 		const view = transcriptView(record);
 
 		// The document header is the session title.
 		assert.match(view, /^# Extraction fixture$/m);
 
-		// Conversation verbatim, each block headed by its speaker + the
-		// message-id anchor — the provenance the extractor reports back.
-		assert.match(view, /### Learner · u1\n\nteach me the chain rule/);
-		assert.match(view, /### Teacher · a2\n\nThe derivative measures how fast a function changes\./);
+		// Conversation verbatim, each block headed by its speaker only —
+		// the [id] anchors are GONE (submit-schema slim, 2026-09-28:
+		// propositions no longer report message ids).
+		assert.match(view, /### Learner\n\nteach me the chain rule/);
+		assert.match(view, /### Teacher\n\nThe derivative measures how fast a function changes\./);
 
 		// Checks render as readable blocks (question + outcome).
-		assert.match(view, /### Quiz · r_probe-1/);
+		assert.match(view, /### Quiz\n/);
 		assert.match(view, /\*\*Q:\*\* What is a derivative, roughly\?/);
 		assert.match(view, /The learner answered incorrectly\./);
 		assert.match(view, /The learner answered correctly\./);
@@ -373,6 +368,25 @@ describe("transcriptView (pure — the shared markdown engine, owner 2026-09-27)
 // ─── the pipeline ───────────────────────────────────────────────────────────
 
 describe("the extraction pipeline (extractor → auditor → merger)", () => {
+	it("stringified-payload heal (owner, 2026-09-28): propositions arriving as ONE JSON string still validate and merge", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const verdict: AuditResult = { propositions: FINDINGS.propositions, edges: FINDINGS.edges };
+
+		// The weak-model failure from the OpenRouter log: the whole array
+		// emitted as a JSON-STRING ("propositions.0: must be object").
+		// pi-agent-core's prepareArguments shim runs BEFORE TypeBox — the
+		// heal parses it, validation passes, no retry burned.
+		const extractor = submitModel("submit_findings", {
+			propositions: JSON.stringify(FINDINGS.propositions),
+			edges: FINDINGS.edges,
+		});
+
+		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers, extractor, auditor: submitModel("submit_review", verdict) });
+		const stats = await pipeline.runExtraction(chatId);
+		assert.deepEqual(stats, { nodes: 2, edges: 1 });
+	});
+
 	it("runs end to end: findings → audit verdict (identity) → deterministic merge + checkpoint", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
@@ -631,7 +645,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const ledgers = memoryLedgers();
 
 		const single = (id: string, name: string, statement: string): SessionFindings => ({
-			propositions: [{ id, name, statement, aliases: [], messages: ["a2"], evidence: ["e"] }],
+			propositions: [{ id, name, statement, aliases: [], }],
 			edges: [],
 		});
 		const findingsA = single("pa", "Alpha claim", "Alpha statement, full precision");
@@ -688,7 +702,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const ledgers = memoryLedgers();
 
 		const single = (id: string, name: string, statement: string): SessionFindings => ({
-			propositions: [{ id, name, statement, aliases: [], messages: ["a2"], evidence: ["e"] }],
+			propositions: [{ id, name, statement, aliases: [], }],
 			edges: [],
 		});
 
@@ -938,8 +952,6 @@ const NOTES_FINDINGS = {
 			name: "Vim normal mode",
 			statement: "Vim starts in Normal mode, where keys are commands.",
 			aliases: [],
-			messages: [],
-			evidence: ["Vim always starts in Normal mode — keys are commands, not text."],
 		},
 	],
 	edges: [],
@@ -980,11 +992,12 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		assert.equal(source.extractions![0]!.stats?.nodes, 1);
 		assert.ok(source.extractions![0]!.stages.extractor.steps.length > 0, "faux usage captured");
 
-		// File-scoped provenance: the mapping line carries the source id;
-		// the node carries NO message anchors.
+		// File-scoped provenance (submit-schema slim, 2026-09-28): the
+		// node carries ONE chat-level point — the source key itself, no
+		// message anchors.
 		const node = ledgers.readNodes()[0]!;
 		assert.equal(node.statement, "Vim starts in Normal mode, where keys are commands.");
-		assert.deepEqual(node.provenance, []);
+		assert.deepEqual(node.provenance, [{ chatId: source.id, messageId: "" }]);
 		assert.deepEqual(ledgers.readMappings(), [{ chatId: source.id, sourceId: "p1", graphNodeId: node.id }]);
 		// The checkpoint stamps the import.
 		assert.equal(ledgers.readCheckpoints()[0]!.chatId, source.id);
@@ -1102,10 +1115,10 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		// Two batches: the first held messages 1-3, the second 4-5 — a
 		// message is never split, batches are consecutive oldest-first.
 		assert.equal(views.length, 2, "one extractor call per batch");
-		assert.ok(views[0]!.includes("### Learner · u1") && views[0]!.includes("### Learner · u3"));
-		assert.ok(!views[0]!.includes("### Learner · u4"), "the batch stops at the token budget");
-		assert.ok(views[1]!.includes("### Learner · u4") && views[1]!.includes("### Learner · u5"));
-		assert.ok(!views[1]!.includes("### Learner · u3"));
+		assert.ok(views[0]!.includes("### Learner") && views[0]!.includes("topic 1:"));
+		assert.ok(!views[0]!.includes("topic 4:"), "the batch stops at the token budget");
+		assert.ok(views[1]!.includes("### Learner") && views[1]!.includes("topic 4:"));
+		assert.ok(!views[1]!.includes("topic 3:"));
 		// The document header is the session title.
 		assert.ok(views[0]!.startsWith("# Chunky coverage fixture"));
 
@@ -1184,7 +1197,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		});
 		await finisher.runExtraction(chatId);
 		assert.equal(reRunViews.length, 1);
-		assert.ok(reRunViews[0]!.includes("### Learner · u4") && reRunViews[0]!.includes("### Learner · u5"));
+		assert.ok(reRunViews[0]!.includes("### Learner") && reRunViews[0]!.includes("topic 4:"));
 		assert.ok(!reRunViews[0]!.includes("### Learner · u1"), "the covered remainder never re-enters the prompt");
 		assert.equal(ledgers.readCoverage().length, 5, "the re-run closed the gap");
 	});

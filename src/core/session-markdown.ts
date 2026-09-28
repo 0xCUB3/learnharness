@@ -4,9 +4,11 @@
  * The extractor's view of a teaching session and the future user-facing
  * session export share this engine: a session is rendered as clean,
  * readable markdown — speaker headers, quiz/check-in blocks, tool notes —
- * with the message-id anchors preserved (extraction provenance depends on
- * the extractor reporting the `[id]` tags it saw; `anchors: false` mints
- * the same document without them, for the user export).
+ * with optional message-id anchors. Since the submit-schema slim
+ * (2026-09-28) propositions no longer report message ids — the extractor
+ * renders anchorless and provenance is chat-level — so the anchors today
+ * serve only the future user-facing export; `anchors: false` mints the
+ * same document without them.
  *
  * Pure core: native messages in (LhMessage), string out. Content parity
  * with the coverage line builder (core/coverage.ts messageViewLines) is

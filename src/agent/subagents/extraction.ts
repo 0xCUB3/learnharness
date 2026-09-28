@@ -38,7 +38,7 @@ import { auditorGraphTools } from "../tools/graph.ts";
  *                    rendered as markdown by the shared session-markdown
  *                    engine, or a notes file verbatim) → SessionFindings:
  *                    propositions + follows/supports edges, each with
- *                    verbatim evidence. TREE-BLIND, graph-blind, FULLY
+ *                    TREE-BLIND, graph-blind, FULLY
  *                    TRUSTED — nothing downstream re-checks it.
  *   auditor (LLM)    never sees the source. Its job is IDENTITY: for each
  *                    proposition, linkTo an existing graph node or create —
@@ -96,22 +96,15 @@ import { auditorGraphTools } from "../tools/graph.ts";
  * re-opens covered history (the deliberate 2026-09-27 split).
  */
 export function transcriptView(record: ChatRecord): string {
-	return sessionMarkdown(record.messages, { title: record.title });
+	// anchors OFF (submit-schema slim, 2026-09-28): propositions no longer
+	// carry message ids, so the [id] anchors are noise for the extractor.
+	return sessionMarkdown(record.messages, { title: record.title, anchors: false });
 }
 
 // ─── the extractor ──────────────────────────────────────────────────────────
 
-const evidenceSchema = Type.Array(Type.String(), {
-	minItems: 1,
-	description: "Verbatim quotes from the transcript that back this. The auditor will check every quote.",
-});
-
-const messagesSchema = Type.Array(Type.String(), {
-	description: "The message ids (from the [id] tags in the transcript) where this came up — provenance.",
-});
-
 const propositionProps = {
-	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by edges and attribution.' }),
+	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by edges.' }),
 	name: Type.String({
 		description:
 			"A very short label for the proposition — a few words, a compact handle like a glossary headword " +
@@ -125,11 +118,11 @@ const propositionProps = {
 			'"X". A misconception is stated as the TRUE correction ("Nietzsche did not endorse ' +
 			'might-makes-right social Darwinism") — wrongness is never recorded in the graph.',
 	}),
-	aliases: Type.Array(Type.String(), {
-		description: "Verbatim phrasings this session used for the same proposition, if any.",
-	}),
-	messages: messagesSchema,
-	evidence: evidenceSchema,
+	aliases: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Verbatim phrasings this session used for the same proposition, if any.",
+		}),
+	),
 };
 
 const edgeSchema = Type.Object({
@@ -138,8 +131,6 @@ const edgeSchema = Type.Object({
 	type: Type.Union([Type.Literal("follows"), Type.Literal("supports")], {
 		description: '"follows" = to is derivable from from; "supports" = from grounds to without entailing it.',
 	}),
-	messages: messagesSchema,
-	evidence: evidenceSchema,
 });
 
 // Weak-model tolerance (owner, 2026-09-25): the old zod `.default([])` /
@@ -187,18 +178,44 @@ const auditSchema = Type.Object(auditProps);
 type NotesFindings = SessionFindings;
 type NotesAuditResult = AuditResult;
 
+// ── the weak-model string-heal (owner, 2026-09-28) ──
+//
+// OpenRouter log evidence: weak models under a big submit payload often
+// emit the whole `propositions` array as ONE JSON-STRING instead of a
+// native array ("propositions.0: must be object"). pi-agent-core runs
+// `prepareArguments` BEFORE TypeBox validation — the sanctioned shim
+// point (same doctrine as restoreMathEscapes at the display seam: heal
+// weak-model wire behavior, don't punish it with a retry). Best-effort:
+// heal only a string that parses to an array; anything else passes
+// through untouched and fails validation exactly as before.
+function healStringifiedArrays(raw: unknown): unknown {
+	if (typeof raw !== "object" || raw === null) return raw;
+	const out: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+	for (const key of ["propositions", "edges"]) {
+		const v = out[key];
+		if (typeof v !== "string" || v.trim().length === 0) continue;
+		try {
+			const parsed: unknown = JSON.parse(v);
+			if (Array.isArray(parsed)) out[key] = parsed;
+		} catch {
+			// not a clean stringify (e.g. truncated) — leave for validation
+		}
+	}
+	return out;
+}
+
 // ── the weak-model ??-fills (the old zod defaults, applied at submit) ──
 
 function fillFindings(raw: Static<typeof findingsSchema>): SessionFindings {
 	return {
-		propositions: raw.propositions,
+		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
 		edges: raw.edges ?? [],
 	};
 }
 
 function fillAudit(raw: Static<typeof auditSchema>): AuditResult {
 	return {
-		propositions: raw.propositions,
+		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
 		edges: raw.edges ?? [],
 	};
 }
@@ -229,7 +246,6 @@ node of its own wrong claim — state the TRUE correction as the proposition.
      edge (see 2).
    - Notes may explain things at length or quote material the author is studying: extract the propositions themselves,
      one reasoning step each — never a topic blob, never a sub-step.
-   - "messages": ALWAYS an empty list — provenance is the file itself.
    - "aliases": verbatim phrasings the notes used for the same proposition.
 
 2. EDGES between propositions — the connective tissue; a graph of lonely nodes is a failed extraction:
@@ -239,10 +255,9 @@ node of its own wrong claim — state the TRUE correction as the proposition.
    - COMPLETENESS: whenever these notes present one proposition as evidence for, consequence of, or
      prerequisite of another, that edge MUST be in your findings. Omitting a real relation is the main
      way extraction fails — do not leave obviously related propositions unconnected.
-   - Every edge cites evidence: a quote appearing VERBATIM in the source.
 
-Evidence discipline: every quote must appear VERBATIM in the source — this is your self-grounding, and the proof the
-statements come from the material rather than invention.
+Faithfulness: extract only what the source actually articulates — never invent, pad, or compress into vagueness. When
+in doubt about a proposition's exact content, quote its source passage to yourself first, then state it precisely.
 
 Include EVERY top-level field of the call even when empty — "edges": [] when there are no relations. NEVER omit
 a field because it is empty.
@@ -252,9 +267,9 @@ Your entire deliverable is ONE submit_findings call.`;
 const EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE session
 rendering and report what that session teaches — as structured findings for the learner's global knowledge graph.
 
-The session is rendered as readable markdown: Teacher and Learner passages in order (each header carries its message
-id — the [id] anchor), Quiz / Recall-check / Question blocks for the embedded checks, and one-line notes where other
-tools ran. Read ALL of it as the session's teaching content.
+The session is rendered as readable markdown: Teacher and Learner passages in order, Quiz / Recall-check /
+Question blocks for the embedded checks, and one-line notes where other tools ran. Read ALL of it as the session's
+teaching content.
 
 You are the ONLY stage that sees this source, and you are FULLY TRUSTED: nothing downstream re-checks your work.
 Extract carefully — the graph will hold exactly what you report.
@@ -279,7 +294,6 @@ a node of its own wrong claim — state the TRUE correction as the proposition.
      edge (see 2).
    - Include corrections of misconceptions the teacher articulated, and true facts explained in prose.
    - One reasoning step per proposition: never a topic blob, never a sub-step.
-   - "messages": the id from the header anchor of every passage where the proposition came up — provenance, report it.
    - "aliases": verbatim phrasings this session used for the same proposition.
 
 2. EDGES between propositions — the connective tissue; a graph of lonely nodes is a failed extraction:
@@ -289,10 +303,9 @@ a node of its own wrong claim — state the TRUE correction as the proposition.
    - COMPLETENESS: whenever this session presents one proposition as evidence for, consequence of, or
      prerequisite of another, that edge MUST be in your findings. Omitting a real relation is the main
      way extraction fails — do not leave obviously related propositions unconnected.
-   - Every edge cites evidence: a quote appearing VERBATIM in the source markdown.
 
-Evidence discipline: every quote must appear VERBATIM in the source markdown (a Quiz block's question counts as the
-source). This is your self-grounding: the proof that statements come from the material rather than invention.
+Faithfulness: extract only what the session actually articulates — never invent, pad, or compress into vagueness. When
+in doubt about a proposition's exact content, quote its source passage to yourself first, then state it precisely.
 
 Include EVERY top-level field of the call even when empty — "edges": [] when there are no relations. NEVER omit a
 field because it is empty.
@@ -335,6 +348,7 @@ async function runSubmitAgent<T>(opts: {
 				label: opts.toolName,
 				description: opts.toolDescription,
 				parameters: opts.parameters,
+				prepareArguments: (args) => healStringifiedArrays(args) as never,
 				execute: async (_toolCallId, input) => {
 					submitted = opts.fill(input);
 					return toToolResult(submitted);
@@ -442,7 +456,7 @@ BRIDGING EDGES — the one place you create edges:
 - NEVER drop or rewrite the extractor's own propositions or edges — pass them through unchanged (adding linkTo is
   the only edit). Never invent propositions.
 
-Reproduce every proposition and edge you received, with their evidence and messages verbatim. Your entire deliverable
+Reproduce every proposition and edge you received verbatim. Your entire deliverable
 is ONE submit_review call.
 
 Include EVERY top-level field of the call even when empty — "edges": []. NEVER omit a field because it is empty.`;

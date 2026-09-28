@@ -85,16 +85,11 @@ export interface MergeSource {
 	coverage?: CoverageEntry[];
 }
 
-/** (chatId, messageIds) → provenance points; order-preserving, deduped. */
-function pointsOf(chatId: string, messages: string[]): ProvenancePoint[] {
-	const seen = new Set<string>();
-	const out: ProvenancePoint[] = [];
-	for (const messageId of messages) {
-		if (messageId.length === 0 || seen.has(messageId)) continue;
-		seen.add(messageId);
-		out.push({ chatId, messageId });
-	}
-	return out;
+/** The run's chat-level provenance point (submit-schema slim, 2026-09-28:
+ *  propositions no longer carry message ids — the model never reported
+ *  them reliably anyway — so every birth from a run shares one point). */
+function pointOf(chatId: string): ProvenancePoint[] {
+	return [{ chatId, messageId: "" }];
 }
 
 const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
@@ -140,7 +135,7 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 
 	for (const p of audit.propositions) {
 		if (mapping.has(p.id)) continue; // already resolved for this chat — idempotent
-		const points = pointsOf(chatId, p.messages);
+		const points = pointOf(chatId);
 		let graphNodeId: string;
 		if (p.linkTo !== undefined && existingIds.has(p.linkTo)) {
 			// Identity verdict: this proposition IS that node. Append a link
@@ -206,7 +201,10 @@ export function mergeFindings(chatId: string, audit: AuditResult, deps: GraphDep
 			from,
 			to,
 			type: edge.type,
-			provenance: bridged ? [{ chatId, messageId: "" }] : pointsOf(chatId, edge.messages),
+			// bridged vs transcript edges both carry the run's chat-level
+			// point now; the distinction lives in the endpoint resolution
+			// above (mapping vs existing node id), not in the provenance.
+			provenance: pointOf(chatId),
 		});
 		assertedByChat.add(key);
 		stats.edges++;

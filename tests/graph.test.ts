@@ -224,24 +224,18 @@ function fixtureAudit(): AuditResult {
 				name: "Alpha",
 				statement: "Alpha intuition",
 				aliases: ["alpha feel"],
-				messages: ["a1", "a3"],
-				evidence: ["fixture evidence"],
 			},
 			{
 				id: "p2",
 				name: "Beta rule",
 				statement: "Beta rule",
 				aliases: [],
-				messages: ["a4"],
-				evidence: ["fixture evidence"],
 			},
 			{
 				id: "p3",
 				name: "Gamma",
 				statement: "Gamma application",
 				aliases: [],
-				messages: ["a5"],
-				evidence: ["fixture evidence"],
 			},
 		],
 		edges: [
@@ -249,8 +243,6 @@ function fixtureAudit(): AuditResult {
 				from: "p1",
 				to: "p2",
 				type: "follows",
-				messages: ["a4"],
-				evidence: ["fixture evidence"],
 			},
 		],
 	};
@@ -282,7 +274,7 @@ function scopedGraph(chatIds: string[]) {
 }
 
 describe("the merger (mergeFindings)", () => {
-	it("creates nodes from the verdicts with message-granular provenance", () => {
+	it("creates nodes from the verdicts with chat-level provenance", () => {
 		const stats = mergeFindings(chat1.id, fixtureAudit(), graphDeps, sessionSource(chat1.id));
 		assert.deepEqual(stats, { nodes: 3, edges: 1 });
 
@@ -293,14 +285,13 @@ describe("the merger (mergeFindings)", () => {
 			assert.match(node.id, /^n_/);
 			assert.ok(node.name.length > 0, "name is required");
 			assert.equal("kind" in node, false, "no kind field");
-			assert.ok(Array.isArray(node.provenance), "message-granular provenance");
+			assert.ok(Array.isArray(node.provenance), "provenance attached");
 		}
-		// Provenance is message-granular: p1 came up in a1 and a3.
+		// Provenance is CHAT-LEVEL (submit-schema slim, 2026-09-28):
+		// propositions no longer carry message ids — the run's source key
+		// is the whole provenance.
 		const alpha = graph.nodes.find((n) => n.statement === "Alpha intuition")!;
-		assert.deepEqual(alpha.provenance, [
-			{ chatId: chat1.id, messageId: "a1" },
-			{ chatId: chat1.id, messageId: "a3" },
-		]);
+		assert.deepEqual(alpha.provenance, [{ chatId: chat1.id, messageId: "" }]);
 
 		// The follows edge, provenance attached.
 		assert.equal(graph.edges.length, 1);
@@ -308,7 +299,7 @@ describe("the merger (mergeFindings)", () => {
 		assert.equal(edge.from, idByStatement.get("Alpha intuition"));
 		assert.equal(edge.to, idByStatement.get("Beta rule"));
 		assert.equal(edge.type, "follows");
-		assert.deepEqual(edge.provenance, [{ chatId: chat1.id, messageId: "a4" }]);
+		assert.deepEqual(edge.provenance, [{ chatId: chat1.id, messageId: "" }]);
 
 		// Mapping lines: one per (chat, sourceId).
 		assert.deepEqual(
@@ -351,8 +342,6 @@ describe("the merger (mergeFindings)", () => {
 						name: "Alpha",
 						statement: "Alpha feel", // a DIFFERENT phrasing — identity is the verdict, not strings
 						aliases: ["alpha intuition"],
-						messages: ["a1"],
-						evidence: ["fixture evidence"],
 						linkTo: alphaId,
 					},
 				],
@@ -369,7 +358,7 @@ describe("the merger (mergeFindings)", () => {
 		assert.ok(alpha.aliases.includes("Alpha feel"), "the session's phrasing joins the aliases");
 		assert.ok(alpha.aliases.includes("alpha intuition"));
 		assert.ok(
-			alpha.provenance.some((pt) => pt.chatId === chat2.id && pt.messageId === "a1"),
+			alpha.provenance.some((pt) => pt.chatId === chat2.id),
 			"provenance unions",
 		);
 		// The mapping records the verdict: (chat2, q1) → the linked node.
@@ -391,8 +380,6 @@ describe("the merger (mergeFindings)", () => {
 						name: "Vim registers",
 						statement: "Vim registers map single keys to editing commands.",
 						aliases: [],
-						messages: [],
-						evidence: ["fixture evidence"],
 					},
 				],
 				edges: [],
@@ -421,14 +408,12 @@ describe("the merger (mergeFindings)", () => {
 					id: `p${i + 1}`,
 					name: `Cluster node ${i + 1}`,
 					statement,
-					aliases: [],
-					messages: [`cluster_msg_${i + 1}`], // birth provenance — the message anchors
-					evidence: ["fixture evidence"],
+					aliases: [], // birth provenance — the message anchors
 				})),
 				edges: [
-					{ from: "p1", to: "p2", type: "follows", messages: [], evidence: ["e"] },
-					{ from: "p2", to: "p3", type: "follows", messages: [], evidence: ["e"] },
-					{ from: "p1", to: "p3", type: "follows", messages: [], evidence: ["e"] },
+					{ from: "p1", to: "p2", type: "follows", },
+					{ from: "p2", to: "p3", type: "follows", },
+					{ from: "p1", to: "p3", type: "follows", },
 				],
 			},
 			graphDeps,
@@ -477,8 +462,6 @@ describe("the merger (mergeFindings)", () => {
 						name: "Alpha",
 						statement: "Alpha intuition", // IDENTICAL to the existing node's statement
 						aliases: [],
-						messages: ["u1"],
-						evidence: ["fixture evidence"],
 						// no linkTo — identity is the auditor's call alone
 					},
 				],
@@ -502,9 +485,7 @@ describe("the merger (mergeFindings)", () => {
 						id: "p1",
 						name: "Vim normal mode",
 						statement: "Vim starts in Normal mode, where keys are commands.",
-						aliases: [],
-						messages: [], // notes carry no message anchors — the file is the provenance
-						evidence: ["fixture evidence"],
+						aliases: [], // notes carry no message anchors — the file is the provenance
 					},
 				],
 				edges: [],
@@ -515,7 +496,7 @@ describe("the merger (mergeFindings)", () => {
 		assert.deepEqual(stats, { nodes: 1, edges: 0 });
 
 		const node = getGraph(graphStore).nodes.find((n) => n.statement.startsWith("Vim starts"))!;
-		assert.deepEqual(node.provenance, [], "no message anchors — the mapping line carries the source");
+		assert.deepEqual(node.provenance, [{ chatId: "src_notesfixture", messageId: "" }], "one chat-level point — the source key, no message anchors");
 		assert.deepEqual(graphStore.readMappings().find((m) => m.chatId === "src_notesfixture"), {
 			chatId: "src_notesfixture",
 			sourceId: "p1",
@@ -607,10 +588,10 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 		].flat());
 		const auditA: AuditResult = {
 			propositions: [
-				{ id: "p1", name: "Shared core", statement: "Shared core statement", aliases: ["shared feel"], messages: ["du1"], evidence: ["e"] },
-				{ id: "p2", name: "Solo fact", statement: "Solo fact statement", aliases: ["solo feel"], messages: ["du1"], evidence: ["e"] },
+				{ id: "p1", name: "Shared core", statement: "Shared core statement", aliases: ["shared feel"], },
+				{ id: "p2", name: "Solo fact", statement: "Solo fact statement", aliases: ["solo feel"], },
 			],
-			edges: [{ from: "p1", to: "p2", type: "follows", messages: ["du1"], evidence: ["e"] }],
+			edges: [{ from: "p1", to: "p2", type: "follows", }],
 		};
 		mergeFindings(dA.id, auditA, graphDeps, sessionSource(dA.id));
 		// Resolve through THIS session's mappings — the shared ledger holds
@@ -633,10 +614,10 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 		].flat());
 		const auditB: AuditResult = {
 			propositions: [
-				{ id: "q1", name: "Shared again", statement: "Shared core, rephrased", aliases: ["B phrasing"], messages: ["eu1"], evidence: ["e"], linkTo: xId },
-				{ id: "q2", name: "B extra", statement: "B extra statement", aliases: ["b extra feel"], messages: ["eu1"], evidence: ["e"] },
+				{ id: "q1", name: "Shared again", statement: "Shared core, rephrased", aliases: ["B phrasing"], linkTo: xId },
+				{ id: "q2", name: "B extra", statement: "B extra statement", aliases: ["b extra feel"], },
 			],
-			edges: [{ from: "q1", to: "q2", type: "follows", messages: ["eu1"], evidence: ["e"] }],
+			edges: [{ from: "q1", to: "q2", type: "follows", }],
 		};
 		mergeFindings(dB.id, auditB, graphDeps, sessionSource(dB.id));
 		const zId = graphStore.readMappings().find((m) => m.chatId === dB.id && m.sourceId === "q2")!.graphNodeId;
@@ -673,7 +654,7 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 		assert.equal(x.name, "Shared core");
 		assert.ok(!x.aliases.includes("shared feel"), "the deleted creator's phrasings are stripped (owner ruling)");
 		assert.ok(x.aliases.includes("B phrasing") && x.aliases.includes("Shared core, rephrased"));
-		assert.deepEqual(x.provenance, [{ chatId: dB.id, messageId: "eu1" }], "only dB's provenance remains");
+		assert.deepEqual(x.provenance, [{ chatId: dB.id, messageId: "" }], "only dB's provenance remains");
 		// Y (the orphan) is gone entirely.
 		assert.equal(graph.nodes.some((n) => n.id === yId), false);
 		assert.equal(graphStore.readNodes().some((n) => n.id === yId), false);
@@ -681,7 +662,7 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 		assert.equal(JSON.stringify(graphStore.readNodes().find((n) => n.id === zId)), zLineBefore);
 		// Edges: dA's assertion X→Y died; dB's X→Z survived.
 		const scoped = scopedGraph([dA.id, dB.id]);
-		assert.deepEqual(scoped.edges, [{ from: xId, to: zId, type: "follows", provenance: [{ chatId: dB.id, messageId: "eu1" }] }]);
+		assert.deepEqual(scoped.edges, [{ from: xId, to: zId, type: "follows", provenance: [{ chatId: dB.id, messageId: "" }] }]);
 		// Mappings: dA's audit trail died; dB's stays.
 		const mappings = graphStore.readMappings().filter((m) => [dA.id, dB.id].includes(m.chatId));
 		assert.deepEqual(mappings, [{ chatId: dB.id, sourceId: "q1", graphNodeId: xId }, { chatId: dB.id, sourceId: "q2", graphNodeId: zId }]);

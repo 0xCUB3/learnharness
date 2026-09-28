@@ -172,7 +172,7 @@ export interface CoverageEntry {
  * of work): the extractor is the ONLY stage that sees the raw source
  * (whole session as readable markdown, or raw notes) and extracts the
  * reasoning chains — propositions (lonely relevant ones included) plus
- * follows/supports edges, with verbatim evidence; the auditor NEVER sees
+ * follows/supports edges; the auditor NEVER sees
  * the source — its job is preparing the merge: identity verdicts
  * (link-or-create, merging equivalent forms of the same proposition) via
  * graph-exploration tools (find / list_sessions / list_propositions), and
@@ -187,7 +187,7 @@ export interface CoverageEntry {
 
 /** One proposed proposition — a node candidate (or a re-encounter of one). */
 export interface ExtractedProposition {
-	/** Extractor-local id ("p1", …) referenced by edges + attribution. */
+	/** Extractor-local id ("p1", …) referenced by edges. */
 	id: string;
 	/** A very short label — a few words, a compact handle like a glossary
 	 *  headword. Not a sentence, needn't be unique or self-contained: the
@@ -202,10 +202,12 @@ export interface ExtractedProposition {
 	statement: string;
 	/** Verbatim phrasings the session used. */
 	aliases: string[];
-	/** The message ids where this proposition came up — provenance. */
-	messages: string[];
-	/** Verbatim transcript quotes backing the proposition. */
-	evidence: string[];
+	/* Submit-schema slim (owner, 2026-09-28): `messages` and `evidence`
+	 * are GONE. Provenance is chat-level (the run's source key); the
+	 * verbatim-quote fields were never persisted and weak models burned
+	 * their retries on them ("propositions.0: must be object" — the
+	 * stringified-payload collapse). The extractor reports propositions
+	 * + structure, nothing else. */
 }
 
 /** One proposed relation. Endpoints are extractor-local proposition ids
@@ -219,10 +221,6 @@ export interface ExtractedEdge {
 	/** Proposition id (or graph node id) that follows / is supported. */
 	to: string;
 	type: EdgeType;
-	/** The message ids where this relation was asserted — provenance. */
-	messages: string[];
-	/** Verbatim transcript quotes backing the relation. */
-	evidence: string[];
 }
 
 /** The extractor's output shape: the raw reasoning chains. */
