@@ -26,7 +26,8 @@ import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../
 import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts";
-import { sessionMarkdown } from "../../core/session-markdown.ts";
+import { teacherProseBlocks } from "../../core/coverage.ts";
+import type { LhMessage } from "../../core/native-messages.ts";
 import { auditorGraphTools } from "../tools/graph.ts";
 
 /**
@@ -83,22 +84,29 @@ import { auditorGraphTools } from "../tools/graph.ts";
 // ─── the source view (what the extractor sees) ──────────────────────────────
 
 /**
- * A session rendered as readable markdown — the EXTRACTOR's view (owner
- * ruling 2026-09-27): the whole session goes in, formatted by the ONE
- * shared session-markdown engine (core/session-markdown.ts — the same
- * engine the user-facing session export will use), with the message-id
- * anchors preserved (the extractor reports them back per
- * proposition/edge — they become provenance). TREE-BLIND by design:
- * no plan tree, no mark_done.
- *
- * Presentation-only: coverage fingerprints hash core/coverage.ts's line
- * format, which is SEPARATE and unchanged — re-formatting the view never
- * re-opens covered history (the deliberate 2026-09-27 split).
+ * The extraction view: the session as TEACHER PROSE ONLY (owner ruling,
+ * 2026-09-28 — supersedes the 2026-09-27 whole-session markdown view):
+ * plain prose paragraphs under the session title. The shared markdown
+ * engine (core/session-markdown.ts) keeps the full session format for
+ * the future user-facing export; the extractor no longer uses it.
+ */
+
+/** The whole-record view (used by callers that render a full session;
+ *  the pipeline itself batches). TEACHER PROSE ONLY (owner, 2026-09-28).
  */
 export function transcriptView(record: ChatRecord): string {
-	// anchors OFF (submit-schema slim, 2026-09-28): propositions no longer
-	// carry message ids, so the [id] anchors are noise for the extractor.
-	return sessionMarkdown(record.messages, { title: record.title, anchors: false });
+	return proseView(record.messages, record.title);
+}
+
+/** The extraction view under the teacher-prose ruling (owner, 2026-09-28):
+ *  ONLY the teacher agent's text blocks — no learner messages, no
+ *  thinking, no tool calls or results, no quiz blocks. Plain paragraphs
+ *  under the session title; the shared markdown engine stays reserved for
+ *  the future user-facing export. */
+function proseView(messages: ReadonlyArray<LhMessage>, title?: string): string {
+	const prose = teacherProseBlocks(messages);
+	const head = title && title.length > 0 ? `# ${title}\n\n` : "";
+	return head + prose.join("\n\n");
 }
 
 // ─── the extractor ──────────────────────────────────────────────────────────
@@ -866,15 +874,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 					`${covered.uncoveredCount} messages, ${batches.length} batch(es) of ≤${chunkTokens} tok`,
 			);
 			for (const batch of batches) {
-				// The batch's source view: the ONE shared markdown engine
-				// (owner 2026-09-27) over the batch's messages. Anchors OFF
-				// (2026-09-28): propositions report no message ids, so the
-				// [id] anchors are noise — same as transcriptView. The
-				// fingerprint's line format is separate and unchanged (no
-				// mass re-extraction).
-				const view = sessionMarkdown(
+				// The batch's source view: TEACHER PROSE ONLY (owner,
+				// 2026-09-28) — plain paragraphs, same selection as the
+				// coverage fingerprints (messageViewLines parity).
+				const view = proseView(
 					batch.map((slot) => slot.message),
-					{ title: record.title, anchors: false },
+					record.title,
 				);
 				setPhase(chatId, "extracting", "chat");
 				const findings = await extract(chatId, view);

@@ -90,6 +90,11 @@ function user(id: string, text: string): LhMessage[] {
 	return [{ id, role: "user", content: text, timestamp: Date.now() } as never];
 }
 
+/** A teacher-prose message (the coverage unit, owner 2026-09-28). */
+function teacher(id: string, text: string): LhMessage[] {
+	return [{ id, role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() } as never];
+}
+
 function assistant(id: string, calls: NativeCall[]): LhMessage[] {
 	const content = calls.map((c) => ({ type: "toolCall", id: c.toolCallId, name: c.name, arguments: c.input as never }));
 	const out: LhMessage[] = [
@@ -923,10 +928,12 @@ describe("single-node deletion (deleteNodeTraces + deleteGraphNode, node interlu
 describe("session coverage read (extraction-UX redesign, 2026-09-24)", () => {
 	it("one session's block: derived uncovered, the newest fold, honest nulls", () => {
 		// Empty coverage: everything uncovered, no fold yet, not running.
+		// Teacher prose only (owner, 2026-09-28): coverage slots are the
+		// teacher's text blocks, so the fixture is all-teacher.
 		const chat = fixtureChat("coverage read", [
-			user("cov_u1", "tell me about coverage reads"),
-			user("cov_u2", "and about per-session blocks"),
-			user("cov_u3", "a third distinct message"),
+			teacher("cov_t1", "tell me about coverage reads"),
+			teacher("cov_t2", "and about per-session blocks"),
+			teacher("cov_t3", "a third distinct message"),
 		].flat());
 		const empty = sessionCoverage(chat.id)!;
 		assert.ok(empty);

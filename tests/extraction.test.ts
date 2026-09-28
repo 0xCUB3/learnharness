@@ -186,6 +186,7 @@ function fixtureChat() {
 	chatStore.saveMessages(chat.id, [
 		user("u1", "teach me the chain rule"),
 		...assistant("a1", [
+			{ type: "text", text: "The chain rule composes rates of change along a path." },
 			quizPart("probe-1", { question: "What is a derivative, roughly?" }, {
 				questionId: "probe-1", kind: "quiz", questionText: "What is a derivative, roughly?",
 				correct: false, dontKnow: false, answeredAt: "2026-08-22T01:00:00.000Z",
@@ -315,35 +316,28 @@ function silentModel(): PiEngine {
 
 // ─── transcriptView (pure) ───────────────────────────────────────────────────
 
-describe("transcriptView (pure — the shared markdown engine, owner 2026-09-27)", () => {
-	it("renders anchorless speaker blocks + check blocks — tree-blind, plan ops folded", () => {
+describe("transcriptView (pure — teacher prose only, owner 2026-09-28)", () => {
+	it("renders ONLY the teacher's prose — no learner, no checks, no tool notes", () => {
 		const { record } = fixtureChat();
 		const view = transcriptView(record);
 
-		// The document header is the session title.
+		// The document header is the session title; the body is the
+		// teacher's text blocks as plain paragraphs.
 		assert.match(view, /^# Extraction fixture$/m);
+		assert.match(view, /The chain rule composes rates of change along a path\./);
+		assert.match(view, /The derivative measures how fast a function changes\./);
 
-		// Conversation verbatim, each block headed by its speaker only —
-		// the [id] anchors are GONE (submit-schema slim, 2026-09-28:
-		// propositions no longer report message ids).
-		assert.match(view, /### Learner\n\nteach me the chain rule/);
-		assert.match(view, /### Teacher\n\nThe derivative measures how fast a function changes\./);
-
-		// Checks render as readable blocks (question + outcome).
-		assert.match(view, /### Quiz\n/);
-		assert.match(view, /\*\*Q:\*\* What is a derivative, roughly\?/);
-		assert.match(view, /The learner answered incorrectly\./);
-		assert.match(view, /The learner answered correctly\./);
-
-		// TREE-BLIND: no plan tree, no tree edges, no mark_done lines — plan
-		// ops fold to the generic one-liner like every other non-quiz tool.
-		assert.doesNotMatch(view, /FINAL PLAN TREE/);
-		assert.doesNotMatch(view, /TREE EDGES/);
-		assert.match(view, /\*plan_init result delivered\*/);
-		assert.doesNotMatch(view, /output-available/);
+		// EVERYTHING else is gone: learner text, quiz blocks, tool notes,
+		// speaker headers — the ruling strips it all.
+		assert.doesNotMatch(view, /teach me the chain rule/);
+		assert.doesNotMatch(view, /go on/);
+		assert.doesNotMatch(view, /check me/);
+		assert.doesNotMatch(view, /### /);
+		assert.doesNotMatch(view, /Quiz/);
+		assert.doesNotMatch(view, /plan_init/);
 	});
 
-	it("summarizes job tool results as one line and drops empty text", () => {
+	it("job tool results and empty text vanish — only prose paragraphs remain", () => {
 		const chat = chatStore.createChat("View noise fixture");
 		createdChats.push(chat.id);
 		chatStore.saveMessages(chat.id, [
@@ -356,12 +350,14 @@ describe("transcriptView (pure — the shared markdown engine, owner 2026-09-27)
 					output: { brief: "long brief", sources: [] },
 				},
 				{ type: "text", text: "   " },
+				{ type: "text", text: "Prose survives." },
 			]),
 		].flat());
 		const view = transcriptView(chatStore.getChat(chat.id)!);
-		assert.match(view, /\*research result delivered\*/);
+		assert.match(view, /Prose survives\./);
+		assert.doesNotMatch(view, /research/);
 		assert.doesNotMatch(view, /long brief/);
-		assert.doesNotMatch(view, /### Teacher/);
+		assert.doesNotMatch(view, /### /);
 	});
 });
 
@@ -1154,11 +1150,13 @@ function passThroughAuditStep(): FauxResponseStep {
 function chunkyChat() {
 	const chat = chatStore.createChat("Chunky coverage fixture");
 	createdChats.push(chat.id);
-	// ~1230 tok per message (chars/4): three fill the 4096 budget, the
-	// fourth would overflow — deterministic batches [m1,m2,m3] + [m4,m5].
+	// ~1230 tok per TEACHER message (chars/4): three fill the 4096 budget,
+	// the fourth would overflow — deterministic batches [m1,m2,m3] + [m4,m5].
+	// Teacher prose only (owner, 2026-09-28): learner messages are
+	// invisible to coverage, so the fixture is all-teacher.
 	chatStore.saveMessages(
 		chat.id,
-		[1, 2, 3, 4, 5].map((n) => user(`u${n}`, `topic ${n}: ${"detail ".repeat(700)}${n}`)),
+		[1, 2, 3, 4, 5].flatMap((n) => assistant(`a${n}`, [{ type: "text", text: `topic ${n}: ${"detail ".repeat(700)}${n}` }])),
 	);
 	return { chatId: chat.id, record: chatStore.getChat(chat.id)! };
 }
@@ -1180,10 +1178,11 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		// Two batches: the first held messages 1-3, the second 4-5 — a
 		// message is never split, batches are consecutive oldest-first.
 		assert.equal(views.length, 2, "one extractor call per batch");
-		assert.ok(views[0]!.includes("### Learner") && views[0]!.includes("topic 1:"));
+		assert.ok(views[0]!.includes("topic 1:") && views[0]!.includes("topic 3:"), "teacher prose only, first three");
 		assert.ok(!views[0]!.includes("topic 4:"), "the batch stops at the token budget");
-		assert.ok(views[1]!.includes("### Learner") && views[1]!.includes("topic 4:"));
+		assert.ok(views[1]!.includes("topic 4:") && views[1]!.includes("topic 5:"));
 		assert.ok(!views[1]!.includes("topic 3:"));
+		assert.doesNotMatch(views[0]!, /### /, "plain paragraphs — no speaker headers");
 		// The document header is the session title.
 		assert.ok(views[0]!.startsWith("# Chunky coverage fixture"));
 
@@ -1263,8 +1262,8 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		});
 		await finisher.runExtraction(chatId);
 		assert.equal(reRunViews.length, 1);
-		assert.ok(reRunViews[0]!.includes("### Learner") && reRunViews[0]!.includes("topic 4:"));
-		assert.ok(!reRunViews[0]!.includes("### Learner · u1"), "the covered remainder never re-enters the prompt");
+		assert.ok(reRunViews[0]!.includes("topic 4:") && reRunViews[0]!.includes("topic 5:"));
+		assert.ok(!reRunViews[0]!.includes("topic 1:"), "the covered remainder never re-enters the prompt");
 		assert.equal(ledgers.readCoverage().length, 5, "the re-run closed the gap");
 	});
 
@@ -1273,7 +1272,10 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		// the ONLY thing later runs can see.
 		const chat = chatStore.createChat("Re-open fixture");
 		createdChats.push(chat.id);
-		chatStore.saveMessages(chat.id, [user("s1", "short topic one"), user("s2", "short topic two")]);
+		chatStore.saveMessages(chat.id, [
+			...assistant("s1", [{ type: "text", text: "short topic one" }]),
+			...assistant("s2", [{ type: "text", text: "short topic two" }]),
+		].flat());
 		const chatId = chat.id;
 		const ledgers = memoryLedgers();
 		const pipeline = createExtractionPipeline({
@@ -1298,10 +1300,9 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const afterAttach = coverageOf(messages(), ledgers.readCoverage(), chatId);
 		assert.equal(afterAttach.uncoveredCount, 0, "data parts don't change the fingerprint");
 
-		// A quiz answer merging into an ASKING message changes its view →
-		// exactly that message re-opens, and the next run extracts it alone.
-		// (Native: the answer arrives as the call's tool result — the
-		// projected group gains the answer line.)
+		// A teacher-prose edit changes the message's view → exactly that
+		// message re-opens, and the next run extracts it alone. (Under the
+		// 2026-09-28 ruling only TEACHER prose can re-open anything.)
 		const mutated = record().map((m) =>
 			(m as { id?: string }).id === "s1"
 				? ({ ...m, content: [...(m as { content: unknown[] }).content, { type: "text", text: "the answer merged in late" }] } as never)
@@ -1320,8 +1321,8 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		});
 		await reOpener.runExtraction(chatId);
 		assert.equal(reRunViews.length, 1, "one batch: the single re-opened message");
-		assert.ok(reRunViews[0]!.includes("the answer merged in late") && !reRunViews[0]!.includes("### Learner · s2"));
-		assert.ok(reRunViews[0]!.includes("### Learner"), "the re-opened message renders");
+		assert.ok(reRunViews[0]!.includes("the answer merged in late") && !reRunViews[0]!.includes("short topic two"));
+		assert.ok(reRunViews[0]!.includes("short topic one"), "the re-opened message renders its full prose");
 		assert.equal(coverageOf(messages(), ledgers.readCoverage(), chatId).uncoveredCount, 0, "re-covered");
 	});
 });

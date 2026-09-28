@@ -116,12 +116,12 @@ describe("sessionMarkdown", () => {
 		assert.equal(md, "### Learner · u1\n\ngo");
 	});
 
-	it("content parity with the coverage line builder (2026-09-27 split)", () => {
-		// Every message that produces view lines produces a markdown block,
-		// and every message that renders nothing renders nothing in either —
-		// same messages, two formats, one seam decision. The FINGERPRINT
-		// stays on the line format (stable — no mass re-extraction when
-		// presentation changes); markdown is presentation only.
+	it("the seam split (owner, 2026-09-28): teacher prose renders in BOTH; the rest renders ONLY here", () => {
+		// The extraction view became TEACHER-PROSE-ONLY: its line builder
+		// yields lines for teacher text alone. This engine keeps the FULL
+		// session format for the future user-facing export — so parity now
+		// holds exactly for teacher prose, and everything else (learner,
+		// quiz, tool results) is markdown-only.
 		const messages: LhMessage[] = [
 			user("u1", "teach me"),
 			teacher("a1", "The chain rule multiplies local rates."),
@@ -130,9 +130,10 @@ describe("sessionMarkdown", () => {
 			result("r3", "j2", "research", {}, true),
 		];
 		for (const message of messages) {
+			const isTeacher = (message as { role?: string }).role === "assistant";
 			const hasLines = messageViewLines(message, message.id).length > 0;
 			const hasMarkdown = messageMarkdown(message, message.id) !== null;
-			assert.equal(hasMarkdown, hasLines, `parity for ${message.id}`);
+			assert.equal(hasLines, isTeacher && hasMarkdown, `view lines follow teacher prose for ${message.id}`);
 		}
 	});
 });
