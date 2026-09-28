@@ -510,17 +510,28 @@ function runAuditor(
  *  The post-batch embedding tail was its own phase (accuracy wave,
  *  2026-09-19) until wave 7 killed the embedder seam wholesale (this
  *  interlude) — birth-session clusters need no post-merge pass. The
- *  phases tell the truth about what the loop is actually waiting on.
- *  "waiting" (owner 2026-09-28): the serialized-audit gate — the run's
- *  audit+merge critical section is queued behind another run's; the
+ *  phases tell the truth about what the job is actually waiting on.
+ *  "queued" (owner, 2026-09-28): the global extract semaphore — 3
+ *  concurrent extractor calls process-wide; the job is waiting for an
+ *  extract slot, not for the model.
+ *  "waiting" (owner 2026-09-28): the serialized-audit gate — the job's
+ *  audit+merge critical section is queued behind another job's; the
  *  extractor is done but the auditor may not start until the graph is
  *  stable. */
-export type ExtractionPhase = "extracting" | "waiting" | "auditing" | "merging";
+export type ExtractionPhase = "queued" | "extracting" | "waiting" | "auditing" | "merging";
 
 /** One in-flight pipeline run. Module-level: one process, one registry.
  *  Exported for the status payload's consumer typing (the dock). */
 export interface RunningExtraction {
+	/** The SOURCE id (chat id / notes src id) — the payload's identity and
+	 *  the abort key. The registry KEY adds "#i" for chunk jobs (a
+	 *  multi-chunk source owns several entries); this field stays the
+	 *  source id so the feed's reveal logic and abort stay source-scoped. */
 	chatId: string;
+	/** PER-CHUNK JOBS (owner, 2026-09-28): which chunk of how many this
+	 *  job is — present only when the source fanned out (n > 1). Drives
+	 *  the feed row's "· i/N" suffix. */
+	part?: { i: number; n: number };
 	/** Which front door the run came through — label + usage-persistence
 	 *  depend on it (chats bill their chat record; notes bill the source
 	 *  record). */
@@ -552,10 +563,15 @@ interface LhExtractionGlobal {
 		lastStartedAt: number;
 	};
 	/** The serialized-audit mutex (owner 2026-09-28): a FIFO promise
-	 *  chain — the audit+merge critical section runs one run at a time,
+	 *  chain — the audit+merge critical section runs one job at a time,
 	 *  process-wide. globalThis for the same module-instance reason as
 	 *  the run registries. */
 	__lhAuditLock?: { tail: Promise<void> };
+	/** The EXTRACT SEMAPHORE (owner, 2026-09-28): 3 concurrent extractor
+	 *  calls process-wide — the provider-facing rate stance (the import
+	 *  route's old 3-wide pool doctrine, now global). Per-chunk jobs fan
+	 *  out in parallel but queue here. */
+	__lhExtractSlots?: { active: number; queue: { resolve: () => void; dead: boolean }[] };
 }
 
 /** THE RUN REGISTRIES live on globalThis, not module level — the
@@ -582,12 +598,17 @@ export function extractionStatuses(): RunningExtraction[] {
  *  nothing merged, nothing checkpointed, partial usage still persisted.
  *  Returns false when no run is in flight (idempotent no-op). */
 export function abortExtraction(chatId: string): boolean {
-	const run = runs().running.get(chatId);
-	if (!run) return false;
-	run.controller.abort();
-	return true;
+	// PER-CHUNK JOBS (owner, 2026-09-28): a source may own several registry
+	// entries (one per chunk/batch) — aborting the source aborts EVERY
+	// job of its fan-out.
+	let found = false;
+	for (const run of runs().running.values()) {
+		if (run.chatId !== chatId) continue;
+		run.controller.abort();
+		found = true;
+	}
+	return found;
 }
-
 // ─── the pipeline ───────────────────────────────────────────────────────────
 
 export interface ExtractionModels {
@@ -697,12 +718,19 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	const runningExtractions = runs().running;
 	const inFlight = runs().inFlight;
 
-	function setPhase(chatId: string, phase: ExtractionPhase, kind: "chat" | "notes", label?: string): void {
+	function setPhase(
+		jobKey: string,
+		phase: ExtractionPhase,
+		kind: "chat" | "notes",
+		label?: string,
+		part?: { i: number; n: number },
+	): void {
 		const R = runs();
-		const prev = runningExtractions.get(chatId);
+		const prev = runningExtractions.get(jobKey);
 		if (!prev) R.lastStartedAt = Math.max(Date.now(), R.lastStartedAt + 1);
-		runningExtractions.set(chatId, {
-			chatId,
+		runningExtractions.set(jobKey, {
+			chatId: prev?.chatId ?? jobKey.split("#")[0]!,
+			part: prev?.part ?? part, // phase changes never lose the part
 			kind,
 			label: prev?.label ?? label, // phase changes never lose the label
 			phase,
@@ -713,8 +741,8 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	}
 
 	/** Accumulate one billed step into the run's registry entry (live). */
-	function recordStep(chatId: string, stage: "extractor" | "auditor", usage: CallUsage, model: string): void {
-		const run = runningExtractions.get(chatId);
+	function recordStep(jobKey: string, stage: "extractor" | "auditor", usage: CallUsage, model: string): void {
+		const run = runningExtractions.get(jobKey);
 		if (!run) return; // not running (tests driving stages directly)
 		run.usage[stage] ??= { model, steps: [] };
 		run.usage[stage]!.steps.push(usage);
@@ -731,14 +759,14 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	 *  abort-aware on both sides of the queue (a waiter that aborts
 	 *  leaves without auditing — its chain link still resolves, so
 	 *  successors never hang). */
-	async function withAuditLock<T>(chatId: string, kind: "chat" | "notes", label: string | undefined, critical: () => Promise<T>): Promise<T> {
-		setPhase(chatId, "waiting", kind, label);
+	async function withAuditLock<T>(jobKey: string, kind: "chat" | "notes", label: string | undefined, critical: () => Promise<T>): Promise<T> {
+		setPhase(jobKey, "waiting", kind, label);
 		const g = globalThis as typeof globalThis & LhExtractionGlobal;
 		const lock = (g.__lhAuditLock ??= { tail: Promise.resolve() });
 		const prev = lock.tail;
 		let release!: () => void;
 		lock.tail = new Promise<void>((resolve) => (release = resolve));
-		const signal = runningExtractions.get(chatId)?.controller.signal;
+		const signal = runningExtractions.get(jobKey)?.controller.signal;
 		let onAbort: (() => void) | undefined;
 		const aborted = new Promise<never>((_, reject) => {
 			if (!signal) return;
@@ -760,10 +788,10 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		}
 	}
 
-	async function extract(chatId: string, view: string): Promise<SessionFindings> {
-		const signal = runningExtractions.get(chatId)?.controller.signal;
-		signal?.throwIfAborted(); // an abort during a sync gap ends the run here
-		console.info(`[extraction ${chatId}] extractor starting (${view.split("\n").length} markdown lines)`);
+	async function extract(jobKey: string, view: string): Promise<SessionFindings> {
+		const signal = runningExtractions.get(jobKey)?.controller.signal;
+		signal?.throwIfAborted(); // an abort during a sync gap ends the job here
+		console.info(`[extraction ${jobKey}] extractor starting (${view.split("\n").length} markdown lines)`);
 		const t0 = performance.now();
 
 		const findings = await runExtractor(
@@ -771,20 +799,20 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			view,
 			signal,
 			(usage, model, step, finishReason, tools) => {
-				recordStep(chatId, "extractor", callUsage(usage), model);
+				recordStep(jobKey, "extractor", callUsage(usage), model);
 				console.info(`[extraction] extractor step ${step}: ${finishReason}, tools: ${tools}`);
 			},
 		);
-		console.info(`[extraction ${chatId}] extractor done in ${Math.round(performance.now() - t0)}ms`);
+		console.info(`[extraction ${jobKey}] extractor done in ${Math.round(performance.now() - t0)}ms`);
 		return findings;
 	}
 
-	async function audit(chatId: string, findings: SessionFindings): Promise<AuditVerdicts> {
-		const signal = runningExtractions.get(chatId)?.controller.signal;
+	async function audit(jobKey: string, findings: SessionFindings): Promise<AuditVerdicts> {
+		const signal = runningExtractions.get(jobKey)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during the extract→audit gap ends here
 		const graph = getGraph(graphStore);
 		console.info(
-			`[extraction ${chatId}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
+			`[extraction ${jobKey}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
 				`${graph.nodes.length} graph nodes)`,
 		);
 		const t0 = performance.now();
@@ -799,31 +827,88 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`The current knowledge graph has ${graph.nodes.length} node(s). Explore it with your tools and link what links.`,
 			signal,
 			(usage, model, step, finishReason, tools) => {
-				recordStep(chatId, "auditor", callUsage(usage), model);
+				recordStep(jobKey, "auditor", callUsage(usage), model);
 				console.info(`[extraction] auditor step ${step}: ${finishReason}, tools: ${tools}`);
 			},
 			auditorGraphTools({ chatStore, graphStore }),
 		);
 		console.info(
-			`[extraction ${chatId}] audit: ${findings.propositions.length} propositions through, ` +
+			`[extraction ${jobKey}] audit: ${findings.propositions.length} propositions through, ` +
 				`${auditResult.links.length} linked to existing nodes, ${auditResult.edges.length} bridging edges`,
 		);
-		console.info(`[extraction ${chatId}] auditor done in ${Math.round(performance.now() - t0)}ms`);
+		console.info(`[extraction ${jobKey}] auditor done in ${Math.round(performance.now() - t0)}ms`);
 		return auditResult;
+	}
+
+
+/** THE EXTRACT SEMAPHORE (owner, 2026-09-28): at most 3 concurrent
+ *  extractor calls, process-wide — the provider-facing stance. Per-chunk
+ *  jobs fan out freely; this gate is what they queue behind ("queued").
+ *  FIFO; abort-aware (a queued job that aborts marks its ticket dead —
+ *  the permit handoff skips it and hands to the next waiter). The audit
+ *  side needs no slot: audits already serialize behind their own global
+ *  lock, so by the time a job releases its extract slot the audit queue
+ *  is the only remaining throttle. */
+	async function withExtractSlot<T>(jobKey: string, critical: () => Promise<T>): Promise<T> {
+		const g = globalThis as typeof globalThis & LhExtractionGlobal;
+		const slots = (g.__lhExtractSlots ??= { active: 0, queue: [] });
+		// Fresh takers increment `active` themselves; a HANDED-OFF permit
+		// does not (the releaser left `active` untouched for us) — counting
+		// both sides is how a semaphore slowly deadlocks at 3-with-empty-
+		// queue.
+		let freshTake = true;
+		if (slots.active >= 3) {
+			freshTake = false;
+			await new Promise<void>((resolve, reject) => {
+				const ticket: { resolve: () => void; dead: boolean } = { resolve, dead: false };
+				slots.queue.push(ticket);
+				const signal = runningExtractions.get(jobKey)?.controller.signal;
+				if (!signal) return;
+				const die = () => {
+					ticket.dead = true; // the permit handoff must skip us
+					const err = new Error("extraction aborted while queued for an extract slot");
+					err.name = "AbortError";
+					reject(err);
+				};
+				if (signal.aborted) die();
+				else signal.addEventListener("abort", die, { once: true });
+			});
+		}
+		if (freshTake) slots.active++;
+		try {
+			return await critical();
+		} finally {
+			// Permit handoff: a waiting ticket inherits the slot directly
+			// (active stays); dead tickets are skipped — their job already
+			// left through the abort path.
+			for (;;) {
+				const next = slots.queue.shift();
+				if (!next) {
+					slots.active--;
+					break;
+				}
+				if (next.dead) continue;
+				next.resolve();
+				break;
+			}
+		}
 	}
 
 	/** Append the run's usage record to the chat's extractions log — success
 	 *  or failure: a failed run still spent money, and its partial usage is
 	 *  exactly what the record should show (stats absent = never merged).
 	 *  Idempotent per startedAt (the store dedupes). */
-	function persistRunUsage(chatId: string, durationMs: number, stats: EmissionStats | undefined): void {
-		const run = runningExtractions.get(chatId);
+	function persistRunUsage(jobKey: string, durationMs: number, stats: EmissionStats | undefined): void {
+		const run = runningExtractions.get(jobKey);
 		if (!run) return; // not running (tests driving stages directly)
+		// PER-CHUNK JOBS (owner, 2026-09-28): the registry KEY may carry a
+		// "#i" suffix — the usage LEDGERS key by SOURCE (run.chatId): one
+		// job's record per chunk, all appended to the source's log.
 		// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run has no
 		// usage log to append to — the record's death is the user's choice
 		// and its partial spend logs with it (appendSourceUsage below
 		// already no-ops for a vanished source; the chat path guards here).
-		if (run.kind === "chat" && !chatStore.getChat(chatId)) return;
+		if (run.kind === "chat" && !chatStore.getChat(run.chatId)) return;
 		const entry: ExtractionRunUsage = {
 			startedAt: run.startedAt,
 			at: new Date().toISOString(),
@@ -834,8 +919,63 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				auditor: run.usage.auditor ?? { model: "unknown", steps: [] },
 			},
 		};
-		if (run.kind === "notes") graphStore.appendSourceUsage(chatId, entry);
-		else chatStore.appendExtractionUsage(chatId, entry);
+		if (run.kind === "notes") graphStore.appendSourceUsage(run.chatId, entry);
+		else chatStore.appendExtractionUsage(run.chatId, entry);
+	}
+
+	/** One chunk/batch JOB (per-chunk jobs, owner 2026-09-28): the registry
+	 *  entry's lifecycle — minted with its part, usage persisted per job
+	 *  (the ledger shows each chunk's cost), removed on any exit. The body
+	 *  runs the full queued → extract → audit-locked merge lifecycle;
+	 *  failure isolation lives at the fan-out site (one bad chunk never
+	 *  kills its siblings). */
+	async function runJob(
+		source: { id: string; kind: "chat" | "notes"; label?: string; part?: { i: number; n: number } },
+		body: (jobKey: string) => Promise<EmissionStats>,
+	): Promise<EmissionStats> {
+		const jobKey = source.part ? `${source.id}#${source.part.i}` : source.id;
+		const t0 = performance.now();
+		try {
+			const stats = await body(jobKey);
+			persistRunUsage(jobKey, Math.round(performance.now() - t0), stats);
+			return stats;
+		} catch (err) {
+			persistRunUsage(jobKey, Math.round(performance.now() - t0), undefined);
+			throw err;
+		} finally {
+			runningExtractions.delete(jobKey);
+		}
+	}
+
+	/** The fan-out aggregation (per-chunk jobs, owner 2026-09-28): successes
+	 *  count (earlier chunks keep their merges — checkpoints make aborts
+	 *  cheap), aborts log and pass as partial stats, isolated failures log
+	 *  per job and never throw — the source's run returns what actually
+	 *  merged. */
+	function aggregateJobs(sourceId: string, settled: PromiseSettledResult<EmissionStats>[]): EmissionStats {
+		const stats: EmissionStats = { nodes: 0, edges: 0 };
+		let aborted = false;
+		let failed = 0;
+		for (const result of settled) {
+			if (result.status === "fulfilled") {
+				stats.nodes += result.value.nodes;
+				stats.edges += result.value.edges;
+				continue;
+			}
+			const err = result.reason;
+			if (err instanceof Error && err.name === "AbortError") aborted = true;
+			else {
+				failed++;
+				console.error(`[extraction ${sourceId}] job failed (isolated):`, err);
+			}
+		}
+		if (aborted)
+			console.info(
+				`[extraction ${sourceId}] aborted — merged chunks keep their coverage, the rest stay uncovered for the next run`,
+			);
+		if (failed > 0)
+			console.error(`[extraction ${sourceId}] ${failed} job(s) failed; successful jobs still merged`);
+		return stats;
 	}
 
 	async function runExtraction(chatId: string): Promise<EmissionStats> {
@@ -849,8 +989,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		// coverage ATOMICALLY (inside the merger's step 4), so an abort or
 		// error below loses at most the in-flight batch — every earlier
 		// batch stays covered, the rest stays visibly uncovered.
-		let batchesDone = 0;
-		const total: EmissionStats = { nodes: 0, edges: 0 };
 		try {
 			const record = chatStore.getChat(chatId);
 			if (!record) throw new Error(`Chat not found: ${chatId}`);
@@ -873,84 +1011,79 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`[extraction ${chatId}] pipeline start — ${covered.uncoveredTokens} uncovered tok, ` +
 					`${covered.uncoveredCount} messages, ${batches.length} batch(es) of ≤${chunkTokens} tok`,
 			);
-			for (const batch of batches) {
-				// The batch's source view: TEACHER PROSE ONLY (owner,
-				// 2026-09-28) — plain paragraphs, same selection as the
-				// coverage fingerprints (messageViewLines parity).
-				const view = proseView(
-					batch.map((slot) => slot.message),
-					record.title,
-				);
-				setPhase(chatId, "extracting", "chat");
-				const findings = await extract(chatId, view);
-				// SERIALIZED AUDIT (owner 2026-09-28): audit + merge are the
-				// graph-mutating critical section — one run at a time,
-				// process-wide, so the auditor explores the graph as it
-				// stands AFTER every earlier run's merge. Reacquired per
-				// batch: interleaved runs each audit against the latest
-				// graph instead of starving each other.
-				await withAuditLock(chatId, "chat", undefined, async () => {
-					setPhase(chatId, "auditing", "chat");
-					const auditResult = await audit(chatId, findings);
-					setPhase(chatId, "merging", "chat");
-					// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
-					// merge. The deletion route aborts this run first and runs its purge
-					// as one sync block; this closes the last window — a run that slipped
-					// past the wind-down finds the chat gone HERE and rides the existing
-					// abort path (info, not error): nothing merged, nothing checkpointed.
-					if (!chatStore.getChat(chatId)) {
-						const gone = new Error(`chat deleted mid-run: ${chatId}`);
-						gone.name = "AbortError";
-						throw gone;
-					}
-					// The batch's messages, snapshotted when the run computed
-					// coverage — if a message mutates mid-run (a quiz answer
-					// merges in), the stored fingerprint won't match its new
-					// one and it re-opens: honest by construction.
-					const foldedAt = new Date().toISOString();
-					const batchStats = mergeFindings(chatId, findings, auditResult, { chatStore, graphStore }, {
-						foldedAt,
-						coverage: batch
-							.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
-							.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
+			// PER-CHUNK JOBS (owner, 2026-09-28): every batch is its own job —
+			// extracts fan out behind the global 3-slot semaphore ("queued"),
+			// audits serialize through the process-wide gate ("waiting"). A
+			// batch that fails is ISOLATED (its messages stay uncovered —
+			// honestly re-runnable); its siblings keep merging.
+			const settled = await Promise.allSettled(
+				batches.map((batch, i) => {
+					const part = batches.length > 1 ? { i: i + 1, n: batches.length } : undefined;
+					return runJob({ id: chatId, kind: "chat", part }, async (jobKey) => {
+						// The batch's source view: TEACHER PROSE ONLY (owner,
+						// 2026-09-28) — plain paragraphs, same selection as the
+						// coverage fingerprints (messageViewLines parity).
+						const view = proseView(
+							batch.map((slot) => slot.message),
+							record.title,
+						);
+						setPhase(jobKey, "queued", "chat", undefined, part);
+						const findings = await withExtractSlot(jobKey, async () => {
+							setPhase(jobKey, "extracting", "chat", undefined, part);
+							return extract(jobKey, view);
+						});
+						// SERIALIZED AUDIT (owner 2026-09-28): audit + merge are the
+						// graph-mutating critical section — one job at a time,
+						// process-wide, so the auditor explores the graph as it
+						// stands AFTER every earlier job's merge.
+						return withAuditLock(jobKey, "chat", undefined, async () => {
+							setPhase(jobKey, "auditing", "chat", undefined, part);
+							const auditResult = await audit(jobKey, findings);
+							setPhase(jobKey, "merging", "chat", undefined, part);
+							// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
+							// merge. The deletion route aborts this run first and runs its purge
+							// as one sync block; this closes the last window — a run that slipped
+							// past the wind-down finds the chat gone HERE and rides the existing
+							// abort path (info, not error): nothing merged, nothing checkpointed.
+							if (!chatStore.getChat(chatId)) {
+								const gone = new Error(`chat deleted mid-run: ${chatId}`);
+								gone.name = "AbortError";
+								throw gone;
+							}
+							// The batch's messages, snapshotted when the run computed
+							// coverage — if a message mutates mid-run (a quiz answer
+							// merges in), the stored fingerprint won't match its new
+							// one and it re-opens: honest by construction.
+							const foldedAt = new Date().toISOString();
+							const batchStats = mergeFindings(chatId, findings, auditResult, { chatStore, graphStore }, {
+								foldedAt,
+								coverage: batch
+									.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
+									.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
+							});
+							// The layout ledger evolves with the merge (sync — the
+							// next snapshot fetch must already reflect the new nodes).
+							settleGraphLayout(graphStore);
+							console.info(
+								`[extraction ${jobKey}] merged: ${batchStats.nodes} nodes, ${batchStats.edges} edges`,
+							);
+							return batchStats;
+						});
 					});
-					total.nodes += batchStats.nodes;
-					total.edges += batchStats.edges;
-				});
-				batchesDone++;
-				console.info(
-					`[extraction ${chatId}] batch ${batchesDone}/${batches.length} merged: ` +
-						`${total.nodes} nodes, ${total.edges} edges (cumulative)`,
-				);
-			}
-			const stats = total;
-			// Option A: the layout ledger evolves with the merge (sync — the
-			// next snapshot fetch must already reflect the new nodes).
-			settleGraphLayout(graphStore);
-			persistRunUsage(chatId, Math.round(performance.now() - t0), stats);
+				}),
+			);
+			const stats = aggregateJobs(chatId, settled);
 			console.info(
 				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges ` +
-					`(${Math.round(performance.now() - t0)}ms total)`,
+					`(${Math.round(performance.now() - t0)}ms total, ${batches.length} batch job(s))`,
 			);
 			return stats;
 		} catch (err) {
-			persistRunUsage(chatId, Math.round(performance.now() - t0), batchesDone > 0 ? total : undefined);
-			// Aborted (the dock's abort button): a deliberate stop, not a
-			// failure. Per-batch coverage (above) makes the stop CHEAP: every
-			// merged batch stays covered; only the in-flight one doesn't — it
-			// stays uncovered, and the next trigger or manual run picks it
-			// up. Partial usage is persisted either way.
-			if (err instanceof Error && err.name === "AbortError") {
-				console.info(
-					`[extraction ${chatId}] aborted (${Math.round(performance.now() - t0)}ms) — ` +
-						`${batchesDone} merged batch(es) stay covered, the in-flight one does not`,
-				);
-				return total;
-			}
-			// A failure keeps the same discipline: merged batches stay
-			// covered, nothing else is checkpointed, and the throw travels
-			// to the caller (this line keeps the run's log legible).
-			console.error(`[extraction ${chatId}] pipeline failed (${Math.round(performance.now() - t0)}ms) after ${batchesDone} batch(es):`, err);
+			// Pre-fan-out failures only (stage gate, coverage read): aborts
+			// and job-level failures are absorbed at the fan-out site, per
+			// job — merged batches stay covered, partial usage persists per
+			// job, the aggregate returns what actually merged.
+			console.error(`[extraction ${chatId}] pipeline failed (${Math.round(performance.now() - t0)}ms):`, err);
 			throw err;
 		} finally {
 			inFlight.delete(chatId);
@@ -989,22 +1122,28 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		return out;
 	}
 
-	async function notesExtract(input: { id: string; filePath: string; text: string; part?: { i: number; n: number } }): Promise<NotesFindings> {
-		const signal = runningExtractions.get(input.id)?.controller.signal;
-		signal?.throwIfAborted(); // an abort during a sync gap ends the run here
+	async function notesExtract(
+		jobKey: string,
+		input: { id: string; filePath: string; text: string; part?: { i: number; n: number } },
+	): Promise<NotesFindings> {
+		// jobKey (per-chunk jobs, owner 2026-09-28): the registry key —
+		// "src#i" for chunk jobs — so the abort signal reaches the call.
+		// input.id stays the SOURCE id for the view and store ledgers.
+		const signal = runningExtractions.get(jobKey)?.controller.signal;
+		signal?.throwIfAborted(); // an abort during a sync gap ends the job here
 		const view = notesView(input);
-		console.info(`[extraction ${input.id}] notes extractor starting (${view.split("\n").length} source lines)`);
+		console.info(`[extraction ${jobKey}] notes extractor starting (${view.split("\n").length} source lines)`);
 		const t0 = performance.now();
 		const findings = await runNotesExtractor(
 			stageEngine("extractor", deps.extractor),
 			view,
 			signal,
 			(usage, model, step, finishReason, tools) => {
-				recordStep(input.id, "extractor", callUsage(usage), model);
+				recordStep(jobKey, "extractor", callUsage(usage), model);
 				console.info(`[extraction] extractor step ${step}: ${finishReason}, tools: ${tools}`);
 			},
 		);
-		console.info(`[extraction ${input.id}] notes extractor done in ${Math.round(performance.now() - t0)}ms`);
+		console.info(`[extraction ${jobKey}] notes extractor done in ${Math.round(performance.now() - t0)}ms`);
 		return findings;
 	}
 
@@ -1030,37 +1169,56 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			console.info(
 				`[extraction ${id}] notes pipeline start (${input.filePath}) — ${chunks.length} chunk(s) of ≤${chunkTokens} tok`,
 			);
-			const stats: EmissionStats = { nodes: 0, edges: 0 };
-			for (const [i, chunk] of chunks.entries()) {
-				setPhase(id, "extracting", "notes", input.filePath);
-				const findings = await notesExtract({ ...input, text: chunk, part: { i: i + 1, n: chunks.length } });
-				// SERIALIZED AUDIT (owner, 2026-09-28): the same gate as the chat
-				// path — a notes import and a chat run may extract in parallel,
-				// but audit + merge one at a time, process-wide. Reacquired per
-				// chunk so multi-chunk runs interleave fairly.
-				const merged = await withAuditLock(id, "notes", input.filePath, async () => {
-					setPhase(id, "auditing", "notes", input.filePath);
-					const auditResult = await audit(id, findings);
-					setPhase(id, "merging", "notes", input.filePath);
-					return mergeFindings(id, findings, auditResult, { chatStore, graphStore }, { foldedAt: input.importedAt });
-				});
-				stats.nodes += merged.nodes;
-				stats.edges += merged.edges;
-			}
-			// Same post-merge settle as the chat path.
-			settleGraphLayout(graphStore);
-			persistRunUsage(id, Math.round(performance.now() - t0), stats);
+			// PER-CHUNK JOBS (owner, 2026-09-28): every chunk is its own job —
+			// registry row, usage record, failure domain. Extracts fan out in
+			// parallel behind the global 3-slot extract semaphore ("queued");
+			// audits serialize through the process-wide gate exactly as before
+			// ("waiting"). The part rides the registry entry (feed suffix
+			// "· i/N") only when the file actually chunked.
+			const settled = await Promise.allSettled(
+				chunks.map((chunk, i) => {
+					const part = chunks.length > 1 ? { i: i + 1, n: chunks.length } : undefined;
+					return runJob({ id, kind: "notes", label: input.filePath, part }, async (jobKey) => {
+						setPhase(jobKey, "queued", "notes", input.filePath, part);
+						const findings = await withExtractSlot(jobKey, async () => {
+							setPhase(jobKey, "extracting", "notes", input.filePath, part);
+							return notesExtract(jobKey, { ...input, text: chunk, part });
+						});
+						// SERIALIZED AUDIT (owner, 2026-09-28): extracts run in
+						// parallel, but audit + merge one at a time, process-wide —
+						// the auditor explores the graph as it stands AFTER every
+						// earlier job's merge. Reacquired per chunk so runs
+						// interleave fairly.
+						return withAuditLock(jobKey, "notes", input.filePath, async () => {
+							setPhase(jobKey, "auditing", "notes", input.filePath, part);
+							const auditResult = await audit(jobKey, findings);
+							setPhase(jobKey, "merging", "notes", input.filePath, part);
+							const merged = mergeFindings(
+								id,
+								findings,
+								auditResult,
+								{ chatStore, graphStore },
+								{ foldedAt: input.importedAt },
+							);
+							// The layout ledger evolves with each merge — the next
+							// snapshot fetch reflects every finished chunk.
+							settleGraphLayout(graphStore);
+							console.info(`[extraction ${jobKey}] merged: ${merged.nodes} nodes, ${merged.edges} edges`);
+							return merged;
+						});
+					});
+				}),
+			);
+			const stats = aggregateJobs(id, settled);
 			console.info(
 				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.edges} edges ` +
-					`(${Math.round(performance.now() - t0)}ms total)`,
+					`(${Math.round(performance.now() - t0)}ms total, ${chunks.length} chunk job(s))`,
 			);
 			return stats;
 		} catch (err) {
-			persistRunUsage(id, Math.round(performance.now() - t0), undefined);
-			if (err instanceof Error && err.name === "AbortError") {
-				console.info(`[extraction ${id}] aborted (${Math.round(performance.now() - t0)}ms) — nothing merged, nothing checkpointed`);
-				return { nodes: 0, edges: 0 };
-			}
+			// Pre-fan-out failures only (stage gate, chunking): job-level
+			// failures and aborts are absorbed at the fan-out site, per job,
+			// with their usage records already persisted.
 			console.error(`[extraction ${id}] notes pipeline failed (${Math.round(performance.now() - t0)}ms):`, err);
 			throw err;
 		} finally {

@@ -2,8 +2,10 @@
  * GET /api/graph/status — the in-flight background extraction runs
  * (vision §1: the pipeline status must be visible on the home graph).
  * Thin transport over the pipeline's module-level registry: phase
- * (extracting / auditing / merging) per chat, oldest first. Titles joined
- * from the chat store; a missing chat record still reports the run.
+ * (queued / extracting / waiting / auditing / merging) per job, oldest
+ * first — a multi-chunk source shows one row PER CHUNK ("· i/N" suffix,
+ * per-chunk jobs, owner 2026-09-28). Titles joined from the chat store;
+ * a missing chat record still reports the run.
  */
 import { chatStore, extractionStatuses } from "@/src/server";
 
@@ -13,8 +15,11 @@ export async function GET() {
 	const runs = extractionStatuses().map((run) => ({
 		chatId: run.chatId,
 		// The run's own label (the file path for notes imports) wins; chat
-		// runs fall back to the chat store's title.
-		title: run.label ?? chatStore.getChat(run.chatId)?.title ?? run.chatId,
+		// runs fall back to the chat store's title. Chunk jobs append their
+		// part ("· 2/5") — one row per chunk of the fan-out.
+		title:
+			(run.label ?? chatStore.getChat(run.chatId)?.title ?? run.chatId) +
+			(run.part ? ` · ${run.part.i}/${run.part.n}` : ""),
 		phase: run.phase,
 		startedAt: run.startedAt,
 		// Live per-stage usage (the money channel): model + per-step CallUsage,

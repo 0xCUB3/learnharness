@@ -576,7 +576,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		assert.equal(stats.nodes, 2, "the direct-value seams ran, untouched by engineFor");
 	});
 
-	it("checkpoints nothing when a stage fails", async () => {
+	it("a failing stage is ISOLATED (per-chunk jobs, owner 2026-09-28): the job fails, nothing merges — and a sibling batch still merges", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
 
@@ -586,9 +586,12 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			extractor: submitModel("submit_findings", FINDINGS),
 			auditor: silentModel(), // never submits the review
 		});
-		await assert.rejects(pipeline.runExtraction(chatId), /the auditor never submitted a review/);
+		// The old run-level throw is gone: one failed job is absorbed at
+		// the fan-out — the run resolves with what actually merged (zeros).
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, edges: 0 });
 		assert.equal(ledgers.readNodes().length, 0);
 		assert.equal(ledgers.readCheckpoints().length, 0, "no checkpoint — the next trigger re-runs");
+		assert.equal(ledgers.readCoverage().length, 0);
 
 		const failingExtractor = createExtractionPipeline({
 			chatStore,
@@ -596,8 +599,36 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			extractor: silentModel(),
 			auditor: submitModel("submit_review", { links: [], edges: [] }),
 		});
-		await assert.rejects(failingExtractor.runExtraction(chatId), /the extractor never submitted findings/);
+		assert.deepEqual(await failingExtractor.runExtraction(chatId), { nodes: 0, edges: 0 });
 		assert.equal(ledgers.readCheckpoints().length, 0);
+
+		// THE isolation pin: a two-batch chat whose SECOND extractor call
+		// never submits — batch 1 still merges, batch 2 stays uncovered
+		// (honestly re-runnable). Count at stream-INVOKE time: readiness
+		// probes mint engines without ever calling them.
+		const { chatId: chunkyId, record } = chunkyChat();
+		let invocations = 0;
+		const findings = findingsStep();
+		const refuse = fauxAssistantMessage("I refuse to use tools");
+		const countingStep: FauxResponseStep = (context, options, state, model) => {
+			invocations++;
+			const step = invocations === 1 ? findings : refuse;
+			return typeof step === "function" ? step(context, options, state, model) : step;
+		};
+		const mixed = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			engineFor: (role) =>
+				role === "extractor" ? fauxEngine([countingStep]) : submitModel("submit_review", { links: [], edges: [] }),
+		});
+		assert.deepEqual(await mixed.runExtraction(chunkyId), { nodes: 2, edges: 1 }, "batch 1's merge survives batch 2's failure");
+		assert.equal(invocations, 2);
+		assert.equal(ledgers.readCoverage().length, 3, "batch 1 checkpointed its three messages");
+		assert.equal(
+			coverageOf(record.messages, ledgers.readCoverage(), chunkyId).uncoveredCount,
+			2,
+			"batch 2's messages stay uncovered for the next run",
+		);
 	});
 
 	it("reports its phase through the status registry while running, and clears it when done", async () => {
@@ -860,7 +891,10 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		assert.deepEqual(second, { nodes: 0, edges: 0 });
 
 		release();
-		await assert.rejects(first, /the extractor never submitted findings/);
+		// The gated extractor never submits — an ISOLATED job failure now
+		// (per-chunk jobs, owner 2026-09-28): the run resolves with zeros
+		// instead of throwing.
+		assert.deepEqual(await first, { nodes: 0, edges: 0 });
 	});
 
 	it("registers runs on the process-wide registry (route-instance safety): a second pipeline instance sees the same single-flight state", async () => {
@@ -909,7 +943,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		assert.deepEqual(await observer.runExtraction(chatId), { nodes: 0, edges: 0 }, "single-flight spans pipeline instances");
 
 		release();
-		await assert.rejects(first, /the extractor never submitted findings/);
+		assert.deepEqual(await first, { nodes: 0, edges: 0 }, "isolated job failure — the run resolves zeros");
 		assert.ok(!extractionStatuses().some((run) => run.chatId === chatId), "the registry entry clears when the run ends (however it ends)");
 		assert.ok(!g.__lhExtractionRuns?.running.has(chatId), "nothing leaks into the global registry");
 	});
@@ -1060,8 +1094,11 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 			graphStore: ledgers,
 			engineFor: (role) => (role === "extractor" ? noEdges() : submitModel("submit_review", { links: [], edges: [] })),
 		});
-		await assert.rejects(pipeline.runExtraction(chatId), /never submitted findings/);
+		// Isolated job failure (per-chunk jobs, owner 2026-09-28): the run
+		// resolves zeros — no throw — and still nothing merged.
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, edges: 0 });
 		assert.equal(ledgers.readNodes().length, 0);
+		assert.equal(ledgers.readCoverage().length, 0, "nothing checkpointed — the messages stay re-runnable");
 	});
 
 	it("re-importing the same file is idempotent: same source identity, refs dedupe, usage history grows", async () => {
@@ -1203,7 +1240,9 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const again = await pipeline.runExtraction(chatId);
 		assert.deepEqual(again, { nodes: 0, edges: 0 });
 		assert.equal(views.length, before);
-		assert.equal(chatStore.getChat(chatId)!.extractions?.length, 1, "the no-op run persists no usage");
+		// PER-CHUNK JOBS (owner 2026-09-28): one usage record per batch job
+		// (two), and the no-op run adds none.
+		assert.equal(chatStore.getChat(chatId)!.extractions?.length, 2, "one usage record per batch job; the no-op run persists none");
 	});
 
 	it("aborting after a merged batch keeps it covered; the re-run extracts only the remainder", async () => {
@@ -1328,6 +1367,112 @@ describe("the chunked pipeline (extraction coverage)", () => {
 });
 
 // ─── session deletion mid-run (wave 6) ─────────────────────────────────────
+
+// ─── per-chunk parallel jobs (owner, 2026-09-28) ─────────────────────────────
+
+describe("per-chunk parallel jobs (owner, 2026-09-28)", () => {
+	const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+	/** 8 single-line chunks: one line per chunk under a tiny budget — a
+	 *  fan-out wide enough to see both the 3-slot semaphore and the queue. */
+	const wideText = () =>
+		Array.from({ length: 8 }, (_, i) => `note ${i}: ${"x".repeat(90)}`).join("\n");
+
+	it("fans out one job per chunk: 3 extract concurrently (the global semaphore), the rest queue, every job is its own feed row", async () => {
+		const ledgers = memoryLedgers();
+		// The extractor call hangs until its ABORT — the observation window:
+		// with all jobs parked, the registry must show exactly 3 extracting
+		// and 5 queued, one row per chunk with its part.
+		const abortingStep: FauxResponseStep = (_context, options) =>
+			new Promise((_resolve, reject) => {
+				const sig = options?.signal;
+				const die = () => {
+					const err = new Error("aborted");
+					err.name = "AbortError";
+					reject(err);
+				};
+				if (sig?.aborted) die();
+				else sig?.addEventListener("abort", die, { once: true });
+			});
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			engineFor: (role) =>
+				role === "extractor" ? fauxEngine([abortingStep]) : submitModel("submit_review", { links: [], edges: [] }),
+			getChunkTokens: () => 20,
+		});
+		const runPromise = pipeline.importNotes({ filePath: "/vault/parallel.md", text: wideText() });
+
+		const srcId = extractionStatuses().find((r) => r.chatId.startsWith("src_"))!.chatId;
+		await until(() => extractionStatuses().filter((r) => r.chatId === srcId).length === 8, 500);
+		const rows = extractionStatuses().filter((r) => r.chatId === srcId);
+		assert.equal(rows.length, 8, "one feed row per chunk job");
+		assert.equal(rows.filter((r) => r.phase === "extracting").length, 3, "the semaphore admits exactly 3 extractor calls");
+		assert.equal(rows.filter((r) => r.phase === "queued").length, 5, "the rest wait for an extract slot, not the model");
+		const parts = rows.map((r) => r.part).filter((p): p is { i: number; n: number } => Boolean(p));
+		assert.equal(parts.length, 8, "multi-chunk sources stamp every row with its part");
+		assert.deepEqual(
+			[...parts].sort((a, b) => a.i - b.i).map((p) => `${p.i}/${p.n}`),
+			Array.from({ length: 8 }, (_, i) => `${i + 1}/8`),
+		);
+
+		// SOURCE-WIDE abort: every chunk job of the fan-out dies together.
+		assert.equal(abortExtraction(srcId), true);
+		assert.deepEqual(await runPromise, { nodes: 0, edges: 0 });
+		assert.equal(extractionStatuses().filter((r) => r.chatId === srcId).length, 0, "all rows leave the registry");
+		assert.equal(ledgers.readNodes().length, 0, "nothing merged");
+		// Per-job usage: all 8 chunk jobs persisted their (failed) spend.
+		const source = ledgers.readSources().find((src) => src.id === srcId)!;
+		assert.equal(source.extractions?.length, 8, "one usage record per chunk job — even failed jobs bill honestly");
+		assert.ok(source.extractions!.every((entry) => entry.stats === undefined), "no job merged — no stats");
+	});
+
+	it("parallel extracts, serialized audits: extractor concurrency peaks at the cap, the auditor NEVER overlaps", async () => {
+		const ledgers = memoryLedgers();
+		let extractInFlight = 0;
+		let extractPeak = 0;
+		let auditInFlight = 0;
+		let auditPeak = 0;
+		// Hand-built submit messages (findingsStep()/passThroughAuditStep()
+		// are step FACTORIES — the slow wrapper must return messages).
+		const findingsMessage = fauxAssistantMessage(
+			[fauxToolCall("submit_findings", FINDINGS as unknown as ToolCall["arguments"], { id: "findings-call" })],
+			{ stopReason: "toolUse" },
+		);
+		const reviewMessage = fauxAssistantMessage(
+			[fauxToolCall("submit_review", { links: [], edges: [] } as unknown as ToolCall["arguments"], { id: "review-call" })],
+			{ stopReason: "toolUse" },
+		);
+		const slowExtract: FauxResponseStep = async () => {
+			extractInFlight++;
+			extractPeak = Math.max(extractPeak, extractInFlight);
+			await sleep(5);
+			extractInFlight--;
+			return findingsMessage;
+		};
+		const slowAudit: FauxResponseStep = async () => {
+			auditInFlight++;
+			auditPeak = Math.max(auditPeak, auditInFlight);
+			await sleep(5);
+			auditInFlight--;
+			return reviewMessage;
+		};
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			engineFor: (role) => (role === "extractor" ? fauxEngine([slowExtract]) : fauxEngine([slowAudit])),
+			getChunkTokens: () => 20,
+		});
+		const stats = await pipeline.importNotes({ filePath: "/vault/parallel-2.md", text: wideText() });
+
+		assert.equal(extractPeak, 3, "8 chunks, 3 permits — the peak pins both the fan-out and the cap");
+		assert.equal(auditPeak, 1, "audits serialize behind the gate — never two at once");
+		// Identical findings in every chunk: one merge, then dedupe — the
+		// aggregate counts real emissions, never double.
+		assert.deepEqual(stats, { nodes: 2, edges: 1 });
+		assert.equal(ledgers.readNodes().length, 2);
+	});
+});
 
 describe("the session-deletion guard (chat deleted mid-run)", () => {
 	it("a run whose chat dies mid-extraction aborts at the merge with nothing merged, checkpointed, or billed", async () => {
