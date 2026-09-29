@@ -17,7 +17,6 @@ import {
 	EmptySelectionError,
 	PracticeSetNotFound,
 	PracticeSetNotReady,
-	UnknownChatError,
 } from "../agent/subagents/practice-pipeline.ts";
 import {
 	ModelsNotConfiguredError,
@@ -72,7 +71,6 @@ export function practiceErrorResponse(err: unknown): Response {
 		);
 	}
 	if (err instanceof EmptySelectionError) return Response.json({ error: err.message, code: "empty_selection" }, { status: 400 });
-	if (err instanceof UnknownChatError) return Response.json({ error: err.message, code: "unknown_chat" }, { status: 404 });
 	if (err instanceof BadAnswersError) return Response.json({ error: err.message, code: "bad_answers" }, { status: 400 });
 	if (err instanceof PracticeSetNotFound) return Response.json({ error: err.message, code: "not_found" }, { status: 404 });
 	if (err instanceof PracticeSetNotReady) return Response.json({ error: err.message, code: "not_ready" }, { status: 409 });
@@ -81,7 +79,10 @@ export function practiceErrorResponse(err: unknown): Response {
 }
 
 /** POST /api/practice/sets — 202 {id}; the set generates in the
- *  background (fire-and-forget pipeline). */
+ *  background (fire-and-forget pipeline). Body is {nodeIds, params,
+ *  title?} ONLY (owner ruling 2026-09-29: problem sets take NODES —
+ *  graph objects; the UI resolves a picked cluster to its member ids,
+ *  and may pass the cluster label as the title). */
 export async function createPracticeSetResponse(body: unknown): Promise<Response> {
 	const b = (body ?? {}) as Record<string, unknown>;
 	const params = parseParams(b.params);
@@ -91,23 +92,23 @@ export async function createPracticeSetResponse(body: unknown): Promise<Response
 			{ status: 400 },
 		);
 	}
+	const titleHint =
+		typeof b.title === "string" && b.title.trim() !== "" ? b.title.trim() : undefined;
+	if (
+		!Array.isArray(b.nodeIds) ||
+		!b.nodeIds.every((id): id is string => typeof id === "string" && ID_OK.test(id))
+	) {
+		return Response.json({ error: "Body must be {nodeIds, params, title?}" }, { status: 400 });
+	}
+	if (b.nodeIds.length === 0) {
+		return Response.json({ error: "nodeIds is empty", code: "empty_selection" }, { status: 400 });
+	}
 	try {
-		if (typeof b.chatId === "string" && b.chatId !== "") {
-			if (!ID_OK.test(b.chatId)) return Response.json({ error: "Invalid chatId" }, { status: 400 });
-			const { set } = await practice.createProblemSet({ chatId: b.chatId }, params);
-			return Response.json({ id: set.id }, { status: 202 });
-		}
-		if (Array.isArray(b.nodeIds) && b.nodeIds.every((id): id is string => typeof id === "string" && ID_OK.test(id))) {
-			if (b.nodeIds.length === 0) {
-				return Response.json({ error: "nodeIds is empty", code: "empty_selection" }, { status: 400 });
-			}
-			const { set } = await practice.createProblemSet({ nodeIds: b.nodeIds }, params);
-			return Response.json({ id: set.id }, { status: 202 });
-		}
+		const { set } = await practice.createProblemSet(b.nodeIds, params, titleHint);
+		return Response.json({ id: set.id }, { status: 202 });
 	} catch (err) {
 		return practiceErrorResponse(err);
 	}
-	return Response.json({ error: 'Body must be {chatId, params} or {nodeIds, params}' }, { status: 400 });
 }
 
 /** POST /api/practice/sets/[id]/answers — 202; grades land in the

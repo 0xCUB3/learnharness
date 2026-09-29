@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import { LEDGER_FILES, POSITIONS_FILE } from "../../config.ts";
-import type { GraphSnapshot } from "../core/contracts.ts";
+import type { GraphClusterGroup, GraphSnapshot } from "../core/contracts.ts";
 import type { GraphCostSummary } from "../core/cost-summary.ts";
 import { graphCostSummary } from "../core/cost-summary.ts";
 import { graphSnapshot } from "../core/graph.ts";
@@ -21,6 +21,24 @@ import { stores } from "./stores.ts";
  */
 export function graphView(): GraphSnapshot {
 	return graphSnapshot(stores);
+}
+
+/** GET /api/graph/clusters — the birth-session groups the graph view
+ *  renders, resolved to node ids for the practice picker (owner ruling
+ *  2026-09-29: cluster→nodeIds resolves in the UI; the API stays
+ *  graph-domain). Reuses the snapshot's clustering verbatim — same
+ *  ordering (size desc, ties by id) and the same MIN_CLUSTER_SIZE
+ *  presentation filter the canvas honors. A corrupt/empty graph is an
+ *  empty list. */
+export function graphClusters(): GraphClusterGroup[] {
+	const snap = graphSnapshot(stores);
+	return snap.clusters.map((cluster) => ({
+		key: cluster.id,
+		kind: cluster.id in snap.sessions ? "chat" : "notes",
+		label: cluster.label,
+		nodeIds: cluster.members,
+		nodeCount: cluster.members.length,
+	}));
 }
 
 /** The graph view's cost surface (GET /api/graph/costs — the 2026-09 cost

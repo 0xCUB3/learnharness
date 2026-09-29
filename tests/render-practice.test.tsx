@@ -14,12 +14,14 @@ import {
 	PracticeDialogBody,
 	type PracticeFailure,
 } from "../components/practice-dialog.tsx";
+import type { GraphClusterGroup } from "../src/core";
 import { PracticeExamBody } from "../components/practice-exam.tsx";
-import type { ChatListItem, Problem, ProblemSet } from "../src/core";
+import type { Problem, ProblemSet } from "../src/core";
 
 /**
- * The practice UI surfaces (slice 5, 2026-09-29): creation dialog (dials
- * + session picker + preselected lock), list page (rows, delete flow),
+ * The practice UI surfaces (slice 5, 2026-09-29; cluster-picker fix the
+ * same evening — graph-domain, not chat-domain): creation dialog (dials
+ * + cluster picker), list page (rows, delete flow),
  * exam page states (generating stubs — propositions never surface —
  * ready + answerable, graded reveal + lock). The pure bodies are pinned
  * here (the render-suite discipline); the live fetch chains (polling,
@@ -36,10 +38,11 @@ const dialValues = {
 	presentation: 0.3,
 };
 
-function chats(): ChatListItem[] {
+function clusters(): GraphClusterGroup[] {
 	return [
-		{ id: "chat_1", title: "Ethics lesson", updatedAt: "2026-09-29T10:00:00.000Z", createdAt: "2026-09-29T09:00:00.000Z", busy: false } as ChatListItem,
-		{ id: "chat_2", title: "Physics", updatedAt: "2026-09-28T10:00:00.000Z", createdAt: "2026-09-28T09:00:00.000Z", busy: false } as ChatListItem,
+		{ key: "chat_1", kind: "chat", label: "Ethics lesson", nodeIds: ["n1", "n2", "n3", "n4"], nodeCount: 4 },
+		{ key: "src_ab12", kind: "notes", label: "~/notes/physics.md", nodeIds: ["n5", "n6", "n7"], nodeCount: 3 },
+		{ key: "chat_9", kind: "chat", label: null, nodeIds: ["n8", "n9", "n10"], nodeCount: 3 },
 	];
 }
 
@@ -81,14 +84,13 @@ function set(over: Partial<ProblemSet> = {}): ProblemSet {
 
 // ─── the creation dialog ─────────────────────────────────────────────────────
 
-describe("PracticeDialogBody — creation", () => {
+describe("PracticeDialogBody — creation (cluster picker)", () => {
 	const base = {
 		values: dialValues,
 		onDial: () => {},
-		chats: chats(),
-		selectedId: null,
+		clusters: clusters(),
+		selectedKey: null,
 		onSelect: () => {},
-		lockedTitle: null,
 		busy: false,
 		failure: null as PracticeFailure | null,
 		onOpenSettings: () => {},
@@ -105,37 +107,41 @@ describe("PracticeDialogBody — creation", () => {
 		}
 	});
 
-	it("session picker: titled rows, selection lights up, Create gated until picked", () => {
+	it("cluster picker: label + proposition-count rows, notes kind marked, Create gated until picked", () => {
 		const html = renderToStaticMarkup(<PracticeDialogBody {...base} />);
-		assert.ok(html.includes('data-testid="practice-dialog-sessions"'));
+		assert.ok(html.includes('data-testid="practice-dialog-clusters"'));
+		assert.ok(html.includes('data-testid="practice-cluster-chat_1"'));
 		assert.ok(html.includes("Ethics lesson"));
-		assert.ok(html.includes('disabled=""'), "no session picked — Create disabled");
+		assert.match(html, /notes · <!-- -->3 propositions|notes · 3 propositions/);
+		assert.ok(html.includes("4 propositions"), "chat cluster shows its count");
+		assert.ok(html.includes('disabled=""'), "no cluster picked — Create disabled");
 
-		const picked = renderToStaticMarkup(<PracticeDialogBody {...base} selectedId="chat_2" />);
-		assert.ok(picked.includes('data-testid="practice-session-chat_2"'));
-		assert.match(picked, /Physics<\/span>.*selected/s);
+		const picked = renderToStaticMarkup(<PracticeDialogBody {...base} selectedKey="src_ab12" />);
+		assert.ok(picked.includes("~/notes/physics.md"));
 	});
 
-	it("preselected mode: picker hidden, the session locked", () => {
-		const html = renderToStaticMarkup(
-			<PracticeDialogBody {...base} chats={null} lockedTitle="Ethics lesson" />,
-		);
-		assert.ok(html.includes('data-testid="practice-dialog-locked"'));
-		assert.ok(!html.includes('data-testid="practice-dialog-sessions"'));
-		assert.ok(!html.includes('disabled=""'), "preselected — Create enabled");
+	it("an unlabeled cluster (naming record gone) renders muted, never guessed", () => {
+		const html = renderToStaticMarkup(<PracticeDialogBody {...base} />);
+		assert.ok(html.includes("unlabeled cluster"));
+		assert.ok(html.includes('data-testid="practice-cluster-chat_9"'));
 	});
 
-	it("empty selection renders the honest inline line", () => {
+	it("an empty graph is an honest empty list", () => {
+		const html = renderToStaticMarkup(<PracticeDialogBody {...base} clusters={[]} />);
+		assert.ok(html.includes("No clusters yet"));
+	});
+
+	it("empty selection (vanished nodes) renders the honest inline line", () => {
 		const html = renderToStaticMarkup(
-			<PracticeDialogBody {...base} failure={{ status: 400, error: "selection has no propositions to practice", code: "empty_selection" }} />,
+			<PracticeDialogBody {...base} selectedKey="chat_1" failure={{ status: 400, error: "selection has no propositions to practice", code: "empty_selection" }} />,
 		);
 		assert.ok(html.includes('data-testid="practice-dialog-error"'));
-		assert.ok(html.includes("This session has no propositions yet"));
+		assert.ok(html.includes("Nothing practicable is left in that cluster"));
 	});
 
 	it("503 renders the server's line + the settings deep link", () => {
 		const html = renderToStaticMarkup(
-			<PracticeDialogBody {...base} lockedTitle="Ethics lesson" failure={{ status: 503, error: "No model configured — set up your models first", code: "models_not_configured" }} />,
+			<PracticeDialogBody {...base} selectedKey="chat_1" failure={{ status: 503, error: "No model configured — set up your models first", code: "models_not_configured" }} />,
 		);
 		assert.ok(html.includes("No model configured"));
 		assert.ok(html.includes('data-testid="practice-dialog-open-settings"'));

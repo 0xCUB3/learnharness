@@ -215,7 +215,7 @@ export function PracticeListPage({ initialSets }: { initialSets: ProblemSet[] })
 				onDelete={(set) => setDeleting(set)}
 				onNew={() => setCreating(true)}
 			/>
-			{creating && <PracticeDialog preselected={null} onClose={() => setCreating(false)} />}
+			{creating && <PracticeDialog onClose={() => setCreating(false)} />}
 			{deleting &&
 				createPortal(
 					<div

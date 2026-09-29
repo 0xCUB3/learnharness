@@ -1,28 +1,31 @@
 "use client";
 
 /**
- * The problem-set creation dialog (practice slice 5, 2026-09-29): the
- * three parameter dials + the session picker → POST /api/practice/sets
- * → router.push to the new exam page. In the delete-session dialog's
- * shape (portaled z-50, pure body exported for SSR pins).
+ * The problem-set creation dialog (practice slice 5, 2026-09-29;
+ * cluster-picker fix same evening): the three parameter dials + the
+ * CLUSTER picker → POST /api/practice/sets → router.push to the new
+ * exam page. In the delete-session dialog's shape (portaled z-50, pure
+ * body exported for SSR pins).
  *
- * TWO OPEN MODES:
- *   - generic (the list page's "New problem set"): a session picker —
- *     the selection is "everything this session touched";
- *   - preselected (the sidebar's "Practice this session's
- *     propositions"): picker hidden, the session shown locked.
+ * GRAPH-DOMAIN, NOT CHAT-DOMAIN (owner ruling 2026-09-29): problem sets
+ * take NODES. The picker lists the birth-session clusters the graph
+ * view renders (GET /api/graph/clusters); picking one resolves to its
+ * member node ids, and the cluster's label rides along as the set's
+ * title. This dialog is the ONLY creation entry for now — the graph-view
+ * cluster entry comes later with the free-form selection UI.
  *
- * Honest failures inline: 400 empty_selection → "This session has no
- * propositions yet" (verbatim per brief); 503 (models/key refusal) →
- * the server's line + an "Open settings" deep link (the zero-keys
- * precedent — setup owns the fix, the dialog owns the pointer).
+ * Honest failures inline: 400 empty_selection (the vanished-nodes edge
+ * — the cluster's propositions are gone) renders the honest line;
+ * 503 (models/key refusal) renders the server's line + an "Open
+ * settings" deep link (the zero-keys precedent — setup owns the fix,
+ * the dialog owns the pointer).
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useSettingsDialog } from "@/components/settings/settings-dialog";
-import type { ChatListItem } from "@/src/core";
+import type { GraphClusterGroup } from "@/src/core";
 
 /** The three dials — key order matches PracticeParams; anchors are the
  *  honest display (a raw 0..1 number tells the learner nothing). */
@@ -43,10 +46,9 @@ export interface PracticeFailure {
 export function PracticeDialogBody({
 	values,
 	onDial,
-	chats,
-	selectedId,
+	clusters,
+	selectedKey,
 	onSelect,
-	lockedTitle,
 	busy,
 	failure,
 	onOpenSettings,
@@ -55,18 +57,16 @@ export function PracticeDialogBody({
 }: {
 	values: Record<(typeof PRACTICE_DIALS)[number]["key"], number>;
 	onDial: (key: (typeof PRACTICE_DIALS)[number]["key"], v: number) => void;
-	/** Null = preselected mode (picker hidden, `lockedTitle` shown). */
-	chats: ChatListItem[] | null;
-	selectedId: string | null;
-	onSelect: (id: string) => void;
-	lockedTitle: string | null;
+	clusters: GraphClusterGroup[];
+	selectedKey: string | null;
+	onSelect: (key: string) => void;
 	busy: boolean;
 	failure: PracticeFailure | null;
 	onOpenSettings: () => void;
 	onClose: () => void;
 	onRun: () => void;
 }) {
-	const canRun = !busy && (lockedTitle !== null || selectedId !== null);
+	const canRun = !busy && selectedKey !== null;
 	return (
 		<div
 			role="dialog"
@@ -78,37 +78,36 @@ export function PracticeDialogBody({
 		>
 			<h2 className="font-title text-2xl tracking-tight">New problem set</h2>
 
-			{/* The session: everything it touched (any provenance point). */}
+			{/* The cluster: a birth-session group of the graph, resolved to
+			    node ids on create (graph-domain, owner 2026-09-29). */}
 			<div className="mt-4 flex flex-col gap-1">
-				{lockedTitle !== null ? (
-					<div data-testid="practice-dialog-locked" className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">
-						<span className="text-muted-foreground">From session — </span>
-						<span className="font-medium">{lockedTitle}</span>
-					</div>
-				) : (
-					<>
-						<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Session</span>
-						<div className="max-h-40 overflow-y-auto rounded-lg border" data-testid="practice-dialog-sessions">
-							{(chats ?? []).map((chat) => (
-								<button
-									type="button"
-									key={chat.id}
-									data-testid={`practice-session-${chat.id}`}
-									onClick={() => onSelect(chat.id)}
-									className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${
-										selectedId === chat.id ? "bg-accent" : ""
-									}`}
-								>
-									<span className="truncate">{chat.title}</span>
-									{selectedId === chat.id && <span className="ml-2 text-xs text-muted-foreground">selected</span>}
-								</button>
-							))}
-							{(chats ?? []).length === 0 && (
-								<div className="px-3 py-2 text-sm text-muted-foreground">No sessions yet.</div>
-							)}
+				<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Cluster</span>
+				<div className="max-h-40 overflow-y-auto rounded-lg border" data-testid="practice-dialog-clusters">
+					{clusters.map((cluster) => (
+						<button
+							type="button"
+							key={cluster.key}
+							data-testid={`practice-cluster-${cluster.key}`}
+							onClick={() => onSelect(cluster.key)}
+							className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-accent ${
+								selectedKey === cluster.key ? "bg-accent" : ""
+							}`}
+						>
+							<span className="min-w-0 truncate">
+								{cluster.label ?? <span className="text-muted-foreground/60">unlabeled cluster</span>}
+							</span>
+							<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+								{cluster.kind === "notes" ? "notes · " : ""}
+								{cluster.nodeCount} propositions
+							</span>
+						</button>
+					))}
+					{clusters.length === 0 && (
+						<div className="px-3 py-2 text-sm text-muted-foreground">
+							No clusters yet — a cluster appears once a session births 3+ propositions.
 						</div>
-					</>
-				)}
+					)}
+				</div>
 			</div>
 
 			{/* The three dials (SettingSlider's markup, anchors as display). */}
@@ -135,7 +134,7 @@ export function PracticeDialogBody({
 
 			{failure && (
 				<div data-testid="practice-dialog-error" className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-					{failure.code === "empty_selection" ? "This session has no propositions yet" : failure.error}
+					{failure.code === "empty_selection" ? "Nothing practicable is left in that cluster — the graph changed." : failure.error}
 					{failure.status === 503 && (
 						<button
 							type="button"
@@ -172,15 +171,9 @@ export function PracticeDialogBody({
 	);
 }
 
-/** The stateful wrapper: fetches the session list (generic mode), runs
- *  the create POST, navigates on 202. Null `preselected` = generic. */
-export function PracticeDialog({
-	preselected,
-	onClose,
-}: {
-	preselected: { chatId: string; title: string } | null;
-	onClose: () => void;
-}) {
+/** The stateful wrapper: fetches the cluster list, runs the create POST
+ *  (nodeIds + the cluster's label as title + params), navigates on 202. */
+export function PracticeDialog({ onClose }: { onClose: () => void }) {
 	const router = useRouter();
 	const { open: openSettings } = useSettingsDialog();
 	const [values, setValues] = useState<Record<(typeof PRACTICE_DIALS)[number]["key"], number>>({
@@ -188,27 +181,26 @@ export function PracticeDialog({
 		cueDistance: 0.5,
 		presentation: 0.5,
 	});
-	const [chats, setChats] = useState<ChatListItem[] | null>(null);
-	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [clusters, setClusters] = useState<GraphClusterGroup[] | null>(null);
+	const [selectedKey, setSelectedKey] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [failure, setFailure] = useState<PracticeFailure | null>(null);
 
-	// Generic mode: the picker's truth is the chat list (fresh on open).
+	// The picker's truth is the graph's clustering (fresh on open).
 	useEffect(() => {
-		if (preselected) return;
 		let alive = true;
-		fetch("/api/chats", { cache: "no-store" })
-			.then((res) => res.json() as Promise<{ chats: ChatListItem[] }>)
+		fetch("/api/graph/clusters", { cache: "no-store" })
+			.then((res) => res.json() as Promise<{ clusters: GraphClusterGroup[] }>)
 			.then((d) => {
-				if (alive) setChats(d.chats);
+				if (alive) setClusters(d.clusters);
 			})
 			.catch(() => {
-				if (alive) setChats([]);
+				if (alive) setClusters([]);
 			});
 		return () => {
 			alive = false;
 		};
-	}, [preselected]);
+	}, []);
 
 	// Esc closes (claimed, the delete-session discipline).
 	useEffect(() => {
@@ -223,15 +215,19 @@ export function PracticeDialog({
 	}, [onClose]);
 
 	const run = useCallback(async () => {
-		const chatId = preselected?.chatId ?? selectedId;
-		if (!chatId || busy) return;
+		const picked = (clusters ?? []).find((c) => c.key === selectedKey);
+		if (!picked || busy) return;
 		setBusy(true);
 		setFailure(null);
 		try {
 			const res = await fetch("/api/practice/sets", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ chatId, params: values }),
+				body: JSON.stringify({
+					nodeIds: picked.nodeIds,
+					params: values,
+					title: picked.label ?? undefined,
+				}),
 			});
 			const body = (await res.json()) as { id?: string; error?: string; code?: string };
 			if (!res.ok || !body.id) {
@@ -244,7 +240,7 @@ export function PracticeDialog({
 			setFailure({ status: 0, error: "Create failed — network error. Try again." });
 			setBusy(false);
 		}
-	}, [preselected, selectedId, busy, values, router]);
+	}, [clusters, selectedKey, busy, values, router]);
 
 	return createPortal(
 		<div
@@ -256,10 +252,9 @@ export function PracticeDialog({
 			<PracticeDialogBody
 				values={values}
 				onDial={(key, v) => setValues((prev) => ({ ...prev, [key]: v }))}
-				chats={preselected ? null : (chats ?? [])}
-				selectedId={selectedId}
-				onSelect={setSelectedId}
-				lockedTitle={preselected?.title ?? null}
+				clusters={clusters ?? []}
+				selectedKey={selectedKey}
+				onSelect={setSelectedKey}
 				busy={busy}
 				failure={failure}
 				onOpenSettings={() => openSettings()}

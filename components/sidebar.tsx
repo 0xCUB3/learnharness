@@ -9,7 +9,6 @@ import type { ChatDeleteMode } from "@/src/core";
 import { GraduationCapIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
-import { PracticeDialog } from "@/components/practice-dialog";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
@@ -398,9 +397,6 @@ function SessionsSidebar() {
 	const ctxAnchorRef = useRef<HTMLElement | null>(null);
 	const [renamingId, setRenamingId] = useState<string | null>(null);
 	const [deleting, setDeleting] = useState<ChatListItem | null>(null);
-	// Practice slice 5 (2026-09-29): the right-click "Practice this session's
-	// propositions" opens the creation dialog PRESELECTED on that session.
-	const [practiceChat, setPracticeChat] = useState<{ chatId: string; title: string } | null>(null);
 
 	const openContext = (e: React.MouseEvent<HTMLButtonElement>, chat: ChatListItem) => {
 		e.preventDefault(); // suppress the native menu
@@ -736,21 +732,6 @@ function SessionsSidebar() {
 							Delete…
 						</button>
 						<div className="my-0.5 border-t border-border/60" aria-hidden="true" />
-						{/* Practice (slice 5): the session's propositions → a problem set.
-						    Sits ABOVE the coverage block — an action like Extract, not
-						    management like Rename/Delete. */}
-						<button
-							type="button"
-							data-testid="ctx-practice"
-							onClick={() => {
-								const target = chats?.find((c) => c.id === ctxChatId);
-								if (target) setPracticeChat({ chatId: target.id, title: target.title });
-								setCtxChatId(null);
-							}}
-							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
-						>
-							Practice this session&apos;s propositions
-						</button>
 						<CoverageMenuBlock chatId={ctxChatId} />
 					</MenuShell>
 				)}
@@ -762,11 +743,6 @@ function SessionsSidebar() {
 					onClose={() => setDeleting(null)}
 					onDeleted={onDeleted}
 				/>
-				{/* The preselected practice dialog (slice 5) — portaled by the
-				    component itself, here for state locality like the delete dialog. */}
-				{practiceChat && (
-					<PracticeDialog preselected={practiceChat} onClose={() => setPracticeChat(null)} />
-				)}
 			</aside>
 	);
 }

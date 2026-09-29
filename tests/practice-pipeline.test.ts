@@ -20,7 +20,6 @@ import {
 	createPracticePipeline,
 	practiceStatuses,
 	EmptySelectionError,
-	UnknownChatError,
 	PracticeSetNotFound,
 	PracticeSetNotReady,
 	BadAnswersError,
@@ -230,7 +229,6 @@ function fixture(partial: Partial<Parameters<typeof createPracticePipeline>[0]> 
 	const deps = {
 		graphStore: diamondGraph(),
 		practiceStore: practice.store,
-		chatStore: memoryChats(),
 		...partial,
 	};
 	return { practice, deps, make: () => createPracticePipeline(deps) };
@@ -273,7 +271,7 @@ describe("createProblemSet (generation)", () => {
 			grader: echoGrader(1),
 		});
 		const pipeline = f.make();
-		const { set, done } = await pipeline.createProblemSet({ nodeIds: ["a", "b", "c", "d", "e"] }, PARAMS);
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "c", "d", "e"], PARAMS);
 
 		assert.match(set.id, /^ps_/);
 		assert.equal(set.status, "partitioning");
@@ -307,7 +305,7 @@ describe("createProblemSet (generation)", () => {
 	it("per-problem failure isolation: one generator fails, the set still completes", async () => {
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b"] }, { chains: ["e"] }]), problemGenerator: echoGenerator(8, ["e"]), grader: echoGrader(1) });
 		const pipeline = f.make();
-		const { set, done } = await pipeline.createProblemSet({ nodeIds: ["a", "b", "e"] }, PARAMS); // chains b + e
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "e"], PARAMS); // chains b + e
 		await done;
 		const final = f.practice.store.getSet(set.id)!;
 		assert.equal(final.status, "ready");
@@ -347,7 +345,7 @@ describe("createProblemSet (generation)", () => {
 		const deps = { ...f.deps, problemGenerator: fauxEngine(Array.from({ length: 5 }, () => factory)), grader: echoGrader(1) };
 		const pipeline = createPracticePipeline(deps);
 
-		const { done } = await pipeline.createProblemSet({ nodeIds: nodes.map((n) => n.id) }, PARAMS);
+		const { done } = await pipeline.createProblemSet(nodes.map((n) => n.id), PARAMS);
 		await until(() => active === 3);
 		assert.equal(max, 3, "exactly three generators in flight");
 		release();
@@ -358,7 +356,7 @@ describe("createProblemSet (generation)", () => {
 	it("abort mid-generation: controllers die, everything generating is 'Aborted'", async () => {
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b"] }, { chains: ["c"] }, { chains: ["d"] }, { chains: ["e"] }]), problemGenerator: hangingModel(4), grader: echoGrader(1) });
 		const pipeline = f.make();
-		const { set, done } = await pipeline.createProblemSet({ nodeIds: ["a", "b", "c", "d", "e"] }, PARAMS);
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "c", "d", "e"], PARAMS);
 		await until(() => f.practice.store.getSet(set.id)?.status === "generating");
 
 		pipeline.abortPractice(set.id);
@@ -390,7 +388,7 @@ describe("createProblemSet (generation)", () => {
 		]);
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b"] }]), problemGenerator: gen, grader: echoGrader(1) });
 		const pipeline = f.make();
-		const { set, done } = await pipeline.createProblemSet({ nodeIds: ["b"] }, PARAMS);
+		const { set, done } = await pipeline.createProblemSet(["b"], PARAMS);
 		await until(() => practiceStatuses().length === 1 && practiceStatuses()[0]!.phase === "generating");
 		seen = practiceStatuses()[0]!;
 		assert.equal(seen.setId, set.id);
@@ -406,7 +404,7 @@ describe("createProblemSet (generation)", () => {
 	it("refusal gate fires BEFORE anything is created", async () => {
 		const f = fixture({}); // no engines, no engineFor
 		const pipeline = f.make();
-		await assert.rejects(pipeline.createProblemSet({ chatId: "chat_1" }, PARAMS), ModelsNotConfiguredError);
+		await assert.rejects(pipeline.createProblemSet(["a", "b"], PARAMS), ModelsNotConfiguredError);
 		assert.equal(f.practice.sets.size, 0, "no set persisted on refusal");
 	});
 });
@@ -414,22 +412,25 @@ describe("createProblemSet (generation)", () => {
 // ─── selection + typed errors ────────────────────────────────────────────────
 
 describe("selection resolution + typed errors", () => {
-	it("chatId: every node with ANY provenance point in the chat", async () => {
+	it("nodeIds: the raw list filtered to live nodes (unknown ids drop)", async () => {
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b", "c", "d", "e"] }]), problemGenerator: echoGenerator(1), grader: echoGrader(1) });
 		const pipeline = f.make();
-		const { set, done } = await pipeline.createProblemSet({ chatId: "chat_1" }, PARAMS);
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "c", "d", "e", "n_ghost"], PARAMS);
 		await done;
 		const final = f.practice.store.getSet(set.id)!;
-		assert.deepEqual(final.nodeIds.sort(), ["a", "b", "c", "d", "e"]);
+		assert.deepEqual(final.nodeIds.sort(), ["a", "b", "c", "d", "e"], "unknown ids silently drop");
 		assert.deepEqual(final.chains.map((c) => c.id).sort(), ["b", "c", "d", "e"]);
+		assert.ok(final.title.startsWith("Practice — "), "no title hint → the dated default");
 	});
 
-	it("unknown chat → UnknownChatError; empty selection → EmptySelectionError", async () => {
+	it("empty selection / vanished nodes → EmptySelectionError; title hint rides", async () => {
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b"] }]), problemGenerator: echoGenerator(1), grader: echoGrader(1) });
 		const pipeline = f.make();
-		await assert.rejects(pipeline.createProblemSet({ chatId: "chat_x" }, PARAMS), UnknownChatError);
-		await assert.rejects(pipeline.createProblemSet({ nodeIds: [] }, PARAMS), EmptySelectionError);
-		await assert.rejects(pipeline.createProblemSet({ nodeIds: ["n_ghost"] }, PARAMS), EmptySelectionError);
+		await assert.rejects(pipeline.createProblemSet([], PARAMS), EmptySelectionError);
+		await assert.rejects(pipeline.createProblemSet(["n_ghost"], PARAMS), EmptySelectionError);
+		const { set, done } = await pipeline.createProblemSet(["a", "b"], PARAMS, "Ethics cluster");
+		await done;
+		assert.equal(f.practice.store.getSet(set.id)!.title, "Ethics cluster");
 	});
 });
 
@@ -439,7 +440,7 @@ describe("submitAnswers (grading)", () => {
 	async function readySet() {
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b"] }, { chains: ["e"] }]), problemGenerator: echoGenerator(2), grader: echoGrader(2) });
 		const pipeline = f.make();
-		const { set, done } = await pipeline.createProblemSet({ nodeIds: ["a", "b", "e"] }, PARAMS);
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "e"], PARAMS);
 		await done;
 		return { f, pipeline, set: f.practice.store.getSet(set.id)! };
 	}
@@ -472,13 +473,13 @@ describe("submitAnswers (grading)", () => {
 
 		const f2 = fixture({ partitioner: hangingModel(), problemGenerator: echoGenerator(1), grader: echoGrader(1) });
 		const p2 = f2.make();
-		const { set: s2 } = await p2.createProblemSet({ nodeIds: ["b"] }, PARAMS); // stuck partitioning
+		const { set: s2 } = await p2.createProblemSet(["b"], PARAMS); // stuck partitioning
 		await assert.rejects(p2.submitAnswers(s2.id, [{ problemId: "pp_x", text: "t" }]), PracticeSetNotReady);
 		p2.abortPractice(s2.id);
 
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b"] }]), problemGenerator: echoGenerator(1), grader: echoGrader(1) });
 		const pl = f.make();
-		const { set: s3, done } = await pl.createProblemSet({ nodeIds: ["b"] }, PARAMS);
+		const { set: s3, done } = await pl.createProblemSet(["b"], PARAMS);
 		await done;
 		await assert.rejects(pl.submitAnswers(s3.id, [{ problemId: "pp_ghost", text: "t" }]), BadAnswersError);
 		const settled = f.practice.store.getSet(s3.id)!; // the post-done record (s3 itself is the creation stub)
@@ -510,7 +511,7 @@ describe("boot sweep + delete", () => {
 	it("a LIVE generating set (registry row) is NOT swept by a second instance", async () => {
 		const f = fixture({ partitioner: hangingModel(), problemGenerator: echoGenerator(1), grader: echoGrader(1) });
 		const a = f.make();
-		const { set, done } = await a.createProblemSet({ nodeIds: ["b"] }, PARAMS); // hangs partitioning
+		const { set, done } = await a.createProblemSet(["b"], PARAMS); // hangs partitioning
 		f.make(); // second pipeline instance, same process → same registry
 		assert.equal(f.practice.store.getSet(set.id)!.status, "partitioning");
 		a.abortPractice(set.id);
@@ -520,7 +521,7 @@ describe("boot sweep + delete", () => {
 	it("delete: aborts live jobs first, drops the record; unknown → false", async () => {
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b"] }]), problemGenerator: echoGenerator(1), grader: echoGrader(1) });
 		const pipeline = f.make();
-		const { set, done } = await pipeline.createProblemSet({ nodeIds: ["b"] }, PARAMS);
+		const { set, done } = await pipeline.createProblemSet(["b"], PARAMS);
 		await done;
 		assert.equal(await pipeline.deleteProblemSet(set.id), true);
 		assert.equal(f.practice.store.getSet(set.id), null);

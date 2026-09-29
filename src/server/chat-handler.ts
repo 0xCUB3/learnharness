@@ -103,7 +103,6 @@ export const extraction = createExtractionPipeline({
 export const practice = createPracticePipeline({
 	graphStore: stores.graphStore,
 	practiceStore: stores.practiceStore,
-	chatStore: stores.chatStore,
 	// BYOK (owner, 2026-09-22): the practice stages resolve the chain —
 	// role override → slot → NOTHING — read FRESH per stage call; an empty
 	// chain flows through as undefined and the pipeline refuses the run

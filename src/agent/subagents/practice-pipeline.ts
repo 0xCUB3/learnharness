@@ -34,7 +34,7 @@
  * flight is rejected (single live grading run per set).
  */
 
-import type { ChatStore, GraphStore, PracticeStore } from "../../core/ports.ts";
+import type { GraphStore, PracticeStore } from "../../core/ports.ts";
 import type { Problem, ProblemSet, ReasoningChain } from "../../core/contracts.ts";
 import { chainsForSelection } from "../../core/practice.ts";
 import {
@@ -52,14 +52,6 @@ export class EmptySelectionError extends Error {
 	constructor(message = "selection has no propositions to practice") {
 		super(message);
 		this.name = "EmptySelectionError";
-	}
-}
-
-/** chatId path: the chat record is gone (404). */
-export class UnknownChatError extends Error {
-	constructor(chatId: string) {
-		super(`no chat ${chatId}`);
-		this.name = "UnknownChatError";
 	}
 }
 
@@ -267,8 +259,6 @@ function dedupInput(practiceStore: PracticeStore, selected: ReadonlySet<string>)
 export interface PracticePipelineDeps extends PracticeModels {
 	graphStore: GraphStore;
 	practiceStore: PracticeStore;
-	/** Titles for the chat-born path (and existence: unknown chat → 404). */
-	chatStore: Pick<ChatStore, "getChat" | "listChats">;
 }
 
 export function createPracticePipeline(deps: PracticePipelineDeps) {
@@ -428,27 +418,17 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 	 * (models/key) fire BEFORE anything is created.
 	 */
 	async function createProblemSet(
-		selector: { chatId: string } | { nodeIds: string[] },
+		nodeIds: string[],
 		params: ProblemSet["params"],
 		titleHint?: string,
 	): Promise<{ set: ProblemSet; done: Promise<void> }> {
 		agents.refuseIfStagesUnready();
 
-		// Resolve the selection: chatId = any-provenance membership (owner:
-		// a node belongs to a session when ANY provenance point names it —
-		// birth-session clustering deliberately NOT used here); nodeIds =
-		// the raw list, unknown ids simply drop.
-		let sourceTitle: string | undefined;
-		let selected;
-		if ("chatId" in selector) {
-			const chat = deps.chatStore.getChat(selector.chatId);
-			if (!chat) throw new UnknownChatError(selector.chatId);
-			sourceTitle = chat.title;
-			selected = deps.graphStore.readNodes().filter((n) => n.provenance.some((pt) => pt.chatId === selector.chatId));
-		} else {
-			const wanted = new Set(selector.nodeIds);
-			selected = deps.graphStore.readNodes().filter((n) => wanted.has(n.id));
-		}
+		// Graph-domain selection (owner ruling 2026-09-29: problem sets
+		// take NODES — the UI resolves a picked cluster to its member ids;
+		// unknown ids simply drop, an empty live intersection refuses).
+		const wanted = new Set(nodeIds);
+		const selected = deps.graphStore.readNodes().filter((n) => wanted.has(n.id));
 		const selectedIds = new Set(selected.map((n) => n.id));
 		const edges = deps
 			.graphStore.readEdges()
@@ -457,7 +437,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		if (chains.length === 0) throw new EmptySelectionError();
 		const propositions: PropositionSnapshot = {};
 		for (const n of selected) propositions[n.id] = { name: n.name, statement: n.statement };
-		const title = titleHint ?? sourceTitle ?? `Practice — ${new Date().toISOString().slice(0, 10)}`;
+		const title = titleHint ?? `Practice — ${new Date().toISOString().slice(0, 10)}`;
 
 		const set = deps.practiceStore.createSet({
 			title,
