@@ -28,6 +28,7 @@ import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts";
 import { teacherProseBlocks } from "../../core/coverage.ts";
+import { chainsToEdges } from "../../core/practice.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { auditorGraphTools } from "../tools/graph.ts";
 import { runSubmitAgent } from "./submit-agent.ts";
@@ -38,11 +39,12 @@ import { runSubmitAgent } from "./submit-agent.ts";
  * orchestrator:
  *
  *   extractor (LLM)  the ONE stage that sees the raw source (a session
- *                    rendered as markdown by the shared session-markdown
- *                    engine, or a notes file verbatim) → SessionFindings:
- *                    propositions + follows/supports edges, each with
- *                    TREE-BLIND, graph-blind, FULLY
- *                    TRUSTED — nothing downstream re-checks it.
+ *                    rendered as the teacher's prose, or a notes file
+ *                    verbatim) → submits propositions + REASONING CHAINS
+ *                    (owner redesign, 2026-09-30), expanded at the seam to
+ *                    SessionFindings' follows-edges. TREE-BLIND,
+ *                    graph-blind, FULLY TRUSTED — nothing downstream
+ *                    re-checks it.
  *   auditor (LLM)    never sees the source. Its job is IDENTITY: for each
  *                    proposition, linkTo an existing graph node or create —
  *                    decided by EXPLORING the graph through tools (find /
@@ -115,33 +117,38 @@ function proseView(messages: ReadonlyArray<LhMessage>, title?: string): string {
 // ─── the extractor ──────────────────────────────────────────────────────────
 
 const propositionProps = {
-	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by edges.' }),
+	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by chains.' }),
 	name: Type.String({
 		description:
-			"A very short label for the proposition — a few words, a compact handle like a glossary headword " +
-			"('Will to power', 'Divine command theory'). Not a sentence, needn't be unique or " +
-			"self-contained: the statement carries the precision. This becomes the node's label in the graph.",
+			"A very short label — established terminology, the term the discipline itself uses, a glossary " +
+			"headword a textbook would print ('Will to power', 'Divine command theory'). Not a sentence, " +
+			"needn't be unique or self-contained: this becomes the node's global label in the graph.",
 	}),
 	statement: Type.String({
 		description:
-			"The proposition as one reasoning step — a TRUE, self-contained, world-facing statement. " +
-			'Never reference the learner, the teacher, or the session: not "the learner understands X" but ' +
-			'"X". A misconception is stated as the TRUE correction ("Nietzsche did not endorse ' +
-			'might-makes-right social Darwinism") — wrongness is never recorded in the graph.',
+			"One true, self-contained, world-facing reasoning step at full precision. Never about the " +
+			'learner, the teacher, or the reading: not "the learner understands X" but "X". A misconception ' +
+			"enters as its TRUE correction.",
 	}),
 	aliases: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "Verbatim phrasings this session used for the same proposition, if any.",
+			description: "Verbatim phrasings the source used for the same proposition, if any.",
 		}),
 	),
 };
 
-const edgeSchema = Type.Object({
-	from: Type.String({ description: "Proposition id that is followed / supported." }),
-	to: Type.String({ description: "Proposition id that follows / is supported by `from`." }),
-	type: Type.Union([Type.Literal("follows"), Type.Literal("supports")], {
-		description: '"follows" = to is derivable from from; "supports" = from grounds to without entailing it.',
+// The extractor redesign (owner, 2026-09-30): the extractor submits
+// REASONING CHAINS — premises + conclusion — and the seam expands each
+// premise to one follows-edge (chainsToEdges, core/practice.ts). The
+// old follows/supports edges array is GONE from the wire; supports stay
+// in the graph contract/store/UI/old data, but no stage mints one again.
+const chainSchema = Type.Object({
+	premises: Type.Array(Type.String(), {
+		minItems: 1,
+		description:
+			"Proposition ids used TOGETHER: they jointly entail the conclusion; independent reasons are separate chains.",
 	}),
+	conclusion: Type.String({ description: "The proposition id the premises jointly imply." }),
 });
 
 // Weak-model tolerance (owner, 2026-09-25): the old zod `.default([])` /
@@ -151,15 +158,23 @@ const edgeSchema = Type.Object({
 // no zod left in the agent band.
 const findingsProps = {
 	propositions: Type.Array(Type.Object(propositionProps), {
-		description: "Every distinct proposition the session touched — true statements, misconception-free.",
+		description: "The propositions themselves — every distinct proposition the source's reasoning uses.",
 	}),
-	edges: Type.Array(edgeSchema, {
+	chains: Type.Array(chainSchema, {
 		description:
-			"Relations between propositions: follows (derivable) / supports (grounds without entailing). Pass [] when there are none — never omit the field.",
+			"Every argument the source makes; conclusions reusable by id as premises of later chains; " +
+			"bare propositions (no argument) ride the propositions list alone; pass [] when none — " +
+			"never omit the field.",
 	}),
 };
 
 const findingsSchema = Type.Object(findingsProps);
+
+/** What the extractor SUBMITS (the redesign's wire shape) — propositions
+ *  + chains. fillFindings normalizes it; validateFindingsChains checks
+ *  the chain laws; expandFindings translates it to SessionFindings at
+ *  the seam. */
+type FindingsSubmit = Static<typeof findingsSchema>;
 
 // VERDICTS-ONLY (owner, 2026-09-28): the auditor never alters the
 // extractor's findings, so it does not restate them — links are its
@@ -198,7 +213,7 @@ type NotesAuditResult = AuditVerdicts;
 function healStringifiedArrays(raw: unknown): unknown {
 	if (typeof raw !== "object" || raw === null) return raw;
 	const out: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
-	for (const key of ["propositions", "edges"]) {
+	for (const key of ["propositions", "chains"]) {
 		const v = out[key];
 		if (typeof v !== "string" || v.trim().length === 0) continue;
 		try {
@@ -211,20 +226,55 @@ function healStringifiedArrays(raw: unknown): unknown {
 	return out;
 }
 
-// ── the submit seam (owner, 2026-09-28) ──
+// ── the submit seam (owner, 2026-09-28; redesigned 2026-09-30) ──
 //
 // Every top-level field on each submit tool is REQUIRED — a payload
-// missing `edges` (findings) or `links` (review) fails validation instead
-// of silently merging
-// edge-less (the degraded-retry hole: the model's first truncated
-// attempt failed validation, then the retry passed with propositions
-// only — optional edges ??-filled [] — merging a pile of nodes with no
-// structure). Only the per-item aliases stay optional with a ??-fill.
+// missing `chains` (findings) or `links` (review) fails validation
+// instead of silently merging structure-less (the degraded-retry hole:
+// the model's first truncated attempt failed validation, then the retry
+// passed with propositions only — optional fields ??-filled [] — merging
+// a pile of nodes with no structure). Only the per-item aliases stay
+// optional with a ??-fill.
 
-function fillFindings(raw: Static<typeof findingsSchema>): SessionFindings {
+function fillFindings(raw: FindingsSubmit): FindingsSubmit {
 	return {
 		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
-		edges: raw.edges,
+		chains: raw.chains,
+	};
+}
+
+/** The chain laws (extractor redesign, 2026-09-30) — the LOUD channel:
+ *  runSubmitAgent turns a problem string into an error tool result and
+ *  the model re-submits within its turns (the practice-proven hook).
+ *  Identical (premise-set, conclusion) chains are NOT errors — they
+ *  dedupe silently at the expansion (chainsToEdges): restating an
+ *  argument is a no-op. */
+function validateFindingsChains(value: FindingsSubmit): string | null {
+	const ids = new Set(value.propositions.map((p) => p.id));
+	for (const chain of value.chains) {
+		if (chain.premises.length === 0) {
+			return "chains: premises must name at least one proposition — a proposition with no argument stays in the propositions list alone.";
+		}
+		const unknown = [...chain.premises, chain.conclusion].find((id) => !ids.has(id));
+		if (unknown !== undefined) {
+			return `chains: "${unknown}" is not one of the submitted proposition ids — every premise and conclusion must appear in this call's propositions.`;
+		}
+		if (chain.premises.includes(chain.conclusion)) {
+			return "chains: a conclusion cannot be its own premise.";
+		}
+	}
+	return null;
+}
+
+/** The translation seam (extractor redesign, 2026-09-30): the wire
+ *  speaks CHAINS, the pipeline speaks follows-EDGES — SessionFindings
+ *  and everything downstream (auditor, resolution, merge, coverage,
+ *  store) is UNCHANGED. One math, one place: chainsToEdges sits next
+ *  to chainsToGraph in core/practice.ts. */
+function expandFindings(raw: FindingsSubmit): SessionFindings {
+	return {
+		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
+		edges: chainsToEdges(raw.chains),
 	};
 }
 
@@ -234,117 +284,43 @@ function fillAudit(raw: Static<typeof auditSchema>): AuditVerdicts {
 	};
 }
 
-const NOTES_EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE source —
-the user's own NOTES, in an ARBITRARY format (personal notes, an exported conversation, a document — anything) — and
-report the arguments and reasoning those notes actually develop, as structured findings for their global knowledge graph.
+// ── the extractor's system prompt (owner redesign, 2026-09-30) ──
+//
+// GOAL-FIRST, NO RULE ARMOR: the old doctrine's defensive lists (DROP
+// lists, merge-your-own-output, name walls, when-in-doubt-omit, the
+// faithfulness paragraph) are ALL CUT — the prompt states the goal and
+// the submission mechanics; the tool's field descriptions carry the
+// details. One shared core + two contextualizations, assembled here —
+// session and notes share the core by construction. (The old opening
+// describing Quiz/Recall-check/Question blocks was stale since the
+// 2026-09-28 teacher-prose ruling and is simply omitted.)
 
-There is no session and no chat structure here: the source is raw text, the author's own material. Read it as such.
-You are the ONLY stage that sees this source — you are fully trusted; report carefully.
-You may be seeing ONE PART of a longer file (large files are chunked): extract exactly what THIS part holds —
-the auditor links equivalent propositions across parts, so overlap worries are not yours.
+export const SESSION_PREAMBLE =
+	"You are the extraction stage of a learning application. You read one source — a teaching session, " +
+	"rendered as the teacher's prose in reading order — and report what it teaches as findings for the " +
+	"learner's global knowledge graph.";
 
-The graph is a set of TRUE propositions about the world, full stop. A node is never anything about the author or the
-source — no "the author understands X", no "mentioned in these notes": the node is just X. A misconception is NOT a
-node of its own wrong claim — state the TRUE correction as the proposition.
+export const NOTES_PREAMBLE =
+	"You are the extraction stage of a learning application. You read one source — one chunk of the " +
+	"author's personal notes, rendered in reading order — and report what it teaches as findings for the " +
+	"learner's global knowledge graph.";
 
-1. PROPOSITIONS — only the propositions that CARRY the notes' reasoning. A proposition earns its
-   place by being a premise, an intermediate step, or a conclusion of an argument the notes actually
-   make. The graph is the reasoning skeleton of the source — not an archive of everything said:
-   - DROP: isolated facts with no argumentative role, name-drops and citations, one-line asides,
-     trivia, enumerations of examples — however true. A proposition nobody argues from, argues to,
-     or argues against does not belong.
-   - Each has a "name" — a VERY short label, a few words: ESTABLISHED terminology, the term the discipline
-     itself uses, a glossary headword a textbook would print ("Will to power", "Divine command theory").
-     NEVER source-local bookkeeping — no letters, numbering, or positional labels ("F1", "criterion C",
-     "the second objection"): the name becomes a GLOBAL graph label that someone who never saw these
-     notes must parse. If the notes used a local shorthand for an established idea, name the node by the
-     established term and put the shorthand in "aliases".
-   - And a "statement" — the self-contained TRUE proposition at full precision.
-   - MERGE YOUR OWN OUTPUT before submitting: two propositions stating the SAME claim at different
-     precision, granularity, or angle are ONE proposition — one statement at full precision, the other
-     phrasings in "aliases". Nothing downstream dedupes you; duplicates become duplicate graph nodes.
-   - Closely related but genuinely distinct propositions stay separate; whether they connect is
-     section 2's call — never add a proposition or an edge just to avoid a lonely node.
-   - Notes may explain at length or quote studied material: extract the propositions that carry the
-     reasoning, one step each — never a topic blob, never a sub-step.
-   - "aliases": verbatim phrasings the notes used for the same proposition.
+export const EXTRACTION_CORE = `THE GOAL: extract the source's REASONING CHAINS. The source teaches by making arguments — propositions
+worked out from other propositions. Your deliverable is twofold: the propositions themselves, and every
+argument the source makes. Each argument is a chain: premises that JOINTLY entail a conclusion.
 
-2. EDGES between propositions — PRECISION over recall. An edge exists ONLY where the source itself
-   presents one proposition as following from, depending on, or being grounded in another — an
-   explicit argumentative act in the text, never a felt relatedness:
-   - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
-   - "supports": from GROUNDS to — the source EXPLICITLY presents from as evidence, motivation, or
-     basis for to, without entailing it. If you have to reach to see the grounding, the edge does not
-     exist. "supports" is the rare exception; a genuinely argumentative relation is almost always
-     "follows".
-   - WHEN IN DOUBT, OMIT. A sparse, trustworthy graph beats a dense, vague one. Never connect
-     propositions merely because they are related, mentioned together, or about the same topic —
-     that is how a graph turns to mush.
+The graph holds TRUE propositions about the world, nothing else — never anything about the learner, the
+teacher, or this reading: not "the learner understands X" but X. A misconception enters as its TRUE
+correction. Each statement is one self-contained reasoning step at full precision.
 
-Faithfulness: extract only what the source actually articulates — never invent, pad, or compress into vagueness. When
-in doubt about a proposition's exact content, quote its source passage to yourself first, then state it precisely.
+SUBMIT with one submit_findings call: every proposition with a short name and a precise statement, and
+every chain as premises + conclusion. Premises within one chain are used TOGETHER — independent arguments
+for the same conclusion are separate chains. A conclusion may reappear, by id, as a premise of later
+chains. Include every field even when empty — "chains": [] when the source makes no arguments. The
+tool's field descriptions carry the details.`;
 
-Include EVERY top-level field of the call even when empty — "edges": [] when there are no relations. NEVER omit
-a field because it is empty.
-
-Your entire deliverable is ONE submit_findings call.`;
-
-const EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE session
-rendering and report what that session teaches — as structured findings for the learner's global knowledge graph.
-
-The session is rendered as readable markdown: Teacher and Learner passages in order, Quiz / Recall-check /
-Question blocks for the embedded checks, and one-line notes where other tools ran. Read ALL of it as the session's
-teaching content.
-
-You are the ONLY stage that sees this source, and you are FULLY TRUSTED: nothing downstream re-checks your work.
-Extract carefully — the graph will hold exactly what you report.
-
-The graph is a set of TRUE propositions about the world, full stop. A node is never anything about the learner or the
-session — no "the learner understands X", no "discussed in this session": the node is just X. A misconception is NOT
-a node of its own wrong claim — state the TRUE correction as the proposition.
-
-1. PROPOSITIONS — only the propositions that CARRY the session's reasoning. A proposition earns its
-   place by being a premise, an intermediate step, or a conclusion of an argument the session actually
-   makes. The graph is the reasoning skeleton of the source — not an archive of everything said:
-   - DROP: isolated facts with no argumentative role, name-drops and citations, one-line asides,
-     trivia, enumerations of examples — however true. A proposition nobody argues from, argues to,
-     or argues against does not belong.
-   - Each has a "name" — a VERY short label, a few words: ESTABLISHED terminology, the term the discipline
-     itself uses, a glossary headword a textbook would print ("Will to power", "Divine command theory").
-     NEVER session-local bookkeeping — no letters, numbering, or positional labels ("F1", "criterion C",
-     "the second objection"): the name becomes a GLOBAL graph label that someone who never saw this
-     session must parse. If the session used a local shorthand for an established idea, name the node by
-     the established term and put the shorthand in "aliases".
-   - And a "statement" — the self-contained TRUE proposition at full precision (the elaboration lives
-     in the graph only as this one statement).
-   - MERGE YOUR OWN OUTPUT before submitting: two propositions stating the SAME claim at different
-     precision, granularity, or angle are ONE proposition — one statement at full precision, the other
-     phrasings in "aliases". Nothing downstream dedupes you; duplicates become duplicate graph nodes.
-   - Closely related but genuinely distinct propositions stay separate; whether they connect is
-     section 2's call — never add a proposition or an edge just to avoid a lonely node.
-   - Corrections of misconceptions the teacher articulated are argumentative by nature — always in.
-   - One reasoning step per proposition: never a topic blob, never a sub-step.
-   - "aliases": verbatim phrasings this session used for the same proposition.
-
-2. EDGES between propositions — PRECISION over recall. An edge exists ONLY where the source itself
-   presents one proposition as following from, depending on, or being grounded in another — an
-   explicit argumentative act in the text, never a felt relatedness:
-   - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
-   - "supports": from GROUNDS to — the source EXPLICITLY presents from as evidence, motivation, or
-     basis for to, without entailing it. If you have to reach to see the grounding, the edge does not
-     exist. "supports" is the rare exception; a genuinely argumentative relation is almost always
-     "follows".
-   - WHEN IN DOUBT, OMIT. A sparse, trustworthy graph beats a dense, vague one. Never connect
-     propositions merely because they are related, mentioned together, or about the same topic —
-     that is how a graph turns to mush.
-
-Faithfulness: extract only what the session actually articulates — never invent, pad, or compress into vagueness. When
-in doubt about a proposition's exact content, quote its source passage to yourself first, then state it precisely.
-
-Include EVERY top-level field of the call even when empty — "edges": [] when there are no relations. NEVER omit a
-field because it is empty.
-
-Your entire deliverable is ONE submit_findings call.`;
+export const EXTRACTOR_INSTRUCTIONS = `${SESSION_PREAMBLE}\n\n${EXTRACTION_CORE}`;
+export const NOTES_EXTRACTOR_INSTRUCTIONS = `${NOTES_PREAMBLE}\n\n${EXTRACTION_CORE}`;
 
 /** The extractor over ONE session transcript (the chat front door). */
 function runExtractor(
@@ -353,12 +329,16 @@ function runExtractor(
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
 ): Promise<SessionFindings> {
-	return runSubmitAgent({
+	// Chains in (the wire), follows-edges out (the pipeline) — the
+	// translation seam of the 2026-09-30 redesign. Validation runs at the
+	// submit seam (error-back); expansion runs once, after a clean submit.
+	return runSubmitAgent<FindingsSubmit>({
 		role: "extractor",
 		toolName: "submit_findings",
 		toolDescription: "Submit the session findings.",
 		parameters: findingsSchema,
 		fill: fillFindings,
+		validate: validateFindingsChains,
 		systemPrompt: EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -366,7 +346,7 @@ function runExtractor(
 		onStep,
 		neverSubmitted: "the extractor never submitted findings",
 		prepareArguments: healStringifiedArrays,
-	});
+	}).then(expandFindings);
 }
 
 /** The extractor over ONE source of raw personal notes (the format-agnostic
@@ -377,12 +357,13 @@ function runNotesExtractor(
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
 ): Promise<NotesFindings> {
-	return runSubmitAgent({
+	return runSubmitAgent<FindingsSubmit>({
 		role: "extractor",
 		toolName: "submit_findings",
 		toolDescription: "Submit the notes findings.",
 		parameters: findingsSchema,
 		fill: fillFindings,
+		validate: validateFindingsChains,
 		systemPrompt: NOTES_EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -390,7 +371,7 @@ function runNotesExtractor(
 		onStep,
 		neverSubmitted: "the extractor never submitted findings",
 		prepareArguments: healStringifiedArrays,
-	});
+	}).then(expandFindings);
 }
 
 // ─── the auditor ───────────────────────────────────────────────────────────
@@ -398,7 +379,7 @@ function runNotesExtractor(
 
 const AUDITOR_INSTRUCTIONS = `You are the linking stage of a learning application's extraction pipeline. An extractor
 has read a source (a teaching session, or the author's personal notes) and reported findings: propositions and
-follows/supports edges. You NEVER see the source itself — the extractor is fully trusted, and you do not re-check
+the follows edges of their reasoning chains. You NEVER see the source itself — the extractor is fully trusted, and you do not re-check
 its work. Your job is IDENTITY: connecting those findings to the CURRENT knowledge graph, preparing the merge.
 
 You explore the graph through your tools: list_sessions, list_propositions, and find (glob over names +

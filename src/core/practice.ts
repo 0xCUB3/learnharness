@@ -73,7 +73,7 @@ export function chainsForSelection(
  *  edges = one follows-edge per (premise, conclusion) pair. Deterministic:
  *  node ids sorted, edges sorted by (from, to). */
 export function chainsToGraph(
-	chains: ReadonlyArray<Pick<ReasoningChain, "id" | "premises" | "conclusion">>,
+	chains: ReadonlyArray<Pick<ReasoningChain, "premises" | "conclusion">>,
 ): {
 	nodeIds: string[];
 	edges: Array<{ from: string; to: string; type: "follows" }>;
@@ -89,6 +89,28 @@ export function chainsToGraph(
 	}
 	edges.sort((a, b) => (a.from !== b.from ? (a.from < b.from ? -1 : 1) : a.to < b.to ? -1 : 1));
 	return { nodeIds: [...nodeIds].sort(), edges };
+}
+
+/** The extraction seam's chain→edge expansion (extractor redesign,
+ *  2026-09-30): the extractor SUBMITS chains (premises + conclusion);
+ *  the pipeline's internal findings carry follows-EDGES downstream
+ *  (auditor, merger, coverage — all unchanged). Each premise becomes
+ *  one edge into the conclusion — chainsToGraph's edge law, shared
+ *  (one math, one place). Identical (premise-set, conclusion) chains
+ *  dedupe SILENTLY here: the model restating an argument is a no-op,
+ *  never an error (validation errors are the loud channel; see the
+ *  extractor's validate hook). */
+export function chainsToEdges(
+	chains: ReadonlyArray<Pick<ReasoningChain, "premises" | "conclusion">>,
+): Array<{ from: string; to: string; type: "follows" }> {
+	const seen = new Set<string>();
+	const deduped = chains.filter((chain) => {
+		const key = `${[...chain.premises].sort().join("+")}>${chain.conclusion}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+	return chainsToGraph(deduped).edges;
 }
 
 /** A chain as one world-facing line — the propositions' NAMES joined

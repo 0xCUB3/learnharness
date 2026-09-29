@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { EdgeType } from "../src/core/contracts.ts";
-import { chainCoverage, chainsForSelection, chainsToGraph, formatChainLine } from "../src/core/practice.ts";
+import { chainCoverage, chainsForSelection, chainsToEdges, chainsToGraph, formatChainLine } from "../src/core/practice.ts";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -157,5 +157,40 @@ describe("formatChainLine (the chain table's one-line shape, 2026-09-29)", () =>
 
 	it("unknown ids fall back to the raw id (honest, never guessed)", () => {
 		assert.equal(formatChainLine({ premises: ["ghost"], conclusion: "c1" }, props), "ghost → Conclusion");
+	});
+});
+
+// ─── chainsToEdges — the extraction seam's expansion (2026-09-30) ────────────
+
+describe("chainsToEdges (the extractor redesign's translation seam)", () => {
+	it("each premise becomes ONE follows-edge into the conclusion", () => {
+		const edges = chainsToEdges([{ premises: ["p1", "p2"], conclusion: "c1" }]);
+		assert.deepEqual(edges, [
+			{ from: "p1", to: "c1", type: "follows" },
+			{ from: "p2", to: "c1", type: "follows" },
+		]);
+	});
+
+	it("chains sharing a conclusion union their premises; the result stays sorted", () => {
+		const edges = chainsToEdges([
+			{ premises: ["p2"], conclusion: "c1" },
+			{ premises: ["p1"], conclusion: "c1" },
+		]);
+		assert.deepEqual(edges, [
+			{ from: "p1", to: "c1", type: "follows" },
+			{ from: "p2", to: "c1", type: "follows" },
+		]);
+	});
+
+	it("identical (premise-set, conclusion) chains dedupe silently — restating is a no-op", () => {
+		const chain = { premises: ["p1", "p2"], conclusion: "c1" };
+		assert.deepEqual(chainsToEdges([chain, chain, { premises: ["p2", "p1"], conclusion: "c1" }]), [
+			{ from: "p1", to: "c1", type: "follows" },
+			{ from: "p2", to: "c1", type: "follows" },
+		]);
+	});
+
+	it("empty in, empty out — bare propositions ride the propositions list alone", () => {
+		assert.deepEqual(chainsToEdges([]), []);
 	});
 });

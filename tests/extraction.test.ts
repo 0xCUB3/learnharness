@@ -41,7 +41,17 @@ import type {
 	SessionFindings,
 } from "../src/core/contracts.ts";
 import type { GraphStore } from "../src/core/ports.ts";
-import { abortExtraction, createExtractionPipeline, extractionStatuses, transcriptView } from "../src/agent/subagents/extraction.ts";
+import {
+	abortExtraction,
+	createExtractionPipeline,
+	extractionStatuses,
+	transcriptView,
+	EXTRACTION_CORE,
+	SESSION_PREAMBLE,
+	NOTES_PREAMBLE,
+	EXTRACTOR_INSTRUCTIONS,
+	NOTES_EXTRACTOR_INSTRUCTIONS,
+} from "../src/agent/subagents/extraction.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError, providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts";
 import { coverageOf, messageViewLines } from "../src/core/coverage.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -217,9 +227,10 @@ after(() => {
 	}
 });
 
-/** What the extractor would produce for the fixture session — tree-blind,
- *  free-form, with chat-level provenance. */
-const FINDINGS: SessionFindings = {
+/** What the extractor SUBMITS for the fixture session (owner redesign,
+ *  2026-09-30): propositions + REASONING CHAINS on the wire — one chain
+ *  (p1 ⟹ p2), expanded to a follows-edge at the seam. */
+const FINDINGS = {
 	propositions: [
 		{
 			id: "p1",
@@ -234,11 +245,10 @@ const FINDINGS: SessionFindings = {
 			aliases: [],
 		},
 	],
-	edges: [
+	chains: [
 		{
-			from: "p1",
-			to: "p2",
-			type: "follows",
+			premises: ["p1"],
+			conclusion: "p2",
 		},
 	],
 };
@@ -371,12 +381,28 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// heal parses it, validation passes, no retry burned.
 		const extractor = submitModel("submit_findings", {
 			propositions: JSON.stringify(FINDINGS.propositions),
-			edges: FINDINGS.edges,
+			chains: FINDINGS.chains,
 		});
 
 		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers, extractor, auditor: submitModel("submit_review", verdict) });
 		const stats = await pipeline.runExtraction(chatId);
 		assert.deepEqual(stats, { nodes: 2, edges: 1 });
+	});
+
+	it("stringified-payload heal: the CHAINS array arriving as ONE JSON string still validates (redesign, 2026-09-30)", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const extractor = submitModel("submit_findings", {
+			propositions: FINDINGS.propositions,
+			chains: JSON.stringify(FINDINGS.chains),
+		});
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor,
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
 	});
 
 	it("runs end to end: findings → audit verdict (identity) → deterministic merge + checkpoint", async () => {
@@ -661,9 +687,9 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const b = fixtureChat();
 		const ledgers = memoryLedgers();
 
-		const single = (id: string, name: string, statement: string): SessionFindings => ({
+		const single = (id: string, name: string, statement: string) => ({
 			propositions: [{ id, name, statement, aliases: [], }],
-			edges: [],
+			chains: [],
 		});
 		const findingsA = single("pa", "Alpha claim", "Alpha statement, full precision");
 		const findingsB = single("pb", "Beta claim", "Beta statement, full precision");
@@ -718,9 +744,9 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const c = fixtureChat();
 		const ledgers = memoryLedgers();
 
-		const single = (id: string, name: string, statement: string): SessionFindings => ({
+		const single = (id: string, name: string, statement: string) => ({
 			propositions: [{ id, name, statement, aliases: [], }],
-			edges: [],
+			chains: [],
 		});
 
 		let gateOpen!: () => void;
@@ -962,8 +988,9 @@ const NOTES_TEXT = `> [!quote] YOU
 > [!abstract] PI
 > Vim always starts in Normal mode — keys are commands, not text.`;
 
-/** What the notes-mode extractor submits: same shapes as session findings,
- *  messages always empty (the file is the provenance). */
+/** What the notes-mode extractor submits: same wire shape as session
+ *  findings (propositions + chains), messages always empty (the file is
+ *  the provenance). */
 const NOTES_FINDINGS = {
 	propositions: [
 		{
@@ -973,13 +1000,215 @@ const NOTES_FINDINGS = {
 			aliases: [],
 		},
 	],
-	edges: [],
+	chains: [],
 } as const;
 
 const NOTES_VERDICT = {
 	links: [],
 	edges: [],
 } as const;
+
+// ─── the extractor redesign (owner, 2026-09-30) ─────────────────────────────
+
+describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable", () => {
+	/** A retry engine: step 1 submits the BAD payload (schema-valid, law-
+	 *  violating — so the pin proves the VALIDATE channel fired, not the
+	 *  schema), step 2 submits the clean one. */
+	function retryEngine(bad: unknown, good: unknown): PiEngine {
+		return fauxEngine([
+			() =>
+				fauxAssistantMessage([fauxToolCall("submit_findings", bad as ToolCall["arguments"], { id: "findings-bad" })], {
+					stopReason: "toolUse",
+				}),
+			() =>
+				fauxAssistantMessage([fauxToolCall("submit_findings", good as ToolCall["arguments"], { id: "findings-good" })], {
+					stopReason: "toolUse",
+				}),
+		]);
+	}
+
+	it("co-premises fan out at the seam: ONE chain with two premises becomes TWO follows-edges into the conclusion", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const extractor = submitModel("submit_findings", {
+			propositions: [
+				{ id: "p1", name: "A", statement: "A holds.", aliases: [] },
+				{ id: "p2", name: "B", statement: "B holds.", aliases: [] },
+				{ id: "p3", name: "C", statement: "A and B together entail C.", aliases: [] },
+			],
+			chains: [{ premises: ["p1", "p2"], conclusion: "p3" }],
+		});
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor,
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 3, edges: 2 });
+		// Both edges point INTO the conclusion's resolved node; the two
+		// from-ends are exactly the two premises (node ids are random —
+		// assert set-wise, never by ledger order).
+		const byName = new Map(ledgers.readNodes().map((n) => [n.name, n.id]));
+		const conclusion = byName.get("C")!;
+		const edges = ledgers.readEdges();
+		assert.ok(edges.every((e) => e.to === conclusion), "both edges point INTO the conclusion");
+		assert.deepEqual(
+			edges.map((e) => e.from).sort(),
+			[byName.get("A")!, byName.get("B")!].sort(),
+		);
+	});
+
+	it("two chains sharing a conclusion union their premises; a bare proposition stays an edge-less node", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const extractor = submitModel("submit_findings", {
+			propositions: [
+				{ id: "p1", name: "A", statement: "A holds.", aliases: [] },
+				{ id: "p2", name: "B", statement: "B holds.", aliases: [] },
+				{ id: "p3", name: "C", statement: "C follows.", aliases: [] },
+				{ id: "p4", name: "Lonely", statement: "A bare proposition no argument uses.", aliases: [] },
+			],
+			chains: [
+				{ premises: ["p1"], conclusion: "p3" },
+				{ premises: ["p2"], conclusion: "p3" },
+			],
+		});
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor,
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		// Independent arguments for the same conclusion are separate chains
+		// → two edges into C; the bare p4 rides the propositions list alone.
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 4, edges: 2 });
+		const lonely = ledgers.readNodes().find((n) => n.name === "Lonely")!;
+		assert.ok(ledgers.readEdges().every((e) => e.from !== lonely.id && e.to !== lonely.id));
+	});
+
+	it("identical chains dedupe SILENTLY at the expansion — restating an argument is a no-op, not an error", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const extractor = submitModel("submit_findings", {
+			...FINDINGS,
+			chains: [FINDINGS.chains[0]!, FINDINGS.chains[0]!],
+		});
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor,
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+	});
+
+	it("the OLD wire shape (an edges array, no chains) is dead: validation fails every turn — nothing merges", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const oldShape = () =>
+			fauxEngine(
+				Array.from({ length: 4 }, () => () =>
+					fauxAssistantMessage(
+						[
+							fauxToolCall(
+								"submit_findings",
+								{
+									propositions: FINDINGS.propositions,
+									edges: [{ from: "p1", to: "p2", type: "follows" }],
+								} as unknown as ToolCall["arguments"],
+							),
+						],
+						{ stopReason: "toolUse" },
+					),
+				),
+			);
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			engineFor: (role) => (role === "extractor" ? oldShape() : submitModel("submit_review", { links: [] })),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, edges: 0 });
+	});
+
+	it("validate error-back: a chain referencing an UNKNOWN id is rejected, the model re-submits clean", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const bad = {
+			...FINDINGS,
+			chains: [{ premises: ["p1", "p9"], conclusion: "p2" }],
+		};
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: retryEngine(bad, FINDINGS),
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		// The first submit was schema-VALID — only the chain law caught it;
+		// the retry merges in full.
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+	});
+
+	it("validate error-back: a conclusion in its OWN premises is rejected, the model re-submits clean", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const bad = {
+			...FINDINGS,
+			chains: [{ premises: ["p1", "p2"], conclusion: "p2" }],
+		};
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: retryEngine(bad, FINDINGS),
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+	});
+
+	it("empty premises never pass: the schema's minItems rejects, the model re-submits clean", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const bad = {
+			...FINDINGS,
+			chains: [{ premises: [], conclusion: "p2" }],
+		};
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: retryEngine(bad, FINDINGS),
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+	});
+
+	it("the system prompt is goal-first: ONE shared core, both preambles assembled onto it", () => {
+		// The core carries the goal + submission mechanics.
+		assert.match(EXTRACTION_CORE, /JOINTLY entail a conclusion/);
+		assert.match(EXTRACTION_CORE, /for the same conclusion are separate chains/);
+		assert.match(EXTRACTION_CORE, /SUBMIT with one submit_findings call/);
+		assert.match(EXTRACTION_CORE, /"chains": \[\] when the source makes no arguments/);
+
+		// Assembly: each front door = its preamble + the shared core.
+		assert.ok(EXTRACTOR_INSTRUCTIONS.startsWith(SESSION_PREAMBLE));
+		assert.ok(EXTRACTOR_INSTRUCTIONS.includes(EXTRACTION_CORE));
+		assert.ok(NOTES_EXTRACTOR_INSTRUCTIONS.startsWith(NOTES_PREAMBLE));
+		assert.ok(NOTES_EXTRACTOR_INSTRUCTIONS.includes(EXTRACTION_CORE), "the notes extractor shares the core by construction");
+
+		// The preambles differ in exactly their source description.
+		assert.notEqual(SESSION_PREAMBLE, NOTES_PREAMBLE);
+		assert.match(SESSION_PREAMBLE, /a teaching session, rendered as the teacher's prose in reading order/);
+		assert.match(NOTES_PREAMBLE, /one chunk of the author's personal notes, rendered in reading order/);
+
+		// NO RULE ARMOR (owner, 2026-09-30): the defensive lists are CUT
+		// from both contextualizations.
+		for (const prompt of [EXTRACTOR_INSTRUCTIONS, NOTES_EXTRACTOR_INSTRUCTIONS]) {
+			assert.doesNotMatch(prompt, /DROP:/);
+			assert.doesNotMatch(prompt, /MERGE YOUR OWN OUTPUT/);
+			assert.doesNotMatch(prompt, /WHEN IN DOUBT, OMIT/);
+			assert.doesNotMatch(prompt, /Faithfulness:/);
+			assert.doesNotMatch(prompt, /follows\/supports/);
+		}
+	});
+});
 
 describe("the notes front door (importNotes — format-agnostic)", () => {
 	it("imports raw notes end to end: source record, file-scoped provenance", async () => {
@@ -1065,7 +1294,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		assert.equal(ledgers.readNodes().length, calls);
 	});
 
-	it("required top-level fields (owner, 2026-09-28): a findings submit MISSING edges fails validation — no silent edge-less merge", async () => {
+	it("required top-level fields (owner, 2026-09-28; chains since 2026-09-30): a findings submit MISSING chains fails validation — no silent structure-less merge", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
 		// The degraded-retry shape from the OpenRouter log: propositions
