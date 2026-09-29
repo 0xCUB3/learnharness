@@ -14,6 +14,7 @@ import {
 } from "../../core/settings.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
+import { withBgLlmSlot } from "./bg-llm-semaphore.ts";
 import type {
 	AuditVerdicts,
 	CallUsage,
@@ -526,7 +527,6 @@ interface LhExtractionGlobal {
 	 *  calls process-wide — the provider-facing rate stance (the import
 	 *  route's old 3-wide pool doctrine, now global). Per-chunk jobs fan
 	 *  out in parallel but queue here. */
-	__lhExtractSlots?: { active: number; queue: { resolve: () => void; dead: boolean }[] };
 }
 
 /** THE RUN REGISTRIES live on globalThis, not module level — the
@@ -796,60 +796,19 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	}
 
 
-/** THE EXTRACT SEMAPHORE (owner, 2026-09-28): at most 3 concurrent
- *  extractor calls, process-wide — the provider-facing stance. Per-chunk
- *  jobs fan out freely; this gate is what they queue behind ("queued").
- *  FIFO; abort-aware (a queued job that aborts marks its ticket dead —
- *  the permit handoff skips it and hands to the next waiter). The audit
- *  side needs no slot: audits already serialize behind their own global
- *  lock, so by the time a job releases its extract slot the audit queue
- *  is the only remaining throttle. */
+	/** THE EXTRACT SLOT (unified 2026-09-29): extraction chunk jobs run
+	 *  under the SHARED background-LLM semaphore — one process-wide pool
+	 *  of 3 permits for extraction chunks AND practice's partitioner/
+	 *  generators/graders (owner ruling; see bg-llm-semaphore.ts). The
+	 *  job's registry-row signal kills a queued ticket (dead-ticket
+	 *  handoff). The audit side needs no slot: audits already serialize
+	 *  behind their own global lock. */
 	async function withExtractSlot<T>(jobKey: string, critical: () => Promise<T>): Promise<T> {
-		const g = globalThis as typeof globalThis & LhExtractionGlobal;
-		const slots = (g.__lhExtractSlots ??= { active: 0, queue: [] });
-		// Fresh takers increment `active` themselves; a HANDED-OFF permit
-		// does not (the releaser left `active` untouched for us) — counting
-		// both sides is how a semaphore slowly deadlocks at 3-with-empty-
-		// queue.
-		let freshTake = true;
-		if (slots.active >= 3) {
-			freshTake = false;
-			await new Promise<void>((resolve, reject) => {
-				const ticket: { resolve: () => void; dead: boolean } = { resolve, dead: false };
-				slots.queue.push(ticket);
-				const signal = runningExtractions.get(jobKey)?.controller.signal;
-				if (!signal) return;
-				const die = () => {
-					ticket.dead = true; // the permit handoff must skip us
-					const err = new Error("extraction aborted while queued for an extract slot");
-					err.name = "AbortError";
-					reject(err);
-				};
-				if (signal.aborted) die();
-				else signal.addEventListener("abort", die, { once: true });
-			});
-		}
-		if (freshTake) slots.active++;
-		try {
-			return await critical();
-		} finally {
-			// Permit handoff: a waiting ticket inherits the slot directly
-			// (active stays); dead tickets are skipped — their job already
-			// left through the abort path.
-			for (;;) {
-				const next = slots.queue.shift();
-				if (!next) {
-					slots.active--;
-					break;
-				}
-				if (next.dead) continue;
-				next.resolve();
-				break;
-			}
-		}
+		const signal = runningExtractions.get(jobKey)?.controller.signal;
+		return withBgLlmSlot(signal, critical);
 	}
 
-	/** Append the run's usage record to the chat's extractions log — success
+		/** Append the run's usage record to the chat's extractions log — success
 	 *  or failure: a failed run still spent money, and its partial usage is
 	 *  exactly what the record should show (stats absent = never merged).
 	 *  Idempotent per startedAt (the store dedupes). */

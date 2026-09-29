@@ -7,7 +7,7 @@
  */
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import {
 	createFauxCore,
 	fauxAssistantMessage,
@@ -16,6 +16,7 @@ import {
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
+import { bgLlmSlots, withBgLlmSlot } from "../src/agent/subagents/bg-llm-semaphore.ts";
 import {
 	createPracticePipeline,
 	practiceStatuses,
@@ -51,12 +52,14 @@ function memoryGraph(nodes: GraphNode[], edges: GraphEdge[]): GraphStore {
 	} satisfies GraphStore;
 }
 
+let storeSeq = 0;
 function memoryPracticeStore() {
 	const sets = new Map<string, ProblemSet>();
+	const tag = `u${++storeSeq}`;
 	let n = 0;
 	const store: PracticeStore = {
 		createSet: (init) => {
-			const id = `ps_t${++n}`;
+			const id = `ps_t${tag}_${++n}`;
 			const set = { ...init, id, problems: init.problems.map((p) => ({ ...p })) };
 			sets.set(id, set);
 			return structuredClone(set);
@@ -183,6 +186,38 @@ function partitionModel(partitions: Array<{ chains: string[] }>): PiEngine {
 /** Hangs until the call's signal aborts (then resolves no submit call) —
  *  the extraction.test.ts cancellation-mimicking idiom. Queue one step
  *  per concurrent call (faux queues are finite). */
+/** Abort-or-gate generator: each step resolves "late" when ITS call's
+ *  signal aborts, or a valid submit when the gate opens. The aborted
+ *  problem burns its retries and errors; the sibling completes on the
+ *  gate — order-independent (every step behaves identically). */
+function abortOrGateModel(count: number, gate: Promise<void>): PiEngine {
+	const factory: FauxResponseStep = (context, options) =>
+		new Promise((resolve) => {
+			const sig = options?.signal;
+			if (sig?.aborted) {
+				resolve(fauxAssistantMessage("late"));
+				return;
+			}
+			let settled = false;
+			const done = (m: ReturnType<typeof fauxAssistantMessage>) => {
+				if (settled) return;
+				settled = true;
+				resolve(m);
+			};
+			sig?.addEventListener("abort", () => done(fauxAssistantMessage("late")), { once: true });
+			void gate.then(() => {
+				const target = targetOf(lastUserText(context as never));
+				done(
+					fauxAssistantMessage(
+						[fauxToolCall("submit_problem", { chains: target, statement: `S ${target.join(",")}`, solution: "v", rubric: "r" } as ToolCall["arguments"], { id: `g-${target.join("-")}` })],
+						{ stopReason: "toolUse" },
+					),
+				);
+			});
+		});
+	return fauxEngine(Array.from({ length: count }, () => factory));
+}
+
 function hangingModel(count = 1): PiEngine {
 	const factory: FauxResponseStep = (_context, options) =>
 		new Promise((resolve) => {
@@ -226,6 +261,9 @@ const PARAMS = { ladderRung: 4, cueDistance: 1, presentation: "theory" } as cons
 
 function fixture(partial: Partial<Parameters<typeof createPracticePipeline>[0]> = {}) {
 	const practice = memoryPracticeStore();
+	// The shared background-LLM pool lives on globalThis — start every
+	// test with a fresh, empty one (no inherited held permits).
+	delete (globalThis as { __lhLlmSlots?: unknown }).__lhLlmSlots;
 	const deps = {
 		graphStore: diamondGraph(),
 		practiceStore: practice.store,
@@ -233,6 +271,19 @@ function fixture(partial: Partial<Parameters<typeof createPracticePipeline>[0]> 
 	};
 	return { practice, deps, make: () => createPracticePipeline(deps) };
 }
+
+// Failure isolation between tests: a timed-out test can leave rows,
+// locks, and held permits behind — the NEXT test must start clean.
+afterEach(() => {
+	const g = globalThis as {
+		__lhPracticeRuns?: Map<string, unknown>;
+		__lhPracticeLocks?: Map<string, unknown>;
+		__lhLlmSlots?: unknown;
+	};
+	g.__lhPracticeRuns?.clear();
+	g.__lhPracticeLocks?.clear();
+	delete g.__lhLlmSlots;
+});
 
 /** Reset the boot sweep's once-per-process flag — each call simulates a
  *  fresh process for the sweep's semantics (production sets it once and
@@ -379,13 +430,246 @@ describe("createProblemSet (generation)", () => {
 		assert.equal(practiceStatuses().length, 0);
 	});
 
-	it("registry shape: kind/phase/label/usage while running, cleared after", async () => {
-		let seen: RunningPractice | undefined;
+	it("registry: partition row first, then UNIQUE per-problem rows with i/N labels; every row clears", async () => {
+		// BOTH generators hold on their own gates — the 2-row mid-flight
+		// window is stable, then b releases alone (per-row usage pin).
+		let releaseB!: () => void;
+		let releaseC!: () => void;
+		const gateB = new Promise<void>((r) => (releaseB = r));
+		const gateC = new Promise<void>((r) => (releaseC = r));
+		const step: FauxResponseStep = (context) => {
+			const target = targetOf(lastUserText(context as never));
+			const gate = target.includes("c") ? gateC : gateB;
+			return gate.then(() =>
+				fauxAssistantMessage(
+					[fauxToolCall("submit_problem", { chains: target, statement: "s", solution: "v", rubric: "r" } as ToolCall["arguments"], { id: `g-${target.join("-")}` })],
+					{ stopReason: "toolUse" },
+				),
+			);
+		};
+		const gen = fauxEngine([step, step]);
+		// Freeze stage 1: the partitioner holds until released.
+		let releasePartition!: () => void;
+		const partitionGate = new Promise<void>((r) => (releasePartition = r));
+		const gatedPartitioner = fauxEngine([
+			() =>
+				partitionGate.then(() =>
+					fauxAssistantMessage(
+						[fauxToolCall("submit_partition", { partitions: [{ chains: ["b"] }, { chains: ["c"] }] } as ToolCall["arguments"], { id: "p1" })],
+						{ stopReason: "toolUse" },
+					),
+				),
+		]);
+		const f = fixture({
+			partitioner: gatedPartitioner,
+			problemGenerator: gen,
+			grader: echoGrader(1),
+		});
+		const pipeline = f.make();
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "c"], PARAMS);
+
+		// Stage 1: exactly ONE row — the partition row (frozen).
+		await until(() => practiceStatuses().length === 1);
+		{
+			const pr = practiceStatuses()[0]!;
+			assert.equal(pr.key, `${set.id}:partition`, "the partition row's key shape");
+			assert.equal(pr.phase, "partitioning");
+			assert.equal(pr.label, `Partitioning — ${set.title}`);
+			assert.equal(pr.kind, "generation");
+			assert.equal(pr.problemIndex, undefined, "no fan-out yet");
+		}
+
+		releasePartition();
+
+		// Stage 2: partition row retired; per-problem rows carry i/N.
+		await until(() => practiceStatuses().length === 2 && practiceStatuses().every((r) => r.phase === "generating"));
+		{
+			const rows = practiceStatuses();
+			assert.ok(!rows.some((r) => r.key === `${set.id}:partition`), "partition row retired at fan-out");
+			const keys = rows.map((r) => r.key);
+			assert.equal(new Set(keys).size, keys.length, "row keys are unique (the dock dup-key law)");
+			for (const r of rows) {
+				assert.match(r.key, new RegExp(`^${set.id}:gen:pp_`), "gen row key shape");
+				assert.equal(r.kind, "generation");
+				assert.match(r.label, /^Problem [12]\/2 — /, `label carries i/N: ${r.label}`);
+			}
+			const byIndex = [...rows].sort((a, b) => (a.problemIndex ?? 0) - (b.problemIndex ?? 0));
+			assert.equal(byIndex[0]!.problemIndex, 1);
+			assert.equal(byIndex[0]!.problemTotal, 2);
+			assert.equal(byIndex[1]!.problemIndex, 2);
+			assert.equal(byIndex[1]!.problemTotal, 2);
+		}
+
+		// PER-ROW USAGE ISOLATION: b submits and settles (its row clears);
+		// c's row is still generating and carries NO usage — b's log lives
+		// on b's row only (the aggregate row would have shown it here).
+		releaseB();
+		await until(() => practiceStatuses().length === 1);
+		{
+			const held = practiceStatuses()[0]!;
+			assert.match(held.key, /:gen:pp_/, "the surviving row is c's");
+			assert.equal(held.usage, undefined, "no cross-contamination of usage between rows");
+		}
+
+		releaseC();
+		await done;
+		assert.equal(practiceStatuses().length, 0, "every row clears");
+	});
+
+	it("grading rows: per-answer keys, Grading i/N labels, queued→grading, per-row usage", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));
+		// hold both grades at the model seam
+		const holdSteps: FauxResponseStep[] = Array.from({ length: 2 }, () => () =>
+			gate.then(() => fauxAssistantMessage([fauxToolCall("submit_grade", { verdict: "solid", feedback: "yes" } as ToolCall["arguments"], { id: "gr" })], { stopReason: "toolUse" })),
+		);
+		const f = fixture({
+			partitioner: partitionModel([{ chains: ["b"] }, { chains: ["c"] }]),
+			problemGenerator: echoGenerator(2),
+			grader: fauxEngine(holdSteps),
+		});
+		const pipeline = f.make();
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "c"], PARAMS);
+		await done;
+		const ready = f.practice.store.getSet(set.id)!;
+		const ids = ready.problems.map((p) => p.id);
+
+		const sub = await pipeline.submitAnswers(set.id, [
+			{ problemId: ids[0]!, text: "first answer" },
+			{ problemId: ids[1]!, text: "second answer" },
+		]);
+		await until(() => practiceStatuses().length === 2 && practiceStatuses().every((r) => r.phase === "grading"));
+		const rows = practiceStatuses();
+		for (const r of rows) {
+			assert.equal(r.kind, "grading");
+			assert.match(r.key, new RegExp(`^${set.id}:grade:pp_`), "grade row key shape");
+			assert.match(r.label, /^Grading [12]\/2 — /, `label carries i/N: ${r.label}`);
+			assert.ok(r.problemIndex === 1 || r.problemIndex === 2);
+			assert.equal(r.problemTotal, 2);
+		}
+		const keys = rows.map((r) => r.key);
+		assert.equal(new Set(keys).size, keys.length, "grade row keys unique");
+
+		release();
+		await sub.done;
+		assert.equal(practiceStatuses().length, 0);
+		const graded = f.practice.store.getSet(set.id)!;
+		assert.ok(graded.problems.every((p) => p.grade?.verdict === "solid"));
+	});
+
+	it("abort ONE gen row: that problem dies alone, siblings complete, set reaches ready with one errored", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const f = fixture({
+			partitioner: partitionModel([{ chains: ["b"] }, { chains: ["c"] }]),
+			problemGenerator: abortOrGateModel(8, gate), // victim burns retries; sibling submits on gate
+			grader: echoGrader(1),
+		});
+		const pipeline = f.make();
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "c"], PARAMS);
+		await until(() => f.practice.store.getSet(set.id)?.status === "generating");
+		const mid = f.practice.store.getSet(set.id)!;
+		const victim = mid.problems[0]!.id;
+
+		pipeline.abortPracticeRow(`${set.id}:gen:${victim}`);
+		release(); // the sibling completes on the gate
+		await done;
+
+		const final = f.practice.store.getSet(set.id)!;
+		assert.equal(final.status, "ready", "the set completes despite the single row abort");
+		const dead = final.problems.find((p) => p.id === victim)!;
+		assert.equal(dead.status, "error");
+		assert.equal(dead.error, "Aborted");
+		const sibling = final.problems.find((p) => p.id !== victim)!;
+		assert.equal(sibling.status, "ready", "the sibling ran on");
+		assert.equal(practiceStatuses().length, 0);
+	});
+
+	it("abort the PARTITION row: the whole run dies (set error Aborted)", async () => {
+		const f = fixture({ partitioner: hangingModel(1), problemGenerator: echoGenerator(1), grader: echoGrader(1) });
+		const pipeline = f.make();
+		const { set, done } = await pipeline.createProblemSet(["b"], PARAMS);
+		await until(() => practiceStatuses().length === 1 && practiceStatuses()[0]!.key === `${set.id}:partition`);
+
+		pipeline.abortPracticeRow(`${set.id}:partition`);
+		await done;
+
+		const final = f.practice.store.getSet(set.id)!;
+		assert.equal(final.status, "error");
+		assert.equal(final.error, "Aborted");
+		assert.equal(practiceStatuses().length, 0);
+	});
+
+	it("abort ONE grade row (queued): that grade drops (answer kept, re-submittable), sibling grade lands", async () => {
+		const f = fixture({
+			partitioner: partitionModel([{ chains: ["b"] }, { chains: ["c"] }]),
+			problemGenerator: echoGenerator(2),
+			grader: echoGrader(2), // sibling grade + the retry's grade
+		});
+		const pipeline = f.make();
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "c"], PARAMS);
+		await done;
+		const ready = f.practice.store.getSet(set.id)!;
+		const ids = ready.problems.map((p) => p.id);
+
+		// Hold ALL THREE shared permits (AFTER the fixture — it resets the
+		// pool): both grade rows sit "queued" behind them, so the abort
+		// exercises the dead-ticket path deterministically (no model call
+		// for the victim at all).
+		let rh1!: () => void;
+		let rh2!: () => void;
+		let rh3!: () => void;
+		const h1 = withBgLlmSlot(undefined, () => new Promise<void>((r) => (rh1 = r)));
+		const h2 = withBgLlmSlot(undefined, () => new Promise<void>((r) => (rh2 = r)));
+		const h3 = withBgLlmSlot(undefined, () => new Promise<void>((r) => (rh3 = r)));
+		const slots = bgLlmSlots();
+		await until(() => slots.active === 3);
+
+		const sub = await pipeline.submitAnswers(set.id, [
+			{ problemId: ids[0]!, text: "first" },
+			{ problemId: ids[1]!, text: "second" },
+		]);
+		await until(() => practiceStatuses().length === 2 && practiceStatuses().every((r) => r.phase === "queued"));
+		const victimKey = practiceStatuses()[0]!.key;
+		const victimId = victimKey.split(":").pop()!;
+
+		pipeline.abortPracticeRow(victimKey);
+		await until(() => practiceStatuses().length === 1); // the aborted row is gone at once
+		assert.equal(practiceStatuses()[0]!.key !== victimKey, true);
+
+		rh3(); // free one permit → the sibling grades
+		await h3;
+		await sub.done;
+		const graded = f.practice.store.getSet(set.id)!;
+		const dropped = graded.problems.find((p) => p.id === victimId)!;
+		assert.equal(dropped.grade, undefined, "the aborted grade is absent");
+		assert.equal(dropped.answer, "first", "the answer is kept");
+		const other = graded.problems.find((p) => p.id !== victimId)!;
+		assert.equal(other.grade?.verdict, "partial", "the sibling grade landed (echoGrader: no 'solid' in its text)");
+		assert.equal(practiceStatuses().length, 0);
+
+		// re-submittable: the dropped answer grades on a second submit
+		const resub = await pipeline.submitAnswers(set.id, [{ problemId: victimId, text: "retry answer" }]);
+		await resub.done;
+		const retried = f.practice.store.getSet(set.id)!;
+		assert.equal(retried.problems.find((p) => p.id === victimId)!.grade?.verdict, "partial", "the retry grades (echoGrader verdict)");
+
+		rh1();
+		rh2();
+		await h1;
+		await h2;
+		assert.equal(bgLlmSlots().active, 0, "the pool drains");
+	});
+
+	it("shared pool: practice queues behind extraction-style holders of the SAME semaphore (identity + contention)", async () => {
+		// identity: one process, one pool — practice and extraction share it
+		assert.equal(bgLlmSlots(), bgLlmSlots());
+
+		let releaseGen!: () => void;
+		const genGate = new Promise<void>((r) => (releaseGen = r));
 		const gen = fauxEngine([
 			(context) =>
-				gate.then(() => {
+				genGate.then(() => {
 					const target = targetOf(lastUserText(context as never));
 					return fauxAssistantMessage(
 						[fauxToolCall("submit_problem", { chains: target, statement: "s", solution: "v", rubric: "r" } as ToolCall["arguments"], { id: "g" })],
@@ -395,17 +679,41 @@ describe("createProblemSet (generation)", () => {
 		]);
 		const f = fixture({ partitioner: partitionModel([{ chains: ["b"] }]), problemGenerator: gen, grader: echoGrader(1) });
 		const pipeline = f.make();
+
+		// Hold all THREE permits as an extraction-style caller would (AFTER
+		// the fixture — it resets the pool): the partitioner (a background
+		// LLM job) must QUEUE behind them.
+		let rh1!: () => void;
+		let rh2!: () => void;
+		let rh3!: () => void;
+		const h1 = withBgLlmSlot(undefined, () => new Promise<void>((r) => (rh1 = r)));
+		const h2 = withBgLlmSlot(undefined, () => new Promise<void>((r) => (rh2 = r)));
+		const h3 = withBgLlmSlot(undefined, () => new Promise<void>((r) => (rh3 = r)));
+		const slots = bgLlmSlots();
+		await until(() => slots.active === 3);
+
 		const { set, done } = await pipeline.createProblemSet(["b"], PARAMS);
+
+		// the partition row EXISTS while its call queues for a permit
+		await until(() => slots.queue.length === 1);
+		assert.equal(practiceStatuses()[0]!.key, `${set.id}:partition`, "the row exists while its call queues");
+		assert.equal(practiceStatuses()[0]!.phase, "partitioning");
+
+		rh3(); // free one permit → the partitioner runs and finishes
+		await h3;
 		await until(() => practiceStatuses().length === 1 && practiceStatuses()[0]!.phase === "generating");
-		seen = practiceStatuses()[0]!;
-		assert.equal(seen.setId, set.id);
-		assert.equal(seen.kind, "generation");
-		assert.ok(seen.label.includes("problem"), `label carries progress: ${seen.label}`);
-		assert.ok(seen.startedAt > 0);
-		assert.ok(seen.usage.partitioner?.model, "partitioner usage folded at submit");
-		release();
+		assert.match(practiceStatuses()[0]!.key, /:gen:pp_/, "the gen row took over");
+		await until(() => slots.active === 3); // two holders + the generator
+
+		releaseGen(); // the generator settles; the set completes
 		await done;
-		assert.equal(practiceStatuses().length, 0);
+		assert.equal(f.practice.store.getSet(set.id)!.status, "ready");
+
+		rh1();
+		rh2();
+		await h1;
+		await h2;
+		assert.equal(bgLlmSlots().active, 0, "the pool drains");
 	});
 
 	it("refusal gate fires BEFORE anything is created", async () => {

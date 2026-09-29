@@ -7,17 +7,23 @@
  * this module owns STATE, the agents module owns CALLS.
  *
  * ARCHITECTURE (extraction's idioms, deliberately):
- *   - Live runs live on globalThis.__lhPracticeRuns — one row per set per
- *     kind ("${setId}:generation" | "${setId}:grading") — because Next dev
- *     compiles each route entry as its own module instance; a module-level
- *     Map would read empty from /api/activity. One process, one truth
- *     (the turn/wake/abort/extraction registries' lesson).
+ *   - Live runs live on globalThis.__lhPracticeRuns — PER-PROBLEM ROWS
+ *     (owner ruling, 2026-09-29: matching the extraction per-chunk
+ *     pattern): "${setId}:partition" while the partitioner runs, then one
+ *     "${setId}:gen:${problemId}" per problem ("queued"→"generating"),
+ *     and one "${setId}:grade:${problemId}" per graded answer
+ *     ("queued"→"grading") — because Next dev compiles each route entry
+ *     as its own module instance; a module-level Map would read empty
+ *     from /api/activity. One process, one truth (the turn/wake/abort/
+ *     extraction registries' lesson).
  *   - Every set-file mutation funnels through the per-set write mutex
  *     (the audit-lock idiom, per-set): the STORE adapter stays dumb —
  *     serialization is THIS layer's job (store module's contract).
- *   - Model calls (generators, graders) gate behind a process-wide
- *     3-permit semaphore (__lhPracticeSlots) — the same provider-facing
- *     rate stance as extraction's slots; abort-aware while queued.
+ *   - Model calls (partitioner, generators, graders) gate behind the
+ *     SHARED background-LLM semaphore — one process-wide pool of 3
+ *     permits for ALL background LLM jobs, extraction chunks included
+ *     (owner ruling, 2026-09-29; bg-llm-semaphore.ts); abort-aware
+ *     while queued.
  *   - The store adapter isSYNC (fs); reads may run unlocked, only
  *     read-modify-write cycles take the lock.
  *
@@ -44,6 +50,7 @@ import {
 	type PreviousProblemRef,
 	type PropositionSnapshot,
 } from "./practice.ts";
+import { withBgLlmSlot } from "./bg-llm-semaphore.ts";
 
 // ─── typed errors (the service maps these to responses) ──────────────────────
 
@@ -83,30 +90,34 @@ export class BadAnswersError extends Error {
 // ─── the live-run registry (globalThis — see module doc) ─────────────────────
 
 export type PracticeRunKind = "generation" | "grading";
-export type PracticePhase = "partitioning" | "generating" | "grading";
+export type PracticePhase = "partitioning" | "queued" | "generating" | "grading";
 
-/** One live run row — generation or grading, per set. Mirrors
- *  RunningExtraction's shape discipline (label carries the progress the
- *  dock renders; usage folds stage logs as they land). */
+/** One live ROW — per-problem, matching the extraction per-chunk pattern
+ *  (owner ruling, 2026-09-29). The registry key IS the row's identity:
+ *  the feed's id and the dock's abort target. Each row owns its OWN
+ *  abort controller (abort routes by row: one problem dies alone) and
+ *  its OWN usage accumulation (this row's model call only). */
 export interface RunningPractice {
-	/** `${setId}:generation` | `${setId}:grading` — the registry key. */
+	/** `${setId}:partition` | `${setId}:gen:${problemId}` |
+	 *  `${setId}:grade:${problemId}` — the registry key, the feed id,
+	 *  and the abort key in one. */
 	key: string;
 	setId: string;
 	kind: PracticeRunKind;
 	phase: PracticePhase;
-	/** Set title + progress ("T — problem 2/5") — the dock's line. */
+	/** "Partitioning — T" | "Problem i/N — T" | "Grading i/N — T" — the
+	 *  dock's line (progress rides the label). */
 	label: string;
 	startedAt: number;
-	/** Stage usage, folded from each runner's returned PracticeStepLog
-	 *  as its call settles (v1: completion-folded, not per-step — the
-	 *  practice blobs ride no live cost channel). */
-	usage: {
-		partitioner?: PracticeStepLog;
-		generator?: PracticeStepLog;
-		grader?: PracticeStepLog;
-	};
-	/** True-cancellation (the dock's abort): shared across the run's
-	 *  model calls; abort() also kills queued semaphore tickets. */
+	/** 1-based position within the fan-out (gen rows: the partition's
+	 *  order; grade rows: the submitted answers' order). */
+	problemIndex?: number;
+	problemTotal?: number;
+	/** THIS row's model-call usage (one stage per row: partitioner,
+	 *  generator, or grader — completion-folded, not per-step). */
+	usage?: PracticeStepLog;
+	/** True-cancellation for THIS row's model call (the dock's abort);
+	 *  abort() also kills a queued semaphore ticket. */
 	controller: AbortController;
 }
 
@@ -114,10 +125,6 @@ interface LhPracticeGlobal {
 	__lhPracticeRuns?: Map<string, RunningPractice>;
 	/** Per-set write mutexes (audit-lock idiom, per-set). */
 	__lhPracticeLocks?: Map<string, { tail: Promise<void> }>;
-	/** The PRACTICE SEMAPHORE: 3 concurrent practice model calls,
-	 *  process-wide — shared by generators and graders (the same
-	 *  provider-facing stance as extraction's extract slots). */
-	__lhPracticeSlots?: { active: number; queue: { resolve: () => void; dead: boolean }[] };
 }
 
 function practiceRuns(): Map<string, RunningPractice> {
@@ -152,48 +159,6 @@ async function withSetLock<T>(setId: string, critical: () => Promise<T> | T): Pr
 	}
 }
 
-/** The 3-permit practice semaphore — extraction's withExtractSlot idiom,
- *  signal taken directly (the caller's row controller). A queued ticket
- *  that aborts marks itself dead: the permit handoff skips it (fresh
- *  takers count themselves; handed-off permits don't — the double-count
- *  deadlock lesson, extraction 2026-09-28). */
-async function withPracticeSlot<T>(signal: AbortSignal | undefined, critical: () => Promise<T>): Promise<T> {
-	const g = globalThis as typeof globalThis & LhPracticeGlobal;
-	const slots = (g.__lhPracticeSlots ??= { active: 0, queue: [] });
-	let freshTake = true;
-	if (slots.active >= 3) {
-		freshTake = false;
-		await new Promise<void>((resolve, reject) => {
-			const ticket: { resolve: () => void; dead: boolean } = { resolve, dead: false };
-			slots.queue.push(ticket);
-			if (!signal) return;
-			const die = () => {
-				ticket.dead = true;
-				const err = new Error("practice run aborted while queued for a slot");
-				err.name = "AbortError";
-				reject(err);
-			};
-			if (signal.aborted) die();
-			else signal.addEventListener("abort", die, { once: true });
-		});
-	}
-	if (freshTake) slots.active++;
-	try {
-		return await critical();
-	} finally {
-		for (;;) {
-			const next = slots.queue.shift();
-			if (!next) {
-				slots.active--;
-				break;
-			}
-			if (next.dead) continue;
-			next.resolve();
-			break;
-		}
-	}
-}
-
 // ─── small helpers ───────────────────────────────────────────────────────────
 
 /** "pp_" + ts36 + rand — mirrors the store's ps_ minting. */
@@ -209,20 +174,14 @@ function messageOf(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-function foldUsage(
-	target: RunningPractice["usage"],
-	stage: "partitioner" | "generator" | "grader",
-	log: PracticeStepLog,
-): void {
-	const cur = target[stage];
-	if (!cur) target[stage] = { model: log.model, steps: [...log.steps] };
-	else {
-		if (!cur.model) cur.model = log.model;
-		cur.steps.push(...log.steps);
-	}
-}
-
-function registerRow(key: string, setId: string, kind: PracticeRunKind, phase: PracticePhase, label: string): RunningPractice {
+function registerRow(
+	key: string,
+	setId: string,
+	kind: PracticeRunKind,
+	phase: PracticePhase,
+	label: string,
+	part?: { i: number; n: number },
+): RunningPractice {
 	const row: RunningPractice = {
 		key,
 		setId,
@@ -230,7 +189,8 @@ function registerRow(key: string, setId: string, kind: PracticeRunKind, phase: P
 		phase,
 		label,
 		startedAt: Date.now(),
-		usage: {},
+		problemIndex: part?.i,
+		problemTotal: part?.n,
 		controller: new AbortController(),
 	};
 	practiceRuns().set(key, row);
@@ -283,7 +243,9 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		const staleBefore = Date.now() - 120_000;
 		for (const set of deps.practiceStore.listSets()) {
 			if (set.status !== "partitioning" && set.status !== "generating") continue;
-			if (practiceRuns().has(`${set.id}:generation`)) continue;
+			let live = false;
+			for (const key of practiceRuns().keys()) if (key.startsWith(`${set.id}:`)) { live = true; break; }
+			if (live) continue;
 			const heartbeat = Date.parse(set.updatedAt ?? set.createdAt);
 			if (Number.isFinite(heartbeat) && heartbeat > staleBefore) continue; // grace
 			console.error(`[practice ${set.id}] boot sweep: stale ${set.status} set marked interrupted`);
@@ -309,29 +271,33 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 	async function generateSet(
 		set: ProblemSet,
 		previousProblems: PreviousProblemRef[],
-		row: RunningPractice,
+		partitionRow: RunningPractice,
 	): Promise<void> {
-		const controller = row.controller;
+		const controller = partitionRow.controller;
 
-		// Stage 1 — the partitioner.
+		// Stage 1 — the partitioner (its OWN dock row; acquires a shared
+		// permit like every background LLM job).
 		let partitions: Array<{ chains: string[] }>;
 		try {
-			const submitted = await agents.runPartitioner({
-				chains: set.chains,
-				propositions: set.propositions,
-				params: set.params,
-				previousProblems,
-				signal: controller.signal,
-			});
-			foldUsage(row.usage, "partitioner", submitted.log);
+			const submitted = await withBgLlmSlot(controller.signal, () =>
+				agents.runPartitioner({
+					chains: set.chains,
+					propositions: set.propositions,
+					params: set.params,
+					previousProblems,
+					signal: controller.signal,
+				}),
+			);
+			partitionRow.usage = submitted.log;
 			partitions = submitted.partitions;
 		} catch (err) {
 			await markSetError(set.id, isAbortLike(err) || controller.signal.aborted ? "Aborted" : messageOf(err));
-			practiceRuns().delete(row.key);
+			practiceRuns().delete(partitionRow.key);
 			return;
 		}
 
-		// Stubs appear the moment the partition lands (numbered, generating).
+		// Stubs appear the moment the partition lands (numbered, generating);
+		// per-problem gen rows take the partition row's place in the dock.
 		const stubs: Problem[] = partitions.map((part) => ({
 			id: newProblemId(),
 			chains: part.chains,
@@ -348,33 +314,42 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 			deps.practiceStore.saveSet(cur);
 			return cur;
 		});
-		if (!saved) {
-			practiceRuns().delete(row.key); // deleted mid-run — stop quietly
-			return;
-		}
-		row.phase = "generating";
-		let settled = 0;
-		row.label = `${set.title} — problem 0/${stubs.length}`;
+		practiceRuns().delete(partitionRow.key);
+		if (!saved) return; // deleted mid-run — stop quietly
 
-		// Stage 2 — one generator per problem, failure-isolated, 3-wide.
+		const genRows = stubs.map((stub, i) =>
+			registerRow(
+				`${set.id}:gen:${stub.id}`,
+				set.id,
+				"generation",
+				"queued",
+				`Problem ${i + 1}/${stubs.length} — ${set.title}`,
+				{ i: i + 1, n: stubs.length },
+			),
+		);
+
+		// Stage 2 — one generator per problem, failure-isolated, each its
+		// own row + abort controller (a row abort kills THAT problem only).
 		await Promise.all(
-			stubs.map(async (stub) => {
+			stubs.map(async (stub, i) => {
+				const row = genRows[i]!; // 1:1 with stubs by construction
 				try {
-					await withPracticeSlot(controller.signal, async () => {
-						if (controller.signal.aborted) {
+					await withBgLlmSlot(row.controller.signal, async () => {
+						if (row.controller.signal.aborted) {
 							const err = new Error("aborted while queued");
 							err.name = "AbortError";
 							throw err;
 						}
+						row.phase = "generating";
 						const generated = await agents.runProblemGenerator({
 							target: stub.chains,
 							fullChains: set.chains,
 							propositions: set.propositions,
 							params: set.params,
 							previousProblems,
-							signal: controller.signal,
+							signal: row.controller.signal,
 						});
-						foldUsage(row.usage, "generator", generated.log);
+						row.usage = generated.log;
 						await withSetLock(set.id, () => {
 							const cur = deps.practiceStore.getSet(set.id);
 							if (!cur) return;
@@ -391,7 +366,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 					});
 				} catch (err) {
 					// Failure isolation: this problem errors, the set runs on.
-					const aborted = isAbortLike(err) || controller.signal.aborted;
+					const aborted = isAbortLike(err) || row.controller.signal.aborted;
 					await withSetLock(set.id, () => {
 						const cur = deps.practiceStore.getSet(set.id);
 						if (!cur) return;
@@ -402,27 +377,22 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 						deps.practiceStore.saveSet(cur);
 					});
 				} finally {
-					settled++;
-					row.label = `${set.title} — problem ${settled}/${stubs.length}`;
+					practiceRuns().delete(row.key);
 				}
 			}),
 		);
 
-		// Settle: ready even with errored problems (per-problem isolation);
-		// aborted runs keep the error abortPractice already wrote.
+		// Settle: ready even with errored problems (per-problem isolation).
+		// A SET-level abort already wrote its verdict synchronously
+		// (abortPractice) — re-reading under the lock, we keep it.
 		await withSetLock(set.id, () => {
 			const cur = deps.practiceStore.getSet(set.id);
 			if (!cur) return;
-			if (controller.signal.aborted) {
-				cur.status = "error";
-				cur.error = "Aborted";
-			} else {
-				cur.status = "ready";
-				cur.error = undefined;
-			}
+			if (cur.status === "error") return; // set-abort's mark stands
+			cur.status = "ready";
+			cur.error = undefined;
 			deps.practiceStore.saveSet(cur);
 		});
-		practiceRuns().delete(row.key);
 	}
 
 	/**
@@ -465,7 +435,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		});
 
 		const previousProblems = dedupInput(deps.practiceStore, selectedIds);
-		const row = registerRow(`${set.id}:generation`, set.id, "generation", "partitioning", title);
+		const row = registerRow(`${set.id}:partition`, set.id, "generation", "partitioning", `Partitioning — ${title}`);
 		const done = generateSet(set, previousProblems, row);
 		return { set, done };
 	}
@@ -482,8 +452,8 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		answers: Array<{ problemId: string; text: string }>,
 	): Promise<{ set: ProblemSet; done: Promise<void> }> {
 		agents.refuseIfStagesUnready(); // grading needs its engine — refuse BEFORE saving answers
-		if (practiceRuns().has(`${setId}:grading`)) {
-			throw new BadAnswersError("a grading run is already in flight for this set");
+		for (const key of practiceRuns().keys()) {
+			if (key.startsWith(`${setId}:grade:`)) throw new BadAnswersError("a grading run is already in flight for this set");
 		}
 		const set = await withSetLock(setId, () => {
 			const cur = deps.practiceStore.getSet(setId);
@@ -504,21 +474,31 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 			return cur;
 		});
 
-		const row = registerRow(`${setId}:grading`, setId, "grading", "grading", `${set.title} — grading`);
+		const gradeRows = answers.map((a, i) =>
+			registerRow(
+				`${setId}:grade:${a.problemId}`,
+				setId,
+				"grading",
+				"queued",
+				`Grading ${i + 1}/${answers.length} — ${set.title}`,
+				{ i: i + 1, n: answers.length },
+			),
+		);
 		const done = (async () => {
-			await Promise.all(answers.map((a) => gradeOne(setId, a.problemId, row)));
-			practiceRuns().delete(row.key);
+			await Promise.all(answers.map((a, i) => gradeOne(setId, a.problemId, gradeRows[i]!))); // 1:1
 		})();
 		return { set, done };
 	}
 
-	/** One grading job — abort/failure drops the grade (answer kept,
-	 *  re-submittable later); success writes it under the set lock. */
+	/** One grading job — its OWN row (key `${setId}:grade:${problemId}`);
+	 *  abort/failure drops the grade (answer kept, re-submittable later);
+	 *  success writes it under the set lock. */
 	async function gradeOne(setId: string, problemId: string, row: RunningPractice): Promise<void> {
 		const controller = row.controller;
 		try {
-			await withPracticeSlot(controller.signal, async () => {
+			await withBgLlmSlot(controller.signal, async () => {
 				if (controller.signal.aborted) return; // dropped — no grade, no error state
+				row.phase = "grading";
 				const set = deps.practiceStore.getSet(setId);
 				if (!set) return;
 				const problem = set.problems.find((p) => p.id === problemId);
@@ -540,7 +520,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 					answer: problem.answer ?? "",
 					signal: controller.signal,
 				});
-				foldUsage(row.usage, "grader", graded.log);
+				row.usage = graded.log;
 				await withSetLock(setId, () => {
 					const cur = deps.practiceStore.getSet(setId);
 					if (!cur) return;
@@ -553,21 +533,34 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		} catch (err) {
 			// Grading failure: the grade simply stays absent (re-submittable).
 			console.error(`[practice] grading failed for ${problemId}:`, isAbortLike(err) ? "aborted" : messageOf(err));
+		} finally {
+			practiceRuns().delete(row.key);
 		}
 	}
 
 	// ── abort + delete ───────────────────────────────────────────────────
 
-	/** True-cancellation for a set's live runs + the persisted "Aborted"
-	 *  marks. Idempotent by design (aborting with nothing in flight is
-	 *  success — the blob is gone either way), like abortExtraction. */
+	/** True-cancellation for ONE row (the dock's abort — id = the row
+	 *  key). Routes by shape: a gen-row abort kills THAT problem only
+	 *  (siblings continue; the failure-isolation catch writes "Aborted");
+	 *  a partition-row abort ends the whole run (the partitioner's catch
+	 *  writes the set error); a grade-row abort drops that grade (the
+	 *  answer stays, re-submittable). Idempotent by design (a gone row
+	 *  is success — the blob is gone either way). */
+	function abortPracticeRow(key: string): void {
+		const row = practiceRuns().get(key);
+		if (!row) return;
+		row.controller.abort();
+		practiceRuns().delete(key);
+	}
+
+	/** SET-level abort — composes from row aborts (every live row of the
+	 *  set) plus the synchronous persisted "Aborted" marks (a set-abort's
+	 *  verdict must stand before the generators' settles re-read it).
+	 *  Idempotent like abortExtraction. */
 	function abortPractice(setId: string): void {
-		for (const key of [`${setId}:generation`, `${setId}:grading`]) {
-			const row = practiceRuns().get(key);
-			if (row) {
-				row.controller.abort();
-				practiceRuns().delete(key);
-			}
+		for (const key of [...practiceRuns().keys()]) {
+			if (key.startsWith(`${setId}:`)) abortPracticeRow(key);
 		}
 		const set = deps.practiceStore.getSet(setId);
 		if (!set) return;
@@ -602,6 +595,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		createProblemSet,
 		submitAnswers,
 		abortPractice,
+		abortPracticeRow,
 		deleteProblemSet,
 	};
 }

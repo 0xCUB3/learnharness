@@ -56,14 +56,19 @@ export interface ActivityExtraction {
 	startedAt: number;
 }
 
-/** A live practice run in the dock's feed — mirrors ActivityExtraction
- *  (kind names which pipeline half: generation or grading). */
+/** A live practice ROW in the dock's feed — per-problem, matching the
+ *  extraction per-chunk pattern (owner ruling, 2026-09-29). id is the
+ *  ROW KEY (`${setId}:partition` | `${setId}:gen:${pid}` |
+ *  `${setId}:grade:${pid}`) — the dock's abort target; problemIndex/
+ *  problemTotal ride when the row belongs to a fan-out. */
 export interface ActivityPractice {
 	id: string;
 	kind: "generation" | "grading";
 	title: string;
 	phase: PracticePhase;
 	startedAt: number;
+	problemIndex?: number;
+	problemTotal?: number;
 }
 
 /** The dock's whole world in one payload: every running process, every view.
@@ -111,11 +116,13 @@ export function activityFeed(): {
 		startedAt: run.startedAt,
 	}));
 	const practice: ActivityPractice[] = practiceStatuses().map((row) => ({
-		id: row.setId,
+		id: row.key,
 		kind: row.kind,
 		title: row.label,
 		phase: row.phase,
 		startedAt: row.startedAt,
+		problemIndex: row.problemIndex,
+		problemTotal: row.problemTotal,
 	}));
 	// oldest-first on last activity: the stable blob order (ISO strings sort chronologically)
 	jobs.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));

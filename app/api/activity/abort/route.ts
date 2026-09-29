@@ -30,7 +30,9 @@ export async function POST(req: Request) {
 	if ((kind !== "job" && kind !== "extraction" && kind !== "turn" && kind !== "practice") || typeof id !== "string" || id === "") {
 		return Response.json({ error: 'Body must be {kind: "job"|"extraction"|"turn"|"practice", id: string}' }, { status: 400 });
 	}
-	if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+	// Practice row keys carry ":" (setId:gen:problemId) — the charset
+	// admits it for every kind (job/turn/extraction ids never use it).
+	if (!/^[A-Za-z0-9:_-]+$/.test(id)) {
 		return Response.json({ error: "Invalid id" }, { status: 400 });
 	}
 
@@ -50,10 +52,11 @@ export async function POST(req: Request) {
 	// kind === "extraction": true cancellation; idempotent (nothing in
 	// flight is success — same dock outcome)
 	if (kind === "practice") {
-		// practice slice 4 (2026-09-29): abort BOTH of a set's live runs
-		// (generation + grading) and mark the persisted "Aborted" state —
-		// idempotent like extraction (nothing in flight is success).
-		practice.abortPractice(id);
+		// practice restructure (owner, 2026-09-29): id is the ROW key —
+		// abort routes by shape (a gen row kills THAT problem only; the
+		// partition row ends the run; a grade row drops that grade).
+		// Idempotent like extraction (nothing in flight is success).
+		practice.abortPracticeRow(id);
 		return Response.json({ ok: true });
 	}
 	abortExtraction(id);

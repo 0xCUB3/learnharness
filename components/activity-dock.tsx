@@ -63,14 +63,18 @@ export interface FeedExtraction {
 	startedAt: number;
 }
 
-/** A live practice run — the set's generation or grading row (practice
- * slice 4). id is the SET id (the abort seam is set-keyed). */
+/** A live practice row — per-problem (owner ruling, 2026-09-29),
+ *  matching the extraction per-chunk pattern. id is the ROW KEY
+ *  (setId:partition | setId:gen:pid | setId:grade:pid) — the abort
+ *  seam is row-keyed; the label carries the i/N. */
 export interface FeedPractice {
 	id: string;
 	kind: "generation" | "grading";
 	title: string;
 	phase: string;
 	startedAt: number;
+	problemIndex?: number;
+	problemTotal?: number;
 }
 
 export interface ActivityFeed {
@@ -251,7 +255,7 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 	}
 	for (const run of feed.practice ?? []) {
 		blobs.push({
-			id: run.id, // the SET id — practice abort is set-keyed
+			id: run.id, // the ROW key — practice abort is row-keyed
 			process: "practice",
 			practiceKind: run.kind,
 			phase: run.phase,
