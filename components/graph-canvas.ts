@@ -623,6 +623,10 @@ export class GraphCanvasRenderer {
 	private builtVersion = -1; // version the cache was built at
 	private nodesPath: Path2D | null = null;
 	private shaftsPath: Path2D = new Path2D();
+	/** Supports shafts draw THINNER (owner, 2026-09-29): their own path +
+	 *  stroke pass at edgeWidth × supportsWidth. Arrowheads share the one
+	 *  heads path at full geometry (owner pick: shaft only). */
+	private supportsShaftsPath: Path2D = new Path2D();
 	private headsPath: Path2D = new Path2D();
 	private regionCanvas: HTMLCanvasElement | null = null;
 	/** World rect the bitmap covers (drawImage target coords). */
@@ -1232,11 +1236,14 @@ export class GraphCanvasRenderer {
 		// Edge shafts + arrowheads: tip lands on the target disc edge. Both
 		// relation types draw the same arrow for now — the double-shaft
 		// glyph was rejected (2026-09-15); differentiation is pending a new
-		// approach. CanvasEdge.type is plumbed for whatever comes next —
-		// except the supports draw toggle (owner, 2026-09-29): off skips
-		// the paths entirely (a draw-only hide; the sim still feels them).
+		// approach. Two owner rulings 2026-09-29: the supports draw toggle
+		// (off skips the paths entirely — a draw-only hide; the sim still
+		// feels them) and the supports SHAFT thickness split (supports get
+		// their own path stroked at edgeWidth × supportsWidth; heads stay
+		// full-geometry in the one shared path).
 		const arrowLen = settings.arrowLength;
 		const shafts = new Path2D();
+		const supportsShafts = new Path2D();
 		const heads = new Path2D();
 		for (const e of data.edges) {
 			if (!settings.showSupports && e.type === "supports") continue;
@@ -1246,14 +1253,16 @@ export class GraphCanvasRenderer {
 			if (!a || !b) continue;
 			const g = arrowGeometry(a, b, nodeR, nodeR, arrowLen);
 			if (!g) continue;
-			shafts.moveTo(g.shaftFrom.x, g.shaftFrom.y);
-			shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
+			const path = e.type === "supports" ? supportsShafts : shafts;
+			path.moveTo(g.shaftFrom.x, g.shaftFrom.y);
+			path.lineTo(g.shaftTo.x, g.shaftTo.y);
 			heads.moveTo(g.tip.x, g.tip.y);
 			heads.lineTo(g.left.x, g.left.y);
 			heads.lineTo(g.right.x, g.right.y);
 			heads.closePath();
 		}
 		this.shaftsPath = shafts;
+		this.supportsShaftsPath = supportsShafts;
 		this.headsPath = heads;
 
 		// Cluster regions are NOT built here: they rasterize into their own
@@ -1620,12 +1629,20 @@ export class GraphCanvasRenderer {
 
 		// 3. Edges: shafts + arrowheads from cached paths; width constant on
 		// screen (÷ k), geometry in world units (scales with the graph).
+		// Supports shafts: a second, thinner stroke (owner, 2026-09-29) —
+		// heads share the one fill at full geometry (shaft-only ruling).
+		// A true 0-width stroke is undefined on canvas: the ratio's 0 end
+		// floors to a hairline (0.5px on screen — hiding is the toggle's).
 		if (settings.edgeWidth > 0) {
 			ctx.strokeStyle = data.colors.edge;
 			ctx.fillStyle = data.colors.edge;
 			ctx.lineWidth = settings.edgeWidth / k;
 			ctx.lineCap = "round";
 			ctx.stroke(this.shaftsPath);
+			if (settings.showSupports) {
+				ctx.lineWidth = Math.max(settings.edgeWidth * settings.supportsWidth, 0.5) / k;
+				ctx.stroke(this.supportsShaftsPath);
+			}
 			ctx.fill(this.headsPath);
 		}
 

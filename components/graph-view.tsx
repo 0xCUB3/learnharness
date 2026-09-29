@@ -53,7 +53,8 @@
  * five sliders (node size, edge width, arrowhead length, label size, the
  * zoom threshold), the supports-edges draw toggle (2026-09-29: off hides
  * supports edges from the canvas — draw-only; physics and detail cards
- * still see them), and the cluster-labels checkbox. SERVER-persisted
+ * still see them) with its shaft-thickness slider (0–1 × Edge width,
+ * default 0.5; heads stay full), and the cluster-labels checkbox. SERVER-persisted
  * (data/render-settings.json via /api/graph/render-settings): loaded
  * once after mount, saved debounced on every user change — one source
  * of truth shared by every browser. The label-zoom slider is log-scaled
@@ -532,7 +533,7 @@ function GraphSettingsControl({
 							/>
 							{/* Supports draw toggle (owner, 2026-09-29): hides the single-line
 							    supports edges from the canvas — follows (⟹-meant) stay. Draw-only:
-							    physics + detail cards still see them. Last row of the FIRST
+							    physics + detail cards still see them. Last rows of the FIRST
 							    section; the border-t below starts Regions. */}
 							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
 								<span>Supports edges</span>
@@ -544,6 +545,21 @@ function GraphSettingsControl({
 									className="accent-primary"
 								/>
 							</label>
+							{/* Supports shaft thickness (owner, 2026-09-29): a LINEAR 0–1
+							    ratio of Edge width (not a ladder — it's a ratio; default 0.5
+							    dead-center anyway, step 0.1 = 11 stops). Grayed out by the
+							    toggle above (the Dilation pattern); 0 floors to a hairline in
+							    the renderer — arrowheads never scale (shaft-only ruling). */}
+							<SettingSlider
+								label="Supports thickness"
+								disabled={!settings.showSupports}
+								min={0}
+								max={1}
+								step={0.1}
+								value={settings.supportsWidth}
+								display={`${Math.round(settings.supportsWidth * 100) / 100}×`}
+								onChange={(v) => changeSettings((cur) => ({ ...cur, supportsWidth: v }))}
+							/>
 						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
 						    dropdown for the bitmap resolution (it's a discrete
 						    choice, not a free number). Server-persisted like the
