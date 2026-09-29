@@ -294,7 +294,7 @@ describe("formatting doctrine pins", () => {
 	it("GENERATOR_DOCTRINE carries the FORMATTING bullet verbatim (Markdown + LaTeX + fenced code + tables/lists)", () => {
 		assert.ok(
 			GENERATOR_DOCTRINE.includes(
-				"- FORMATTING: your statement, solution, and rubric are rendered as full Markdown — use everything it offers. Mathematics is always LaTeX: inline as $…$, display as $$…$$ on its own lines. Code, pseudocode, and formal systems live in fenced code blocks with a language tag; identifiers and symbols inline as `code`. Use tables for parallel structure and comparisons, lists for enumerations. Prose-only renderings of mathematical or structured content are a defect: if a sentence carries an equation, a derivation, or a piece of code, format it as what it is.",
+				"- FORMATTING: your statement, solution, and rubric are rendered as full Markdown — use everything it offers. Mathematics is always LaTeX: inline as \\(…\\), display as \\[…\\] on its own lines — a bare $ is literal currency and never starts math. Inside math, use LaTeX commands for symbols, not unicode stand-ins (they fail to render). Code, pseudocode, and formal systems live in fenced code blocks with a language tag; identifiers and symbols inline as `code`. Use tables for parallel structure and comparisons, lists for enumerations. Skip headers — at this size they are pointless decoration; structure with paragraphs, bold labels, and lists (a genuinely long derivation may earn one). Prose-only renderings of mathematical or structured content are a defect: if a sentence carries an equation, a derivation, or a piece of code, format it as what it is.",
 			),
 			"the exact FORMATTING sentence",
 		);
@@ -312,7 +312,7 @@ describe("formatting doctrine pins", () => {
 	it("GRADER_INSTRUCTIONS carries the formatting paragraph before the OUTPUT section", () => {
 		assert.ok(
 			GRADER_INSTRUCTIONS.includes(
-				"Feedback renders as full Markdown. Mathematics is always LaTeX — inline as $…$, display as $$…$$ on its own lines. Code in fenced blocks with a language tag, identifiers inline as `code`. Lists and tables wherever they carry structure. Name the failed recall and teach the boundary in properly formatted prose, not plain text.",
+				"Feedback renders as full Markdown. Mathematics is always LaTeX — inline as \\(…\\), display as \\[…\\] on its own lines (a bare $ is literal currency). Inside math, LaTeX commands for symbols, not unicode stand-ins. Code in fenced blocks with a language tag, identifiers inline as `code`. Lists and tables wherever they carry structure; no headers — feedback is short-form, structure it with paragraphs and bold labels. Name the failed recall and teach the boundary in properly formatted prose, not plain text.",
 			),
 			"the exact grader paragraph",
 		);

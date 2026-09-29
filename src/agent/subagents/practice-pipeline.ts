@@ -232,10 +232,11 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 	//   1. ONCE PER PROCESS (globalThis flag) — an instance could otherwise
 	//      evaluate against a registry whose fresh row it can't observe
 	//      (dev route bundles, restart paths).
-	//   2. GRACE WINDOW (120s over updatedAt ?? createdAt) — a live run
-	//      saves at every phase/problem transition, so its heartbeat is
-	//      structurally never 120s stale; a true orphan is minutes stale at
-	//      the next boot.
+	//   2. GRACE WINDOW (120s over updatedAt ?? createdAt) — a live run's
+	//      WATCHDOG re-stamps the file every 30s (cross-worker liveness —
+	//      the registry is NOT shared between dev route workers), so a
+	//      live run is structurally never 120s stale; a true crash stops
+	//      the beats and is minutes stale at the next boot.
 	//   3. Live-row check (globalThis-shared registry) as before.
 	const sweepFlag = globalThis as { __lhPracticeSweepDone?: boolean };
 	if (!sweepFlag.__lhPracticeSweepDone) {
@@ -275,6 +276,26 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 	): Promise<void> {
 		const controller = partitionRow.controller;
 
+		// PERSISTENT HEARTBEAT (owner live test #2, 2026-09-29 — the sweep
+		// stamped LIVE runs again): dev serves routes from workers that do
+		// NOT share this process's registry, so memory liveness cannot
+		// protect a cross-worker sweep, and a long-running last problem can
+		// exceed the 120s grace between store writes. The watchdog
+		// re-stamps updatedAt on the FILE every 30s while THIS run is live
+		// (4-beat tolerance inside the grace window) — any process's sweep
+		// then sees a fresh heartbeat; a true crash stops the beats and the
+		// orphan goes stale honestly.
+		const beat = setInterval(() => {
+			void withSetLock(set.id, () => {
+				const cur = deps.practiceStore.getSet(set.id);
+				if (!cur) return;
+				if (cur.status !== "partitioning" && cur.status !== "generating") return;
+				deps.practiceStore.saveSet(cur);
+			});
+		}, 30_000);
+		beat.unref?.();
+
+		try {
 		// Stage 1 — the partitioner (its OWN dock row; acquires a shared
 		// permit like every background LLM job).
 		let partitions: Array<{ chains: string[] }>;
@@ -393,6 +414,9 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 			cur.error = undefined;
 			deps.practiceStore.saveSet(cur);
 		});
+		} finally {
+			clearInterval(beat);
+		}
 	}
 
 	/**

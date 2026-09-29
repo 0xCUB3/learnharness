@@ -35,7 +35,8 @@ export function PracticeListBody({
 	onNew: () => void;
 }) {
 	return (
-		<div className="mx-auto flex w-full max-w-3xl flex-col gap-3 p-6" data-testid="practice-list">
+		<div className="h-dvh overflow-y-auto" data-testid="practice-list-scroll">
+			<div className="mx-auto flex w-full max-w-3xl flex-col gap-3 p-6" data-testid="practice-list">
 			<div className="flex items-center justify-between">
 				<h1 className="font-title text-3xl tracking-tight">Practice</h1>
 				<button
@@ -96,6 +97,7 @@ export function PracticeListBody({
 					);
 				})}
 			</div>
+		</div>
 		</div>
 	);
 }

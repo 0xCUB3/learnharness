@@ -85,7 +85,8 @@ export function PracticeExamBody({
 	const answerable = set.problems.filter((p) => !p.grade);
 	const anyDraft = answerable.some((p) => (drafts[p.id] ?? p.answer ?? "") !== "");
 	return (
-		<div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6" data-testid="practice-exam">
+		<div className="h-dvh overflow-y-auto" data-testid="practice-exam-scroll">
+			<div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6" data-testid="practice-exam">
 			<div className="flex flex-col gap-1">
 				<h1 className="font-title text-3xl tracking-tight">{set.title}</h1>
 				<p className="text-xs text-muted-foreground/80" data-testid="practice-exam-levels">
@@ -177,6 +178,7 @@ export function PracticeExamBody({
 					)}
 				</div>
 			)}
+			</div>
 		</div>
 	);
 }
