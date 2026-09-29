@@ -322,15 +322,17 @@ export function ChainTableBody({
 							// top (header) and bottom. Never on individual rows.
 							className="relative border-b border-border/60"
 						>
-							{/* The TREE THREAD (owner round 5, trial): a vertical guide
-							    dropping from the cluster's expander arrow down through
-							    its chain rows — the arrow's column (center 37px: pl-3 +
-							    checkbox 14 + gap 4 + half the 14px expander), from the
-							    arrow's own height to the last row's middle. */}
+							{/* The TREE THREAD (owner rounds 5–6): a vertical guide at the
+							    expander arrow's column (center 37px: pl-3 + checkbox 14 +
+							    gap 4 + half the 14px expander), BRACKETED by checkbox
+							    bottom edges — it starts at the cluster row's own checkbox
+							    bottom (top-[23px], leaving the arrow's stroke a visible
+							    gap, live-measured) and terminates exactly at the LAST
+							    checkbox bottom (bottom-[8px] = 9px from the border box minus the 1px group rule, measured). */}
 							{open && group.chains.length > 0 && (
 								<div
 									data-testid={`cluster-thread-${group.key}`}
-									className="pointer-events-none absolute bottom-3.5 left-[37px] top-4 w-px bg-border/50"
+									className="pointer-events-none absolute bottom-[8px] left-[37px] top-[23px] w-px bg-border/50"
 								/>
 							)}
 							{/* The cluster row: birth-session group header. */}
@@ -368,13 +370,15 @@ export function ChainTableBody({
 									const selectedInChain = memberIds.filter((id) => selection.has(id)).length;
 									return (
 										<div key={chain.id} data-testid={`chain-block-${chain.id}`} className="relative">
-												{/* The chain's own thread: from its expander arrow down
-												    through the statement rows (center 73px: pl-12 +
-												    checkbox 14 + gap 4 + half the expander). */}
+												{/* The chain's own thread (owner rounds 5–6): the same
+												    bracket law one level down — at the chain arrow's column
+												    (center 73px), from the chain row's checkbox bottom
+												    (top-[22px]) to the LAST statement row's checkbox bottom
+												    (bottom-[8px]) — live-measured anchors. */}
 												{chainOpen && memberIds.length > 0 && (
 													<div
 														data-testid={`chain-thread-${chain.id}`}
-														className="pointer-events-none absolute bottom-3.5 left-[73px] top-3.5 w-px bg-border/50"
+														className="pointer-events-none absolute bottom-[8px] left-[73px] top-[22px] w-px bg-border/50"
 													/>
 												)}
 											<div

@@ -154,6 +154,11 @@ describe("ChainTableBody — THE shared TopBar + the lines law (owner, round 2)"
 		// the columns: the cluster arrow sits at 37px, the chain arrow at 73px
 		assert.ok(open.includes("left-[37px]"), "thread at the cluster arrow's column");
 		assert.ok(open.includes("left-[73px]"), "thread at the chain arrow's column");
+		// the BRACKET LAW (owner round 6): each thread runs from its parent
+		// row's checkbox bottom edge (a visible gap below the arrow's stroke)
+		// to the LAST child row's checkbox bottom edge — live-measured anchors
+		assert.ok(open.includes("bottom-[8px] left-[37px] top-[23px]"), "cluster thread bracketed by checkbox bottoms");
+		assert.ok(open.includes("top-[22px]") && open.includes("bottom-[8px]"), "chain thread bracketed by checkbox bottoms");
 	});
 });
 
