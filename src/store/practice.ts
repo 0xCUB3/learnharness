@@ -73,7 +73,21 @@ const isPropositions = (v: unknown): boolean => {
 
 const SET_STATUSES = new Set(["partitioning", "generating", "ready", "error"]);
 const PROBLEM_STATUSES = new Set(["generating", "ready", "error"]);
-const VERDICTS = new Set(["solid", "partial", "missed"]);
+function isGrade(g: unknown): boolean {
+	if (typeof g !== "object" || g === null) return false;
+	const v = g as Record<string, unknown>;
+	// Integer 0–10 + non-empty reasoning (one-attempt redesign, owner
+	// 2026-09-29: the grader scores; verdicts + prose feedback retired).
+	return (
+		typeof v.score === "number" &&
+		Number.isInteger(v.score) &&
+		v.score >= 0 &&
+		v.score <= 10 &&
+		typeof v.reasoning === "string" &&
+		v.reasoning.length > 0 &&
+		typeof v.gradedAt === "string"
+	);
+}
 
 const isProblem = (v: unknown): boolean => {
 	if (typeof v !== "object" || v === null) return false;
@@ -83,19 +97,7 @@ const isProblem = (v: unknown): boolean => {
 	if (typeof p.status !== "string" || !PROBLEM_STATUSES.has(p.status)) return false;
 	if (p.error !== undefined && typeof p.error !== "string") return false;
 	if (p.answer !== undefined && typeof p.answer !== "string") return false;
-	if (p.grade !== undefined) {
-		const g = p.grade as Record<string, unknown>;
-		if (
-			typeof g !== "object" ||
-			g === null ||
-			typeof g.verdict !== "string" ||
-			!VERDICTS.has(g.verdict) ||
-			typeof g.feedback !== "string" ||
-			typeof g.gradedAt !== "string"
-		) {
-			return false;
-		}
-	}
+	if (p.grade !== undefined && !isGrade(p.grade)) return false;
 	return true;
 };
 

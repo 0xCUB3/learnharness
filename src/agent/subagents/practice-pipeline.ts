@@ -34,10 +34,12 @@
  * background failure paths settle the persisted record (never an
  * unhandled rejection); aborts mark "Aborted".
  *
- * GRADING FAILURE DISCIPLINE: an aborted or failed grade leaves the
- * answer in place, the grade absent — the problem is re-submittable
- * later (a new grading job). A second submitAnswers while grading is in
- * flight is rejected (single live grading run per set).
+ * ONE ATTEMPT PER PROBLEM (owner ruling 2026-09-29): a problem accepts
+ * a single submission — once `answer` is set the problem is done, the
+ * route refuses re-submission. Grades are per-problem: submitting
+ * another problem while one grades is fine (the shared LLM pool bounds
+ * parallelism); only the SAME problem's live grade row blocks (which
+ * the one-attempt rule already prevents client-side).
  */
 
 import type { GraphStore, PracticeStore } from "../../core/ports.ts";
@@ -476,8 +478,10 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		answers: Array<{ problemId: string; text: string }>,
 	): Promise<{ set: ProblemSet; done: Promise<void> }> {
 		agents.refuseIfStagesUnready(); // grading needs its engine — refuse BEFORE saving answers
-		for (const key of practiceRuns().keys()) {
-			if (key.startsWith(`${setId}:grade:`)) throw new BadAnswersError("a grading run is already in flight for this set");
+		for (const a of answers) {
+			if (practiceRuns().has(`${setId}:grade:${(a as { problemId?: unknown }).problemId}`)) {
+				throw new BadAnswersError("this problem's grade is already in flight");
+			}
 		}
 		const set = await withSetLock(setId, () => {
 			const cur = deps.practiceStore.getSet(setId);
@@ -488,7 +492,9 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 				if (typeof a.problemId !== "string" || !ids.has(a.problemId)) throw new BadAnswersError(`unknown problem id`);
 				if (typeof a.text !== "string" || a.text.trim() === "") throw new BadAnswersError("answers must be non-empty text");
 				const p = cur.problems.find((q) => q.id === a.problemId)!;
-				if (p.grade) throw new BadAnswersError(`problem ${a.problemId} is already graded`);
+				// ONE attempt (owner 2026-09-29): an existing answer ends the
+				// problem — graded or not, it is never re-submitted.
+				if (p.answer !== undefined) throw new BadAnswersError(`problem ${a.problemId} was already answered`);
 			}
 			for (const a of answers) {
 				const p = cur.problems.find((q) => q.id === a.problemId)!;
@@ -550,12 +556,13 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 					if (!cur) return;
 					const p = cur.problems.find((q) => q.id === problemId);
 					if (!p || p.grade) return;
-					p.grade = { verdict: graded.verdict, feedback: graded.feedback, gradedAt: new Date().toISOString() };
+					p.grade = { score: graded.score, reasoning: graded.reasoning, gradedAt: new Date().toISOString() };
 					deps.practiceStore.saveSet(cur);
 				});
 			});
 		} catch (err) {
-			// Grading failure: the grade simply stays absent (re-submittable).
+			// Grading failure: the grade simply stays absent (the answer
+			// stands — one attempt; the UI shows "grade interrupted").
 			console.error(`[practice] grading failed for ${problemId}:`, isAbortLike(err) ? "aborted" : messageOf(err));
 		} finally {
 			practiceRuns().delete(row.key);

@@ -200,7 +200,7 @@ describe("PracticeListBody — the set list", () => {
 	it("graded count appears; empty list states it honestly", () => {
 		const s = set({
 			problems: [
-				readyProblem("pp_1", ["n3"], { grade: { verdict: "solid", feedback: "f", gradedAt: "2026-09-29T13:00:00.000Z" } }),
+				readyProblem("pp_1", ["n3"], { answer: "a", grade: { score: 9, reasoning: "r", gradedAt: "2026-09-29T13:00:00.000Z" } }),
 				readyProblem("pp_2", ["n1"]),
 			],
 		});
@@ -251,9 +251,9 @@ describe("PracticeExamBody — exam states", () => {
 		drafts: {} as Record<string, string>,
 		onDraft: () => {},
 		onSubmit: () => {},
-		submitting: false,
-		submitError: null as string | null,
-		grading: false,
+		submittingId: null as string | null,
+		submitErrors: {} as Record<string, string>,
+		liveGradeIds: new Set<string>(),
 	};
 
 	it("generating: numbered stubs with the placeholder — propositions NEVER surface", () => {
@@ -271,12 +271,19 @@ describe("PracticeExamBody — exam states", () => {
 		assert.ok(!html.includes("Each person owns themself"));
 		assert.ok(!html.includes('data-testid="answer-pp_1"'), "no answer box for a stub");
 		// No submit while generating.
-		assert.ok(!html.includes('data-testid="practice-submit"'));
+		assert.ok(!html.includes('data-testid="practice-submit-'));
 	});
 
-	it("the header carries the levels line (named levels, owner 2026-09-29)", () => {
+	it("the top bar carries the title + sidebar toggle; the body carries the levels line (owner, UI round 2026-09-29)", () => {
 		const s = set({ problems: [readyProblem("pp_1", ["n3"])] });
 		const html = renderToStaticMarkup(<PracticeExamBody set={s} {...examBase} />);
+		// The chat-pattern top bar: drag surface, toggle slot, truncating title.
+		assert.ok(html.includes("lh-drag"));
+		assert.ok(html.includes('aria-label="Open sidebar"'));
+		assert.ok(html.includes('data-testid="practice-exam-title"'));
+		assert.ok(html.includes("Ethics lesson"));
+		// The internal scroller (the sidebar stays fixed when this page scrolls).
+		assert.ok(html.includes('data-testid="practice-exam-scroll"'));
 		assert.ok(html.includes('data-testid="practice-exam-levels"'));
 		assert.ok(html.includes("Direct exercise · Adjacent context · Theory"), "the fixture's rung 2 / cue 1 / theory");
 	});
@@ -286,37 +293,67 @@ describe("PracticeExamBody — exam states", () => {
 		const gated = renderToStaticMarkup(<PracticeExamBody set={s} {...examBase} />);
 		assert.ok(gated.includes("self-ownership")); // markdown strong rendered
 		assert.ok(gated.includes('data-testid="answer-pp_1"'));
-		assert.ok(gated.includes('data-testid="practice-submit"'));
+		// PER-PROBLEM submit (owner 2026-09-29): the button lives under the
+		// box, gated on a draft; there is NO global submit anywhere.
+		assert.ok(gated.includes('data-testid="practice-submit-pp_1"'));
 		assert.ok(gated.includes('disabled=""'), "empty drafts — submit disabled");
 		const filled = renderToStaticMarkup(<PracticeExamBody set={s} {...examBase} drafts={{ pp_1: "because…" }} />);
-		assert.ok(!filled.includes('data-testid="practice-submit-error"'));
+		assert.ok(!filled.includes('disabled=""'), "a draft arms the submit");
+		assert.ok(!filled.includes('data-testid="practice-submit-error-pp_1"'));
 	});
 
-	it("graded: answer read-only, verdict chip + feedback + solution + rubric revealed", () => {
+	it("submitted + graded: answer read-only, score + reasoning + solution revealed, rubric collapsed", () => {
 		const s = set({
 			problems: [
 				readyProblem("pp_1", ["n3"], {
 					answer: "because arguing is intentional action",
-					grade: { verdict: "partial", feedback: "Half the target came to mind.", gradedAt: "2026-09-29T13:00:00.000Z" },
+					grade: { score: 6, reasoning: "Half the target came to mind.", gradedAt: "2026-09-29T13:00:00.000Z" },
 				}),
 				readyProblem("pp_2", ["n1"]),
 			],
 		});
 		const html = renderToStaticMarkup(<PracticeExamBody set={s} {...examBase} />);
-		// The locked answer.
+		// The locked answer — one attempt, done.
 		assert.ok(html.includes("because arguing is intentional action"));
-		assert.ok(/readOnly/.test(html), "the graded answer is read-only");
-		// The reveal.
-		assert.ok(html.includes('data-testid="reveal-pp_1"'));
-		assert.ok(html.includes("partial"));
-		assert.ok(html.includes('data-testid="feedback-pp_1"'));
+		assert.ok(/readOnly/.test(html), "the submitted answer is read-only");
+		assert.ok(!html.includes('data-testid="practice-submit-pp_1"'), "no re-submission");
+		// The grade: mono score + brief reasoning.
+		assert.ok(html.includes('data-testid="grade-pp_1"'));
+		assert.ok(html.includes("6/10"));
+		assert.ok(html.includes('data-testid="reasoning-pp_1"'));
 		assert.ok(html.includes("Half the target came to mind."));
+		// The instant reveal.
+		assert.ok(html.includes('data-testid="reveal-pp_1"'));
 		assert.ok(html.includes('data-testid="solution-pp_1"'));
 		assert.ok(html.includes("The model solution."));
+		// The rubric rides a collapsed <details> (owner 2026-09-29).
+		assert.ok(html.includes("<details"));
+		assert.ok(!html.includes("<details open"), "collapsed by default");
 		assert.ok(html.includes('data-testid="rubric-pp_1"'));
 		assert.ok(html.includes("names self-ownership"));
-		// Ungraded sibling stays answerable.
+		// Unanswered sibling stays answerable.
 		assert.ok(html.includes('data-testid="answer-pp_2"'));
+		assert.ok(html.includes('data-testid="practice-submit-pp_2"'));
+	});
+
+	it("submitted, grade pending: the reveal shows instantly, grading spins per problem", () => {
+		const s = set({
+			problems: [readyProblem("pp_1", ["n3"], { answer: "because arguing is intentional action" })],
+		});
+		const live = renderToStaticMarkup(
+			<PracticeExamBody set={s} {...examBase} liveGradeIds={new Set(["pp_1"])} />,
+		);
+		// Instant reveal — the solution needs no grade.
+		assert.ok(live.includes('data-testid="solution-pp_1"'));
+		assert.ok(live.includes('data-testid="rubric-pp_1"'));
+		// The live spinner for exactly this problem.
+		assert.ok(live.includes('data-testid="grading-pp_1"'));
+		assert.ok(live.includes("Grading"));
+		assert.ok(!live.includes('data-testid="grade-pp_1"'), "no score yet");
+		// No live row (dropped grade): honest, no eternal spinner.
+		const dropped = renderToStaticMarkup(<PracticeExamBody set={s} {...examBase} />);
+		assert.ok(dropped.includes('data-testid="grade-interrupted-pp_1"'));
+		assert.ok(!dropped.includes('data-testid="grading-pp_1"'));
 	});
 
 	it("a failed problem says so; a failed set says so", () => {

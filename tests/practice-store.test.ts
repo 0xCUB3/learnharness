@@ -79,13 +79,13 @@ describe("the practice store", () => {
 			rubric: "- names the performative contradiction",
 			status: "ready",
 			answer: "Because…",
-			grade: { verdict: "solid", feedback: "Named it.", gradedAt: "2026-09-29T13:00:00.000Z" },
+			grade: { score: 9, reasoning: "Named it.", gradedAt: "2026-09-29T13:00:00.000Z" },
 		});
 		set.status = "ready";
 		practiceStore.saveSet(set);
 		const reread = practiceStore.getSet(set.id);
 		assert.equal(reread?.status, "ready");
-		assert.equal(reread?.problems[0]?.grade?.verdict, "solid");
+		assert.equal(reread?.problems[0]?.grade?.score, 9);
 	});
 
 	it("listSets returns createdAt-descending and skips corrupt/unparseable files", () => {
@@ -157,17 +157,21 @@ describe("isProblemSet", () => {
 		assert.ok(isProblemSet(minimal));
 	});
 
-	it("grade verdicts are the three-level union", () => {
-		const withGrade = (verdict: string): unknown => ({
+	it("grades are integer scores 0–10 with non-empty reasoning (one-attempt redesign)", () => {
+		const withGrade = (score: unknown, reasoning = "why"): unknown => ({
 			...init(),
 			id: "ps_valid",
 			problems: [
-				{ id: "pp_1", chains: [], statement: "", solution: "", rubric: "", status: "ready", grade: { verdict, feedback: "", gradedAt: "t" } },
+				{ id: "pp_1", chains: [], statement: "", solution: "", rubric: "", status: "ready", grade: { score, reasoning, gradedAt: "t" } },
 			],
 		});
-		assert.ok(isProblemSet(withGrade("solid")));
-		assert.ok(isProblemSet(withGrade("partial")));
-		assert.ok(isProblemSet(withGrade("missed")));
-		assert.ok(!isProblemSet(withGrade("excellent")));
+		assert.ok(isProblemSet(withGrade(0)));
+		assert.ok(isProblemSet(withGrade(10)));
+		assert.ok(!isProblemSet(withGrade(11)), "above the range");
+		assert.ok(!isProblemSet(withGrade(-1)), "below the range");
+		assert.ok(!isProblemSet(withGrade(7.5)), "fractional scores are refused");
+		assert.ok(!isProblemSet(withGrade("9")), "string scores are refused");
+		assert.ok(!isProblemSet(withGrade(9, "")), "empty reasoning is refused");
+		assert.ok(!isProblemSet({ ...init(), id: "ps_valid", problems: [{ id: "pp_1", chains: [], statement: "", solution: "", rubric: "", status: "ready", grade: { verdict: "solid", feedback: "legacy", gradedAt: "t" } }] }), "legacy verdict grades fail (wipe regime)");
 	});
 });

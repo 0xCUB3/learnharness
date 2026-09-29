@@ -113,16 +113,16 @@ export type ProblemSetStatus = "partitioning" | "generating" | "ready" | "error"
  *  generator submits. */
 export type ProblemStatus = "generating" | "ready" | "error";
 
-/** The grader's three-level verdict (feedback-only; nothing derives from
- *  it — no understanding writes, owner 2026-09-29). */
-export type GradeVerdict = "solid" | "partial" | "missed";
-
-/** The grading job's deliverable, stored on the problem record. */
+/** The grading job's deliverable (owner, 2026-09-29 — one attempt per
+ * problem; the grader scores, it does not coach in prose): an integer
+ * score against the pre-written rubric plus a minimal justification.
+ * Nothing derives from it — no understanding writes. */
 export interface ProblemGrade {
-	verdict: GradeVerdict;
-	/** What actually mattered: the failed recall named, the boundary
-	 *  taught — against the pre-written solution + rubric. */
-	feedback: string;
+	/** 0–10, integer. */
+	score: number;
+	/** Why this score — one or two sentences: which rubric points were
+	 * met or missed, and which proposition failed to come to mind. */
+	reasoning: string;
 	gradedAt: string;
 }
 
@@ -151,7 +151,7 @@ export interface Problem {
 	/** The learner's answer, once submitted (dictation-first — thinking
 	 *  out loud is the primary answering mode). */
 	answer?: string;
-	/** The grading job's verdict, once it lands. */
+	/** The grader's score + reasoning, once it lands. */
 	grade?: ProblemGrade;
 }
 

@@ -233,27 +233,27 @@ describe("runGrader", () => {
 		answer: "Well, if I'm arguing at all, I must own myself…",
 	};
 
-	it("returns the verdict + feedback with its step log", async () => {
+	it("returns the score + reasoning with its step log", async () => {
 		const agents = createPracticeAgents({
-			grader: submitModel("submit_grade", { verdict: "solid", feedback: "The recall happened." }),
+			grader: submitModel("submit_grade", { score: 9, reasoning: "The recall happened." }),
 		});
 		const out = await agents.runGrader(graderInput);
-		assert.equal(out.verdict, "solid");
-		assert.equal(out.feedback, "The recall happened.");
+		assert.equal(out.score, 9);
+		assert.equal(out.reasoning, "The recall happened.");
 		assert.ok(out.log.model);
 		assert.equal(out.log.steps.length, 1);
 	});
 
-	it("schema-rejects an off-union verdict and retries", async () => {
+	it("schema-rejects an out-of-range score and retries", async () => {
 		const agents = createPracticeAgents({
 			grader: retryModel(
 				"submit_grade",
-				{ verdict: "excellent", feedback: "…" },
-				{ verdict: "partial", feedback: "Half the target came to mind." },
+				{ score: 12, reasoning: "…" },
+				{ score: 6, reasoning: "Half the target came to mind." },
 			),
 		});
 		const out = await agents.runGrader(graderInput);
-		assert.equal(out.verdict, "partial");
+		assert.equal(out.score, 6);
 		assert.equal(out.log.steps.length, 2);
 	});
 
@@ -312,7 +312,7 @@ describe("formatting doctrine pins", () => {
 	it("GRADER_INSTRUCTIONS carries the formatting paragraph before the OUTPUT section", () => {
 		assert.ok(
 			GRADER_INSTRUCTIONS.includes(
-				"Feedback renders as full Markdown. Mathematics is always LaTeX — inline as \\(…\\), display as \\[…\\] on its own lines (a bare $ is literal currency). Inside math, LaTeX commands for symbols, not unicode stand-ins. Code in fenced blocks with a language tag, identifiers inline as `code`. Lists and tables wherever they carry structure; no headers — feedback is short-form, structure it with paragraphs and bold labels. Name the failed recall and teach the boundary in properly formatted prose, not plain text.",
+				"The reasoning is plain prose, one or two sentences: which rubric points were met or missed and, when something failed, WHICH proposition failed to come to mind. Mathematics is LaTeX — inline as \\(…\\), display as \\[…\\] (a bare $ is literal currency); no headers, no lists — minimal is the standard.",
 			),
 			"the exact grader paragraph",
 		);

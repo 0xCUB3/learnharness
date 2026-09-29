@@ -152,7 +152,7 @@ function echoGenerator(count = 24, failTargets: string[] = []): PiEngine {
 	return fauxEngine(Array.from({ length: count }, () => factory));
 }
 
-/** A grader whose verdict encodes in the answer text ("solid" → solid). */
+/** A grader whose score encodes in the answer text ("solid" → 9, else 6). */
 function echoGrader(count: number): PiEngine {
 	const factory: FauxResponseStep = (context) => {
 		const answer = lastUserText(context as never).split("THE LEARNER'S ANSWER\n")[1] ?? "";
@@ -161,8 +161,8 @@ function echoGrader(count: number): PiEngine {
 				fauxToolCall(
 					"submit_grade",
 					{
-						verdict: answer.includes("solid") ? "solid" : "partial",
-						feedback: "The boundary.",
+						score: answer.includes("solid") ? 9 : 6,
+						reasoning: "Which rubric points were met.",
 					} as ToolCall["arguments"],
 					{ id: "grade-call" },
 				),
@@ -521,7 +521,7 @@ describe("createProblemSet (generation)", () => {
 		const gate = new Promise<void>((r) => (release = r));
 		// hold both grades at the model seam
 		const holdSteps: FauxResponseStep[] = Array.from({ length: 2 }, () => () =>
-			gate.then(() => fauxAssistantMessage([fauxToolCall("submit_grade", { verdict: "solid", feedback: "yes" } as ToolCall["arguments"], { id: "gr" })], { stopReason: "toolUse" })),
+			gate.then(() => fauxAssistantMessage([fauxToolCall("submit_grade", { score: 9, reasoning: "yes" } as ToolCall["arguments"], { id: "gr" })], { stopReason: "toolUse" })),
 		);
 		const f = fixture({
 			partitioner: partitionModel([{ chains: ["b"] }, { chains: ["c"] }]),
@@ -554,7 +554,7 @@ describe("createProblemSet (generation)", () => {
 		await sub.done;
 		assert.equal(practiceStatuses().length, 0);
 		const graded = f.practice.store.getSet(set.id)!;
-		assert.ok(graded.problems.every((p) => p.grade?.verdict === "solid"));
+		assert.ok(graded.problems.every((p) => p.grade?.score === 9));
 	});
 
 	it("abort ONE gen row: that problem dies alone, siblings complete, set reaches ready with one errored", async () => {
@@ -600,7 +600,7 @@ describe("createProblemSet (generation)", () => {
 		assert.equal(practiceStatuses().length, 0);
 	});
 
-	it("abort ONE grade row (queued): that grade drops (answer kept, re-submittable), sibling grade lands", async () => {
+	it("abort ONE grade row (queued): that grade drops (answer kept, one attempt — no re-submission), sibling grade lands", async () => {
 		const f = fixture({
 			partitioner: partitionModel([{ chains: ["b"] }, { chains: ["c"] }]),
 			problemGenerator: echoGenerator(2),
@@ -645,14 +645,18 @@ describe("createProblemSet (generation)", () => {
 		assert.equal(dropped.grade, undefined, "the aborted grade is absent");
 		assert.equal(dropped.answer, "first", "the answer is kept");
 		const other = graded.problems.find((p) => p.id !== victimId)!;
-		assert.equal(other.grade?.verdict, "partial", "the sibling grade landed (echoGrader: no 'solid' in its text)");
+		assert.equal(other.grade?.score, 6, "the sibling grade landed (echoGrader: no 'solid' in its text)");
 		assert.equal(practiceStatuses().length, 0);
 
-		// re-submittable: the dropped answer grades on a second submit
-		const resub = await pipeline.submitAnswers(set.id, [{ problemId: victimId, text: "retry answer" }]);
-		await resub.done;
-		const retried = f.practice.store.getSet(set.id)!;
-		assert.equal(retried.problems.find((p) => p.id === victimId)!.grade?.verdict, "partial", "the retry grades (echoGrader verdict)");
+		// ONE attempt (owner 2026-09-29): the dropped grade's answer
+		// stands — re-submission is refused, the problem is done.
+		await assert.rejects(
+			() => pipeline.submitAnswers(set.id, [{ problemId: victimId, text: "retry answer" }]),
+			/was already answered/,
+		);
+		const after = f.practice.store.getSet(set.id)!;
+		assert.equal(after.problems.find((p) => p.id === victimId)!.grade, undefined, "still no grade — one attempt");
+		assert.equal(after.problems.find((p) => p.id === victimId)!.answer, "first");
 
 		rh1();
 		rh2();
@@ -772,8 +776,8 @@ describe("submitAnswers (grading)", () => {
 		const final = f.practice.store.getSet(set.id)!;
 		const g1 = final.problems.find((p) => p.id === p1.id)!.grade;
 		const g2 = final.problems.find((p) => p.id === p2.id)!.grade;
-		assert.ok(g1 && g1.verdict === "solid", "verdict encodes from the answer text");
-		assert.ok(g2 && g2.verdict === "partial");
+		assert.ok(g1 && g1.score === 9, "score encodes from the answer text");
+		assert.ok(g2 && g2.score === 6);
 		assert.ok(g1!.gradedAt >= NOW);
 		assert.equal(practiceStatuses().length, 0, "the grading row clears");
 

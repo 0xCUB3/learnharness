@@ -211,7 +211,7 @@ PARTITION DOCTRINE:
 
 OUTPUT — your entire deliverable is ONE submit_partition call: "partitions", a list of { chains: [ids] }, one entry per problem, together containing every input chain exactly once. No empty entries; no unknown ids; no problem without a real target relationship.`;
 
-export const GRADER_INSTRUCTIONS = `You are the grading stage of a learning application's practice system. One practice problem — built to strengthen the learner's recall of specific propositions — has been answered. Your job is FEEDBACK ONLY: verdict + what actually mattered. You are not assessing a person; you are coaching a recall.
+export const GRADER_INSTRUCTIONS = `You are the grading stage of a learning application's practice system. One practice problem — built to strengthen the learner's recall of specific propositions — has been answered. Your job is small and fast: an integer score and a one-or-two-sentence justification. You are not assessing a person; you are scoring a recall.
 
 You receive: the problem's statement; its pre-written MODEL SOLUTION and GRADING RUBRIC (committed before the learner ever saw the problem — they are the reference, not you); the propositions (names + statements) the problem was built to exercise; and the learner's ANSWER — often dictated thinking-out-loud prose. Extract the reasoning from the prose; grade the substance, never the form. Do not demand the solution's exact wording — the rubric names what actually matters; nothing else is graded.
 
@@ -219,18 +219,14 @@ JUDGE AGAINST THE REFERENCE:
 - Work the rubric points: which are met, which are missed, which are half-met in the answer's own terms.
 - Where the answer diverges from the model solution, ask whether the divergence is a different-but-valid route (the rubric decides) or a wrong turn.
 
-NAME THE FAILED RECALL: when something is missed, identify WHICH proposition failed to come to mind — or came to mind in a wrong or incomplete form. That is the actionable diagnosis; say it plainly.
+THE SCORE (one integer, 0–10):
+- 9–10: the targeted recall(s) happened — the answer meets the rubric's essentials. Peripheral gaps do not lower it.
+- 5–8: some of the target came to mind; the answer is materially incomplete or partly wrong.
+- 0–4: the targeted proposition(s) did not come to mind — the answer is empty or on the wrong track.
 
-TEACH THE BOUNDARY: feedback should locate the boundary — what would have made the answer right, where the wrong path breaks and why. Not "incorrect"; the reason it is incorrect, in one or two tight paragraphs.
+The reasoning is plain prose, one or two sentences: which rubric points were met or missed and, when something failed, WHICH proposition failed to come to mind. Mathematics is LaTeX — inline as \\(…\\), display as \\[…\\] (a bare $ is literal currency); no headers, no lists — minimal is the standard.
 
-THE VERDICT (exactly one):
-- "solid": the targeted recall(s) happened — the answer meets the rubric's essentials. Peripheral gaps do not lower it.
-- "partial": some of the target came to mind; the answer is materially incomplete or partly wrong.
-- "missed": the targeted proposition(s) did not come to mind — the answer is empty or on the wrong track.
-
-Feedback renders as full Markdown. Mathematics is always LaTeX — inline as \\(…\\), display as \\[…\\] on its own lines (a bare $ is literal currency). Inside math, LaTeX commands for symbols, not unicode stand-ins. Code in fenced blocks with a language tag, identifiers inline as \`code\`. Lists and tables wherever they carry structure; no headers — feedback is short-form, structure it with paragraphs and bold labels. Name the failed recall and teach the boundary in properly formatted prose, not plain text.
-
-OUTPUT — your entire deliverable is ONE submit_grade call: "verdict" and "feedback" (non-empty; the boundary-teaching text above).`;
+OUTPUT — your entire deliverable is ONE submit_grade call: "score" (integer 0–10) and "reasoning" (non-empty, brief).`;
 
 // ─── schemas + fills ─────────────────────────────────────────────────────────
 
@@ -250,8 +246,8 @@ const problemSchema = Type.Object({
 type ProblemSubmit = Static<typeof problemSchema>;
 
 const gradeSchema = Type.Object({
-	verdict: Type.Union([Type.Literal("solid"), Type.Literal("partial"), Type.Literal("missed")]),
-	feedback: Type.String({ minLength: 1 }),
+	score: Type.Integer({ minimum: 0, maximum: 10 }),
+	reasoning: Type.String({ minLength: 1 }),
 });
 type GradeSubmit = Static<typeof gradeSchema>;
 
@@ -364,8 +360,8 @@ export interface GraderInput {
 	signal?: AbortSignal;
 }
 export interface GraderOutput {
-	verdict: "solid" | "partial" | "missed";
-	feedback: string;
+	score: number;
+	reasoning: string;
 	log: PracticeStepLog;
 }
 
@@ -499,7 +495,7 @@ export function createPracticeAgents(deps: PracticeModels) {
 		const grade = await runSubmitAgent({
 			role: "grader",
 			toolName: "submit_grade",
-			toolDescription: "Submit the grade: verdict (solid | partial | missed) and non-empty feedback.",
+			toolDescription: "Submit the grade: an integer score 0-10 and brief non-empty reasoning.",
 			parameters: gradeSchema,
 			fill: (raw) => raw,
 			systemPrompt: GRADER_INSTRUCTIONS,
@@ -509,7 +505,7 @@ export function createPracticeAgents(deps: PracticeModels) {
 			onStep: stepLogger(log),
 			neverSubmitted: "the grader never submitted a grade",
 		});
-		return { verdict: grade.verdict, feedback: grade.feedback, log };
+		return { score: grade.score, reasoning: grade.reasoning, log };
 	}
 
 	return { refuseIfStagesUnready, runPartitioner, runProblemGenerator, runGrader };
