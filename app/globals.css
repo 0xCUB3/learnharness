@@ -478,6 +478,9 @@ body {
                        resolves by DOM order, not z-index: no-drag subtracts
                        only regions added earlier in the tree)
    - .lh-no-drag     carve-out for interactive elements inside a drag band
+                       (native interactive elements carve out AUTOMATICALLY —
+                       see the auto carve-out rule below; manual use is for
+                       clickable non-natives only)
    - .lh-lights-gutter  the sidebar LH band's traffic-light gutter: lights
                        end at x≈68, the wordmark starts at 80px (5rem)
    - .lh-closed-toggle  same gutter for the sidebar toggle when the sidebar
@@ -487,6 +490,17 @@ body {
 	-webkit-app-region: drag;
 }
 .lh-electron .lh-no-drag {
+	-webkit-app-region: no-drag;
+}
+/* THE AUTO CARVE-OUT (owner standardization ruling, 2026-09-29 night):
+   inside a drag band, every NATIVE interactive element is automatically
+   a no-drag island — "draggable anywhere that is not a clickable
+   element" becomes structural, not per-child discipline. TopBar
+   contents can differ arbitrarily; buttons/inputs/links always stay
+   clickable with zero opt-out bookkeeping. Manual .lh-no-drag remains
+   only for clickable NON-native elements (spans/divs with onClick —
+   e.g. the graph chrome's control column). */
+.lh-electron .lh-drag :is(button, input, textarea, select, a, summary, [contenteditable]) {
 	-webkit-app-region: no-drag;
 }
 /* 92px = measured lights' right edge (~75pt) + the lights' own 16px

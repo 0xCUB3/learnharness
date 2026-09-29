@@ -1555,19 +1555,7 @@ export function GraphView() {
 				}}
 			/>
 
-			{/* The chain table overlay (chains-overlay plan, 2026-09-29):
-			    ABSOLUTE INSIDE the graph area (the session-overlay idiom —
-			    never a body portal) so the app chrome stays sharp and
-			    reachable; the overlay itself is read-only toward the graph
-			    and owns its selection + the custom practice dialog. */}
-			<ChainTableOverlay
-				open={chainsOpen && !isEmpty}
-				nodes={snapshot?.nodes ?? []}
-				edges={snapshot?.edges ?? []}
-				sessions={snapshot?.sessions ?? {}}
-				fileSources={snapshot?.fileSources ?? {}}
-				onClose={() => setChainsOpen(false)}
-			/>
+
 
 			{/* Legend + filters: search box and per-state toggle rows. */}
 			{/* Top-right controls — separate floating containers (owner,
@@ -1734,6 +1722,26 @@ export function GraphView() {
 					)}
 				</div>
 			)}
-		</div>
+			{/* The chain table overlay (chains-overlay plan, 2026-09-29):
+			    ABSOLUTE INSIDE the graph area (the session-overlay idiom —
+			    never a body portal) so the app chrome stays sharp and
+			    reachable; the overlay itself is read-only toward the graph
+			    and owns its selection + the custom practice dialog.
+			    LAST CHILD OF THE ROOT, DELIBERATELY (owner, 2026-09-29
+			    night): app-region subtraction resolves by DOM order, not
+			    z-index — mounted earlier, the chrome's lh-no-drag column
+			    punched dead zones through the overlay's TopBar drag band
+			    (over the counts, around the search field). A full-bleed
+			    surface covering a drag band must paint AFTER everything it
+			    covers. (DeleteNodeDialog is body-portaled — DOM-irrelevant
+			    here.) */}
+			<ChainTableOverlay
+				open={chainsOpen && !isEmpty}
+				nodes={snapshot?.nodes ?? []}
+				edges={snapshot?.edges ?? []}
+				sessions={snapshot?.sessions ?? {}}
+				fileSources={snapshot?.fileSources ?? {}}
+				onClose={() => setChainsOpen(false)}
+			/>		</div>
 	);
 }
