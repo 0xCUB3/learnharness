@@ -122,7 +122,16 @@ describe("the dictation keyless seam (owner dictation trio)", () => {
 const catalog = (strongProvider: string | null, ...keyedProviders: string[]): ModelCatalogResponse => ({
 	models: [],
 	defaults: null,
-	rolePins: { researcher: null, demoBuilder: null, visualMaker: null, extractor: null, auditor: null },
+	rolePins: {
+		researcher: null,
+		demoBuilder: null,
+		visualMaker: null,
+		extractor: null,
+		auditor: null,
+		partitioner: null,
+		problemGenerator: null,
+		grader: null,
+	},
 	slots: {
 		strong: strongProvider
 			? { model: { provider: strongProvider, id: `${strongProvider}/model` }, thinkingLevel: "low" }

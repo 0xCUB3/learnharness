@@ -13,7 +13,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
-import { toToolResult } from "../tool-execute.ts";
+import { toToolResult, ToolInputError } from "../tool-execute.ts";
 import type { ModelRole } from "../../../config.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
@@ -42,6 +42,11 @@ export async function runSubmitAgent<T>(opts: {
 	 *  TypeBox validation — the sanctioned shim point). Identity by
 	 *  default; extraction wires healStringifiedArrays here. */
 	prepareArguments?: (args: unknown) => unknown;
+	/** Semantic validation at the submit seam: the value is schema-valid
+	 *  but may violate a PIPELINE law (coverage, echo-equality). Returning
+	 *  a problem string throws ToolInputError → pi turns it into an error
+	 *  tool result → the model retries within maxTurns. null = accept. */
+	validate?: (value: T) => string | null;
 }): Promise<T> {
 	let submitted: T | undefined;
 	const result = await runSubagent(
@@ -55,7 +60,10 @@ export async function runSubmitAgent<T>(opts: {
 				prepareArguments: (args) =>
 					(opts.prepareArguments ? opts.prepareArguments(args) : args) as never,
 				execute: async (_toolCallId, input) => {
-					submitted = opts.fill(input);
+					const value = opts.fill(input);
+					const problem = opts.validate?.(value) ?? null;
+					if (problem) throw new ToolInputError(opts.toolName, [problem]);
+					submitted = value;
 					return toToolResult(submitted);
 				},
 			} satisfies AgentTool<any>,

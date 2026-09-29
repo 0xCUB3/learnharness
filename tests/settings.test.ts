@@ -202,13 +202,16 @@ describe("sanitizeUserSettings", () => {
 		assert.deepEqual(out.agent?.tools, { quiz: false, demo: true });
 	});
 
-	it("BACKGROUND_MODEL_ROLES matches the five background roles (the labeler died with the wave-7 namer kill)", () => {
+	it("BACKGROUND_MODEL_ROLES matches the eight background roles (practice trio added, owner 2026-09-29)", () => {
 		assert.deepEqual([...BACKGROUND_MODEL_ROLES], [
 			"researcher",
 			"demoBuilder",
 			"visualMaker",
 			"extractor",
 			"auditor",
+			"partitioner",
+			"problemGenerator",
+			"grader",
 		]);
 	});
 });
