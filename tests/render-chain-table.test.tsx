@@ -139,9 +139,9 @@ describe("ChainTableBody — THE shared TopBar + the lines law (owner, round 2)"
 		const sep = html.split("border-b border-border/60").length - 1;
 		assert.ok(sep >= 2, "separators between groups");
 		// chain rows themselves carry NO border — their entire class list is
-		// the staircase law (pl-7.5 = under the cluster's expander arrow);
+		// the staircase law (pl-12 = aligned with the cluster's FOLDER icon);
 		// the chip outlines' border-border/70 is an outline, not a row line
-		assert.ok(html.includes('class="flex items-center gap-1 py-1 pl-7.5 pr-3"'), "the chain row: staircase indent, no border");
+		assert.ok(html.includes('class="flex items-center gap-1 py-1 pl-12 pr-3"'), "the chain row: staircase indent, no border");
 	});
 });
 
@@ -186,13 +186,13 @@ describe("ChainTableBody — chain rows (chips + connectors)", () => {
 		// owner ruling: the derivation is already encoded in the chain line —
 		// no conclusion marker down here
 		assert.ok(!html.includes("prop-conclusion"), "no conclusion marker anywhere");
-		// THE ALIGNMENT STAIRCASE (owner ruling, round 3): each level's
-		// checkbox sits under its parent's expander arrow. The expander
-		// shares the checkbox's 14px width, so each step is 18px: clusters
-		// pl-3 (12) → chains pl-7.5 (30 = the cluster expander) →
-		// statements pl-12 (48 = the chain expander)
-		assert.ok(html.includes("pl-12"), "statements under the chain's expander");
-		assert.ok(html.includes("pl-7.5"), "chains under the cluster's expander");
+		// THE ALIGNMENT STAIRCASE (owner ruling, round 4 — "double the
+		// indentation"): each level's checkbox sits under its parent's ICON
+		// slot, TWO columns (36px) past its own. Every column is 18px:
+		// clusters pl-3 (12) → chains pl-12 (48 = the folder icon) →
+		// statements pl-21 (84 = where a chain icon WOULD sit)
+		assert.ok(html.includes("pl-21"), "statements at the would-be chain-icon column");
+		assert.ok(html.includes("pl-12"), "chains aligned with the folder icon");
 		assert.ok(html.includes("h-5 w-3.5"), "the expander shares the checkbox's 14px width");
 	});
 });
