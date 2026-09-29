@@ -42,6 +42,26 @@ const init = (over: Partial<Omit<ProblemSet, "id">> = {}): Omit<ProblemSet, "id"
 
 // ─── round-trip ──────────────────────────────────────────────────────────────
 
+describe("updatedAt — the live-run heartbeat", () => {
+	it("createSet stamps updatedAt = createdAt; saveSet re-stamps on every write", () => {
+		const set = practiceStore.createSet(init());
+		assert.equal(set.updatedAt, set.createdAt, "birth stamp");
+		const before = new Date().toISOString();
+		const edited = { ...set, title: "Renamed" };
+		practiceStore.saveSet(edited);
+		const read = practiceStore.getSet(set.id)!
+		assert.ok(read.updatedAt !== undefined && read.updatedAt >= before, "every write re-stamps");
+		assert.notEqual(read.title, set.title);
+	});
+
+	it("legacy rows without updatedAt still validate (readers fall back to createdAt)", () => {
+		const set = practiceStore.createSet(init());
+		const bare = { ...set } as Partial<typeof set>;
+		delete bare.updatedAt;
+		assert.ok(isProblemSet({ ...bare, id: set.id }));
+	});
+});
+
 describe("the practice store", () => {
 	it("createSet assigns a ps_ id, mkdirs, and round-trips through getSet", () => {
 		const set = practiceStore.createSet(init());

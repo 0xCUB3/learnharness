@@ -234,6 +234,13 @@ function fixture(partial: Partial<Parameters<typeof createPracticePipeline>[0]> 
 	return { practice, deps, make: () => createPracticePipeline(deps) };
 }
 
+/** Reset the boot sweep's once-per-process flag — each call simulates a
+ *  fresh process for the sweep's semantics (production sets it once and
+ *  never re-sweeps; tests need controlled re-arming). */
+const resetSweep = () => {
+	delete (globalThis as { __lhPracticeSweepDone?: boolean }).__lhPracticeSweepDone;
+};
+
 /** Await a condition (the extraction until() idiom, trimmed). */
 async function until(cond: () => boolean, ms = 2000): Promise<void> {
 	const t0 = Date.now();
@@ -490,11 +497,11 @@ describe("submitAnswers (grading)", () => {
 // ─── boot sweep + delete ─────────────────────────────────────────────────────
 
 describe("boot sweep + delete", () => {
-	it("an orphaned generating set (no live row) is marked interrupted", async () => {
+	it("a STALE orphan (>120s heartbeat, no live row) is marked interrupted", async () => {
 		const f = fixture({});
 		const orphan = f.practice.store.createSet({
 			title: "orphan",
-			createdAt: NOW,
+			createdAt: new Date(Date.now() - 300_000).toISOString(), // 5 min stale
 			params: PARAMS,
 			nodeIds: ["b"],
 			propositions: { b: { name: "B", statement: "s" } },
@@ -502,18 +509,69 @@ describe("boot sweep + delete", () => {
 			status: "generating",
 			problems: [{ id: "pp_orphan", chains: ["b"], statement: "", solution: "", rubric: "", status: "generating" }],
 		});
+		resetSweep();
 		f.make(); // the sweep runs at construction
 		const swept = f.practice.store.getSet(orphan.id)!;
 		assert.equal(swept.status, "error");
 		assert.equal(swept.error, "Interrupted (server restarted)");
 	});
 
+	it("a FRESH generating set (no live row) is NOT stamped — the grace window (owner bug fix)", async () => {
+		const f = fixture({});
+		const fresh = f.practice.store.createSet({
+			title: "fresh",
+			createdAt: new Date().toISOString(), // heartbeat seconds old
+			params: PARAMS,
+			nodeIds: ["b"],
+			propositions: { b: { name: "B", statement: "s" } },
+			chains: [{ id: "b", premises: ["a"], conclusion: "b" }],
+			status: "generating",
+			problems: [{ id: "pp_fresh", chains: ["b"], statement: "", solution: "", rubric: "", status: "generating" }],
+		});
+		resetSweep();
+		f.make();
+		const read = f.practice.store.getSet(fresh.id)!;
+		assert.equal(read.status, "generating", "grace: a live run's fresh heartbeat is never stamped");
+		assert.equal(read.error, undefined);
+	});
+
+	it("once per process: a second factory instantiation never re-sweeps", async () => {
+		const f = fixture({});
+		const orphanA = f.practice.store.createSet({
+			title: "swept",
+			createdAt: new Date(Date.now() - 300_000).toISOString(),
+			params: PARAMS,
+			nodeIds: ["b"],
+			propositions: { b: { name: "B", statement: "s" } },
+			chains: [{ id: "b", premises: ["a"], conclusion: "b" }],
+			status: "generating",
+			problems: [],
+		});
+		resetSweep();
+		f.make(); // sweeps orphanA, sets the process flag
+		assert.equal(f.practice.store.getSet(orphanA.id)!.status, "error");
+
+		const orphanB = f.practice.store.createSet({
+			title: "second",
+			createdAt: new Date(Date.now() - 300_000).toISOString(),
+			params: PARAMS,
+			nodeIds: ["b"],
+			propositions: { b: { name: "B", statement: "s" } },
+			chains: [{ id: "b", premises: ["a"], conclusion: "b" }],
+			status: "generating",
+			problems: [],
+		});
+		f.make(); // flag set → NO sweep
+		assert.equal(f.practice.store.getSet(orphanB.id)!.status, "generating", "the sweep runs once per process");
+	});
+
 	it("a LIVE generating set (registry row) is NOT swept by a second instance", async () => {
 		const f = fixture({ partitioner: hangingModel(), problemGenerator: echoGenerator(1), grader: echoGrader(1) });
 		const a = f.make();
 		const { set, done } = await a.createProblemSet(["b"], PARAMS); // hangs partitioning
-		f.make(); // second pipeline instance, same process → same registry
-		assert.equal(f.practice.store.getSet(set.id)!.status, "partitioning");
+		resetSweep();
+		f.make(); // second pipeline instance, same process → same registry, sweep RE-ARMED
+		assert.equal(f.practice.store.getSet(set.id)!.status, "partitioning", "the live row protects it even mid-sweep");
 		a.abortPractice(set.id);
 		await done;
 	});

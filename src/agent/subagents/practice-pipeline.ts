@@ -264,15 +264,29 @@ export interface PracticePipelineDeps extends PracticeModels {
 export function createPracticePipeline(deps: PracticePipelineDeps) {
 	const agents = createPracticeAgents(deps);
 
-	// BOOT SWEEP: a persisted partitioning/generating set with no live row
-	// is a crash/restart orphan (the registry is memory-only) — mark it,
-	// idempotently. Runs at every pipeline instantiation (dev route
-	// entries re-run it; live rows are globalThis-shared and skipped).
-	for (const set of deps.practiceStore.listSets()) {
-		if (
-			(set.status === "partitioning" || set.status === "generating") &&
-			!practiceRuns().has(`${set.id}:generation`)
-		) {
+	// BOOT SWEEP (owner bug fix, live test 2026-09-29 — the sweep once
+	// stamped a LIVE run): a persisted partitioning/generating set with no
+	// live row AND a heartbeat older than the grace window is a crash/
+	// restart orphan (the registry is memory-only) — mark it, idempotently.
+	// THREE guards against stamping the living:
+	//   1. ONCE PER PROCESS (globalThis flag) — an instance could otherwise
+	//      evaluate against a registry whose fresh row it can't observe
+	//      (dev route bundles, restart paths).
+	//   2. GRACE WINDOW (120s over updatedAt ?? createdAt) — a live run
+	//      saves at every phase/problem transition, so its heartbeat is
+	//      structurally never 120s stale; a true orphan is minutes stale at
+	//      the next boot.
+	//   3. Live-row check (globalThis-shared registry) as before.
+	const sweepFlag = globalThis as { __lhPracticeSweepDone?: boolean };
+	if (!sweepFlag.__lhPracticeSweepDone) {
+		sweepFlag.__lhPracticeSweepDone = true;
+		const staleBefore = Date.now() - 120_000;
+		for (const set of deps.practiceStore.listSets()) {
+			if (set.status !== "partitioning" && set.status !== "generating") continue;
+			if (practiceRuns().has(`${set.id}:generation`)) continue;
+			const heartbeat = Date.parse(set.updatedAt ?? set.createdAt);
+			if (Number.isFinite(heartbeat) && heartbeat > staleBefore) continue; // grace
+			console.error(`[practice ${set.id}] boot sweep: stale ${set.status} set marked interrupted`);
 			set.status = "error";
 			set.error = "Interrupted (server restarted)";
 			deps.practiceStore.saveSet(set);

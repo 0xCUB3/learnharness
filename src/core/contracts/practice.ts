@@ -163,6 +163,12 @@ export interface ProblemSet {
 	 *  default. */
 	title: string;
 	createdAt: string;
+	/** Bumped on every store write — the live-run heartbeat the boot
+	 *  sweep's grace window reads (a live run saves at every phase or
+	 *  problem transition, so it is structurally never 120s stale).
+	 *  Absent on legacy rows (validator tolerates; readers fall back
+	 *  to createdAt). */
+	updatedAt?: string;
 	params: PracticeParams;
 	/** The selected node ids — the raw selection record. The chain
 	 *  decomposition derives from these + the follows-edges among them at

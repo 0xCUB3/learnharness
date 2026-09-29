@@ -133,6 +133,7 @@ function createSet(init: Omit<ProblemSet, "id">): ProblemSet {
 	const set: ProblemSet = {
 		...init,
 		id: `ps_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
+		updatedAt: init.updatedAt ?? init.createdAt,
 	};
 	writeSetFile(set);
 	return set;
@@ -164,6 +165,9 @@ function listSets(): ProblemSet[] {
 
 function saveSet(set: ProblemSet): void {
 	if (!isProblemSet(set)) throw new Error("problem set record failed validation");
+	// The heartbeat: every write re-stamps (the boot sweep's grace window
+	// reads this — a live run is structurally never 120s stale).
+	set.updatedAt = new Date().toISOString();
 	writeSetFile(set);
 }
 
