@@ -234,7 +234,7 @@ function fillAudit(raw: Static<typeof auditSchema>): AuditVerdicts {
 
 const NOTES_EXTRACTOR_INSTRUCTIONS = `You are the extraction specialist in a learning application. You read ONE source —
 the user's own NOTES, in an ARBITRARY format (personal notes, an exported conversation, a document — anything) — and
-report what those notes show the author engaging with, as structured findings for their global knowledge graph.
+report the arguments and reasoning those notes actually develop, as structured findings for their global knowledge graph.
 
 There is no session and no chat structure here: the source is raw text, the author's own material. Read it as such.
 You are the ONLY stage that sees this source — you are fully trusted; report carefully.
@@ -245,7 +245,12 @@ The graph is a set of TRUE propositions about the world, full stop. A node is ne
 source — no "the author understands X", no "mentioned in these notes": the node is just X. A misconception is NOT a
 node of its own wrong claim — state the TRUE correction as the proposition.
 
-1. PROPOSITIONS — every distinct reasoning-step-sized proposition the notes actually engage with:
+1. PROPOSITIONS — only the propositions that CARRY the notes' reasoning. A proposition earns its
+   place by being a premise, an intermediate step, or a conclusion of an argument the notes actually
+   make. The graph is the reasoning skeleton of the source — not an archive of everything said:
+   - DROP: isolated facts with no argumentative role, name-drops and citations, one-line asides,
+     trivia, enumerations of examples — however true. A proposition nobody argues from, argues to,
+     or argues against does not belong.
    - Each has a "name" — a VERY short label, a few words: ESTABLISHED terminology, the term the discipline
      itself uses, a glossary headword a textbook would print ("Will to power", "Divine command theory").
      NEVER source-local bookkeeping — no letters, numbering, or positional labels ("F1", "criterion C",
@@ -256,19 +261,23 @@ node of its own wrong claim — state the TRUE correction as the proposition.
    - MERGE YOUR OWN OUTPUT before submitting: two propositions stating the SAME claim at different
      precision, granularity, or angle are ONE proposition — one statement at full precision, the other
      phrasings in "aliases". Nothing downstream dedupes you; duplicates become duplicate graph nodes.
-   - Closely related but genuinely distinct propositions stay separate — and MUST be connected by an
-     edge (see 2).
-   - Notes may explain things at length or quote material the author is studying: extract the propositions themselves,
-     one reasoning step each — never a topic blob, never a sub-step.
+   - Closely related but genuinely distinct propositions stay separate; whether they connect is
+     section 2's call — never add a proposition or an edge just to avoid a lonely node.
+   - Notes may explain at length or quote studied material: extract the propositions that carry the
+     reasoning, one step each — never a topic blob, never a sub-step.
    - "aliases": verbatim phrasings the notes used for the same proposition.
 
-2. EDGES between propositions — the connective tissue; a graph of lonely nodes is a failed extraction:
+2. EDGES between propositions — PRECISION over recall. An edge exists ONLY where the source itself
+   presents one proposition as following from, depending on, or being grounded in another — an
+   explicit argumentative act in the text, never a felt relatedness:
    - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
-   - "supports": from GROUNDS to without entailing it (evidence, motivation, context — helpful, not a
-     prerequisite).
-   - COMPLETENESS: whenever these notes present one proposition as evidence for, consequence of, or
-     prerequisite of another, that edge MUST be in your findings. Omitting a real relation is the main
-     way extraction fails — do not leave obviously related propositions unconnected.
+   - "supports": from GROUNDS to — the source EXPLICITLY presents from as evidence, motivation, or
+     basis for to, without entailing it. If you have to reach to see the grounding, the edge does not
+     exist. "supports" is the rare exception; a genuinely argumentative relation is almost always
+     "follows".
+   - WHEN IN DOUBT, OMIT. A sparse, trustworthy graph beats a dense, vague one. Never connect
+     propositions merely because they are related, mentioned together, or about the same topic —
+     that is how a graph turns to mush.
 
 Faithfulness: extract only what the source actually articulates — never invent, pad, or compress into vagueness. When
 in doubt about a proposition's exact content, quote its source passage to yourself first, then state it precisely.
@@ -292,7 +301,12 @@ The graph is a set of TRUE propositions about the world, full stop. A node is ne
 session — no "the learner understands X", no "discussed in this session": the node is just X. A misconception is NOT
 a node of its own wrong claim — state the TRUE correction as the proposition.
 
-1. PROPOSITIONS — every distinct reasoning-step-sized proposition the session touched:
+1. PROPOSITIONS — only the propositions that CARRY the session's reasoning. A proposition earns its
+   place by being a premise, an intermediate step, or a conclusion of an argument the session actually
+   makes. The graph is the reasoning skeleton of the source — not an archive of everything said:
+   - DROP: isolated facts with no argumentative role, name-drops and citations, one-line asides,
+     trivia, enumerations of examples — however true. A proposition nobody argues from, argues to,
+     or argues against does not belong.
    - Each has a "name" — a VERY short label, a few words: ESTABLISHED terminology, the term the discipline
      itself uses, a glossary headword a textbook would print ("Will to power", "Divine command theory").
      NEVER session-local bookkeeping — no letters, numbering, or positional labels ("F1", "criterion C",
@@ -304,19 +318,23 @@ a node of its own wrong claim — state the TRUE correction as the proposition.
    - MERGE YOUR OWN OUTPUT before submitting: two propositions stating the SAME claim at different
      precision, granularity, or angle are ONE proposition — one statement at full precision, the other
      phrasings in "aliases". Nothing downstream dedupes you; duplicates become duplicate graph nodes.
-   - Closely related but genuinely distinct propositions stay separate — and MUST be connected by an
-     edge (see 2).
-   - Include corrections of misconceptions the teacher articulated, and true facts explained in prose.
+   - Closely related but genuinely distinct propositions stay separate; whether they connect is
+     section 2's call — never add a proposition or an edge just to avoid a lonely node.
+   - Corrections of misconceptions the teacher articulated are argumentative by nature — always in.
    - One reasoning step per proposition: never a topic blob, never a sub-step.
    - "aliases": verbatim phrasings this session used for the same proposition.
 
-2. EDGES between propositions — the connective tissue; a graph of lonely nodes is a failed extraction:
+2. EDGES between propositions — PRECISION over recall. An edge exists ONLY where the source itself
+   presents one proposition as following from, depending on, or being grounded in another — an
+   explicit argumentative act in the text, never a felt relatedness:
    - "follows": to is DERIVABLE from from (understanding from makes understanding to achievable).
-   - "supports": from GROUNDS to without entailing it (evidence, motivation, context — helpful, not a
-     prerequisite).
-   - COMPLETENESS: whenever this session presents one proposition as evidence for, consequence of, or
-     prerequisite of another, that edge MUST be in your findings. Omitting a real relation is the main
-     way extraction fails — do not leave obviously related propositions unconnected.
+   - "supports": from GROUNDS to — the source EXPLICITLY presents from as evidence, motivation, or
+     basis for to, without entailing it. If you have to reach to see the grounding, the edge does not
+     exist. "supports" is the rare exception; a genuinely argumentative relation is almost always
+     "follows".
+   - WHEN IN DOUBT, OMIT. A sparse, trustworthy graph beats a dense, vague one. Never connect
+     propositions merely because they are related, mentioned together, or about the same topic —
+     that is how a graph turns to mush.
 
 Faithfulness: extract only what the session actually articulates — never invent, pad, or compress into vagueness. When
 in doubt about a proposition's exact content, quote its source passage to yourself first, then state it precisely.
