@@ -16,6 +16,10 @@ import {
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
+import {
+	GENERATOR_DOCTRINE,
+	GRADER_INSTRUCTIONS,
+} from "../src/agent/subagents/practice.ts";
 import { createPracticeAgents, renderChains, renderParams, renderPreviousProblems } from "../src/agent/subagents/practice.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError, type ProviderKeyMissing } from "../src/core/settings.ts";
 import type { PracticeParams, ReasoningChain } from "../src/core/contracts.ts";
@@ -282,4 +286,41 @@ describe("refusal gates (BYOK honest refusal, extraction's pattern)", () => {
 		const agents = createPracticeAgents({ engineFor: () => engine, providerKeyMissing: () => null });
 		agents.refuseIfStagesUnready(); // no throw
 	});
+});
+
+// ─── formatting doctrine (owner-approved 2026-09-29) ─────────────────────────
+
+describe("formatting doctrine pins", () => {
+	it("GENERATOR_DOCTRINE carries the FORMATTING bullet verbatim (Markdown + LaTeX + fenced code + tables/lists)", () => {
+		assert.ok(
+			GENERATOR_DOCTRINE.includes(
+				"- FORMATTING: your statement, solution, and rubric are rendered as full Markdown — use everything it offers. Mathematics is always LaTeX: inline as $…$, display as $$…$$ on its own lines. Code, pseudocode, and formal systems live in fenced code blocks with a language tag; identifiers and symbols inline as `code`. Use tables for parallel structure and comparisons, lists for enumerations. Prose-only renderings of mathematical or structured content are a defect: if a sentence carries an equation, a derivation, or a piece of code, format it as what it is.",
+			),
+			"the exact FORMATTING sentence",
+		);
+		// it sits after the parameters bullet, before PREVIOUS PROBLEMS
+		assert.ok(
+			GENERATOR_DOCTRINE.indexOf("- FORMATTING:") > GENERATOR_DOCTRINE.indexOf("THE PRESENTATION:"),
+			"after the presentation bullet",
+		);
+		assert.ok(
+			GENERATOR_DOCTRINE.indexOf("- PREVIOUS PROBLEMS:") > GENERATOR_DOCTRINE.indexOf("- FORMATTING:"),
+			"before PREVIOUS PROBLEMS",
+		);
+	});
+
+	it("GRADER_INSTRUCTIONS carries the formatting paragraph before the OUTPUT section", () => {
+		assert.ok(
+			GRADER_INSTRUCTIONS.includes(
+				"Feedback renders as full Markdown. Mathematics is always LaTeX — inline as $…$, display as $$…$$ on its own lines. Code in fenced blocks with a language tag, identifiers inline as `code`. Lists and tables wherever they carry structure. Name the failed recall and teach the boundary in properly formatted prose, not plain text.",
+			),
+			"the exact grader paragraph",
+		);
+		assert.ok(
+			GRADER_INSTRUCTIONS.indexOf("Feedback renders as full Markdown") < GRADER_INSTRUCTIONS.indexOf("OUTPUT — your entire deliverable is ONE submit_grade call"),
+			"before the OUTPUT section",
+		);
+	});
+
+
 });

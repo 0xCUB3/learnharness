@@ -40,7 +40,7 @@ import { chainCoverage, CUE_LEVELS, LADDER_RUNGS, PRESENTATIONS } from "../../co
 
 // ─── doctrines ───────────────────────────────────────────────────────────────
 
-const GENERATOR_DOCTRINE = `# The problem engineering framework
+export const GENERATOR_DOCTRINE = `# The problem engineering framework
 
 ## I. Theory
 
@@ -188,6 +188,7 @@ INPUTS (in the user message):
   THE CUE DISTANCE: 0 Lesson context · 1 Adjacent context · 2 Far context — how far the situation sits from the cues the learner has already met: the lesson's own examples AND every previous problem's situation. Far context is the edge of the recognizable band — the proposition must still genuinely apply, and the learner must be able to find it by looking.
   THE PRESENTATION: Theory (the subject's own terms — symbols, formal objects, native vocabulary) or Application (a concrete worldly affair in which the proposition's structure appears in the wild). It dresses the situation; it never changes the rung or the cue distance.
   Apply Part II step 2: degrade honestly if the target cannot support them — the degradation shows in the problem's own shape, never in meta-commentary.
+- FORMATTING: your statement, solution, and rubric are rendered as full Markdown — use everything it offers. Mathematics is always LaTeX: inline as $…$, display as $$…$$ on its own lines. Code, pseudocode, and formal systems live in fenced code blocks with a language tag; identifiers and symbols inline as \`code\`. Use tables for parallel structure and comparisons, lists for enumerations. Prose-only renderings of mathematical or structured content are a defect: if a sentence carries an equation, a derivation, or a piece of code, format it as what it is.
 - PREVIOUS PROBLEMS: problems the learner has already answered, with the chains they exercised. Do not rebuild one; keep your situation distant from theirs — cue distance counts previous problems' situations (Part I, "Cue distance").
 
 OUTPUT — your entire deliverable is ONE submit_problem call:
@@ -210,7 +211,7 @@ PARTITION DOCTRINE:
 
 OUTPUT — your entire deliverable is ONE submit_partition call: "partitions", a list of { chains: [ids] }, one entry per problem, together containing every input chain exactly once. No empty entries; no unknown ids; no problem without a real target relationship.`;
 
-const GRADER_INSTRUCTIONS = `You are the grading stage of a learning application's practice system. One practice problem — built to strengthen the learner's recall of specific propositions — has been answered. Your job is FEEDBACK ONLY: verdict + what actually mattered. You are not assessing a person; you are coaching a recall.
+export const GRADER_INSTRUCTIONS = `You are the grading stage of a learning application's practice system. One practice problem — built to strengthen the learner's recall of specific propositions — has been answered. Your job is FEEDBACK ONLY: verdict + what actually mattered. You are not assessing a person; you are coaching a recall.
 
 You receive: the problem's statement; its pre-written MODEL SOLUTION and GRADING RUBRIC (committed before the learner ever saw the problem — they are the reference, not you); the propositions (names + statements) the problem was built to exercise; and the learner's ANSWER — often dictated thinking-out-loud prose. Extract the reasoning from the prose; grade the substance, never the form. Do not demand the solution's exact wording — the rubric names what actually matters; nothing else is graded.
 
@@ -226,6 +227,8 @@ THE VERDICT (exactly one):
 - "solid": the targeted recall(s) happened — the answer meets the rubric's essentials. Peripheral gaps do not lower it.
 - "partial": some of the target came to mind; the answer is materially incomplete or partly wrong.
 - "missed": the targeted proposition(s) did not come to mind — the answer is empty or on the wrong track.
+
+Feedback renders as full Markdown. Mathematics is always LaTeX — inline as $…$, display as $$…$$ on its own lines. Code in fenced blocks with a language tag, identifiers inline as \`code\`. Lists and tables wherever they carry structure. Name the failed recall and teach the boundary in properly formatted prose, not plain text.
 
 OUTPUT — your entire deliverable is ONE submit_grade call: "verdict" and "feedback" (non-empty; the boundary-teaching text above).`;
 
