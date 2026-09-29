@@ -27,7 +27,7 @@ const JOINS = { sessions: { seedplan: "Orbital mechanics — plan phase" }, file
 function bodyAt(impact: NodeImpact | "loading" | "gone", extra?: { failure?: { code: string; error: string } | null }) {
 	return renderToStaticMarkup(
 		createElement(DeleteNodeBody, {
-			node: { id: "kepler", name: "Kepler's three laws" },
+			nodes: [{ id: "kepler", name: "Kepler's three laws" }],
 			joins: JOINS,
 			impact,
 			busy: false,
@@ -65,7 +65,14 @@ describe("EXTRACTION_RETRY_LINE (the 409 phrasing, owner-locked)", () => {
 describe("DeleteNodeDialog (thin SSR)", () => {
 	it("null node renders nothing", () => {
 		const html = renderToStaticMarkup(
-			createElement(DeleteNodeDialog, { node: null, joins: { sessions: {}, fileSources: {} }, onClose: () => {}, onDeleted: () => {} }),
+			createElement(DeleteNodeDialog, { nodes: null, joins: { sessions: {}, fileSources: {} }, onClose: () => {}, onDeleted: () => {} }),
+		);
+		assert.equal(html, "");
+	});
+
+	it("empty nodes array also renders nothing (null and [] are both closed)", () => {
+		const html = renderToStaticMarkup(
+			createElement(DeleteNodeDialog, { nodes: [], joins: { sessions: {}, fileSources: {} }, onClose: () => {}, onDeleted: () => {} }),
 		);
 		assert.equal(html, "");
 	});
@@ -85,6 +92,45 @@ describe("DeleteNodeDialog (thin SSR)", () => {
 		assert.match(html, /data-testid="node-impact-loading"/);
 	});
 
+	it("multi-selection: plural title, the names listed in mono, capped at 8 + and-K-more", () => {
+		const three = renderToStaticMarkup(
+			createElement(DeleteNodeBody, {
+				nodes: [
+					{ id: "kepler", name: "Kepler's three laws" },
+					{ id: "newton", name: "Newton's second law" },
+					{ id: "hook", name: "Hooke's law" },
+				],
+				joins: JOINS,
+				impact: "loading",
+				busy: false,
+				failure: null,
+				onClose: () => {},
+				onRun: () => {},
+			}),
+		);
+		assert.match(three, /Delete 3 propositions\?/); // plural title
+		assert.match(three, /data-testid="node-names-code"/); // the names block
+		assert.match(three, /Kepler&#x27;s three laws, Newton&#x27;s second law, Hooke&#x27;s law/);
+		assert.ok(!three.includes('data-testid="node-name-code"'), "the single-name testid is gone in multi");
+
+		// the cap: 10 names render 8 + ", and 2 more"
+		const ten = renderToStaticMarkup(
+			createElement(DeleteNodeBody, {
+				nodes: Array.from({ length: 10 }, (_, i) => ({ id: `n${i}`, name: `Prop ${i}` })),
+				joins: JOINS,
+				impact: "loading",
+				busy: false,
+				failure: null,
+				onClose: () => {},
+				onRun: () => {},
+			}),
+		);
+		assert.match(ten, /Delete 10 propositions\?/);
+		assert.match(ten, /Prop 7/); // the 8th name still listed
+		assert.doesNotMatch(ten, /Prop 8</); // the 9th is not
+		assert.match(ten, /, and 2 more/);
+	});
+
 	it("the body at gone: honest already-removed state, a Close that rides the same refresh", () => {
 		const html = bodyAt("gone");
 		assert.match(html, /no longer in the graph/);
@@ -92,10 +138,11 @@ describe("DeleteNodeDialog (thin SSR)", () => {
 	});
 
 	it("the body at resolved impact: plain fact lines, joined names (chats + notes files), the cannot-be-undoned copy", () => {
-		const html = bodyAt({ edges: 2, quizEvents: 3, observations: 0, sessions: ["seedplan", "src_plato", "chat_ghost"] });
+		// (drift fix 2026-09-30: quizEvents/observations died with the
+		// quiz-events ledger — the impact carries links + sessions only)
+		const html = bodyAt({ edges: 2, sessions: ["seedplan", "src_plato", "chat_ghost"] });
 		assert.match(html, /2 links to other topics/);
-		assert.match(html, /3 quiz answers/);
-		assert.match(html, /0 session notes/); // zeros stay visible — no understate
+		assert.ok(!html.includes("quiz answer"), "the dead quiz fact is gone");
 		// joined display names: chat title, notes file path, unknown id honestly itself
 		assert.match(html, /Orbital mechanics — plan phase/);
 		assert.match(html, /\/notes\/plato\.md/);
@@ -107,7 +154,7 @@ describe("DeleteNodeDialog (thin SSR)", () => {
 	});
 
 	it("the body at failure: the 409 renders the activity-dock line with a Try-again", () => {
-		const html = bodyAt({ edges: 0, quizEvents: 0, observations: 0, sessions: [] }, { failure: { code: "extraction_running", error: "server line" } });
+		const html = bodyAt({ edges: 0, sessions: [] }, { failure: { code: "extraction_running", error: "server line" } });
 		assert.match(html, /data-testid="node-delete-failure"/);
 		assert.match(html, new RegExp(EXTRACTION_RETRY_LINE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 		assert.doesNotMatch(html, /server line/); // the dock phrasing REPLACES the raw line for the known code

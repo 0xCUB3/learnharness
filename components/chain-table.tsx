@@ -51,8 +51,13 @@
  * the Google-Photos pattern — appears only when something is selected,
  * showing the agents' ACTUAL input (chainsForSelection over the flat
  * node-id selection: a premise without its conclusion counts as the
- * singleton it becomes) + Clear + Generate problem set (the one action
- * for now; the bar is a neutral action slot for future ones). The fuzzy
+ * singleton it becomes) + Clear + Generate problem set. DELETE (owner,
+ * 2026-09-29 night: "this is really the view deletion should be done
+ * in") rides the same bar FENCED at the right end — divider + the
+ * destructive red pair — and opens the SAME full-death confirm dialog
+ * the canvas uses (multi-selections list their names + the unioned
+ * impact); this ends the overlay's read-only stance: it is the graph's
+ * MANAGEMENT surface now. The fuzzy
  * search (names, aliases, statements) filters chains grouped +
  * auto-expanded under their clusters (non-matching clusters hide; the
  * collapsed view returns on clear).
@@ -68,6 +73,7 @@ import {
 	ChevronUpIcon,
 	FolderIcon,
 	FolderOpenIcon,
+	Trash2Icon,
 	ListTreeIcon,
 	SearchIcon,
 	XIcon,
@@ -76,6 +82,7 @@ import { chainsForSelection, formatChainLine, fuzzyScore } from "@/src/core";
 import type { GraphEdge, GraphNode } from "@/src/core";
 import { TopBar } from "@/components/top-bar";
 import { PracticeDialog } from "@/components/practice-dialog";
+import { DeleteNodeDialog } from "@/components/delete-node-dialog";
 
 /** The sortable columns (owner ruling: all three — consistency). */
 export type ChainSortCol = "name" | "props" | "created";
@@ -117,6 +124,7 @@ export function ChainTableBody({
 	onToggleNodes,
 	onClear,
 	onGenerate,
+	onDelete,
 	onClose,
 }: {
 	nodes: GraphNode[];
@@ -137,6 +145,8 @@ export function ChainTableBody({
 	onToggleNodes: (ids: string[], next: boolean) => void;
 	onClear: () => void;
 	onGenerate: () => void;
+	/** Opens the full-death confirm dialog (owner, 2026-09-29 night). */
+	onDelete: () => void;
 	onClose: () => void;
 }) {
 	const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
@@ -484,6 +494,21 @@ export function ChainTableBody({
 						>
 							Generate problem set
 						</button>
+						{/* The danger fence (owner ruling): a divider quarantines
+						    the destructive action at the bar's right end — the
+						    safe actions and the kill switch never blend. The
+						    full-death confirm dialog catches the misclick. */}
+						<span data-testid="chain-danger-divider" aria-hidden="true" className="h-4 w-px bg-border/70" />
+						<button
+							type="button"
+							data-testid="chain-delete"
+							onClick={onDelete}
+							aria-label={`Delete ${selection.size} selected ${selection.size === 1 ? "proposition" : "propositions"}`}
+							className="flex items-center gap-1.5 rounded-full border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+						>
+							<Trash2Icon aria-hidden="true" className="size-3.5" />
+							Delete
+						</button>
 					</div>
 				</div>
 			)}
@@ -564,17 +589,18 @@ export function ChainTableOverlay({
 	const [expandedClusters, setExpandedClusters] = useState<ReadonlySet<string>>(() => new Set());
 	const [expandedChains, setExpandedChains] = useState<ReadonlySet<string>>(() => new Set());
 	const [dialogOpen, setDialogOpen] = useState(false);
+	const [deleteOpen, setDeleteOpen] = useState(false);
 
-	// Esc dismisses (unless the practice dialog has focus — its own Esc
-	// owns that layer; both listen on window, so the guard is explicit).
+	// Esc dismisses (unless a dialog has focus — each dialog's own Esc
+	// owns its layer; all listen on window, so the guards are explicit).
 	useEffect(() => {
-		if (!open || dialogOpen) return;
+		if (!open || dialogOpen || deleteOpen) return;
 		const onKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape") onClose();
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [open, dialogOpen, onClose]);
+	}, [open, dialogOpen, deleteOpen, onClose]);
 
 	if (!open) return null;
 
@@ -628,6 +654,7 @@ export function ChainTableOverlay({
 					onToggleNodes={toggleNodes}
 					onClear={() => setSelection(new Set())}
 					onGenerate={() => setDialogOpen(true)}
+					onDelete={() => setDeleteOpen(true)}
 					onClose={onClose}
 				/>
 			</div>
@@ -636,6 +663,23 @@ export function ChainTableOverlay({
 					mode="custom"
 					selection={{ nodeIds, propositions: selectedNodes.length, chains: derived.length }}
 					onClose={() => setDialogOpen(false)}
+				/>
+			)}
+			{deleteOpen && (
+				<DeleteNodeDialog
+					nodes={selectedNodes.map((n) => ({ id: n.id, name: n.name }))}
+					joins={{ sessions, fileSources }}
+					onClose={() => setDeleteOpen(false)}
+					onDeleted={(deadIds, graphRevision) => {
+						// Close the dialog; prune the dead ids from the
+						// selection (the rest of a big selection survives);
+						// announce the revision so GraphView refetches the
+						// snapshot — fresh nodes/edges flow back in as props.
+						setDeleteOpen(false);
+						const dead = new Set(deadIds);
+						setSelection((prev) => new Set([...prev].filter((id) => !dead.has(id))));
+						window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }));
+					}}
 				/>
 			)}
 		</>

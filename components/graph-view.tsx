@@ -1537,18 +1537,18 @@ export function GraphView() {
 			{/* The full-death confirm dialog (node interlude) — portaled to
 			    body by the component itself, lives here for state locality. */}
 			<DeleteNodeDialog
-				node={deletingNode}
+				nodes={deletingNode ? [deletingNode] : null}
 				joins={{
 					sessions: snapshot?.sessions ?? {},
 					fileSources: snapshot?.fileSources ?? {},
 				}}
 				onClose={() => setDeletingNode(null)}
-				onDeleted={(nodeId, graphRevision) => {
+				onDeleted={(nodeIds, graphRevision) => {
 					// Close the dialog; close the detail card if it pointed here
 					// (the refetch would close it anyway, but the same frame
 					// should not show a card for a node the user just killed).
 					setDeletingNode(null);
-					if (selected?.node.id === nodeId) setSelected(null);
+					if (selected && nodeIds.includes(selected.node.id)) setSelected(null);
 					// The wave-6 chain: every listener refetches on this. Clusters
 					// shrink / unrender below the minimum on the server's read.
 					window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }));
