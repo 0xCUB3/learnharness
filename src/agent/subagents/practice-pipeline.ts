@@ -275,6 +275,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		set: ProblemSet,
 		previousProblems: PreviousProblemRef[],
 		partitionRow: RunningPractice,
+		note?: string,
 	): Promise<void> {
 		const controller = partitionRow.controller;
 
@@ -308,6 +309,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 					propositions: set.propositions,
 					params: set.params,
 					previousProblems,
+					note,
 					signal: controller.signal,
 				}),
 			);
@@ -370,6 +372,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 							propositions: set.propositions,
 							params: set.params,
 							previousProblems,
+							note,
 							signal: row.controller.signal,
 						});
 						row.usage = generated.log;
@@ -431,6 +434,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		nodeIds: string[],
 		params: ProblemSet["params"],
 		titleHint?: string,
+		note?: string,
 	): Promise<{ set: ProblemSet; done: Promise<void> }> {
 		agents.refuseIfStagesUnready();
 
@@ -458,11 +462,12 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 			chains,
 			status: "partitioning",
 			problems: [],
+			...(note ? { note } : {}),
 		});
 
 		const previousProblems = dedupInput(deps.practiceStore, selectedIds);
 		const row = registerRow(`${set.id}:partition`, set.id, "generation", "partitioning", `Partitioning — ${title}`);
-		const done = generateSet(set, previousProblems, row);
+		const done = generateSet(set, previousProblems, row, note);
 		return { set, done };
 	}
 

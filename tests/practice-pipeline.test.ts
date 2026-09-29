@@ -183,6 +183,45 @@ function partitionModel(partitions: Array<{ chains: string[] }>): PiEngine {
 	]);
 }
 
+/** A partitioner that RECORDS the prompt it saw before submitting — the
+ *  learner-note thread pin. */
+function capturingPartitioner(partitions: Array<{ chains: string[] }>, seen: string[]): PiEngine {
+	return fauxEngine([
+		(context) => {
+			seen.push(lastUserText(context as never));
+			return fauxAssistantMessage(
+				[fauxToolCall("submit_partition", { partitions } as ToolCall["arguments"], { id: "p-call" })],
+				{ stopReason: "toolUse" },
+			);
+		},
+	]);
+}
+
+/** An echo generator that RECORDS each prompt before submitting. */
+function capturingEchoGenerator(seen: string[], count: number): PiEngine {
+	const factory: FauxResponseStep = (context) => {
+		const prompt = lastUserText(context as never);
+		seen.push(prompt);
+		const target = targetOf(prompt);
+		return fauxAssistantMessage(
+			[
+				fauxToolCall(
+				"submit_problem",
+				{
+					chains: target,
+					statement: `Problem on ${target.join(", ")}`,
+					solution: "The model solution.",
+					rubric: "- names it",
+				} as ToolCall["arguments"],
+					{ id: "g-call" },
+				),
+			],
+			{ stopReason: "toolUse" },
+		);
+	};
+	return fauxEngine(Array.from({ length: count }, () => factory));
+}
+
 /** Hangs until the call's signal aborts (then resolves no submit call) —
  *  the extraction.test.ts cancellation-mimicking idiom. Queue one step
  *  per concurrent call (faux queues are finite). */
@@ -358,6 +397,43 @@ describe("createProblemSet (generation)", () => {
 		);
 		// Registry cleared.
 		assert.equal(practiceStatuses().length, 0);
+	});
+
+	it("the learner's note threads to the partitioner + every generator and persists on the set (owner, 2026-09-29)", async () => {
+		const partSeen: string[] = [];
+		const genSeen: string[] = [];
+		const f = fixture({
+			partitioner: capturingPartitioner([{ chains: ["b"] }, { chains: ["e"] }], partSeen),
+			problemGenerator: capturingEchoGenerator(genSeen, 2),
+			grader: echoGrader(1),
+		});
+		const pipeline = f.make();
+		const { set, done } = await pipeline.createProblemSet(["a", "b", "e"], PARAMS, undefined, "keep it geometric");
+		await done;
+
+		assert.equal(set.note, "keep it geometric", "persisted at creation");
+		assert.equal(f.practice.store.getSet(set.id)!.note, "keep it geometric", "survives the store round-trip");
+		assert.ok(partSeen[0]!.includes("THE LEARNER'S NOTE"), "rode the partitioner prompt");
+		assert.ok(partSeen[0]!.includes("keep it geometric"));
+		assert.equal(genSeen.length, 2);
+		for (const prompt of genSeen) {
+			assert.ok(prompt.includes("THE LEARNER'S NOTE"), "rode every generator prompt");
+			assert.ok(prompt.includes("keep it geometric"));
+		}
+
+		// No note → no block, anywhere (optional in every sense).
+		const partSeenBare: string[] = [];
+		const genSeenBare: string[] = [];
+		const f2 = fixture({
+			partitioner: capturingPartitioner([{ chains: ["b", "e"] }], partSeenBare),
+			problemGenerator: capturingEchoGenerator(genSeenBare, 1),
+			grader: echoGrader(1),
+		});
+		const s2 = await f2.make().createProblemSet(["a", "b", "e"], PARAMS);
+		await s2.done;
+		assert.equal(s2.set.note, undefined);
+		assert.ok(!partSeenBare[0]!.includes("THE LEARNER'S NOTE"));
+		assert.ok(!genSeenBare[0]!.includes("THE LEARNER'S NOTE"));
 	});
 
 	it("per-problem failure isolation: one generator fails, the set still completes", async () => {

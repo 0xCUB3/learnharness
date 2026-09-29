@@ -1,8 +1,9 @@
 /**
  * POST /api/practice/sets — create a problem set (202 {id}; generation
  * runs in the background — the fire-and-forget pipeline). Body:
- *   {chatId, params}          — everything this session touched
- *   {nodeIds, params}         — a manual node selection
+ *   {nodeIds, params, title?, note?}  — a node selection, the cluster's
+ *                                     label, and the learner's optional
+ *                                     free-form note
  * Validation + typed-error mapping live in the service (server/practice).
  * GET — the set list (createdAt desc, the store's order).
  */

@@ -87,6 +87,8 @@ describe("PracticeDialogBody — creation (cluster picker)", () => {
 	const base = {
 		params: { ...DEFAULT_PRACTICE_PARAMS },
 		onParam: () => {},
+		note: "",
+		onNote: () => {},
 		clusters: clusters(),
 		selectedKey: null,
 		onSelect: () => {},
@@ -124,6 +126,17 @@ describe("PracticeDialogBody — creation (cluster picker)", () => {
 		assert.ok(moved.includes("textbook/toy-example shape"), "cue-0 definition");
 		assert.ok(moved.includes("a concrete worldly affair"), "application definition shown");
 		assert.match(moved, /param-presentation-application[^]*border-primary/, "application segment active");
+	});
+
+	it("the learner's note: optional textarea under the params, carries text, capped client-side", () => {
+		const html = renderToStaticMarkup(<PracticeDialogBody {...base} note="lean toward pricing applications" />);
+		assert.ok(html.includes('data-testid="practice-note"'));
+		assert.ok(html.includes("Anything else? (optional)"), "the label");
+		assert.ok(html.includes("lean toward pricing applications"), "controlled value renders");
+		assert.match(html, /maxlength="2000"/i, "client-side cap mirrors the API law");
+		// Empty default: present but empty — optional in every sense.
+		const bare = renderToStaticMarkup(<PracticeDialogBody {...base} />);
+		assert.match(bare, /data-testid="practice-note"[^>]*><\/textarea>/, "no value when unset");
 	});
 
 	it("cluster picker: label + proposition-count rows, notes kind marked, Create gated until picked", () => {

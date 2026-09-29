@@ -111,6 +111,7 @@ export function isProblemSet(value: unknown): value is ProblemSet {
 		typeof v.id === "string" &&
 		v.id.startsWith("ps_") &&
 		typeof v.title === "string" &&
+		(v.note === undefined || typeof v.note === "string") &&
 		typeof v.createdAt === "string" &&
 		isParams(v.params) &&
 		isStringArray(v.nodeIds) &&

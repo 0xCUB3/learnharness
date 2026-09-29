@@ -188,6 +188,7 @@ INPUTS (in the user message):
   THE CUE DISTANCE: 0 Lesson context · 1 Adjacent context · 2 Far context — how far the situation sits from the cues the learner has already met: the lesson's own examples AND every previous problem's situation. Far context is the edge of the recognizable band — the proposition must still genuinely apply, and the learner must be able to find it by looking.
   THE PRESENTATION: Theory (the subject's own terms — symbols, formal objects, native vocabulary) or Application (a concrete worldly affair in which the proposition's structure appears in the wild). It dresses the situation; it never changes the rung or the cue distance.
   Apply Part II step 2: degrade honestly if the target cannot support them — the degradation shows in the problem's own shape, never in meta-commentary.
+- THE LEARNER'S NOTE (optional): free-form text the learner attached when creating the set — wishes, emphasis, context about themselves. Weigh it as preference, not instruction: take what serves the target and the parameters, ignore what conflicts with them, and never let it move a problem off its rung or out of its band. Its absence means nothing.
 - FORMATTING: your statement, solution, and rubric are rendered as full Markdown — use everything it offers. Mathematics is always LaTeX: inline as \\(…\\), display as \\[…\\] on its own lines — a bare $ is literal currency and never starts math. Inside math, use LaTeX commands for symbols, not unicode stand-ins (they fail to render). Code, pseudocode, and formal systems live in fenced code blocks with a language tag; identifiers and symbols inline as \`code\`. Use tables for parallel structure and comparisons, lists for enumerations. Skip headers — at this size they are pointless decoration; structure with paragraphs, bold labels, and lists (a genuinely long derivation may earn one). Prose-only renderings of mathematical or structured content are a defect: if a sentence carries an equation, a derivation, or a piece of code, format it as what it is.
 - PREVIOUS PROBLEMS: problems the learner has already answered, with the chains they exercised. Do not rebuild one; keep your situation distant from theirs — cue distance counts previous problems' situations (Part I, "Cue distance").
 
@@ -208,6 +209,7 @@ PARTITION DOCTRINE:
 - READ THE MIX OFF THE SHAPE: many singletons and few multi-premise chains suggest recall + discrimination problems; long premise chains suggest composition and path-finding. Your partition is where that judgment lives.
 - RESPECT THE PARAMETERS: the request names the ladder rung, the cue distance, and the presentation. Low rungs (0–2) mean many small assignments — single chains standing alone; high rungs (3–4) mean larger assignments — composition needs material to chain, path-finding needs distractor material to conceal the path among. Far cue distance makes grouping confusables together MORE important: the discrimination must travel into the far situation. Presentation does not shape your partition.
 - DO NOT DUPLICATE: previous problems the learner has already seen are listed with their chains. If an existing problem already covers a group of chains, re-partition so the new set differs in what it groups and how.
+- THE LEARNER'S NOTE (optional): free-form text the learner attached at creation — it may wish for grouping, count, or emphasis. Weigh it as preference; the partition laws above always win, and when the note conflicts with them, follow the laws silently.
 
 OUTPUT — your entire deliverable is ONE submit_partition call: "partitions", a list of { chains: [ids] }, one entry per problem, together containing every input chain exactly once. No empty entries; no unknown ids; no problem without a real target relationship.`;
 
@@ -324,6 +326,8 @@ export interface PartitionerInput {
 	propositions: PropositionSnapshot;
 	params: PracticeParams;
 	previousProblems: PreviousProblemRef[];
+	/** The learner's creation note — optional; weighed, never obeyed. */
+	note?: string;
 	signal?: AbortSignal;
 }
 export interface PartitionerOutput {
@@ -339,6 +343,8 @@ export interface GeneratorInput {
 	propositions: PropositionSnapshot;
 	params: PracticeParams;
 	previousProblems: PreviousProblemRef[];
+	/** The learner's creation note — optional; weighed, never obeyed. */
+	note?: string;
 	signal?: AbortSignal;
 }
 export interface GeneratedProblem {
@@ -394,6 +400,14 @@ function validateProblem(value: ProblemSubmit, target: string[]): string | null 
 	return null;
 }
 
+/** The learner's creation note as a prompt block — present ONLY when a
+ *  note exists (owner, 2026-09-29: more learner control, nothing owed). */
+function learnerNoteBlock(note: string | undefined): string | null {
+	return note
+		? `THE LEARNER'S NOTE (free-form additional input — weigh it; you are not obliged to follow it)\n${note}`
+		: null;
+}
+
 export function createPracticeAgents(deps: PracticeModels) {
 	const stageEngine = (role: ModelRole, override?: PiEngine): PiEngine | undefined =>
 		override ?? deps.engineFor?.(role);
@@ -433,11 +447,13 @@ export function createPracticeAgents(deps: PracticeModels) {
 		const log: PracticeStepLog = { model: null, steps: [] };
 		const prompt = [
 			renderChains(input.chains, input.propositions),
-			"THE PARAMETERS",
 			renderParams(input.params),
+			learnerNoteBlock(input.note),
 			"PREVIOUS PROBLEMS (already seen — do not duplicate)",
 			renderPreviousProblems(input.previousProblems),
-		].join("\n\n");
+		]
+			.filter((block): block is string => block !== null)
+			.join("\n\n");
 		const submitted = await runSubmitAgent({
 			role: "partitioner",
 			toolName: "submit_partition",
@@ -461,11 +477,13 @@ export function createPracticeAgents(deps: PracticeModels) {
 		const prompt = [
 			`YOUR TARGET (the chains this problem is built to strengthen)\n${targetChains.map(chainLine).join("\n")}`,
 			`THE FULL SET — propositions and chains of the entire selection (supporting material: minimal use, maximal focus on the target)\n${renderChains(input.fullChains, input.propositions)}`,
-			"THE PARAMETERS",
 			renderParams(input.params),
+			learnerNoteBlock(input.note),
 			"PREVIOUS PROBLEMS (already answered — do not rebuild one; keep your situation distant from theirs)",
 			renderPreviousProblems(input.previousProblems),
-		].join("\n\n");
+		]
+			.filter((block): block is string => block !== null)
+			.join("\n\n");
 		const problem = await runSubmitAgent({
 			role: "problemGenerator",
 			toolName: "submit_problem",

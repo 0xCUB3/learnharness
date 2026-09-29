@@ -72,6 +72,25 @@ function silentModel(): PiEngine {
 	return fauxEngine([fauxAssistantMessage("I refuse to use tools"), fauxAssistantMessage("…")]);
 }
 
+/** A one-shot submitter that first records the LAST USER MESSAGE it saw —
+ *  for pinning what actually rode the prompt. */
+function capturingSubmitModel(name: string, input: unknown, seen: string[]): PiEngine {
+	return fauxEngine([
+		(context) => {
+			const messages = (context as { messages: Array<{ role: string; content: unknown }> }).messages;
+			for (let i = messages.length - 1; i >= 0; i--) {
+				const m = messages[i]!;
+				if (m.role !== "user") continue;
+				seen.push(typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+				break;
+			}
+			return fauxAssistantMessage([fauxToolCall(name, input as ToolCall["arguments"], { id: `${name}-call` })], {
+				stopReason: "toolUse",
+			});
+		},
+	]);
+}
+
 // ─── rendering ───────────────────────────────────────────────────────────────
 
 describe("renderParams — named levels, never a number", () => {
@@ -164,6 +183,30 @@ describe("runPartitioner", () => {
 			/the partitioner never submitted a partition/,
 		);
 	});
+
+	it("the learner's note: rides the prompt as its own block when present, absent when unset", async () => {
+		const seen: string[] = [];
+		const agents = createPracticeAgents({
+			partitioner: capturingSubmitModel("submit_partition", { partitions: [{ chains: ["n3", "n2"] }] }, seen),
+		});
+		await agents.runPartitioner({
+			chains,
+			propositions,
+			params,
+			previousProblems: [],
+			note: "one big problem, please — and lean on pricing",
+		});
+		assert.equal(seen.length, 1);
+		assert.ok(seen[0]!.includes("THE LEARNER'S NOTE"), "the block title");
+		assert.ok(seen[0]!.includes("one big problem, please — and lean on pricing"), "the note text");
+
+		const seenBare: string[] = [];
+		const bare = createPracticeAgents({
+			partitioner: capturingSubmitModel("submit_partition", { partitions: [{ chains: ["n3", "n2"] }] }, seenBare),
+		});
+		await bare.runPartitioner({ chains, propositions, params, previousProblems: [] });
+		assert.ok(!seenBare[0]!.includes("THE LEARNER'S NOTE"), "no block when no note");
+	});
 });
 
 // ─── the problem generator ───────────────────────────────────────────────────
@@ -217,6 +260,31 @@ describe("runProblemGenerator", () => {
 	it("neverSubmitted: a silent model throws", async () => {
 		const agents = createPracticeAgents({ problemGenerator: silentModel() });
 		await assert.rejects(agents.runProblemGenerator(generatorInput), /the problem generator never submitted a problem/);
+	});
+
+	it("the learner's note: rides the prompt when present, absent when unset", async () => {
+		const seen: string[] = [];
+		const agents = createPracticeAgents({
+			problemGenerator: capturingSubmitModel(
+				"submit_problem",
+				{ chains: ["n3"], statement: "…", solution: "…", rubric: "…" },
+				seen,
+			),
+		});
+		await agents.runProblemGenerator({ ...generatorInput, note: "situations from central banking, if you can" });
+		assert.ok(seen[0]!.includes("THE LEARNER'S NOTE"));
+		assert.ok(seen[0]!.includes("situations from central banking, if you can"));
+
+		const seenBare: string[] = [];
+		const bare = createPracticeAgents({
+			problemGenerator: capturingSubmitModel(
+				"submit_problem",
+				{ chains: ["n3"], statement: "…", solution: "…", rubric: "…" },
+				seenBare,
+			),
+		});
+		await bare.runProblemGenerator(generatorInput);
+		assert.ok(!seenBare[0]!.includes("THE LEARNER'S NOTE"), "no block when no note");
 	});
 });
 
@@ -291,6 +359,13 @@ describe("refusal gates (BYOK honest refusal, extraction's pattern)", () => {
 // ─── formatting doctrine (owner-approved 2026-09-29) ─────────────────────────
 
 describe("formatting doctrine pins", () => {
+	it("GENERATOR_DOCTRINE pins the learner-note stance (weighed, never owed)", () => {
+		assert.ok(
+			GENERATOR_DOCTRINE.includes("- THE LEARNER'S NOTE (optional): free-form text the learner attached when creating the set"),
+		);
+		assert.ok(GENERATOR_DOCTRINE.includes("never let it move a problem off its rung or out of its band"));
+	});
+
 	it("GENERATOR_DOCTRINE carries the FORMATTING bullet verbatim (Markdown + LaTeX + fenced code + tables/lists)", () => {
 		assert.ok(
 			GENERATOR_DOCTRINE.includes(

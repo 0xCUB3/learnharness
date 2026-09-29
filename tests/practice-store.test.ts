@@ -152,6 +152,13 @@ describe("isProblemSet", () => {
 		assert.ok(!isProblemSet({ ...init(), status: "cooked" }));
 	});
 
+	it("the learner's note: optional string, round-trips; non-string refused (owner, 2026-09-29)", () => {
+		assert.ok(isProblemSet({ ...init({ note: "keep it geometric" }), id: "ps_noted" }));
+		assert.ok(!isProblemSet({ ...init({ note: 42 as unknown as string }), id: "ps_badnote" }));
+		const created = practiceStore.createSet(init({ note: "lean toward pricing" }));
+		assert.equal(practiceStore.getSet(created.id)!.note, "lean toward pricing");
+	});
+
 	it("tolerates optional fields — a minimal stub (no error/answer/grade) reads", () => {
 		const minimal = { ...init({ problems: [{ id: "pp_1", chains: [], statement: "", solution: "", rubric: "", status: "generating" }] }), id: "ps_valid" };
 		assert.ok(isProblemSet(minimal));

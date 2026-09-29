@@ -187,6 +187,13 @@ export interface ProblemSet {
 	status: ProblemSetStatus;
 	/** Set when the partition itself (or the run as a whole) failed. */
 	error?: string;
+	/** The learner's free-form note from the creation dialog (owner,
+	 *  2026-09-29: more learner control, no other purpose). Carried to the
+	 *  partitioner and every generator as ADDITIONAL INPUT — weighed as
+	 *  preference, never an obligation, never overriding the laws. Trimmed,
+	 *  capped (2000 chars at the API); persisted so the set stays a
+	 *  self-contained document of what was asked for. */
+	note?: string;
 	/** Problem stubs appear here the moment the partitioner submits —
 	 *  numbered by position, "generating", propositions invisible. */
 	problems: Problem[];

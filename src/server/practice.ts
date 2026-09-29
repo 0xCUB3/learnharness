@@ -81,11 +81,16 @@ export function practiceErrorResponse(err: unknown): Response {
 	return Response.json({ error: "Internal error" }, { status: 500 });
 }
 
+/** The learner-note cap (creation dialog; the textarea's own maxLength
+ *  matches — server-side is the law). */
+const NOTE_MAX = 2000;
+
 /** POST /api/practice/sets — 202 {id}; the set generates in the
  *  background (fire-and-forget pipeline). Body is {nodeIds, params,
- *  title?} ONLY (owner ruling 2026-09-29: problem sets take NODES —
+ *  title?, note?} ONLY (owner ruling 2026-09-29: problem sets take NODES —
  *  graph objects; the UI resolves a picked cluster to its member ids,
- *  and may pass the cluster label as the title). */
+ *  and may pass the cluster label as the title; note is the learner's
+ *  free-form creation input, optional). */
 export async function createPracticeSetResponse(body: unknown): Promise<Response> {
 	const b = (body ?? {}) as Record<string, unknown>;
 	const params = parseParams(b.params);
@@ -97,17 +102,28 @@ export async function createPracticeSetResponse(body: unknown): Promise<Response
 	}
 	const titleHint =
 		typeof b.title === "string" && b.title.trim() !== "" ? b.title.trim() : undefined;
+	let note: string | undefined;
+	if (b.note !== undefined) {
+		if (typeof b.note !== "string") {
+			return Response.json({ error: "note must be a string" }, { status: 400 });
+		}
+		const trimmed = b.note.trim();
+		if (trimmed.length > NOTE_MAX) {
+			return Response.json({ error: `note is over ${NOTE_MAX} characters` }, { status: 400 });
+		}
+		note = trimmed || undefined; // whitespace-only = no note
+	}
 	if (
 		!Array.isArray(b.nodeIds) ||
 		!b.nodeIds.every((id): id is string => typeof id === "string" && ID_OK.test(id))
 	) {
-		return Response.json({ error: "Body must be {nodeIds, params, title?}" }, { status: 400 });
+		return Response.json({ error: "Body must be {nodeIds, params, title?, note?}" }, { status: 400 });
 	}
 	if (b.nodeIds.length === 0) {
 		return Response.json({ error: "nodeIds is empty", code: "empty_selection" }, { status: 400 });
 	}
 	try {
-		const { set } = await practice.createProblemSet(b.nodeIds, params, titleHint);
+		const { set } = await practice.createProblemSet(b.nodeIds, params, titleHint, note);
 		return Response.json({ id: set.id }, { status: 202 });
 	} catch (err) {
 		return practiceErrorResponse(err);
