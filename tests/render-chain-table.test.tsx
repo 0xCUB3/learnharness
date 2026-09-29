@@ -5,7 +5,9 @@
  * surface), cluster → chain → statement hierarchy (a chain lives in its
  * CONCLUSION's birth cluster; expanding a chain reveals statements
  * directly — names live in the line, never twice), proposition CHIPS +
- * → connectors (a lonely chip = a standalone proposition; the "(no
+ * ∧/⟹ LaTeX connectives (premises join by land, the conclusion
+ * separates by implication — REAL KaTeX renders, prominent white; a
+ * lonely chip = a standalone proposition; the "(no
  * premises)" annotation is dead), rotating chevrons, folder/waypoints
  * icons, a floating bottom selection bar that never shifts layout, and
  * a fuzzy search that auto-expands matching clusters.
@@ -164,14 +166,22 @@ describe("ChainTableBody — THE shared TopBar + the lines law (owner, round 2)"
 });
 
 describe("ChainTableBody — chain rows (chips + connectors)", () => {
-	it("names render as outlined chips with → connectors BETWEEN them", () => {
+	it("names render as outlined chips; premises join by ∧, the conclusion by ⟹ — REAL KaTeX glyphs in the foreground", () => {
 		const html = render({ expandedClusters: new Set(["chat1"]) });
 		assert.ok(html.includes('data-testid="chain-row-c1"'));
 		assert.ok(html.includes('data-testid="prop-chip-a"'), "premise chip");
 		assert.ok(html.includes('data-testid="prop-chip-c1"'), "conclusion chip");
 		assert.ok(html.includes("Premise one"), "chip text");
-		assert.ok(html.includes('data-testid="chain-arrow-c1-1"'), "the connector");
-		assert.ok(html.includes("→"), "the arrow glyph");
+		// the connectives (owner ruling, 2026-09-30): premises ∧, conclusion
+		// ⟹ — KaTeX renders (class katex present), PROMINENT foreground
+		assert.ok(html.includes('data-testid="chain-and-c1-1"'), "the land between premises");
+		assert.ok(html.includes('data-testid="chain-implies-c1"'), "the implication before the conclusion");
+		const and = html.match(/data-testid="chain-and-c1-1"[^>]*>/)?.[0] ?? "";
+		assert.match(and, /text-foreground/, "prominent — the theme's white, not dim gray");
+		assert.ok(html.includes("katex"), "a REAL KaTeX render, not a unicode arrow");
+		// the old arrow is dead as a VISIBLE connector — it survives only in
+		// the row's aria-label (formatChainLine, the plain-text form)
+		assert.doesNotMatch(html, />\s*→\s*</, "no textual arrow connector remains");
 		// owner ruling (round 3): the chain waypoints icons are GONE — the
 		// chips + connectors already read as chains; only folders keep icons
 		assert.ok(!html.includes("lucide-waypoints"), "no chain icon");

@@ -21,26 +21,15 @@
  * (vertical column hairlines removed with them, owner ruling: "anything
  * else is better without them").
  *
- * THE CHAIN LINE: every proposition name is a faint-outlined CHIP with
- * the → a clearly separated connector between chips — a lonely chip
- * reads as a standalone proposition (the "(no premises)" annotation is
- * dead in the visible UI; it survives only as the row's aria-label).
- * Icons: ONLY the cluster FolderIcon survives (owner ruling, evening
- * round 3: the chain waypoints icons are not needed — the chips +
- * connectors already read as chains); propositions chip-only. Chevrons
- * rotate with expansion. Statement rows show propositions PLAIN (owner
- * ruling: the derivation is already encoded in the chain line — no
- * conclusion marker down there).
- *
- * THE ALIGNMENT STAIRCASE (owner ruling, round 3): every level's
- * checkbox sits ONE COLUMN under its parent's expander — aligned with
- * the parent's ICON slot: open a folder and the chain checkboxes line
- * up with the FOLDER icon; the statements step one more unit out (the
- * would-be chain-icon column — the chains lost their icons but the
- * pattern continues, owner: "double the indentation"). Geometry: every
- * column is 14px + 4px gap = 18px and each step is TWO columns (36px) —
- * clusters pl-3 (12px), chains pl-12 (48px = the cluster's folder
- * icon), statements pl-21 (84px = where a chain icon WOULD sit).
+ * THE CHAIN LINE: every proposition name is a faint-outlined CHIP
+ * with the LOGIC as the connectives (owner rulings, 2026-09-30):
+ * premises join with the LaTeX LAND (∧) and the conclusion separates
+ * by the LaTeX IMPLICATION (⟹) — `A ∧ B ⟹ C`, never the misleading
+ * `A → B → C`. The glyphs are REAL KaTeX renders (components/
+ * latex-glyph.tsx — the app's math engine, never SVGs), PROMINENT in
+ * the theme foreground (white), not dim gray. A lonely chip (no
+ * premises) carries no glyph — it reads as a standalone proposition;
+ * "(no premises)" survives only as the row's aria-label.
  *
  * SORTING: all three columns sortable (owner ruling — "consistency is
  * key"): Name (A→Z), Props (largest-first), Created (newest-first);
@@ -83,6 +72,7 @@ import type { GraphEdge, GraphNode } from "@/src/core";
 import { TopBar } from "@/components/top-bar";
 import { PracticeDialog } from "@/components/practice-dialog";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog";
+import { LatexGlyph } from "@/components/latex-glyph";
 
 /** The sortable columns (owner ruling: all three — consistency). */
 export type ChainSortCol = "name" | "props" | "created";
@@ -405,20 +395,42 @@ export function ChainTableBody({
 												/>
 												<Expander open={chainOpen} onClick={() => onToggleChain(chain.id)} testid={`chain-toggle-${chain.id}`} label={`Expand chain ${nameOf(chain.conclusion)}`} />
 												{/* The chain line: proposition names as faint-outlined
-												    chips, → the connector BETWEEN them (owner ruling) — a
-												    lonely chip reads as a standalone proposition. */}
+												    chips. THE LOGIC IS THE PAYLOAD (owner rulings,
+												    2026-09-30): premises join with the LaTeX LAND (∧),
+												    the conclusion separates by the LaTeX IMPLICATION
+												    (⟹) — `A ∧ B ⟹ C`, never the misleading `A → B →
+												    C` — the glyphs render through KaTeX (the app's
+												    math engine), PROMINENT in the theme foreground
+												    (white), not the old dim gray. A lonely chip reads
+												    as a standalone proposition (no glyphs at all);
+												    the row's aria-label keeps the plain-text form. */}
 												<span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-0.5 gap-y-1 text-[13px] leading-tight">
-													{memberIds.map((id, i) => (
-														<span key={id} className="flex items-center">
-															{i > 0 && <span data-testid={`chain-arrow-${chain.id}-${i}`} className="px-1.5 text-muted-foreground/50">→</span>}
-															<span
-																data-testid={`prop-chip-${id}`}
-																className="rounded border border-border/70 bg-muted/30 px-1.5 py-0.5"
-															>
-																{nameOf(id)}
+													{memberIds.map((id, i) => {
+														const isConclusion = i === memberIds.length - 1;
+														return (
+															<span key={id} className="flex items-center">
+																{i > 0 && (isConclusion ? (
+																	<LatexGlyph
+																		cmd="\implies"
+																		testid={`chain-implies-${chain.id}`}
+																		className="px-1.5 text-foreground"
+																	/>
+																) : (
+																	<LatexGlyph
+																		cmd="\land"
+																		testid={`chain-and-${chain.id}-${i}`}
+																		className="px-1.5 text-foreground"
+																	/>
+																))}
+																<span
+																	data-testid={`prop-chip-${id}`}
+																	className="rounded border border-border/70 bg-muted/30 px-1.5 py-0.5"
+																>
+																	{nameOf(id)}
+																</span>
 															</span>
-														</span>
-													))}
+														);
+													})}
 												</span>
 												<span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
 													{memberIds.length}
