@@ -39,10 +39,12 @@ interface CatalogModel {
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
-function main(): void {
-	// Every data file is {api: {modelId: entry}} — ids are per-provider
-	// namespaced already (openrouter's are slugs, native ones plain).
-	const priced = new Map<string, { cost: CatalogModel["cost"] }>();
+/** The pure walk: every catalog entry that carries pricing, keyed
+ *  "provider:id". Exported for the drift-guard test (tests/prices-sync)
+ *  so the guard asserts EXACTLY what this script would generate — the
+ *  test and the generator can never disagree (owner, 2026-09-29). */
+export function buildPrices(): Map<string, CatalogModel["cost"]> {
+	const priced = new Map<string, CatalogModel["cost"]>();
 	for (const file of fs.readdirSync(DATA_DIR).filter((f) => f.endsWith(".json"))) {
 		const provider = file.slice(0, -".json".length);
 		const catalog = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), "utf-8")) as Record<
@@ -57,10 +59,17 @@ function main(): void {
 				// First writer wins (an id can appear under two apis within one
 				// file with identical pricing; cross-file collisions cannot
 				// happen — keys are provider-qualified).
-				priced.set(`${provider}:${id}`, { cost: m.cost });
+				priced.set(`${provider}:${id}`, m.cost);
 			}
 		}
 	}
+	return priced;
+}
+
+function main(): void {
+	const priced = new Map<string, { cost: CatalogModel["cost"] }>(
+		[...buildPrices()].map(([k, cost]) => [k, { cost }] as const),
+	);
 
 	// Sort by key for a stable, diff-friendly generated table.
 	const rows = [...priced.entries()]
@@ -70,15 +79,18 @@ function main(): void {
 		}));
 
 	const tables = `/** Token prices, USD per 1M tokens. A missing model makes cost render
- *  as absent ("—"), never zero. Keys are provider-qualified ("provider:id")
- *  since the model slots wave; openrouter ids ALSO appear under their bare
- *  slug (the legacy stamp format, kept so pre-wave records keep pricing).
+ *  as absent ("—"), never zero. Keys are uniformly provider-qualified
+ *  ("provider:id") — NO legacy bare-slug compat (owner decision, sync
+ *  script 2026-09-20): pre-wave records stamped with bare slugs render
+ *  unpriced.
  *  Context-window limits are NOT a table (owner amendment, 2026-09-23):
  *  every meter's denominator reads pi's LIVE catalog (GET /api/models /
  *  the activity feed's server-side join) — missing model, usage-only.
  *  Refresh: bump @earendil-works/pi-ai, then npx tsx scripts/sync-pricing.ts
  *  (reads pi-ai's shipped catalogs — the same source the engine and the
- *  picker use). */
+ *  picker use). Forgetting the re-run is exactly how models go unpriced
+ *  (deepseek-v4.1-flash, 2026-09-29) — the drift-guard test
+ *  (tests/prices-sync.test.ts) fails the gates until you do. */
 export const PRICES: Record<string, ModelPrice> = {
 ${rows.map((r) => r.price).join("\n")}
 };
@@ -93,4 +105,7 @@ ${rows.map((r) => r.price).join("\n")}
 	console.log(`prices.ts regenerated from pi-ai's catalogs: ${priced.size} keys priced.`);
 }
 
-main();
+// Run only as a script, not when imported (the drift-guard test).
+if (process.argv[1] && import.meta.filename && path.resolve(process.argv[1]) === import.meta.filename) {
+	main();
+}
