@@ -188,12 +188,14 @@ describe("auditor graph tools", () => {
 	];
 	const { chatStore, graphStore } = fakeStores(nodes);
 
-	it("find: glob over names + statements + aliases, returning id + name + statement", async () => {
+	it("find: glob over names + statements + aliases, returning id + name + statement + BIRTH SESSION (owner, 2026-09-29)", async () => {
 		const tools = auditorGraphTools({ chatStore, graphStore });
 		const out = (await tools.find!.execute!("tc", { query: "*will to power*" })).details as string;
 		assert.match(out, /1 match\(es\):/);
 		assert.match(out, /- n1 :: Will to power/);
 		assert.match(out, /statement: The will to power is Nietzsche's central drive\./);
+		// The born-in pointer: hits compose with list_propositions.
+		assert.match(out, /born in: c1/);
 		// Statements and aliases hit too — and a bare term gets implicit stars.
 		const byStatement = (await tools.find!.execute!("tc", { query: "living again" })).details as string;
 		assert.match(byStatement, /n2 :: Eternal recurrence/);

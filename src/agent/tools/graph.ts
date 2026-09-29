@@ -123,7 +123,8 @@ export function auditorGraphTools(ctx: GraphToolContext): Record<string, AgentTo
 			label: "find",
 			description:
 				"Search the knowledge graph for existing propositions — glob over names, statements, and aliases. " +
-				"Returns each match's id, name, and full statement. This is how you decide whether a new proposition IS an existing one: search its key words, its synonyms, its phrasings.",
+				"Returns each match's id, name, full statement, and the session(s) it was born in (a list_propositions id). " +
+				"This is how you decide whether a new proposition IS an existing one: search its key words, its synonyms, its phrasings.",
 			parameters: findInput,
 			execute: serverExecute("find", findInput, async ({ query }): Promise<string> => {
 				const nodes = getGraph(deps.graphStore).nodes;
@@ -131,7 +132,17 @@ export function auditorGraphTools(ctx: GraphToolContext): Record<string, AgentTo
 					(n) => globMatch(query, n.name) || globMatch(query, n.statement) || n.aliases.some((a) => globMatch(query, a)),
 				);
 				if (hits.length === 0) return `No existing proposition matches "${query}".`;
-				const lines = hits.map((n) => `- ${n.id} :: ${n.name}\n  statement: ${n.statement}`);
+				// BORN-IN POINTER (owner, 2026-09-29): a hit names its birth
+				// session(s) — find results now compose with list_propositions
+				// (read the whole session the hit came from) instead of being
+				// dead ends. Legacy no-provenance nodes name none.
+				const lines = hits.map((n) => {
+					const born = [...new Set(n.provenance.map((pt) => pt.chatId))];
+					return (
+						`- ${n.id} :: ${n.name}\n  statement: ${n.statement}` +
+						(born.length > 0 ? `\n  born in: ${born.join(", ")}` : "")
+					);
+				});
 				return `${hits.length} match(es):\n${lines.join("\n")}`;
 			}),
 		},
