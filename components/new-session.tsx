@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
 import { DictationBar, useDictation } from "@/components/dictation";
-import { SidebarToggle } from "@/components/sidebar";
+import { TopBar } from "@/components/top-bar";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
@@ -77,12 +77,12 @@ export function DraftShell({
 	return (
 		<div className="flex h-dvh">
 			<div className="flex min-w-0 flex-1 flex-col">
-				{/* h-15 (60px) matches the chat header and the sidebar's LH wordmark
-			    band (owner, round 6). */}
-			<header className="lh-drag flex h-15 items-center gap-3 border-b border-border px-3">
-					<SidebarToggle />
-					<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">New session</div>
-				</header>
+				{/* The shared top bar (standardization ruling, 2026-09-29): one
+			    element, every surface — h-15, drag, sidebar reopen, lights
+			    gutter. h-15 (60px) matches the sidebar's wordmark band. */}
+			<TopBar>
+				<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">New session</div>
+			</TopBar>
 
 				<div className="relative flex min-h-0 flex-1">
 					{/* The pointer-events pattern (953b22b): the sticky wrapper is

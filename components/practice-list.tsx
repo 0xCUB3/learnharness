@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { PlusIcon, TrashIcon } from "lucide-react";
-import { SidebarToggle } from "@/components/sidebar";
+import { TopBar } from "@/components/top-bar";
 import type { ProblemSet } from "@/src/core";
 import { PracticeDialog } from "@/components/practice-dialog";
 
@@ -47,8 +47,7 @@ export function PracticeListBody({
 				    the sidebar reopen toggle first, "Practice" beside it, the
 				    page's one action at the right edge (lh-no-drag — it must
 				    stay clickable inside the drag band). */}
-				<header className="lh-drag flex h-15 items-center gap-3 border-b border-border px-3">
-					<SidebarToggle />
+				<TopBar>
 					<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">
 						Practice
 					</div>
@@ -61,7 +60,7 @@ export function PracticeListBody({
 						<PlusIcon className="size-3.5" />
 						New problem set
 					</button>
-				</header>
+				</TopBar>
 				<div className="relative flex min-h-0 flex-1">
 					<div
 						className="h-full min-w-0 flex-1 overflow-y-auto"

@@ -31,9 +31,9 @@ import type { Problem, ProblemSet } from "@/src/core";
 import { CUE_LEVELS, LADDER_RUNGS, PRESENTATIONS } from "@/src/core";
 import { restoreMathEscapes } from "@/src/core";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { TopBar } from "@/components/top-bar";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { DictationBar, useDictation } from "@/components/dictation";
-import { SidebarToggle } from "@/components/sidebar";
 
 /** One answerable problem: textarea + focus-gated dictation bar. */
 export function ProblemBox({
@@ -99,15 +99,14 @@ export function PracticeExamBody({
 				    pattern — h-15, lh-drag (the Electron window-drag surface, so
 				    the traffic lights never cover content), the sidebar reopen
 				    toggle first, the set title truncating beside it. */}
-				<header className="lh-drag flex h-15 items-center gap-3 border-b border-border px-3">
-					<SidebarToggle />
+				<TopBar>
 					<div
 						className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight"
 						data-testid="practice-exam-title"
 					>
 						{set.title}
 					</div>
-				</header>
+				</TopBar>
 				<div className="relative flex min-h-0 flex-1">
 					<div
 						className="h-full min-w-0 flex-1 overflow-y-auto"

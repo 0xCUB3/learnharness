@@ -31,7 +31,7 @@ import { MermaidOverlay, SessionMermaidContext } from "@/components/session-over
 import { WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
-import { SidebarToggle } from "@/components/sidebar";
+import { TopBar } from "@/components/top-bar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsage } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
@@ -926,15 +926,12 @@ export function Chat({
 				    60px is an ALIGNMENT, not just a size: it equals the sidebar's
 				    LH wordmark band, so the header's border-b continues that
 				    band's bottom edge as one line across the app (owner, round 6). */}
-				<header
+				<TopBar
 					// While renaming the bar is NOT a drag surface: app-region:drag
 					// would eat the mousedown, so click-to-escape (below) could
-					// never fire. Rename mode is interactive mode (owner ask).
-					className={
-						renaming
-							? "flex h-15 items-center gap-3 border-b border-border px-3"
-							: "lh-drag flex h-15 items-center gap-3 border-b border-border px-3"
-					}
+					// never fire. Rename mode is interactive mode (owner ask) —
+					// TopBar's one escape hatch.
+					drag={!renaming}
 					onMouseDown={(e) => {
 						// Escape hitbox: any mousedown outside the input itself blurs
 						// it, running the existing onBlur commit path. The input is
@@ -943,7 +940,6 @@ export function Chat({
 						if (renaming && e.target !== titleInputRef.current) titleInputRef.current?.blur();
 					}}
 				>
-					<SidebarToggle />
 					{renaming ? (
 						<>
 							<input
@@ -1016,7 +1012,7 @@ export function Chat({
 					    numbers. Before the phase label — the chips cluster right. */}
 					<CoverageRing chatId={chatId} refreshKey={coverageTick} />
 					<PhaseChip phase={phases.at(-1) ?? "probe"} />
-				</header>
+				</TopBar>
 
 				<div className="relative flex min-h-0 flex-1">
 				<Conversation className="h-full min-w-0 flex-1" initial="instant">

@@ -7,9 +7,16 @@
  * directly — names live in the line, never twice), proposition CHIPS +
  * → connectors (a lonely chip = a standalone proposition; the "(no
  * premises)" annotation is dead), rotating chevrons, folder/waypoints
- * icons, hairline table lines, sortable Name + Created headers, a
- * floating bottom selection bar that never shifts layout, and a fuzzy
- * search that auto-expands matching clusters.
+ * icons, a floating bottom selection bar that never shifts layout, and
+ * a fuzzy search that auto-expands matching clusters.
+ *
+ * ROUND 2 (owner refinements, 2026-09-29 late): the top bar is THE
+ * shared TopBar (h-15, lh-drag + select-none, sidebar reopen, standard
+ * title size); PROMINENT indentation carries the hierarchy — the ONLY
+ * lines left are the separators between cluster groups (vertical column
+ * hairlines and per-row lines are gone); statement rows are PLAIN (no
+ * conclusion marker); ALL THREE columns sort (Props too — consistency)
+ * with a SMALL chevron on the active header.
  */
 
 import React from "react";
@@ -115,6 +122,29 @@ describe("ChainTableBody — clusters (the outermost layer)", () => {
 	});
 });
 
+describe("ChainTableBody — THE shared TopBar + the lines law (owner, round 2)", () => {
+	it("the body renders the standardized top bar: h-15, lh-drag, select-none, standard title size, close X", () => {
+		const html = render();
+		assert.ok(html.includes("lh-drag"), "the window-drag band");
+		assert.ok(html.includes("select-none"), "dragging never highlights the title");
+		assert.ok(html.includes("h-15"), "the standard height");
+		assert.ok(html.includes('font-title text-3xl tracking-tight">Chains<'), "the standard title size");
+		assert.ok(html.includes('data-testid="chain-table-close"'), "the close X");
+		assert.ok(html.includes('data-testid="chain-table-search"'), "the search input");
+	});
+
+	it("the ONLY lines are the separators between cluster groups — no per-row or vertical lines", () => {
+		const html = render({ expandedClusters: new Set(["chat1"]) });
+		// group wrappers: every group but the last carries the separator
+		const sep = html.split("border-b border-border/60").length - 1;
+		assert.ok(sep >= 2, "separators between groups");
+		// chain rows themselves carry NO border — their entire class list is
+		// the indent law (pl-11 under the cluster folder, owner round 2); the
+		// chip outlines' border-border/70 is an outline, not a row line
+		assert.ok(html.includes('class="flex items-center gap-1 py-1 pl-11 pr-3"'), "the chain row: indent, no border");
+	});
+});
+
 describe("ChainTableBody — chain rows (chips + connectors)", () => {
 	it("names render as outlined chips with → connectors BETWEEN them", () => {
 		const html = render({ expandedClusters: new Set(["chat1"]) });
@@ -143,7 +173,7 @@ describe("ChainTableBody — chain rows (chips + connectors)", () => {
 		assert.ok(html.includes('aria-label="Premise one, Premise two → Conclusion"'));
 	});
 
-	it("expanding a chain reveals member STATEMENTS directly — names never twice, conclusion marked", () => {
+	it("expanding a chain reveals member STATEMENTS directly — PLAIN rows, no conclusion marker (owner, round 2)", () => {
 		const html = render({
 			expandedClusters: new Set(["chat1"]),
 			expandedChains: new Set(["c1"]),
@@ -151,20 +181,26 @@ describe("ChainTableBody — chain rows (chips + connectors)", () => {
 		assert.ok(html.includes('data-testid="prop-row-a"'), "premise statement row");
 		assert.ok(html.includes("Statement A."), "the statement text, one click deep");
 		assert.ok(html.includes("Statement C."), "the conclusion statement");
-		assert.ok(html.includes('data-testid="prop-conclusion-c1"'), "the conclusion marker");
-		// premise rows carry no conclusion marker
-		const aRow = html.split('data-testid="prop-row-a"')[1]?.split('data-testid="prop-row-')[0] ?? "";
-		assert.ok(!aRow.includes("prop-conclusion"), "premises unmarked");
+		// owner ruling: the derivation is already encoded in the chain line —
+		// no conclusion marker down here
+		assert.ok(!html.includes("prop-conclusion"), "no conclusion marker anywhere");
+		// statements indent DEEPEST (pl-[4.75rem]); chains pl-11 under clusters
+		assert.ok(html.includes("pl-[4.75rem]"), "the deepest indent");
+		assert.ok(html.includes("pl-11"), "the chain indent");
 	});
 });
 
 describe("ChainTableBody — the sortable table headers", () => {
-	it("Name + Created are sort controls with aria-sort; Props is plain text", () => {
+	it("ALL THREE columns are sort controls with aria-sort (owner: consistency is key)", () => {
 		const html = render();
 		assert.ok(html.includes('data-testid="sort-name"'));
+		assert.ok(html.includes('data-testid="sort-props"'));
 		assert.ok(html.includes('data-testid="sort-created"'));
 		assert.ok(html.includes('aria-sort="ascending"'), "default name A→Z");
-		assert.ok(!html.includes('data-testid="sort-props"'), "size is text, not a control");
+		// the small chevron (size-3 lucide) marks the ACTIVE header only —
+		// no giant text triangles (owner, round 2)
+		assert.ok(html.includes('lucide-chevron-up size-3'), "small up chevron on active name");
+		assert.ok(html.includes('lucide-chevron-down') === false, "no down chevron while ascending");
 	});
 
 	it("descending state shows on the active header only", () => {
@@ -172,6 +208,20 @@ describe("ChainTableBody — the sortable table headers", () => {
 		assert.ok(html.includes('data-testid="sort-created"'));
 		assert.ok(html.includes('aria-sort="descending"'));
 		assert.ok(html.includes('aria-sort="none"'), "the inactive column");
+		assert.ok(html.includes('lucide-chevron-down size-3'), "small down chevron");
+	});
+
+	it("Props sort orders cluster rows AND chains within (largest-first by default)", () => {
+		const html = render({ sort: { col: "props", dir: 1 }, expandedClusters: new Set(["chat1"]) }); // ascending: smallest first
+		const unlabeled = html.indexOf("cluster-group-\0unlabeled");
+		const notes = html.indexOf('data-testid="cluster-group-notes1"');
+		const chat = html.indexOf('data-testid="cluster-group-chat1"');
+		assert.ok(unlabeled > 0 && notes > 0 && chat > 0, "all three groups render");
+		assert.ok(unlabeled < notes && notes < chat, "1 < 2 < 4 member ids ascending");
+		// within chat1: the singleton (1) sorts before the three-member chain
+		const soloRow = html.indexOf('data-testid="chain-row-solo"');
+		const c1Row = html.indexOf('data-testid="chain-row-c1"');
+		assert.ok(soloRow > 0 && c1Row > 0 && soloRow < c1Row, "chain sizes ascending within the cluster");
 	});
 });
 
