@@ -41,10 +41,13 @@ export function getPracticeSet(id: string): ProblemSet | null {
 function parseParams(raw: unknown): PracticeParams | null {
 	if (typeof raw !== "object" || raw === null) return null;
 	const p = raw as Record<string, unknown>;
-	const dial = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
-	if (!dial(p.searchSolutionRatio) || !dial(p.cueDistance) || !dial(p.presentation)) return null;
+	// Named levels ONLY (owner, 2026-09-29): exact unions, nothing between —
+	// a rung is a rung; there is no float to interpolate.
+	if (p.ladderRung !== 0 && p.ladderRung !== 1 && p.ladderRung !== 2 && p.ladderRung !== 3 && p.ladderRung !== 4) return null;
+	if (p.cueDistance !== 0 && p.cueDistance !== 1 && p.cueDistance !== 2) return null;
+	if (p.presentation !== "theory" && p.presentation !== "application") return null;
 	return {
-		searchSolutionRatio: p.searchSolutionRatio,
+		ladderRung: p.ladderRung,
 		cueDistance: p.cueDistance,
 		presentation: p.presentation,
 	};
@@ -88,7 +91,7 @@ export async function createPracticeSetResponse(body: unknown): Promise<Response
 	const params = parseParams(b.params);
 	if (!params) {
 		return Response.json(
-			{ error: "params must carry searchSolutionRatio, cueDistance, presentation as numbers in [0,1]" },
+			{ error: "params must carry ladderRung (0-4), cueDistance (0-2), presentation (theory|application) as exact levels" },
 			{ status: 400 },
 		);
 	}

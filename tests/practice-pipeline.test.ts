@@ -222,7 +222,7 @@ function diamondGraph(): GraphStore {
 	);
 }
 
-const PARAMS = { searchSolutionRatio: 0.6, cueDistance: 0.5, presentation: 0.4 };
+const PARAMS = { ladderRung: 4, cueDistance: 1, presentation: "theory" } as const;
 
 function fixture(partial: Partial<Parameters<typeof createPracticePipeline>[0]> = {}) {
 	const practice = memoryPracticeStore();

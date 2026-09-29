@@ -36,7 +36,7 @@ import type { PiEngine } from "../models.ts";
 import { runSubmitAgent } from "./submit-agent.ts";
 import { callUsage } from "./extraction.ts";
 import type { CallUsage, PracticeParams, ReasoningChain } from "../../core/contracts.ts";
-import { chainCoverage } from "../../core/practice.ts";
+import { chainCoverage, CUE_LEVELS, LADDER_RUNGS, PRESENTATIONS } from "../../core/practice.ts";
 
 // ─── doctrines ───────────────────────────────────────────────────────────────
 
@@ -109,13 +109,13 @@ Three operations modify a problem at any position on the axes.
 
 ### The ladder
 
-Canonical points on the main axis, bottom to top:
+The main axis, bottom to top — five rungs, numbered; the request arrives as a rung:
 
-- **Worked example** — the solution is shown; nothing is demanded. An installation object; nothing yet to recall.
-- **Completion** — the path is shown with a gap; the learner supplies one step. What to recall is nearly announced.
-- **Direct exercise** — one step, no hint, but the situation makes the applicable proposition unmistakable. Trains execution, not choosing.
-- **Composition** — several steps, chained; the path is narrow but must be held and run.
-- **Path-finding** — several steps, the path concealed, distractors present, the statement suggesting wrong methods. The competition shape.
+- **0 Worked example** — the solution is shown; nothing is demanded. An installation object; nothing yet to recall.
+- **1 Completion** — the path is shown with a gap; the learner supplies one step. What to recall is nearly announced.
+- **2 Direct exercise** — one step, no hint, but the situation makes the applicable proposition unmistakable. Trains execution, not choosing.
+- **3 Composition** — several steps, chained; the path is narrow but must be held and run.
+- **4 Path-finding** — several steps, the path concealed, distractors present, the statement suggesting wrong methods. The competition shape.
 
 The ladder is the main axis only. Cue distance and the three operations apply at every point.
 
@@ -183,7 +183,11 @@ You are one generator in a two-stage pipeline: a partitioner has already divided
 INPUTS (in the user message):
 - YOUR TARGET: the chains this problem is built to strengthen — the partitioner's assignment.
 - THE FULL SET: the proposition legend and chain list of the ENTIRE selection, not just the target. A coherent problem often cannot be built from the target alone — you may draw on other propositions of the full set as supporting material when the problem needs it. DOCTRINE: minimal use of outside propositions, maximal focus on the target — the target is what the learner must recall; outside propositions are material the solution may pass through. The never-announce rule covers every proposition, target or not.
-- THE PARAMETERS: search-to-solution ratio, cue distance, presentation, each 0..1 (0 = flashcard end / lesson-close / pure theory; 1 = competition end / far transfer / real-world application). Apply Part II step 2: degrade honestly if the target cannot support them — the degradation shows in the problem's own shape, never in meta-commentary.
+- THE PARAMETERS: three settings, each a named level — never a number to interpolate.
+  THE LADDER RUNG (the main axis): 0 Worked example · 1 Completion · 2 Direct exercise · 3 Composition · 4 Path-finding (Part I's ladder). The invocation names your rung; build exactly that CLASS of problem. There is no continuum between rungs — a rung-3 problem is composition, not "composition with a little path-finding."
+  THE CUE DISTANCE: 0 Lesson context · 1 Adjacent context · 2 Far context — how far the situation sits from the cues the learner has already met: the lesson's own examples AND every previous problem's situation. Far context is the edge of the recognizable band — the proposition must still genuinely apply, and the learner must be able to find it by looking.
+  THE PRESENTATION: Theory (the subject's own terms — symbols, formal objects, native vocabulary) or Application (a concrete worldly affair in which the proposition's structure appears in the wild). It dresses the situation; it never changes the rung or the cue distance.
+  Apply Part II step 2: degrade honestly if the target cannot support them — the degradation shows in the problem's own shape, never in meta-commentary.
 - PREVIOUS PROBLEMS: problems the learner has already answered, with the chains they exercised. Do not rebuild one; keep your situation distant from theirs — cue distance counts previous problems' situations (Part I, "Cue distance").
 
 OUTPUT — your entire deliverable is ONE submit_problem call:
@@ -201,7 +205,7 @@ PARTITION DOCTRINE:
 - SMALLEST SOUND SET: prefer fewer, well-loaded problems. But never force unrelated material together: a problem's chains must share a real target relationship (confusable with each other, feeding the same conclusion, forming a path, or clustered around one idea). If the only thing two chains share is the graph, they belong in different problems.
 - GROUP CONFUSABLES TOGETHER: propositions that apply to almost the same situations must land in the same problem — discrimination (choosing between near-identical situations) is a problem-engineering operation, and it is only possible when both confusables are in the room.
 - READ THE MIX OFF THE SHAPE: many singletons and few multi-premise chains suggest recall + discrimination problems; long premise chains suggest composition and path-finding. Your partition is where that judgment lives.
-- RESPECT THE PARAMETERS: the request carries the three dials (search-to-solution ratio, cue distance, presentation). Higher ratios support — and favor — larger assignments (more material to conceal a path in); at the bottom of the axis, one-step problems dominate and single chains stand alone.
+- RESPECT THE PARAMETERS: the request names the ladder rung, the cue distance, and the presentation. Low rungs (0–2) mean many small assignments — single chains standing alone; high rungs (3–4) mean larger assignments — composition needs material to chain, path-finding needs distractor material to conceal the path among. Far cue distance makes grouping confusables together MORE important: the discrimination must travel into the far situation. Presentation does not shape your partition.
 - DO NOT DUPLICATE: previous problems the learner has already seen are listed with their chains. If an existing problem already covers a group of chains, re-partition so the new set differs in what it groups and how.
 
 OUTPUT — your entire deliverable is ONE submit_partition call: "partitions", a list of { chains: [ids] }, one entry per problem, together containing every input chain exactly once. No empty entries; no unknown ids; no problem without a real target relationship.`;
@@ -277,10 +281,14 @@ export function renderChains(chains: ReasoningChain[], propositions: Proposition
 }
 
 export function renderParams(params: PracticeParams): string {
+	const rung = LADDER_RUNGS[params.ladderRung];
+	const cue = CUE_LEVELS[params.cueDistance];
+	const pres = PRESENTATIONS[params.presentation];
 	return [
-		`search-to-solution ratio: ${params.searchSolutionRatio.toFixed(1)} (0 = announced recall, 1 = competition problem)`,
-		`cue distance: ${params.cueDistance.toFixed(1)} (0 = lesson-close, 1 = far transfer)`,
-		`presentation: ${params.presentation.toFixed(1)} (0 = pure theory, 1 = real-world application)`,
+		"THE PARAMETERS",
+		`Ladder rung ${params.ladderRung} — ${rung.name}: ${rung.definition}`,
+		`Cue distance ${params.cueDistance} — ${cue.name}: ${cue.definition}`,
+		`Presentation: ${pres.name} — ${pres.definition}`,
 	].join("\n");
 }
 

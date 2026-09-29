@@ -2,10 +2,12 @@
 
 /**
  * The problem-set creation dialog (practice slice 5, 2026-09-29;
- * cluster-picker fix same evening): the three parameter dials + the
- * CLUSTER picker → POST /api/practice/sets → router.push to the new
- * exam page. In the delete-session dialog's shape (portaled z-50, pure
- * body exported for SSR pins).
+ * cluster-picker + discretized-axes fixes same evening): the three
+ * NAMED-LEVEL parameters — a 5-detent ladder slider, a 3-detent cue
+ * slider, a Theory|Application toggle — + the CLUSTER picker → POST
+ * /api/practice/sets → router.push to the new exam page. In the
+ * delete-session dialog's shape (portaled z-50, pure body exported for
+ * SSR pins).
  *
  * GRAPH-DOMAIN, NOT CHAT-DOMAIN (owner ruling 2026-09-29): problem sets
  * take NODES. The picker lists the birth-session clusters the graph
@@ -25,15 +27,16 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useSettingsDialog } from "@/components/settings/settings-dialog";
-import type { GraphClusterGroup } from "@/src/core";
+import { CUE_LEVELS, LADDER_RUNGS, PRESENTATIONS } from "@/src/core";
+import type { GraphClusterGroup, PracticeParams } from "@/src/core";
 
-/** The three dials — key order matches PracticeParams; anchors are the
- *  honest display (a raw 0..1 number tells the learner nothing). */
-export const PRACTICE_DIALS = [
-	{ key: "searchSolutionRatio", label: "Search ↔ Solve", anchors: "flashcard · competition" },
-	{ key: "cueDistance", label: "Cue distance", anchors: "near the lesson · far transfer" },
-	{ key: "presentation", label: "Presentation", anchors: "theory · application" },
-] as const;
+/** The creation defaults (owner, 2026-09-29): rung 2 Direct exercise,
+ *  cue 1 Adjacent context, Theory. */
+export const DEFAULT_PRACTICE_PARAMS: PracticeParams = {
+	ladderRung: 2,
+	cueDistance: 1,
+	presentation: "theory",
+};
 
 export interface PracticeFailure {
 	status: number;
@@ -44,8 +47,8 @@ export interface PracticeFailure {
 /** The dialog's pure body — exported for SSR pins (the delete-session /
  *  settings body pattern). The wrapper owns state + fetch + portal. */
 export function PracticeDialogBody({
-	values,
-	onDial,
+	params,
+	onParam,
 	clusters,
 	selectedKey,
 	onSelect,
@@ -55,8 +58,8 @@ export function PracticeDialogBody({
 	onClose,
 	onRun,
 }: {
-	values: Record<(typeof PRACTICE_DIALS)[number]["key"], number>;
-	onDial: (key: (typeof PRACTICE_DIALS)[number]["key"], v: number) => void;
+	params: PracticeParams;
+	onParam: (patch: Partial<PracticeParams>) => void;
 	clusters: GraphClusterGroup[];
 	selectedKey: string | null;
 	onSelect: (key: string) => void;
@@ -110,26 +113,74 @@ export function PracticeDialogBody({
 				</div>
 			</div>
 
-			{/* The three dials (SettingSlider's markup, anchors as display). */}
+			{/* The three parameters — named levels, never a number to
+			    interpolate (owner, 2026-09-29). Stepped sliders snap to the
+			    detents; each shows the level's NAME + its one-line
+			    definition; presentation is a two-segment toggle. */}
 			<div className="mt-4 flex flex-col gap-3">
-				{PRACTICE_DIALS.map((dial) => (
-					<label key={dial.key} className="flex flex-col gap-1">
-						<span className="flex items-center justify-between text-[11px] text-muted-foreground">
-							{dial.label}
-							<span className="text-muted-foreground/80">{dial.anchors}</span>
-						</span>
-						<input
-							type="range"
-							min={0}
-							max={1}
-							step={0.1}
-							value={values[dial.key]}
-							data-testid={`dial-${dial.key}`}
-							onChange={(e) => onDial(dial.key, Number(e.target.value))}
-							className="h-1.5 w-full accent-primary"
-						/>
-					</label>
-				))}
+				<div className="flex flex-col gap-1">
+					<span className="flex items-center justify-between text-[11px] text-muted-foreground">
+						Ladder
+						<span className="text-muted-foreground/80">0 · 1 · 2 · 3 · 4</span>
+					</span>
+					<input
+						type="range"
+						min={0}
+						max={4}
+						step={1}
+						value={params.ladderRung}
+						data-testid="param-ladder"
+						onChange={(e) => onParam({ ladderRung: Number(e.target.value) as PracticeParams["ladderRung"] })}
+						className="h-1.5 w-full accent-primary"
+					/>
+					<span data-testid="param-ladder-level" className="text-xs">
+						<span className="font-medium">{LADDER_RUNGS[params.ladderRung].name}</span>
+						<span className="text-muted-foreground"> — {LADDER_RUNGS[params.ladderRung].definition}</span>
+					</span>
+				</div>
+				<div className="flex flex-col gap-1">
+					<span className="flex items-center justify-between text-[11px] text-muted-foreground">
+						Cue distance
+						<span className="text-muted-foreground/80">0 · 1 · 2</span>
+					</span>
+					<input
+						type="range"
+						min={0}
+						max={2}
+						step={1}
+						value={params.cueDistance}
+						data-testid="param-cue"
+						onChange={(e) => onParam({ cueDistance: Number(e.target.value) as PracticeParams["cueDistance"] })}
+						className="h-1.5 w-full accent-primary"
+					/>
+					<span data-testid="param-cue-level" className="text-xs">
+						<span className="font-medium">{CUE_LEVELS[params.cueDistance].name}</span>
+						<span className="text-muted-foreground"> — {CUE_LEVELS[params.cueDistance].definition}</span>
+					</span>
+				</div>
+				<div className="flex flex-col gap-1">
+					<span className="text-[11px] text-muted-foreground">Presentation</span>
+					<div className="flex gap-1" data-testid="param-presentation">
+						{(["theory", "application"] as const).map((pres) => (
+							<button
+								type="button"
+								key={pres}
+								data-testid={`param-presentation-${pres}`}
+								onClick={() => onParam({ presentation: pres })}
+								className={`flex-1 rounded-md border px-3 py-1.5 text-xs transition-colors ${
+									params.presentation === pres
+										? "border-primary bg-primary/10 font-medium text-foreground"
+										: "text-muted-foreground hover:bg-accent"
+								}`}
+							>
+								{PRESENTATIONS[pres].name}
+							</button>
+						))}
+					</div>
+					<span data-testid="param-presentation-level" className="text-xs text-muted-foreground">
+						{PRESENTATIONS[params.presentation].definition}
+					</span>
+				</div>
 			</div>
 
 			{failure && (
@@ -176,11 +227,7 @@ export function PracticeDialogBody({
 export function PracticeDialog({ onClose }: { onClose: () => void }) {
 	const router = useRouter();
 	const { open: openSettings } = useSettingsDialog();
-	const [values, setValues] = useState<Record<(typeof PRACTICE_DIALS)[number]["key"], number>>({
-		searchSolutionRatio: 0.5,
-		cueDistance: 0.5,
-		presentation: 0.5,
-	});
+	const [params, setParams] = useState<PracticeParams>({ ...DEFAULT_PRACTICE_PARAMS });
 	const [clusters, setClusters] = useState<GraphClusterGroup[] | null>(null);
 	const [selectedKey, setSelectedKey] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -225,7 +272,7 @@ export function PracticeDialog({ onClose }: { onClose: () => void }) {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					nodeIds: picked.nodeIds,
-					params: values,
+					params,
 					title: picked.label ?? undefined,
 				}),
 			});
@@ -240,7 +287,7 @@ export function PracticeDialog({ onClose }: { onClose: () => void }) {
 			setFailure({ status: 0, error: "Create failed — network error. Try again." });
 			setBusy(false);
 		}
-	}, [clusters, selectedKey, busy, values, router]);
+	}, [clusters, selectedKey, busy, params, router]);
 
 	return createPortal(
 		<div
@@ -250,8 +297,8 @@ export function PracticeDialog({ onClose }: { onClose: () => void }) {
 			}}
 		>
 			<PracticeDialogBody
-				values={values}
-				onDial={(key, v) => setValues((prev) => ({ ...prev, [key]: v }))}
+				params={params}
+				onParam={(patch) => setParams((prev) => ({ ...prev, ...patch }))}
 				clusters={clusters ?? []}
 				selectedKey={selectedKey}
 				onSelect={setSelectedKey}

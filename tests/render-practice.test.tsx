@@ -9,11 +9,7 @@ import {
 	PracticeListBody,
 	setStatusWord,
 } from "../components/practice-list.tsx";
-import {
-	PRACTICE_DIALS,
-	PracticeDialogBody,
-	type PracticeFailure,
-} from "../components/practice-dialog.tsx";
+import { DEFAULT_PRACTICE_PARAMS, PracticeDialogBody, type PracticeFailure } from "../components/practice-dialog.tsx";
 import type { GraphClusterGroup } from "../src/core";
 import { PracticeExamBody } from "../components/practice-exam.tsx";
 import type { Problem, ProblemSet } from "../src/core";
@@ -30,13 +26,7 @@ import type { Problem, ProblemSet } from "../src/core";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
-const PARAMS = { searchSolutionRatio: 0.5, cueDistance: 0.5, presentation: 0.5 };
-
-const dialValues = {
-	searchSolutionRatio: 0.7,
-	cueDistance: 0.5,
-	presentation: 0.3,
-};
+const PARAMS = { ladderRung: 2, cueDistance: 1, presentation: "theory" } as const;
 
 function clusters(): GraphClusterGroup[] {
 	return [
@@ -95,8 +85,8 @@ function set(over: Partial<ProblemSet> = {}): ProblemSet {
 
 describe("PracticeDialogBody — creation (cluster picker)", () => {
 	const base = {
-		values: dialValues,
-		onDial: () => {},
+		params: { ...DEFAULT_PRACTICE_PARAMS },
+		onParam: () => {},
 		clusters: clusters(),
 		selectedKey: null,
 		onSelect: () => {},
@@ -107,13 +97,33 @@ describe("PracticeDialogBody — creation (cluster picker)", () => {
 		onRun: () => {},
 	};
 
-	it("renders the three dials with anchor labels", () => {
+	it("stepped controls: 5-detent ladder + 3-detent cue + Theory|Application toggle, defaults rung 2 / cue 1 / theory", () => {
 		const html = renderToStaticMarkup(<PracticeDialogBody {...base} />);
-		for (const dial of PRACTICE_DIALS) {
-			assert.ok(html.includes(`data-testid="dial-${dial.key}"`), `the ${dial.key} dial`);
-			assert.ok(html.includes(dial.anchors), `the ${dial.key} anchors`);
-			assert.ok(html.includes(dial.label));
-		}
+		assert.ok(html.includes('data-testid="param-ladder"'));
+		assert.match(html, /min="0" max="4" step="1"/);
+		assert.ok(html.includes('data-testid="param-cue"'));
+		assert.match(html, /min="0" max="2" step="1"/);
+		assert.ok(html.includes('data-testid="param-presentation-theory"'));
+		assert.ok(html.includes('data-testid="param-presentation-application"'));
+		// The DEFAULTS: rung 2 / cue 1 / theory, with names + definitions.
+		assert.match(html, /value="2"/); // ladder detent
+		assert.match(html, /value="1"/); // cue detent
+		assert.ok(html.includes("Direct exercise"), "default rung name");
+		assert.ok(html.includes("Adjacent context"), "default cue name");
+		assert.ok(html.includes("one step, no hint"), "current rung definition shown");
+		assert.ok(html.includes("same domain, different setup/packaging"), "current cue definition shown");
+	});
+
+	it("moving a detent swaps the shown name + definition; the toggle switches", () => {
+		const moved = renderToStaticMarkup(
+			<PracticeDialogBody {...base} params={{ ladderRung: 4, cueDistance: 0, presentation: "application" }} />,
+		);
+		assert.ok(moved.includes("Path-finding"));
+		assert.ok(moved.includes("the statement suggesting wrong methods"), "rung-4 definition");
+		assert.ok(moved.includes("Lesson context"));
+		assert.ok(moved.includes("textbook/toy-example shape"), "cue-0 definition");
+		assert.ok(moved.includes("a concrete worldly affair"), "application definition shown");
+		assert.match(moved, /param-presentation-application[^]*border-primary/, "application segment active");
 	});
 
 	it("cluster picker: label + proposition-count rows, notes kind marked, Create gated until picked", () => {
@@ -262,6 +272,13 @@ describe("PracticeExamBody — exam states", () => {
 		assert.ok(!html.includes('data-testid="answer-pp_1"'), "no answer box for a stub");
 		// No submit while generating.
 		assert.ok(!html.includes('data-testid="practice-submit"'));
+	});
+
+	it("the header carries the levels line (named levels, owner 2026-09-29)", () => {
+		const s = set({ problems: [readyProblem("pp_1", ["n3"])] });
+		const html = renderToStaticMarkup(<PracticeExamBody set={s} {...examBase} />);
+		assert.ok(html.includes('data-testid="practice-exam-levels"'));
+		assert.ok(html.includes("Direct exercise · Adjacent context · Theory"), "the fixture's rung 2 / cue 1 / theory");
 	});
 
 	it("ready: the statement renders as markdown, the box is answerable, submit gated on a draft", () => {

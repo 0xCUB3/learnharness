@@ -16,7 +16,7 @@ import {
 	type ToolCall,
 } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
-import { createPracticeAgents, renderChains, renderPreviousProblems } from "../src/agent/subagents/practice.ts";
+import { createPracticeAgents, renderChains, renderParams, renderPreviousProblems } from "../src/agent/subagents/practice.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError, type ProviderKeyMissing } from "../src/core/settings.ts";
 import type { PracticeParams, ReasoningChain } from "../src/core/contracts.ts";
 
@@ -31,7 +31,7 @@ const chains: ReasoningChain[] = [
 	{ id: "n3", premises: ["n1"], conclusion: "n3" },
 	{ id: "n2", premises: [], conclusion: "n2" },
 ];
-const params: PracticeParams = { searchSolutionRatio: 0.7, cueDistance: 0.4, presentation: 0.6 };
+const params: PracticeParams = { ladderRung: 3, cueDistance: 2, presentation: "application" };
 
 function fauxEngine(steps: FauxResponseStep[]): PiEngine {
 	const faux = createFauxCore({});
@@ -69,6 +69,21 @@ function silentModel(): PiEngine {
 }
 
 // ─── rendering ───────────────────────────────────────────────────────────────
+
+describe("renderParams — named levels, never a number", () => {
+	it("renders the exact named-level block", () => {
+		const out = renderParams(params);
+		assert.equal(
+			out,
+			[
+				"THE PARAMETERS",
+				"Ladder rung 3 — Composition: several steps, chained; the path is narrow but must be held and run.",
+				"Cue distance 2 — Far context: as far from the typical cue as recognition allows, the edge of the recognizable band — the proposition must still genuinely apply, and the learner must be able to find it by looking.",
+				'Presentation: Application — a concrete worldly affair — a case, episode, system, or story — in which the proposition\'s structure appears in the wild.',
+			].join("\n"),
+		);
+	});
+});
 
 describe("rendering (the agent-facing text)", () => {
 	it("renderChains: legend with names + statements, premises → conclusion, singletons marked", () => {

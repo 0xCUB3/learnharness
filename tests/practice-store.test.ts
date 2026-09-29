@@ -24,7 +24,7 @@ afterEach(() => {
 const init = (over: Partial<Omit<ProblemSet, "id">> = {}): Omit<ProblemSet, "id"> => ({
 	title: "Libertarianism — session practice",
 	createdAt: "2026-09-29T12:00:00.000Z",
-	params: { searchSolutionRatio: 0.7, cueDistance: 0.4, presentation: 0.6 },
+	params: { ladderRung: 2, cueDistance: 1, presentation: "theory" },
 	nodeIds: ["n_a", "n_b", "n_c"],
 	propositions: {
 		n_a: { name: "Self-ownership", statement: "Each person owns themself." },
@@ -122,6 +122,11 @@ describe("isProblemSet", () => {
 		assert.ok(!isProblemSet({}));
 		assert.ok(!isProblemSet({ ...init(), id: "xx_1" }));
 		assert.ok(!isProblemSet({ ...init(), params: { searchSolutionRatio: "high" } }));
+	// Legacy float-params sets fail the named-level unions and are
+	// skipped from lists (owner, 2026-09-29: no migration — data/practice
+	// is wiped before testing).
+	assert.ok(!isProblemSet({ ...init(), id: "ps_ok", params: { searchSolutionRatio: 0.7, cueDistance: 0.4, presentation: 0.6 } }));
+	assert.ok(!isProblemSet({ ...init(), id: "ps_ok2", params: { ladderRung: 2.5, cueDistance: 1, presentation: "theory" } }), "no floats between rungs");
 		assert.ok(!isProblemSet({ ...init(), chains: [{ id: "n_c", premises: "n_a", conclusion: "n_c" }] }));
 		assert.ok(!isProblemSet({ ...init(), propositions: { n_a: { name: "x" } } }));
 		assert.ok(!isProblemSet({ ...init(), status: "cooked" }));

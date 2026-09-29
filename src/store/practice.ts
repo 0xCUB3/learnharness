@@ -35,13 +35,17 @@ const isStringArray = (v: unknown): v is string[] =>
 const isParams = (v: unknown): boolean => {
 	if (typeof v !== "object" || v === null) return false;
 	const p = v as Record<string, unknown>;
+	// Named levels ONLY (owner, 2026-09-29): legacy float-params sets fail
+	// here and are skipped from lists — no migration (owner wipes
+	// data/practice before testing).
 	return (
-		typeof p.searchSolutionRatio === "number" &&
-		Number.isFinite(p.searchSolutionRatio) &&
-		typeof p.cueDistance === "number" &&
-		Number.isFinite(p.cueDistance) &&
-		typeof p.presentation === "number" &&
-		Number.isFinite(p.presentation)
+		(p.ladderRung === 0 ||
+			p.ladderRung === 1 ||
+			p.ladderRung === 2 ||
+			p.ladderRung === 3 ||
+			p.ladderRung === 4) &&
+		(p.cueDistance === 0 || p.cueDistance === 1 || p.cueDistance === 2) &&
+		(p.presentation === "theory" || p.presentation === "application")
 	);
 };
 

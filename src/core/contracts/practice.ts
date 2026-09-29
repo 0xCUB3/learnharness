@@ -49,17 +49,57 @@ export interface ReasoningChain {
 	conclusion: string;
 }
 
-/** The three dials every problem set is configured with (owner, 2026-09-29)
- *  — all 0..1, interpreted by the agents against the framework's axes. */
+/** The main axis, discretized (owner, 2026-09-29 — named levels, never
+ *  a number to interpolate; definitions verbatim from the ladder
+ *  doctrine): */
+export type LadderRung = 0 | 1 | 2 | 3 | 4;
+
+/** Cue distance from every situation the learner has already met — the
+ *  lesson's own examples AND every previous problem's situation
+ *  (definitions owner-approved 2026-09-29): */
+export type CueDistance = 0 | 1 | 2;
+
+/** How the situation is dressed — never changes the rung or the cue
+ *  distance: */
+export type Presentation = "theory" | "application";
+
+/** The three settings every problem set is configured with (owner,
+ *  2026-09-29) — each a named level, invoked as that level exactly:
+ *
+ *  THE LADDER (the main axis, bottom to top):
+ *    0 Worked example — the solution is shown; nothing is demanded. An
+ *      installation object; nothing yet to recall.
+ *    1 Completion — the path is shown with a gap; the learner supplies
+ *      one step. What to recall is nearly announced.
+ *    2 Direct exercise — one step, no hint, but the situation makes the
+ *      applicable proposition unmistakable. Trains execution, not choosing.
+ *    3 Composition — several steps, chained; the path is narrow but must
+ *      be held and run.
+ *    4 Path-finding — several steps, the path concealed, distractors
+ *      present, the statement suggesting wrong methods. The competition
+ *      shape.
+ *
+ *  THE CUE DISTANCE:
+ *    0 Lesson context — the textbook/toy-example shape in the teaching's
+ *      own framing.
+ *    1 Adjacent context — a genuinely new situation built from the
+ *      teaching's own world — same domain, different setup/packaging.
+ *    2 Far context — as far from the typical cue as recognition allows,
+ *      the edge of the recognizable band; the proposition must still
+ *      genuinely apply, and the learner must be able to find it by looking.
+ *
+ *  THE PRESENTATION:
+ *    theory — the subject's own terms — symbols, formal objects, native
+ *      vocabulary.
+ *    application — a concrete worldly affair — a case, episode, system,
+ *      or story — in which the proposition's structure appears in the wild. */
 export interface PracticeParams {
-	/** Search-to-solution ratio — the main axis: flashcard recall (0) to
-	 *  competition problem (1). */
-	searchSolutionRatio: number;
-	/** Cue distance from every situation already used (0 = near the
-	 *  lesson, 1 = far transfer — still inside the recognizable band). */
-	cueDistance: number;
-	/** Presentation axis: pure theory (0) to real-world application (1). */
-	presentation: number;
+	/** Which class of problem to build — exactly that rung. */
+	ladderRung: LadderRung;
+	/** How far the situation sits from the cues already met. */
+	cueDistance: CueDistance;
+	/** How the situation is dressed. */
+	presentation: Presentation;
 }
 
 /** Where a set stands in the two-stage run. The set is PERSISTED at
@@ -119,8 +159,8 @@ export interface Problem {
 export interface ProblemSet {
 	/** "ps_" + ts36 + rand — store-assigned. */
 	id: string;
-	/** Display label — auto-generated (the session's title, or
-	 *  date-based). */
+	/** Display label — the picked cluster's label, or the dated
+	 *  default. */
 	title: string;
 	createdAt: string;
 	params: PracticeParams;

@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GradeVerdict, Problem, ProblemSet } from "@/src/core";
+import { CUE_LEVELS, LADDER_RUNGS, PRESENTATIONS } from "@/src/core";
 import { restoreMathEscapes } from "@/src/core";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { BrailleSpinner } from "@/components/braille-spinner";
@@ -87,6 +88,10 @@ export function PracticeExamBody({
 		<div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6" data-testid="practice-exam">
 			<div className="flex flex-col gap-1">
 				<h1 className="font-title text-3xl tracking-tight">{set.title}</h1>
+				<p className="text-xs text-muted-foreground/80" data-testid="practice-exam-levels">
+					{LADDER_RUNGS[set.params.ladderRung].name} · {CUE_LEVELS[set.params.cueDistance].name} ·{" "}
+					{PRESENTATIONS[set.params.presentation].name}
+				</p>
 				<p className="text-sm text-muted-foreground" data-testid="practice-exam-status">
 					{set.status === "partitioning" && "Partitioning the chains…"}
 					{set.status === "generating" && `Generating — ${set.problems.filter((p) => p.status === "ready").length}/${set.problems.length} problems ready`}
