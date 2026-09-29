@@ -25,10 +25,20 @@
  * the → a clearly separated connector between chips — a lonely chip
  * reads as a standalone proposition (the "(no premises)" annotation is
  * dead in the visible UI; it survives only as the row's aria-label).
- * Icons: clusters FolderIcon (open when expanded), chains WaypointsIcon,
- * propositions chip-only. Chevrons rotate with expansion. Statement rows
- * show propositions PLAIN (owner ruling: the derivation is already
- * encoded in the chain line — no conclusion marker down there).
+ * Icons: ONLY the cluster FolderIcon survives (owner ruling, evening
+ * round 3: the chain waypoints icons are not needed — the chips +
+ * connectors already read as chains); propositions chip-only. Chevrons
+ * rotate with expansion. Statement rows show propositions PLAIN (owner
+ * ruling: the derivation is already encoded in the chain line — no
+ * conclusion marker down there).
+ *
+ * THE ALIGNMENT STAIRCASE (owner ruling, round 3): every level's
+ * checkbox sits DIRECTLY UNDER its parent's expander arrow — open a
+ * folder and the chain checkboxes line up with the arrow, same one
+ * level down. Geometry: the expander shares the checkbox's 14px width
+ * (h-5 w-3.5), so each nesting step is exactly checkbox(14) + gap(4) =
+ * 18px — clusters pl-3 (12px, checkbox at 12), chains pl-7.5 (30px =
+ * the cluster expander), statements pl-12 (48px = the chain expander).
  *
  * SORTING: all three columns sortable (owner ruling — "consistency is
  * key"): Name (A→Z), Props (largest-first), Created (newest-first);
@@ -58,7 +68,6 @@ import {
 	FolderOpenIcon,
 	ListTreeIcon,
 	SearchIcon,
-	WaypointsIcon,
 	XIcon,
 } from "lucide-react";
 import { chainsForSelection, formatChainLine, fuzzyScore } from "@/src/core";
@@ -255,9 +264,11 @@ export function ChainTableBody({
 			</TopBar>
 
 			{/* The list: NO per-row lines (owner ruling) — the ONLY horizontal
-			    separators sit between cluster groups; PROMINENT indentation
-			    carries the hierarchy (clusters → chains pl-11 → statements
-			    pl-[4.75rem]). All three columns sort, small chevron on active. */}
+			    separators sit between cluster groups; the ALIGNMENT STAIRCASE
+			    carries the hierarchy (owner round 3: each level's checkbox sits
+			    under its parent's expander arrow — clusters pl-3, chains pl-7.5
+			    under the folder arrow, statements pl-12 under the chain arrow).
+			    All three columns sort, small chevron on active. */}
 			<div className="min-h-0 flex-1 overflow-y-auto">
 				<div className="sticky top-0 z-10 flex items-center gap-1 px-3 py-1.5 text-[11px] uppercase tracking-widest text-muted-foreground/70 backdrop-blur">
 					<button
@@ -344,7 +355,7 @@ export function ChainTableBody({
 											<div
 												data-testid={`chain-row-${chain.id}`}
 												aria-label={formatChainLine(chain, Object.fromEntries([...byId.entries()].map(([id, n]) => [id, { name: n.name }])))}
-												className="flex items-center gap-1 py-1 pl-11 pr-3"
+												className="flex items-center gap-1 py-1 pl-7.5 pr-3"
 											>
 												<RowCheckbox
 													checked={selectedInChain === memberIds.length && memberIds.length > 0}
@@ -354,9 +365,6 @@ export function ChainTableBody({
 													label={`Select chain ${nameOf(chain.conclusion)}`}
 												/>
 												<Expander open={chainOpen} onClick={() => onToggleChain(chain.id)} testid={`chain-toggle-${chain.id}`} label={`Expand chain ${nameOf(chain.conclusion)}`} />
-												<span className="flex shrink-0 items-center justify-center text-muted-foreground">
-													<WaypointsIcon className="size-3.5" />
-												</span>
 												{/* The chain line: proposition names as faint-outlined
 												    chips, → the connector BETWEEN them (owner ruling) — a
 												    lonely chip reads as a standalone proposition. */}
@@ -394,7 +402,7 @@ export function ChainTableBody({
 														<div
 															key={id}
 															data-testid={`prop-row-${id}`}
-															className="flex items-start gap-2 py-1 pl-[4.75rem] pr-3"
+															className="flex items-start gap-2 py-1 pl-12 pr-3"
 														>
 															<RowCheckbox
 																checked={selection.has(id)}
@@ -464,7 +472,7 @@ function Expander({ open, onClick, testid, label }: { open: boolean; onClick: ()
 			onClick={onClick}
 			aria-label={label}
 			aria-expanded={open}
-			className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+			className="flex h-5 w-3.5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
 		>
 			<ChevronRightIcon className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
 		</button>
