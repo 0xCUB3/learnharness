@@ -70,9 +70,9 @@ describe("activity dock pure layer", () => {
 			},
 		});
 		const blob = toBlobs({ jobs: [priced], extractions: [] })[0]!;
-		// (10000-5000)/1e6*0.075 + 5000/1e6*0.015 + 1000/1e6*0.25 = 0.0007
-		// (pi-ai catalog prices)
-		assert.ok(blob.cost !== null && blob.cost > 0.0006 && blob.cost < 0.0008);
+		// (10000-5000)/1e6*0.15 + 5000/1e6*0.05 + 1000/1e6*0.5 = 0.0015
+		// (pi-ai catalog prices — glm-5.3-flash drifted in pi-ai 0.87.1)
+		assert.ok(blob.cost !== null && blob.cost > 0.0014 && blob.cost < 0.0016);
 		const absent = toBlobs({ jobs: [job()], extractions: [] })[0]!;
 		assert.equal(absent.cost, null);
 	});
@@ -243,7 +243,8 @@ describe("activity section render", () => {
 				}}
 			/>,
 		);
-		// two identical priced jobs → 2 × $0.001 = $0.0020 total (pi prices)
-		assert.match(html, /activity-total-cost[^>]*>\$0\.0020</);
+		// two identical priced jobs → 2 × $0.002 = $0.0040 total (pi prices,
+		// glm-5.3-flash drifted in pi-ai 0.87.1)
+		assert.match(html, /activity-total-cost[^>]*>\$0\.0040</);
 	});
 });

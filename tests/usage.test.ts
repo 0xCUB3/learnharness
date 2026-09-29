@@ -42,9 +42,10 @@ test("sumSteps folds steps; absent stays absent until a value appears", () => {
 test("callCost: glm-5.3-flash math — fresh input, cached read, output", () => {
 	const cost = callCost(call({ inputTokens: 100_000, outputTokens: 20_000, cacheReadTokens: 10_000 }), "openrouter:z-ai/glm-5.3-flash");
 	assert.ok(cost !== null);
-	// fresh 90k @ $0.075/M + cached 10k @ $0.015/M + output 20k @ $0.25/M
-	// (pi-ai catalog prices — regenerated tables, scripts/sync-pricing)
-	assert.ok(Math.abs(cost! - (0.00675 + 0.00015 + 0.005)) < 1e-9);
+	// fresh 90k @ $0.15/M + cached 10k @ $0.05/M + output 20k @ $0.5/M
+	// (pi-ai catalog prices — regenerated tables, scripts/sync-pricing;
+	// prices drifted in pi-ai 0.87.1, owner's cost fix 2026-09-29)
+	assert.ok(Math.abs(cost! - (0.0135 + 0.0005 + 0.01)) < 1e-9);
 });
 
 test("callCost: cache writes bill at the cacheWrite rate", () => {
