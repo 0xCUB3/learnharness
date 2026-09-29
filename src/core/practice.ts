@@ -91,6 +91,24 @@ export function chainsToGraph(
 	return { nodeIds: [...nodeIds].sort(), edges };
 }
 
+/** A chain as one world-facing line — the propositions' NAMES joined
+ *  by the derivation arrow: "Premise one, Premise two → Conclusion"; a
+ *  singleton shows its "(no premises)" marker. Pure + browser-safe:
+ *  the shell (chain table, derived previews) cannot import the agent
+ *  module — the level tables set this precedent. Unknown ids fall back
+ *  to the raw id (honest, never guessed). Premises sort by id — the
+ *  same determinism law as chainsForSelection. */
+export function formatChainLine(
+	chain: Pick<ReasoningChain, "premises" | "conclusion">,
+	propositions: Readonly<Record<string, { name: string }>>,
+): string {
+	const nameOf = (id: string) => propositions[id]?.name ?? id;
+	const premises = [...chain.premises].sort().map(nameOf).join(", ");
+	return premises !== ""
+		? `${premises} → ${nameOf(chain.conclusion)}`
+		: `${nameOf(chain.conclusion)} (no premises)`;
+}
+
 /** chainCoverage()'s report. `missing` fails the partition; `duplicated`
  *  is informational — a chain MAY legitimately be exercised by several
  *  problems (the operations make that sound). */

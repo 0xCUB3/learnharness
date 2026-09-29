@@ -31,6 +31,7 @@ const PROPS = {
 	onImportFiles: () => {},
 	settings: {} as GraphRenderSettings,
 	changeSettings: () => {},
+	onOpenChains: () => {},
 };
 
 describe("GraphChromeRow — the empty-graph ruling (owner, 2026-09-25)", () => {
@@ -42,16 +43,18 @@ describe("GraphChromeRow — the empty-graph ruling (owner, 2026-09-25)", () => 
 		// the settings gear is the lucide-settings svg (tooltip wave: its old
 		// native title is gone — the styled tooltip carries the label now)
 		assert.ok(!html.includes("lucide-settings"), "settings is a lie on an empty graph");
+		assert.ok(!html.includes('data-testid="open-chain-table"'), "chains is a lie on an empty graph");
 		assert.ok(!html.includes("graph-chrome-fade-in"), "nothing gated = nothing fading in");
 	});
 
-	it("POPULATED graph: all three render, the gated pair carries the fade", () => {
+	it("POPULATED graph: all four render, the gated trio carries the fade", () => {
 		const html = renderToStaticMarkup(createElement(GraphChromeRow, { ...PROPS, isEmpty: false }));
 		assert.ok(html.includes('data-testid="import-notes"'));
 		assert.ok(html.includes("Search nodes…"));
 		assert.ok(html.includes("lucide-settings"), "the settings gear renders");
-		// the appear-once fade rides exactly the two gated controls, never Import Notes
-		assert.equal(html.split("graph-chrome-fade-in").length - 1, 2, "two fade carriers: search + settings");
+		assert.ok(html.includes('data-testid="open-chain-table"'), "the chains entry renders");
+		// the appear-once fade rides exactly the three gated controls, never Import Notes
+		assert.equal(html.split("graph-chrome-fade-in").length - 1, 3, "three fade carriers: search + chains + settings");
 	});
 
 	it("the no-match note renders only when the wrapper says so (its truth stays upstream)", () => {

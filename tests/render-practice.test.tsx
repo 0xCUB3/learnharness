@@ -189,6 +189,49 @@ describe("PracticeDialogBody — creation (cluster picker)", () => {
 	});
 });
 
+describe("PracticeDialogBody — creation (CUSTOM mode, the chains overlay's handoff)", () => {
+	const base = {
+		params: { ...DEFAULT_PRACTICE_PARAMS },
+		onParam: () => {},
+		note: "",
+		onNote: () => {},
+		clusters: clusters(),
+		selectedKey: null,
+		onSelect: () => {},
+		busy: false,
+		failure: null as PracticeFailure | null,
+		onOpenSettings: () => {},
+		onClose: () => {},
+		onRun: () => {},
+	};
+
+	it("no cluster picker — the selection summary + dated default title instead", () => {
+		const html = renderToStaticMarkup(
+			<PracticeDialogBody
+				{...base}
+				mode="custom"
+				selection={{ nodeIds: ["n1", "n2", "n3", "n4"], propositions: 4, chains: 2 }}
+			/>,
+		);
+		assert.ok(!html.includes('data-testid="practice-dialog-clusters"'), "custom mode has no picker");
+		assert.ok(html.includes('data-testid="practice-dialog-selection"'));
+		assert.match(html, /Practice — (<!-- -->)?\d{4}-\d{2}-\d{2}/, "the dated default title (the pipeline's own stamp)");
+		assert.ok(html.includes('data-testid="practice-dialog-selection-line"'));
+		assert.ok(html.includes("4 propositions"));
+		assert.ok(html.includes("2 chains"));
+		assert.ok(!html.includes('disabled=""'), "a non-empty selection enables Create immediately");
+	});
+
+	it("dials + note still ride along — the params/note laws are mode-independent", () => {
+		const html = renderToStaticMarkup(
+			<PracticeDialogBody {...base} mode="custom" selection={{ nodeIds: ["n1"], propositions: 1, chains: 1 }} />,
+		);
+		assert.ok(html.includes('data-testid="param-ladder"'));
+		assert.ok(html.includes('data-testid="practice-note"'));
+		assert.ok(html.includes("1 proposition →"));
+	});
+});
+
 // ─── the list page ───────────────────────────────────────────────────────────
 
 describe("PracticeListBody — the set list", () => {

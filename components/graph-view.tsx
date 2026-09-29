@@ -66,13 +66,14 @@
 
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { FileTextIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
+import { FileTextIcon, ListTreeIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
 import { incrementalLayout, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useActivity } from "@/components/activity-dock";
 import { MenuShell } from "@/components/menu-shell.tsx";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
+import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { Hint } from "@/components/ui/hint";
 import {
 	ARROW_LENGTH_LADDER,
@@ -860,6 +861,7 @@ export function GraphChromeRow({
 	onImportFiles,
 	settings,
 	changeSettings,
+	onOpenChains,
 }: {
 	isEmpty: boolean;
 	query: string;
@@ -873,6 +875,9 @@ export function GraphChromeRow({
 	onImportFiles: (files: FileList | null) => void;
 	settings: GraphRenderSettings;
 	changeSettings: (update: (cur: RenderSettings) => RenderSettings) => void;
+	/** Opens the chain table overlay (the chains-overlay plan,
+	 *  2026-09-29). */
+	onOpenChains: () => void;
 }) {
 	return (
 		<>
@@ -900,6 +905,24 @@ export function GraphChromeRow({
 					{noMatch && (
 						<div className="px-1.5 pt-1 text-[11px] text-muted-foreground">No matching nodes.</div>
 					)}
+				</div>
+			)}
+			{/* The chain table (chains overlay, owner plan 2026-09-29) — the
+			    graph's free-form practice entry. Own container (36px band),
+			    between the search and Import. */}
+			{!isEmpty && (
+				<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+					<Hint label="Every reasoning chain, selectable for practice" side="bottom">
+						<button
+							type="button"
+							onClick={onOpenChains}
+							data-testid="open-chain-table"
+							className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
+						>
+							<ListTreeIcon className="size-3" />
+							Chains
+						</button>
+					</Hint>
 				</div>
 			)}
 			{/* Import notes — its own container (36px, header band); ALWAYS
@@ -1050,6 +1073,9 @@ export function GraphView() {
 	// Fetch the derived graph. Re-runs when a background pipeline run
 	// finishes (refreshTick) — its merges just landed in the ledger.
 	const [refreshTick, setRefreshTick] = useState(0);
+	// The chain table overlay (chains-overlay plan, 2026-09-29) —
+	// component-local: a browsing surface, not graph state.
+	const [chainsOpen, setChainsOpen] = useState(false);
 	useEffect(() => {
 		let cancelled = false;
 		fetch("/api/graph")
@@ -1529,6 +1555,20 @@ export function GraphView() {
 				}}
 			/>
 
+			{/* The chain table overlay (chains-overlay plan, 2026-09-29):
+			    ABSOLUTE INSIDE the graph area (the session-overlay idiom —
+			    never a body portal) so the app chrome stays sharp and
+			    reachable; the overlay itself is read-only toward the graph
+			    and owns its selection + the custom practice dialog. */}
+			<ChainTableOverlay
+				open={chainsOpen && !isEmpty}
+				nodes={snapshot?.nodes ?? []}
+				edges={snapshot?.edges ?? []}
+				sessions={snapshot?.sessions ?? {}}
+				fileSources={snapshot?.fileSources ?? {}}
+				onClose={() => setChainsOpen(false)}
+			/>
+
 			{/* Legend + filters: search box and per-state toggle rows. */}
 			{/* Top-right controls — separate floating containers (owner,
 			    graph-view round 2). Row order (2026-09-17): search,
@@ -1576,6 +1616,7 @@ export function GraphView() {
 					onImportFiles={onImportFiles}
 					settings={settings}
 					changeSettings={changeSettings}
+					onOpenChains={() => setChainsOpen(true)}
 				/>
 			</div>
 

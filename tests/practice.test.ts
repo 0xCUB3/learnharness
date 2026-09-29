@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { EdgeType } from "../src/core/contracts.ts";
-import { chainCoverage, chainsForSelection, chainsToGraph } from "../src/core/practice.ts";
+import { chainCoverage, chainsForSelection, chainsToGraph, formatChainLine } from "../src/core/practice.ts";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -136,5 +136,26 @@ describe("chainCoverage", () => {
 			problems: [{ chains: ["b", "ghost"] }],
 		};
 		assert.deepEqual(chainCoverage(set), { missing: [], duplicated: [] });
+	});
+});
+
+describe("formatChainLine (the chain table's one-line shape, 2026-09-29)", () => {
+	const props = {
+		p1: { name: "Premise one" },
+		p2: { name: "Premise two" },
+		c1: { name: "Conclusion" },
+		solo: { name: "Standalone" },
+	};
+
+	it("joins sorted premise NAMES by the derivation arrow", () => {
+		assert.equal(formatChainLine({ premises: ["p2", "p1"], conclusion: "c1" }, props), "Premise one, Premise two → Conclusion");
+	});
+
+	it("a singleton shows its (no premises) marker", () => {
+		assert.equal(formatChainLine({ premises: [], conclusion: "solo" }, props), "Standalone (no premises)");
+	});
+
+	it("unknown ids fall back to the raw id (honest, never guessed)", () => {
+		assert.equal(formatChainLine({ premises: ["ghost"], conclusion: "c1" }, props), "ghost → Conclusion");
 	});
 });
