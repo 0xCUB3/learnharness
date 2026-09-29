@@ -272,7 +272,9 @@ export function ChainTableBody({
 			    statements pl-21 where a chain icon would sit).
 			    All three columns sort, small chevron on active. */}
 			<div className="min-h-0 flex-1 overflow-y-auto">
-				<div className="sticky top-0 z-10 flex items-center gap-1 px-3 py-1.5 text-[11px] uppercase tracking-widest text-muted-foreground/70 backdrop-blur">
+				{/* The TOP rule (owner round 5: the table is framed — a line under
+			    the header, a line under the last group, lines between groups). */}
+				<div className="sticky top-0 z-10 flex items-center gap-1 border-b border-border/60 bg-background/80 px-3 py-1.5 text-[11px] uppercase tracking-widest text-muted-foreground/70 backdrop-blur">
 					<button
 						type="button"
 						data-testid="sort-name"
@@ -308,17 +310,29 @@ export function ChainTableBody({
 					</div>
 				)}
 
-				{groups.map((group, groupIndex) => {
+				{groups.map((group) => {
 					const open = searching || expandedClusters.has(group.key);
 					const selectedCount = group.nodeIds.filter((id) => selection.has(id)).length;
 					return (
 						<div
 							key={group.key}
 							data-testid={`cluster-group-${group.key}`}
-							// The one line that survives (owner ruling): the separator
-							// BETWEEN cluster groups — never on individual rows.
-							className={groupIndex < groups.length - 1 ? "border-b border-border/60" : ""}
+							// The horizontal rules (owner rulings, rounds 2 + 5): between
+							// cluster groups AND under the last one — the table is framed
+							// top (header) and bottom. Never on individual rows.
+							className="relative border-b border-border/60"
 						>
+							{/* The TREE THREAD (owner round 5, trial): a vertical guide
+							    dropping from the cluster's expander arrow down through
+							    its chain rows — the arrow's column (center 37px: pl-3 +
+							    checkbox 14 + gap 4 + half the 14px expander), from the
+							    arrow's own height to the last row's middle. */}
+							{open && group.chains.length > 0 && (
+								<div
+									data-testid={`cluster-thread-${group.key}`}
+									className="pointer-events-none absolute bottom-3.5 left-[37px] top-4 w-px bg-border/50"
+								/>
+							)}
 							{/* The cluster row: birth-session group header. */}
 							<div className="flex items-center gap-1 px-3 py-1.5">
 								<RowCheckbox
@@ -353,7 +367,16 @@ export function ChainTableBody({
 									const chainOpen = expandedChains.has(chain.id);
 									const selectedInChain = memberIds.filter((id) => selection.has(id)).length;
 									return (
-										<div key={chain.id} data-testid={`chain-block-${chain.id}`}>
+										<div key={chain.id} data-testid={`chain-block-${chain.id}`} className="relative">
+												{/* The chain's own thread: from its expander arrow down
+												    through the statement rows (center 73px: pl-12 +
+												    checkbox 14 + gap 4 + half the expander). */}
+												{chainOpen && memberIds.length > 0 && (
+													<div
+														data-testid={`chain-thread-${chain.id}`}
+														className="pointer-events-none absolute bottom-3.5 left-[73px] top-3.5 w-px bg-border/50"
+													/>
+												)}
 											<div
 												data-testid={`chain-row-${chain.id}`}
 												aria-label={formatChainLine(chain, Object.fromEntries([...byId.entries()].map(([id, n]) => [id, { name: n.name }])))}

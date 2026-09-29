@@ -133,15 +133,27 @@ describe("ChainTableBody — THE shared TopBar + the lines law (owner, round 2)"
 		assert.ok(html.includes('data-testid="chain-table-search"'), "the search input");
 	});
 
-	it("the ONLY lines are the separators between cluster groups — no per-row or vertical lines", () => {
+	it("the table is FRAMED: header rule + rules between groups + rule under the last group; rows stay lineless (owner round 5)", () => {
 		const html = render({ expandedClusters: new Set(["chat1"]) });
-		// group wrappers: every group but the last carries the separator
+		// every group wrapper carries the rule now — between groups AND under
+		// the last one; the header carries the TOP rule
 		const sep = html.split("border-b border-border/60").length - 1;
-		assert.ok(sep >= 2, "separators between groups");
+		assert.ok(sep >= 4, "header + 3 group rules");
 		// chain rows themselves carry NO border — their entire class list is
 		// the staircase law (pl-12 = aligned with the cluster's FOLDER icon);
 		// the chip outlines' border-border/70 is an outline, not a row line
 		assert.ok(html.includes('class="flex items-center gap-1 py-1 pl-12 pr-3"'), "the chain row: staircase indent, no border");
+	});
+
+	it("TREE THREADS: open folders/chains drop a vertical guide from their expander arrow down the children's edge (owner round 5)", () => {
+		const collapsed = render();
+		assert.ok(!collapsed.includes("cluster-thread-"), "no thread while collapsed");
+		const open = render({ expandedClusters: new Set(["chat1"]), expandedChains: new Set(["c1"]) });
+		assert.ok(open.includes('data-testid="cluster-thread-chat1"'), "the cluster thread");
+		assert.ok(open.includes('data-testid="chain-thread-c1"'), "the chain thread");
+		// the columns: the cluster arrow sits at 37px, the chain arrow at 73px
+		assert.ok(open.includes("left-[37px]"), "thread at the cluster arrow's column");
+		assert.ok(open.includes("left-[73px]"), "thread at the chain arrow's column");
 	});
 });
 
