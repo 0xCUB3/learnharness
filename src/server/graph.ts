@@ -4,6 +4,7 @@ import type { GraphClusterGroup, GraphSnapshot } from "../core/contracts.ts";
 import type { GraphCostSummary } from "../core/cost-summary.ts";
 import { graphCostSummary } from "../core/cost-summary.ts";
 import { graphSnapshot } from "../core/graph.ts";
+import { birthSessionPartition } from "../core/session-clusters.ts";
 import {
 	deleteNodeTraces,
 	nodeDeletionImpact,
@@ -23,21 +24,23 @@ export function graphView(): GraphSnapshot {
 	return graphSnapshot(stores);
 }
 
-/** GET /api/graph/clusters — the birth-session groups the graph view
- *  renders, resolved to node ids for the practice picker (owner ruling
- *  2026-09-29: cluster→nodeIds resolves in the UI; the API stays
- *  graph-domain). Reuses the snapshot's clustering verbatim — same
- *  ordering (size desc, ties by id) and the same MIN_CLUSTER_SIZE
- *  presentation filter the canvas honors. A corrupt/empty graph is an
- *  empty list. */
+/** GET /api/graph/clusters — the birth-session groups, resolved to node
+ *  ids for the practice picker (owner ruling 2026-09-29: cluster→nodeIds
+ *  resolves in the UI; the API stays graph-domain). EVERY group is
+ *  listed regardless of size (owner ruling, same evening:
+ *  MIN_CLUSTER_SIZE is a hull-DRAWING rule — practice availability must
+ *  not inherit a visual threshold), with the partition's own ordering
+ *  (size desc, ties by id asc). The label join mirrors the snapshot's:
+ *  chat title / notes file path, null when the naming record is gone —
+ *  honest, never guessed. A corrupt/empty graph is an empty list. */
 export function graphClusters(): GraphClusterGroup[] {
 	const snap = graphSnapshot(stores);
-	return snap.clusters.map((cluster) => ({
-		key: cluster.id,
-		kind: cluster.id in snap.sessions ? "chat" : "notes",
-		label: cluster.label,
-		nodeIds: cluster.members,
-		nodeCount: cluster.members.length,
+	return birthSessionPartition(snap.nodes).map((group) => ({
+		key: group.id,
+		kind: group.id in snap.sessions ? "chat" : "notes",
+		label: snap.sessions[group.id] ?? snap.fileSources[group.id] ?? null,
+		nodeIds: group.members,
+		nodeCount: group.members.length,
 	}));
 }
 

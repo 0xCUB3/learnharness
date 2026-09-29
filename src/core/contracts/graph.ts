@@ -260,10 +260,11 @@ export interface Cluster {
 
 /** One birth-session cluster as the practice picker consumes it (owner
  *  ruling 2026-09-29: problem sets take NODES — the UI resolves a picked
- *  cluster to its member ids). Same grouping the graph view renders
- *  (birthSessionPartition semantics, MIN_CLUSTER_SIZE presentation
- *  filter included); `label` is null when the naming record is gone —
- *  honest, never guessed (the graph view renders those unlabeled). */
+ *  cluster to its member ids). EVERY birth-session group regardless of
+ *  size (owner ruling, same evening: MIN_CLUSTER_SIZE is a hull-drawing
+ *  rule — practice availability must not inherit a visual threshold);
+ *  `label` is null when the naming record is gone — honest, never
+ *  guessed (the graph view renders those unlabeled). */
 export interface GraphClusterGroup {
 	/** The birth session's id — a chatId or a notes source id. */
 	key: string;

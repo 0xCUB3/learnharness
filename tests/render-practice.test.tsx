@@ -46,6 +46,15 @@ function clusters(): GraphClusterGroup[] {
 	];
 }
 
+/** Small groups are listable (owner ruling: practice availability never
+ *  inherits the hull-drawing threshold). */
+function smallClusters(): GraphClusterGroup[] {
+	return [
+		{ key: "chat_2", kind: "chat", label: "One-off question", nodeIds: ["n20"], nodeCount: 1 },
+		{ key: "chat_3", kind: "chat", label: "Quick exchange", nodeIds: ["n30", "n31"], nodeCount: 2 },
+	];
+}
+
 function stubProblem(id: string, chains: string[]): Problem {
 	return { id, chains, statement: "", solution: "", rubric: "", status: "generating" };
 }
@@ -129,6 +138,15 @@ describe("PracticeDialogBody — creation (cluster picker)", () => {
 	it("an empty graph is an honest empty list", () => {
 		const html = renderToStaticMarkup(<PracticeDialogBody {...base} clusters={[]} />);
 		assert.ok(html.includes("No clusters yet"));
+		assert.ok(html.includes("once a session births its first proposition"), "no 3+ mechanics in copy");
+	});
+
+	it("1- and 2-proposition groups appear — no hull threshold in the picker", () => {
+		const html = renderToStaticMarkup(<PracticeDialogBody {...base} clusters={smallClusters()} />);
+		assert.ok(html.includes('data-testid="practice-cluster-chat_2"'), "singleton group listed");
+		assert.ok(html.includes("1 propositions"));
+		assert.ok(html.includes('data-testid="practice-cluster-chat_3"'), "pair group listed");
+		assert.ok(html.includes("2 propositions"));
 	});
 
 	it("empty selection (vanished nodes) renders the honest inline line", () => {
