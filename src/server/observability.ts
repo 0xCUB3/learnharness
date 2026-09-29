@@ -20,6 +20,7 @@
  */
 
 import { extractionStatuses, type ExtractionPhase } from "../agent/subagents/extraction.ts";
+import { practiceStatuses, type PracticePhase } from "../agent/subagents/practice-pipeline.ts";
 import { chatStore } from "../store/chats.ts";
 import { graphRevision } from "./graph.ts";
 import { catalogContextLimits } from "./model-catalog.ts";
@@ -27,6 +28,7 @@ import { listJobs } from "./jobs.ts";
 import type { JobRecord } from "../core/contracts.ts";
 
 export { abortExtraction, extractionStatuses, type ExtractionPhase, type RunningExtraction } from "../agent/subagents/extraction.ts";
+export { practiceStatuses, type PracticePhase, type RunningPractice } from "../agent/subagents/practice-pipeline.ts";
 export { chatStore } from "../store/chats.ts";
 
 /** A running sub-agent job, joined with its chat's title for the dock.
@@ -54,6 +56,16 @@ export interface ActivityExtraction {
 	startedAt: number;
 }
 
+/** A live practice run in the dock's feed — mirrors ActivityExtraction
+ *  (kind names which pipeline half: generation or grading). */
+export interface ActivityPractice {
+	id: string;
+	kind: "generation" | "grading";
+	title: string;
+	phase: PracticePhase;
+	startedAt: number;
+}
+
 /** The dock's whole world in one payload: every running process, every view.
  *  Jobs are RUNNING-ONLY — finished jobs belong to their chat's transcript;
  *  the blob disappears when the process ends. Cost math is NOT done here:
@@ -65,7 +77,12 @@ export interface ActivityExtraction {
  *  graph changed underneath me" (a merge landed, a deletion purged) and
  *  refetch clusters/layout. Reads never move it; the DELETE response
  *  returns the same stamp. */
-export function activityFeed(): { jobs: ActivityJob[]; extractions: ActivityExtraction[]; graphRevision: number } {
+export function activityFeed(): {
+	jobs: ActivityJob[];
+	extractions: ActivityExtraction[];
+	practice: ActivityPractice[];
+	graphRevision: number;
+} {
 	const chats = chatStore.listChats();
 	const limits = catalogContextLimits();
 	const jobs: ActivityJob[] = [];
@@ -93,11 +110,19 @@ export function activityFeed(): { jobs: ActivityJob[]; extractions: ActivityExtr
 		phase: run.phase,
 		startedAt: run.startedAt,
 	}));
+	const practice: ActivityPractice[] = practiceStatuses().map((row) => ({
+		id: row.setId,
+		kind: row.kind,
+		title: row.label,
+		phase: row.phase,
+		startedAt: row.startedAt,
+	}));
 	// oldest-first on last activity: the stable blob order (ISO strings sort chronologically)
 	jobs.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
 	return {
 		jobs,
 		extractions: extractions.sort((a, b) => a.startedAt - b.startedAt),
+		practice: practice.sort((a, b) => a.startedAt - b.startedAt),
 		graphRevision: graphRevision(),
 	};
 }

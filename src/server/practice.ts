@@ -1,0 +1,132 @@
+/**
+ * THE PRACTICE SERVICE (slice 4, 2026-09-29): the thin, route-facing
+ * surface over the practice pipeline — request parsing/validation, typed
+ * error → response mapping. Routes call THIS, never the pipeline
+ * internals (the chats/graph service discipline).
+ *
+ * The pipeline instance is the chat-handler composition root's export
+ * (`practice`, next to `extraction`): engines resolve fresh per stage
+ * from BYOK settings, and refusals map to the 503 envelope family.
+ */
+
+import { practice } from "./chat-handler.ts";
+import { stores } from "./stores.ts";
+import type { PracticeParams, ProblemSet } from "../core/contracts.ts";
+import {
+	BadAnswersError,
+	EmptySelectionError,
+	PracticeSetNotFound,
+	PracticeSetNotReady,
+	UnknownChatError,
+} from "../agent/subagents/practice-pipeline.ts";
+import {
+	ModelsNotConfiguredError,
+	ProviderKeyMissingError,
+	PROVIDER_KEY_MISSING_CODE,
+} from "../core/settings.ts";
+
+// app/api uses base-URL charset ids (the activity/abort precedent).
+const ID_OK = /^[A-Za-z0-9_-]+$/;
+
+/** GET /api/practice/sets — the list, createdAt desc (store's order). */
+export function listPracticeSets(): ProblemSet[] {
+	return stores.practiceStore.listSets();
+}
+
+/** GET /api/practice/sets/[id] — one set, or null (→ 404). */
+export function getPracticeSet(id: string): ProblemSet | null {
+	return stores.practiceStore.getSet(id);
+}
+
+/** Strict params: three finite numbers in [0, 1]. */
+function parseParams(raw: unknown): PracticeParams | null {
+	if (typeof raw !== "object" || raw === null) return null;
+	const p = raw as Record<string, unknown>;
+	const dial = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+	if (!dial(p.searchSolutionRatio) || !dial(p.cueDistance) || !dial(p.presentation)) return null;
+	return {
+		searchSolutionRatio: p.searchSolutionRatio,
+		cueDistance: p.cueDistance,
+		presentation: p.presentation,
+	};
+}
+
+/** The typed pipeline errors → HTTP (refusals → the 503 envelope family,
+ *  exactly like the import route's extraction mapping). */
+export function practiceErrorResponse(err: unknown): Response {
+	if (err instanceof ModelsNotConfiguredError) {
+		return Response.json(
+			{ error: err.envelope.error, code: "models_not_configured", missing: err.envelope.missing },
+			{ status: 503 },
+		);
+	}
+	if (err instanceof ProviderKeyMissingError) {
+		return Response.json(
+			{
+				error: err.envelope.error,
+				code: PROVIDER_KEY_MISSING_CODE,
+				provider: err.envelope.provider,
+				slots: err.envelope.slots,
+			},
+			{ status: 503 },
+		);
+	}
+	if (err instanceof EmptySelectionError) return Response.json({ error: err.message, code: "empty_selection" }, { status: 400 });
+	if (err instanceof UnknownChatError) return Response.json({ error: err.message, code: "unknown_chat" }, { status: 404 });
+	if (err instanceof BadAnswersError) return Response.json({ error: err.message, code: "bad_answers" }, { status: 400 });
+	if (err instanceof PracticeSetNotFound) return Response.json({ error: err.message, code: "not_found" }, { status: 404 });
+	if (err instanceof PracticeSetNotReady) return Response.json({ error: err.message, code: "not_ready" }, { status: 409 });
+	console.error("[practice] unexpected:", err);
+	return Response.json({ error: "Internal error" }, { status: 500 });
+}
+
+/** POST /api/practice/sets — 202 {id}; the set generates in the
+ *  background (fire-and-forget pipeline). */
+export async function createPracticeSetResponse(body: unknown): Promise<Response> {
+	const b = (body ?? {}) as Record<string, unknown>;
+	const params = parseParams(b.params);
+	if (!params) {
+		return Response.json(
+			{ error: "params must carry searchSolutionRatio, cueDistance, presentation as numbers in [0,1]" },
+			{ status: 400 },
+		);
+	}
+	try {
+		if (typeof b.chatId === "string" && b.chatId !== "") {
+			if (!ID_OK.test(b.chatId)) return Response.json({ error: "Invalid chatId" }, { status: 400 });
+			const { set } = await practice.createProblemSet({ chatId: b.chatId }, params);
+			return Response.json({ id: set.id }, { status: 202 });
+		}
+		if (Array.isArray(b.nodeIds) && b.nodeIds.every((id): id is string => typeof id === "string" && ID_OK.test(id))) {
+			if (b.nodeIds.length === 0) {
+				return Response.json({ error: "nodeIds is empty", code: "empty_selection" }, { status: 400 });
+			}
+			const { set } = await practice.createProblemSet({ nodeIds: b.nodeIds }, params);
+			return Response.json({ id: set.id }, { status: 202 });
+		}
+	} catch (err) {
+		return practiceErrorResponse(err);
+	}
+	return Response.json({ error: 'Body must be {chatId, params} or {nodeIds, params}' }, { status: 400 });
+}
+
+/** POST /api/practice/sets/[id]/answers — 202; grades land in the
+ *  background. Body: {answers: [{problemId, text}]}. */
+export async function submitPracticeAnswersResponse(setId: string, body: unknown): Promise<Response> {
+	if (!ID_OK.test(setId)) return Response.json({ error: "Invalid set id" }, { status: 400 });
+	const b = (body ?? {}) as Record<string, unknown>;
+	const raw = b.answers;
+	if (!Array.isArray(raw) || raw.length === 0 || !raw.every((a): a is { problemId: string; text: string } =>
+		typeof a === "object" && a !== null &&
+		typeof (a as Record<string, unknown>).problemId === "string" &&
+		typeof (a as Record<string, unknown>).text === "string",
+	)) {
+		return Response.json({ error: 'Body must be {answers: [{problemId: string, text: string}]}' }, { status: 400 });
+	}
+	try {
+		const { set } = await practice.submitAnswers(setId, raw);
+		return Response.json({ id: set.id }, { status: 202 });
+	} catch (err) {
+		return practiceErrorResponse(err);
+	}
+}

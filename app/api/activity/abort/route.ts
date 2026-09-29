@@ -17,7 +17,7 @@
  * Extraction abort is idempotent by design (aborting with nothing in
  * flight is success — the blob is gone either way) -> 200.
  */
-import { abortExtraction, abortJob, abortTurn } from "@/src/server";
+import { abortExtraction, abortJob, abortTurn, practice } from "@/src/server";
 
 export async function POST(req: Request) {
 	let body: unknown;
@@ -27,8 +27,8 @@ export async function POST(req: Request) {
 		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
 	}
 	const { kind, id } = (body ?? {}) as { kind?: string; id?: string };
-	if ((kind !== "job" && kind !== "extraction" && kind !== "turn") || typeof id !== "string" || id === "") {
-		return Response.json({ error: 'Body must be {kind: "job"|"extraction"|"turn", id: string}' }, { status: 400 });
+	if ((kind !== "job" && kind !== "extraction" && kind !== "turn" && kind !== "practice") || typeof id !== "string" || id === "") {
+		return Response.json({ error: 'Body must be {kind: "job"|"extraction"|"turn"|"practice", id: string}' }, { status: 400 });
 	}
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) {
 		return Response.json({ error: "Invalid id" }, { status: 400 });
@@ -49,6 +49,13 @@ export async function POST(req: Request) {
 	}
 	// kind === "extraction": true cancellation; idempotent (nothing in
 	// flight is success — same dock outcome)
+	if (kind === "practice") {
+		// practice slice 4 (2026-09-29): abort BOTH of a set's live runs
+		// (generation + grading) and mark the persisted "Aborted" state —
+		// idempotent like extraction (nothing in flight is success).
+		practice.abortPractice(id);
+		return Response.json({ ok: true });
+	}
 	abortExtraction(id);
 	return Response.json({ ok: true });
 }

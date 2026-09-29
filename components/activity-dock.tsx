@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
+import { ActivityIcon, BotIcon, FileTextIcon, GraduationCapIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
 import { isModelsRefusal, isProviderKeyRefusal, jobCost } from "@/src/core";
@@ -63,9 +63,20 @@ export interface FeedExtraction {
 	startedAt: number;
 }
 
+/** A live practice run — the set's generation or grading row (practice
+ * slice 4). id is the SET id (the abort seam is set-keyed). */
+export interface FeedPractice {
+	id: string;
+	kind: "generation" | "grading";
+	title: string;
+	phase: string;
+	startedAt: number;
+}
+
 export interface ActivityFeed {
 	jobs: FeedJob[];
 	extractions: FeedExtraction[];
+	practice?: FeedPractice[];
 }
 
 const EMPTY_FEED: ActivityFeed = { jobs: [], extractions: [] };
@@ -95,7 +106,7 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 	const [feed, setFeed] = useState<ActivityFeed>(EMPTY_FEED);
 	const [nonce, setNonce] = useState(0);
 	const refresh = useCallback(() => setNonce((n) => n + 1), []);
-	const hasRunning = feed.jobs.length > 0 || feed.extractions.length > 0;
+	const hasRunning = feed.jobs.length > 0 || feed.extractions.length > 0 || (feed.practice?.length ?? 0) > 0;
 
 	useEffect(() => {
 		let alive = true;
@@ -106,7 +117,7 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 				if (res.ok) {
 					const data = (await res.json()) as Partial<ActivityFeed>;
 					if (alive)
-					setFeed({ jobs: data.jobs ?? [], extractions: data.extractions ?? [] });
+					setFeed({ jobs: data.jobs ?? [], extractions: data.extractions ?? [], practice: data.practice ?? [] });
 				}
 			} catch {
 				// transport blip: keep the last feed, try again
@@ -146,14 +157,18 @@ export function useActivity(): { feed: ActivityFeed; refresh: () => void } {
 
 // ─── Pure presentation helpers (exported for tests) ──────────────────────────
 
-/** One dock blob: the unified view of a job or an extraction run. */
+/** One dock blob: the unified view of a job, an extraction run, or a
+ *  practice run. */
 export interface ActivityBlob {
-	/** job.id, or the extraction job's row id (source id, or "src#i" for
-	 *  chunk jobs — unique per row, per-chunk jobs owner 2026-09-28). */
+	/** job.id, the extraction job's row id (source id, or "src#i" for
+	 *  chunk jobs — unique per row, per-chunk jobs owner 2026-09-28), or
+	 *  the practice SET id (the abort seam is set-keyed). */
 	id: string;
-	process: "job" | "extraction";
-	/** Sub-agent kind for jobs (extraction blobs have none). */
+	process: "job" | "extraction" | "practice";
+	/** Sub-agent kind for jobs (extraction/practice blobs have none). */
 	jobKind?: JobKind;
+	/** Practice run kind (generation | grading) — practice blobs only. */
+	practiceKind?: "generation" | "grading";
 	/** Extraction phase (extracting/auditing/merging/embedding); jobs carry none. */
 	phase?: string;
 	title: string;
@@ -234,6 +249,20 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 			activity: "",
 		});
 	}
+	for (const run of feed.practice ?? []) {
+		blobs.push({
+			id: run.id, // the SET id — practice abort is set-keyed
+			process: "practice",
+			practiceKind: run.kind,
+			phase: run.phase,
+			title: run.title,
+			chatId: "", // practice is not chat-scoped
+			startedAt: run.startedAt,
+			cost: null, // practice runs ride no live cost channel (v1)
+			context: null,
+			activity: "",
+		});
+	}
 	blobs.sort((a, b) => a.startedAt - b.startedAt);
 	return blobs;
 }
@@ -295,11 +324,10 @@ export function ActivitySection({ feed: feedProp }: { feed?: ActivityFeed }) {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
-					kind: blob.process === "job" ? "job" : "extraction",
-					// Extractions abort by SOURCE id (chatId) — chunk rows
-					// share one source and die together (the route's id
-					// charset rejects the "#" of a "src#i" job key anyway).
-					id: blob.process === "job" ? blob.id : blob.chatId,
+					kind: blob.process,
+					// Extractions abort by SOURCE id (chatId) — chunk rows share one
+					// source and die together; practice aborts by SET id (blob.id).
+					id: blob.process === "extraction" ? blob.chatId : blob.id,
 				}),
 			});
 			if (!res.ok) {
@@ -372,11 +400,14 @@ function ActivityBlobRow({
 	abortState: AbortState | undefined;
 	onAbort: () => void;
 }) {
-	const Icon = blob.process === "extraction" ? WaypointsIcon : (blob.jobKind && KIND_ICON[blob.jobKind]) || BotIcon;
+	const Icon =
+		blob.process === "extraction" ? WaypointsIcon : blob.process === "practice" ? GraduationCapIcon : (blob.jobKind && KIND_ICON[blob.jobKind]) || BotIcon;
 	const label =
 		blob.process === "extraction"
 			? `Extraction — ${blob.phase ?? "running"}`
-			: blob.jobKind === "research"
+			: blob.process === "practice"
+				? `Practice — ${blob.phase ?? "running"}`
+				: blob.jobKind === "research"
 				? "Researcher"
 				: blob.jobKind === "demo"
 					? "Demo builder"

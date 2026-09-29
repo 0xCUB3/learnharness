@@ -3,6 +3,7 @@ import { createProberAgent, createTeacherAgent, type AgentBuildOptions, type Tea
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
+import { createPracticePipeline } from "../agent/subagents/practice-pipeline.ts";
 import type { ModelRole } from "../../config.ts";
 import {
 	deliverJobResult,
@@ -93,6 +94,24 @@ export const extraction = createExtractionPipeline({
 	// Key-presence gate (provider-key interlude, 2026-09-25): same check
 	// the job runner gets — a stage engine whose provider key is gone
 	// refuses BEFORE any batch runs (the typed throw), never mid-run.
+	providerKeyMissing: (provider, tier) =>
+		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
+});
+
+/** The app's ONE practice pipeline instance — the API routes reach it
+ *  through the server barrel / service, same discipline as extraction. */
+export const practice = createPracticePipeline({
+	graphStore: stores.graphStore,
+	practiceStore: stores.practiceStore,
+	chatStore: stores.chatStore,
+	// BYOK (owner, 2026-09-22): the practice stages resolve the chain —
+	// role override → slot → NOTHING — read FRESH per stage call; an empty
+	// chain flows through as undefined and the pipeline refuses the run
+	// with the typed ModelsNotConfiguredError. Direct test values still win.
+	engineFor: (role) =>
+		resolveEngine(role),
+	// Key-presence gate: same check extraction gets — a stage engine whose
+	// provider key is gone refuses BEFORE any set is created.
 	providerKeyMissing: (provider, tier) =>
 		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
 });
