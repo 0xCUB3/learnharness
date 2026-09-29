@@ -7,8 +7,6 @@ import { graphSnapshot } from "../core/graph.ts";
 import { birthSessionPartition } from "../core/session-clusters.ts";
 import {
 	deleteNodeTraces,
-	nodeDeletionImpact,
-	type NodeDeletionImpact,
 	type NodeDeletionStats,
 } from "../core/graph-deletion.ts";
 import { extractionStatuses } from "../agent/subagents/extraction.ts";
@@ -140,9 +138,3 @@ export function deleteGraphNode(nodeId: string): NodeDeleteOutcome {
 	return { ok: true, stats, graphRevision: graphRevision() };
 }
 
-/** The confirm dialog's pre-flight read (GET /api/graph/nodes/[id]):
- * what full death would take with it. 404-shaped null when the node
- * does not exist — the UI shows the dialog only for nodes it can see. */
-export function graphNodeImpact(nodeId: string): NodeDeletionImpact | null {
-	return nodeDeletionImpact(stores.graphStore, nodeId);
-}

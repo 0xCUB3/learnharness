@@ -140,14 +140,14 @@ export function PracticeDialogBody({
 							</span>
 							<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
 								{cluster.kind === "notes" ? "notes · " : ""}
-								{cluster.nodeCount} propositions
+								{cluster.nodeCount} {cluster.nodeCount === 1 ? "node" : "nodes"}
 							</span>
 						</button>
 					))}
 					{clusters.length === 0 && (
 						<div className="px-3 py-2 text-sm text-muted-foreground">
 							No clusters yet — a cluster appears once a session births its
-							first proposition.
+							first node.
 						</div>
 					)}
 				</div>
@@ -166,7 +166,7 @@ export function PracticeDialogBody({
 					<div className="rounded-lg border bg-accent/30 px-3 py-2 text-sm">
 						<div className="text-muted-foreground">Practice — {new Date().toISOString().slice(0, 10)}</div>
 						<div data-testid="practice-dialog-selection-line">
-							{selection?.propositions ?? 0} {selection?.propositions === 1 ? "proposition" : "propositions"} →{" "}
+							{selection?.propositions ?? 0} {selection?.propositions === 1 ? "node" : "nodes"} →{" "}
 							{selection?.chains ?? 0} {selection?.chains === 1 ? "chain" : "chains"}
 						</div>
 					</div>

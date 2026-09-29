@@ -250,7 +250,7 @@ export function ChainTableBody({
 			<TopBar>
 				<span className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">Chains</span>
 				<span className="shrink-0 text-xs text-muted-foreground">
-					{chains.length} {chains.length === 1 ? "chain" : "chains"} · {nodes.length} propositions
+					{chains.length} {chains.length === 1 ? "chain" : "chains"} · {nodes.length} {nodes.length === 1 ? "node" : "nodes"}
 				</span>
 				<div className="relative shrink-0">
 					<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -258,8 +258,8 @@ export function ChainTableBody({
 						value={query}
 						data-testid="chain-table-search"
 						onChange={(e) => onQuery(e.target.value)}
-						placeholder="Search propositions…"
-						aria-label="Search propositions"
+						placeholder="Search nodes…"
+						aria-label="Search nodes"
 						spellCheck={false}
 						className="lh-no-drag h-8 w-56 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
 					/>
@@ -447,7 +447,7 @@ export function ChainTableBody({
 																checked={selection.has(id)}
 																onToggle={(next) => onToggleNodes([id], next)}
 																testid={`prop-checkbox-${id}`}
-																label={`Select proposition ${node.name}`}
+																label={`Select node ${node.name}`}
 															/>
 															<span className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
 																{node.statement}
@@ -475,7 +475,7 @@ export function ChainTableBody({
 						className="pointer-events-auto flex items-center gap-3 rounded-full border bg-card px-4 py-2 shadow-lg"
 					>
 						<span data-testid="chain-selected-summary" className="text-xs font-medium">
-							{selection.size} {selection.size === 1 ? "proposition" : "propositions"} →{" "}
+							{selection.size} {selection.size === 1 ? "node" : "nodes"} →{" "}
 							{derived.length} {derived.length === 1 ? "chain" : "chains"}
 						</span>
 						<button
@@ -503,7 +503,7 @@ export function ChainTableBody({
 							type="button"
 							data-testid="chain-delete"
 							onClick={onDelete}
-							aria-label={`Delete ${selection.size} selected ${selection.size === 1 ? "proposition" : "propositions"}`}
+							aria-label={`Delete ${selection.size} selected ${selection.size === 1 ? "node" : "nodes"}`}
 							className="flex items-center gap-1.5 rounded-full border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
 						>
 							<Trash2Icon aria-hidden="true" className="size-3.5" />
@@ -668,7 +668,6 @@ export function ChainTableOverlay({
 			{deleteOpen && (
 				<DeleteNodeDialog
 					nodes={selectedNodes.map((n) => ({ id: n.id, name: n.name }))}
-					joins={{ sessions, fileSources }}
 					onClose={() => setDeleteOpen(false)}
 					onDeleted={(deadIds, graphRevision) => {
 						// Close the dialog; prune the dead ids from the

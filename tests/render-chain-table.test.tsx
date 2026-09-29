@@ -256,11 +256,11 @@ describe("ChainTableBody — the floating selection bar (never shifts layout)", 
 		assert.ok(!html.includes('data-testid="chain-selection-bar"'));
 	});
 
-	it("appears with the derived N propositions → M chains + Clear + Generate + the FENCED Delete", () => {
+	it("appears with the derived N nodes → M chains + Clear + Generate + the FENCED Delete", () => {
 		const html = render({ selection: new Set(["a", "b", "c1"]) });
 		assert.ok(html.includes('data-testid="chain-selection-bar"'));
 		assert.ok(html.includes('data-testid="chain-selected-summary"'));
-		assert.ok(html.includes("3 propositions → 1 chain"));
+		assert.ok(html.includes("3 nodes → 1 chain"));
 		assert.ok(html.includes('data-testid="chain-clear"'));
 		assert.ok(html.includes('data-testid="chain-generate"'));
 		// The danger fence (owner, 2026-09-29 night): a divider quarantines
@@ -269,7 +269,7 @@ describe("ChainTableBody — the floating selection bar (never shifts layout)", 
 		assert.ok(html.includes('data-testid="chain-danger-divider"'));
 		const del = html.match(/<button[^>]*data-testid="chain-delete"[^>]*>/)?.[0] ?? "";
 		assert.match(del, /border-destructive\/50/); // the destructive pair
-		assert.match(del, /aria-label="Delete 3 selected propositions"/);
+		assert.match(del, /aria-label="Delete 3 selected nodes"/);
 		assert.ok(html.includes("lucide-trash-2"), "the trash icon");
 		// the fence is AFTER generate in the DOM (right end of the bar)
 		assert.ok(html.indexOf('chain-generate"') < html.indexOf('chain-danger-divider"'));
@@ -284,7 +284,7 @@ describe("ChainTableBody — the floating selection bar (never shifts layout)", 
 
 	it("a premise WITHOUT its conclusion derives as the singleton it becomes", () => {
 		const html = render({ selection: new Set(["a", "d"]) });
-		assert.ok(html.includes("2 propositions → 2 chains"), "no follows-edge survives inside the selection");
+		assert.ok(html.includes("2 nodes → 2 chains"), "no follows-edge survives inside the selection");
 	});
 });
 
@@ -303,7 +303,7 @@ describe("ChainTableBody — the fuzzy search (grouped + auto-expand)", () => {
 		assert.ok(!html.includes("cluster-group-notes1") === false, "notes1 still renders (it has a match)");
 		assert.ok(!html.includes("Ethics lesson") === false, "chat1 still renders (it has a match)");
 		// the floating bar is never search-filtered
-		assert.ok(html.includes("3 propositions → 1 chain"));
+		assert.ok(html.includes("3 nodes → 1 chain"));
 	});
 
 	it("no matches: the honest empty line", () => {

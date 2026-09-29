@@ -260,31 +260,8 @@ export interface NodeDeletionStats {
 	edgesRemoved: number;
 }
 
-/** The confirm dialog's pre-flight facts (the GET on the same node id):
- * what full death would take with it. sessions is the deduped set of
- * chats/notes sources that reference the node — provenance points count. */
-export interface NodeDeletionImpact {
-	edges: number;
-	sessions: string[];
-}
-
-/** A node exists iff a ledger line carries its id. */
 function nodeLinesOf(graphStore: GraphStore, nodeId: string): GraphNode[] {
 	return graphStore.readNodes().filter((line) => line.id === nodeId);
-}
-
-/** The impact facts for one node, or null when no such node exists. */
-export function nodeDeletionImpact(graphStore: GraphStore, nodeId: string): NodeDeletionImpact | null {
-	if (nodeLinesOf(graphStore, nodeId).length === 0) return null;
-	const edges = graphStore.readEdges().filter((line) => line.from === nodeId || line.to === nodeId);
-	const sessions = new Set<string>();
-	for (const line of nodeLinesOf(graphStore, nodeId)) {
-		for (const pt of line.provenance) sessions.add(pt.chatId);
-	}
-	return {
-		edges: edges.length,
-		sessions: [...sessions].sort(),
-	};
 }
 
 /**

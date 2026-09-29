@@ -1538,10 +1538,6 @@ export function GraphView() {
 			    body by the component itself, lives here for state locality. */}
 			<DeleteNodeDialog
 				nodes={deletingNode ? [deletingNode] : null}
-				joins={{
-					sessions: snapshot?.sessions ?? {},
-					fileSources: snapshot?.fileSources ?? {},
-				}}
 				onClose={() => setDeletingNode(null)}
 				onDeleted={(nodeIds, graphRevision) => {
 					// Close the dialog; close the detail card if it pointed here

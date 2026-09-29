@@ -144,8 +144,8 @@ describe("PracticeDialogBody — creation (cluster picker)", () => {
 		assert.ok(html.includes('data-testid="practice-dialog-clusters"'));
 		assert.ok(html.includes('data-testid="practice-cluster-chat_1"'));
 		assert.ok(html.includes("Ethics lesson"));
-		assert.match(html, /notes · <!-- -->3 propositions|notes · 3 propositions/);
-		assert.ok(html.includes("4 propositions"), "chat cluster shows its count");
+		assert.match(html, /notes · <!-- -->3 nodes|notes · 3 nodes/);
+		assert.ok(html.includes("4 nodes"), "chat cluster shows its count");
 		assert.ok(html.includes('disabled=""'), "no cluster picked — Create disabled");
 
 		const picked = renderToStaticMarkup(<PracticeDialogBody {...base} selectedKey="src_ab12" />);
@@ -161,15 +161,15 @@ describe("PracticeDialogBody — creation (cluster picker)", () => {
 	it("an empty graph is an honest empty list", () => {
 		const html = renderToStaticMarkup(<PracticeDialogBody {...base} clusters={[]} />);
 		assert.ok(html.includes("No clusters yet"));
-		assert.ok(html.includes("once a session births its first proposition"), "no 3+ mechanics in copy");
+		assert.ok(html.includes("once a session births its first node"), "no 3+ mechanics in copy");
 	});
 
 	it("1- and 2-proposition groups appear — no hull threshold in the picker", () => {
 		const html = renderToStaticMarkup(<PracticeDialogBody {...base} clusters={smallClusters()} />);
 		assert.ok(html.includes('data-testid="practice-cluster-chat_2"'), "singleton group listed");
-		assert.ok(html.includes("1 propositions"));
+		assert.ok(html.includes("1 node"));
 		assert.ok(html.includes('data-testid="practice-cluster-chat_3"'), "pair group listed");
-		assert.ok(html.includes("2 propositions"));
+		assert.ok(html.includes("2 nodes"));
 	});
 
 	it("empty selection (vanished nodes) renders the honest inline line", () => {
@@ -217,7 +217,7 @@ describe("PracticeDialogBody — creation (CUSTOM mode, the chains overlay's han
 		assert.ok(html.includes('data-testid="practice-dialog-selection"'));
 		assert.match(html, /Practice — (<!-- -->)?\d{4}-\d{2}-\d{2}/, "the dated default title (the pipeline's own stamp)");
 		assert.ok(html.includes('data-testid="practice-dialog-selection-line"'));
-		assert.ok(html.includes("4 propositions"));
+		assert.ok(html.includes("4 nodes"));
 		assert.ok(html.includes("2 chains"));
 		assert.ok(!html.includes('disabled=""'), "a non-empty selection enables Create immediately");
 	});
@@ -228,7 +228,7 @@ describe("PracticeDialogBody — creation (CUSTOM mode, the chains overlay's han
 		);
 		assert.ok(html.includes('data-testid="param-ladder"'));
 		assert.ok(html.includes('data-testid="practice-note"'));
-		assert.ok(html.includes("1 proposition →"));
+		assert.ok(html.includes("1 node →"));
 	});
 });
 

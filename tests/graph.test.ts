@@ -591,7 +591,6 @@ import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import {
 	deleteNodeTraces,
-	nodeDeletionImpact,
 	type NodeDeletionStats,
 } from "../src/core/graph-deletion.ts";
 import { deleteGraphNode, graphRevision } from "../src/server/graph.ts";
@@ -809,18 +808,6 @@ describe("single-node deletion (deleteNodeTraces + deleteGraphNode, node interlu
 		// Resting positions for both.
 		graphStore.writePositions({ n_dead: { x: 1, y: 1 }, n_keep: { x: 2, y: 2 } });
 	}
-
-	it("nodeDeletionImpact: the confirm dialog's pre-flight facts", () => {
-		buildNodeScenario();
-		assert.deepEqual(nodeDeletionImpact(graphStore, "n_dead"), {
-			edges: 2,
-			// The re-encounter — the only session provenance can name (the
-			// legacy empty-provenance line names none).
-			sessions: ["chat_node_a"],
-		});
-		// Unknown node: null (the route's 404).
-		assert.equal(nodeDeletionImpact(graphStore, "n_missing"), null);
-	});
 
 	it("deleteNodeTraces: FULL DEATH — the node, its edges, its evidence, its anchors, its position", () => {
 		buildNodeScenario();
