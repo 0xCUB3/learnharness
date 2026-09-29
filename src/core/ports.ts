@@ -21,6 +21,7 @@ import type {
 	ExtractionRunUsage,
 	PlanTree,
 	Position,
+	ProblemSet,
 	CoverageEntry,
 	SessionCheckpoint,
 	TurnUsage,
@@ -155,6 +156,33 @@ export interface JobStore {
 	 *  route refuses while jobs are still running, so by the time this
 	 *  fires every record is terminal. */
 	deleteJobsForChat(chatId: string): number;
+}
+
+// ─── PracticeStore — problem-set documents (data/practice) ──────────────────
+
+/** Everything a new set needs except the store-assigned "ps_" id. */
+export type CreateProblemSetInit = Omit<ProblemSet, "id">;
+
+/**
+ * The practice module's persistence: one JSON document per problem set
+ * (src/store/practice.ts adapter). Sets are bounded, SELF-CONTAINED
+ * snapshots — propositions + chains frozen at creation (contracts/
+ * practice.ts) — so reads never join the live graph. Replace-whole
+ * writes like settings.json, one-file-per-record like data/jobs.
+ * Concurrent same-set writes are the pipeline's serialization duty
+ * (slice 4), not the store's — this seam owns file integrity only.
+ */
+export interface PracticeStore {
+	/** Persist a new set; the store assigns the id ("ps_" + ts36 + rand). */
+	createSet(init: CreateProblemSetInit): ProblemSet;
+	/** The full set document, or null when unknown id / corrupt file. */
+	getSet(id: string): ProblemSet | null;
+	/** Every set, createdAt descending (the practice page's list view). */
+	listSets(): ProblemSet[];
+	/** Persist the full set document (replace-whole). */
+	saveSet(set: ProblemSet): void;
+	/** Delete a set file; false when unknown id. */
+	deleteSet(id: string): boolean;
 }
 
 // ─── SettingsStore — THE user settings record (settings-storage wave, 2026-09-19) ──

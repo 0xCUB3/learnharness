@@ -128,6 +128,16 @@ export interface ProblemSet {
 	 *  decomposition derives from these + the follows-edges among them at
 	 *  creation time. */
 	nodeIds: string[];
+	/** Snapshot of every selected proposition at creation — nodeId →
+	 *  {name, statement}. The set is SELF-CONTAINED (planning ruling,
+	 *  2026-09-29): rendering, generation, grading, and dedup never
+	 *  re-read the live graph, which keeps moving (extraction continues,
+	 *  nodes get deleted); a set is a document of what WAS selected. */
+	propositions: Record<string, { name: string; statement: string }>;
+	/** The frozen chain derivation (chainsForSelection at creation time).
+	 *  Coverage checks and the problems' chain tags resolve against THIS,
+	 *  never against live edges. */
+	chains: ReasoningChain[];
 	status: ProblemSetStatus;
 	/** Set when the partition itself (or the run as a whole) failed. */
 	error?: string;

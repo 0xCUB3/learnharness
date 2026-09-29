@@ -26,6 +26,10 @@ export const PATHS = {
 	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
 	chats: path.join(DATA_ROOT, "chats"),
 	graph: path.join(DATA_ROOT, "graph"),
+	/** Practice problem sets (one JSON document per set — src/store/practice.ts).
+	 * Bounded self-contained snapshots (propositions + chains frozen at
+	 * creation), not append-only ledgers. */
+	practice: path.join(DATA_ROOT, "practice"),
 } as const;
 
 // ─── Models ────────────────────────────────────────────────────────────────
