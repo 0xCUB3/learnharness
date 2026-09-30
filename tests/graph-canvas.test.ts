@@ -14,6 +14,7 @@ import { describe, it, it as test } from "node:test";
 import {
 	applyClusterLabels,
 	arrowGeometry,
+	isImpNodeId,
 	boxBlurRound,
 	fitTransform,
 	labelAlpha,
@@ -147,6 +148,26 @@ describe("arrowGeometry", () => {
 
 	test("null for coincident endpoints (never a NaN arrow)", () => {
 		assert.equal(arrowGeometry({ x: 5, y: 5 }, { x: 5, y: 5 }, 6, 6, 5), null);
+	});
+
+	// The rendering arc's geometry laws (owner, 2026-09-30): an edge INTO
+	// an imp point is drawn with toRadius 0 (headless, terminates at the
+	// center); an edge OUT of one with fromRadius 0 (starts at the center).
+	test("toRadius 0 — the tip lands exactly at the target CENTER (headless convergence)", () => {
+		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 0, 5)!;
+		assert.ok(Math.abs(g.tip.x - 100) < 1e-9 && Math.abs(g.tip.y) < 1e-9, "tip = the center, past which no shaft draws");
+	});
+
+	test("fromRadius 0 — the shaft starts exactly at the source CENTER", () => {
+		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 0, 6, 5)!;
+		assert.ok(Math.abs(g.shaftFrom.x) < 1e-9 && Math.abs(g.shaftFrom.y) < 1e-9, "shaftFrom = the center");
+	});
+});
+
+describe("isImpNodeId (the pure-geometry law, rendering arc 2026-09-30)", () => {
+	test("arg_-prefixed ids are geometry; proposition ids are citizens", () => {
+		assert.equal(isImpNodeId("arg_123af5a046ba"), true);
+		assert.equal(isImpNodeId("n_abc123"), false);
 	});
 });
 

@@ -106,16 +106,18 @@ describe("incrementalLayout", () => {
 describe("settleGraphLayout", () => {
 	it("dedupes repeated node lines, runs, and writes the whole ledger", () => {
 		const written: Record<string, Position>[] = [];
-		const lines = [node("a"), node("b"), node("a")]; // "a" appended twice
+		const lines = [node("a"), node("b"), node("c"), node("d"), node("a")]; // "a" appended twice
 		const store = {
 			readNodes: () => lines.map((l) => ({ ...l })),
-			readChains: () => [chain("arg_ab", ["a"], "b")],
+			readChains: () => [chain("arg_ab", ["a"], "b"), chain("arg_bcd", ["b", "c"], "d")],
 			readPositions: () => ({} as Record<string, Position>),
 			writePositions: (p: Record<string, Position>) => void written.push(p),
 		};
 		settleGraphLayout(store);
 		assert.equal(written.length, 1);
-		assert.deepEqual(Object.keys(written[0]!).sort(), ["a", "arg_ab", "b"], "one position per unique node AND the derived implication node");
+		// arg_ab is single-premise → collapsed to a direct arrow, NO imp
+		// node; arg_bcd is multi-premise → its imp node joins the layout.
+		assert.deepEqual(Object.keys(written[0]!).sort(), ["a", "arg_bcd", "b", "c", "d"], "positions for the unique nodes and ONLY the multi-premise chain's imp node");
 	});
 
 	it("does nothing on an empty graph", () => {
@@ -129,6 +131,32 @@ describe("settleGraphLayout", () => {
 		assert.equal(written.length, 0);
 	});
 });
+describe("imp-link half distance (rendering arc, owner 2026-09-30)", () => {
+	const settle = (from: string, to: string, linkDistance: number) => {
+		const nodes = [{ id: from, x: 0, y: 0 }, { id: to, x: 500, y: 0 }];
+		const sim = createGraphSimulation(nodes, [{ from, to }], {
+			linkDistance,
+			chargeStrength: 0, // springs only — the rest length IS the equilibrium
+			gravity: { x: 0, y: 0, strength: 0 },
+		});
+		for (let i = 0; i < 300; i++) sim.tick();
+		const [a, b] = sim.nodes() as unknown as { id: string; x: number; y: number }[];
+		assert.ok(a && b, "both nodes present");
+		return Math.abs(b.x - a.x);
+	};
+
+	it("a plain proposition link settles at the full rest length (tuned or default)", () => {
+		assert.ok(Math.abs(settle("a", "b", 100) - 100) < 2, "plain link ≈ 100");
+	});
+
+	it("a link TOUCHING an implication node gets HALF the rest length", () => {
+		// into the imp point (premise → arg_x)
+		assert.ok(Math.abs(settle("a", "arg_x", 100) - 50) < 2, "into-imp link ≈ 50");
+		// out of it (arg_x → conclusion)
+		assert.ok(Math.abs(settle("arg_x", "b", 100) - 50) < 2, "out-of-imp link ≈ 50");
+	});
+});
+
 describe("clusterPull (the centroid force)", () => {
 	it("compacts each cluster toward its OWN centroid; strength 0 = off", () => {
 		// Two loose chains, far apart, edges only WITHIN each chain.

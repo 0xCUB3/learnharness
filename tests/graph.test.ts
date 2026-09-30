@@ -19,11 +19,11 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
-import type { AuditVerdicts, SessionFindings } from "../src/core/contracts.ts";
+import type { AuditVerdicts, GraphChain, GraphNode, SessionFindings } from "../src/core/contracts.ts";
 import type { QuestionAnswerData } from "../src/core/question-core.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { projectView as projectNative } from "../src/core/view.ts";
-import { getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
+import { deriveView, getGraph, graphSnapshot, mergeFindings, type GraphDeps } from "../src/core/graph.ts";
 import { coverageSlots } from "../src/core/coverage.ts";
 import { graphStore } from "../src/store/graph.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -459,18 +459,22 @@ describe("the merger (mergeFindings)", () => {
 		assert.equal(mine!.label, "/vault/cluster notes.md", "a notes file is a birth-session — the label is its path");
 
 		// Chains-primary split (owner, 2026-09-30): `nodes` is the canvas
-		// image (propositions + derived implication nodes), `propositions`
-		// is the stored truth alone — the chain table's input. The store is
-		// shared across this suite, so assert the INVARIANT, not counts:
-		// image = truth + one imp node per fully-live stored chain, and the
-		// truth never carries an arg_ id.
+		// image, `propositions` the stored truth alone (the chain table's
+		// input). The store is shared across this suite, so assert the
+		// INVARIANT, not counts — and since the rendering arc
+		// (2026-09-30), only MULTI-premise live chains mint imp nodes
+		// (this fixture's two single-premise chains collapse to direct
+		// arrows — zero imp nodes here).
 		const stored = graphStore.readChains();
 		const live = new Set(snap.propositions.map((n) => n.id));
-		const liveChains = stored.filter((c) => live.has(c.conclusion) && c.premises.every((p) => live.has(p)));
+		const impChains = stored.filter(
+			(c) => c.premises.length >= 2 && live.has(c.conclusion) && c.premises.every((p) => live.has(p)),
+		);
 		assert.ok(snap.propositions.every((n) => !n.id.startsWith("arg_")), "the stored-truth list never carries imp nodes");
-		assert.equal(snap.nodes.length, snap.propositions.length + liveChains.length, "image = truth + one imp node per live chain");
+		assert.equal(snap.nodes.length, snap.propositions.length + impChains.length, "image = truth + one imp node per MULTI-premise live chain");
 		const imp = snap.nodes.filter((n) => n.id.startsWith("arg_"));
-		assert.ok(imp.length === liveChains.length && imp.every((n) => snap.propositions.every((p) => p.id !== n.id)), "the extra nodes are exactly the derived implication nodes");
+		assert.ok(imp.length === impChains.length && imp.every((n) => snap.propositions.every((p) => p.id !== n.id)), "the extra nodes are exactly the derived implication nodes");
+		assert.equal(imp.length, 0, "this fixture's chains are single-premise — all collapsed to direct arrows");
 	});
 
 	it("derives the sessions index in graphSnapshot", () => {
@@ -994,5 +998,68 @@ describe("session coverage read (extraction-UX redesign, 2026-09-24)", () => {
 
 	it("unknown chat → null (the caller owns the 404)", () => {
 		assert.equal(sessionCoverage("chat_never_was"), null);
+	});
+});
+
+// ─── deriveView (the rendering arc, owner 2026-09-30) ────────────────────────
+
+describe("deriveView (the argument's geometry)", () => {
+	const prop = (id: string): GraphNode => ({
+		id,
+		name: id.toUpperCase(),
+		statement: `${id} statement`,
+		aliases: [],
+		createdAt: "2026-09-30T00:00:00.000Z",
+		provenance: [],
+	});
+	const chain = (id: string, premises: string[], conclusion: string): GraphChain => ({
+		id,
+		premises,
+		conclusion,
+		provenance: [],
+		createdAt: "2026-09-30T00:00:00.000Z",
+	});
+
+	it("a SINGLE-premise chain collapses to ONE direct arrow — no imp node", () => {
+		const view = deriveView({ nodes: [prop("a"), prop("b")], chains: [chain("arg_ab", ["a"], "b")] });
+		assert.deepEqual(view.nodes.map((n) => n.id), ["a", "b"], "no arg_ node minted");
+		assert.deepEqual(view.edges, [{ from: "a", to: "b" }], "the argument IS a plain arrow");
+	});
+
+	it("a MULTI-premise chain keeps the imp node + fan (premises in, conclusion out)", () => {
+		const view = deriveView({
+			nodes: [prop("a"), prop("b"), prop("c")],
+			chains: [chain("arg_ab", ["a", "b"], "c")],
+		});
+		assert.deepEqual(view.nodes.map((n) => n.id).sort(), ["a", "arg_ab", "b", "c"]);
+		assert.deepEqual(
+			[...view.edges].sort((x, y) => (x.from < y.from ? -1 : x.from > y.from ? 1 : x.to < y.to ? -1 : 1)),
+			[
+				{ from: "a", to: "arg_ab" },
+				{ from: "arg_ab", to: "c" },
+				{ from: "b", to: "arg_ab" },
+			],
+		);
+		const imp = view.nodes.find((n) => n.id === "arg_ab")!;
+		assert.equal(imp.name, "\u27f9");
+	});
+
+	it("two chains SHARING a conclusion stay distinct — two geometry points, never a unioned fan", () => {
+		const view = deriveView({
+			nodes: [prop("a"), prop("b"), prop("c"), prop("d"), prop("e")],
+			chains: [chain("arg_e1", ["a", "b"], "e"), chain("arg_e2", ["c", "d"], "e")],
+		});
+		assert.deepEqual(
+			view.nodes.map((n) => n.id).sort(),
+			["a", "arg_e1", "arg_e2", "b", "c", "d", "e"],
+		);
+		assert.ok(view.edges.some((x) => x.from === "arg_e1" && x.to === "e"));
+		assert.ok(view.edges.some((x) => x.from === "arg_e2" && x.to === "e"));
+	});
+
+	it("dangling chains drop (missing member — the honest belt)", () => {
+		const view = deriveView({ nodes: [prop("a")], chains: [chain("arg_ghost", ["a"], "gone"), chain("arg_gone", ["ghost"], "a")] });
+		assert.deepEqual(view.nodes.map((n) => n.id), ["a"]);
+		assert.deepEqual(view.edges, []);
 	});
 });

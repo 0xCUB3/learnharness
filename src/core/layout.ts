@@ -196,6 +196,14 @@ export interface LayoutEdge {
 }
 
 export const LINK_DISTANCE = 40;
+/** Implication-node id prefix (the mint law lives in core/graph.ts's
+ *  newGraphChainId). Layout-side: links TOUCHING an imp node get HALF
+ *  the base rest length — the argument's geometry (a converging point)
+ *  sits tight against its premises/conclusion instead of spread like a
+ *  real proposition citizen (owner ruling, rendering arc 2026-09-30). */
+const IMP_ID_PREFIX = "arg_";
+const impLinkId = (v: string | number | { id: string }): string =>
+	typeof v === "object" ? v.id : String(v);
 export const CHARGE_STRENGTH = -240; // 2026-09-17: −120 → −240 (user: repulsion default too weak); the default is shared with render-settings (gm-centered in CHARGE_RANGE).
 /** Per-tick anchor re-blend: fraction of an anchored node's displacement
  *  from its previous position that SURVIVES each tick. 0.85 = gentle
@@ -238,6 +246,7 @@ export function createGraphSimulation(
 		degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
 	}
 	const linkStrength = options.linkStrength ?? 1;
+	const linkDistance = options.linkDistance ?? LINK_DISTANCE;
 
 	const sim = forceSimulation<LayoutNode, SimLink>(nodes)
 		.force(
@@ -246,7 +255,16 @@ export function createGraphSimulation(
 				edges.map((e) => ({ source: e.from, target: e.to })),
 			)
 				.id((d) => d.id)
-				.distance(options.linkDistance ?? LINK_DISTANCE)
+				// Per-link rest length (rendering arc, owner 2026-09-30): a
+				// link touching an implication node (arg_-prefixed id — the
+				// string form pre-init, the node ref after) gets HALF the
+				// base distance, default or user-tuned alike.
+				.distance(
+					(l) =>
+						impLinkId(l.source).startsWith(IMP_ID_PREFIX) || impLinkId(l.target).startsWith(IMP_ID_PREFIX)
+							? linkDistance / 2
+							: linkDistance,
+				)
 				.strength(
 					(l) =>
 						(linkStrength * 1) /

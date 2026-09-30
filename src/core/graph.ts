@@ -303,15 +303,19 @@ export function getGraph(graphStore: Pick<GraphStore, "readNodes" | "readChains"
 	return { nodes: [...byId.values()], chains };
 }
 
-/** The DERIVED view — what the canvas renders. One implication NODE per
- *  chain (id = the chain's arg_ id; name "⟹"; statement = the chain
- *  line; the chain's provenance/createdAt) plus UNTYPED arrows: each
- *  premise → the implication node, the implication node → the
- *  conclusion. Rendering specialization (invisible / physics-free)
- *  comes later (owner, 2026-09-30: physics is fine with imp nodes as
- *  regular nodes for now). Dangling chains (a member node missing)
- *  drop here — the deletion cascades should prevent them; this is the
- *  honest belt. */
+/** The DERIVED view — what the canvas renders. A SINGLE-premise chain
+ *  collapses to ONE direct arrow premise → conclusion (no imp node:
+ *  a chain is always N-in/1-out, so one premise is the degenerate
+ *  1-in-1-out case). A MULTI-premise chain mints an implication NODE
+ *  (id = the chain's arg_ id; name "⟹"; statement = the chain line;
+ *  the chain's provenance/createdAt) plus arrows: each premise → the
+ *  implication node, the implication node → the conclusion — the
+ *  canvas renders imp nodes as pure geometry (owner, rendering arc:
+ *  invisible, unpickable; co-premise lines converge headless to a
+ *  point, one arrowed line leaves it). Physics keeps imp nodes as
+ *  regular citizens (half link distance — layout.ts). Dangling chains
+ *  (a member node missing) drop here — the deletion cascades should
+ *  prevent them; this is the honest belt. */
 export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: GraphEdge[] } {
 	const names: Record<string, { name: string }> = {};
 	for (const node of graph.nodes) names[node.id] = { name: node.name };
@@ -320,6 +324,12 @@ export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: Gr
 	const edges: GraphEdge[] = [];
 	for (const chain of graph.chains) {
 		if (!live.has(chain.conclusion) || !chain.premises.every((premise) => live.has(premise))) continue;
+		// Single premise: the argument IS a plain arrow — no geometry
+		// point needed (the 1-in/1-out collapse; rendering arc, owner).
+		if (chain.premises.length === 1) {
+			edges.push({ from: chain.premises[0]!, to: chain.conclusion });
+			continue;
+		}
 		impNodes.push({
 			id: chain.id,
 			name: "⟹",

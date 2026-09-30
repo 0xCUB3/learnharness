@@ -86,13 +86,22 @@ export interface CanvasNode {
 }
 
 /** One directed edge of the DERIVED view (chains-primary, 2026-09-30):
- *  premise → implication node → conclusion, UNTYPED — every arrow is an
- *  implication, so every arrow renders the double-shaft glyph (⟹) +
- *  arrowhead (DECIDED 2026-09-14, docs/vision-edge-glyph.md). */
+ *  premise → implication node → conclusion, UNTYPED, all PLAIN
+ *  single-shaft arrows — there is no double-shaft glyph anywhere
+ *  (the 2026-09-14 ruling died with typed edges). An argument renders
+ *  as its geometry: co-premise lines converge HEADLESS onto the
+ *  implication point, one arrowed line leaves it; a single-premise
+ *  argument is one ordinary arrow (see deriveView). */
 export interface CanvasEdge {
 	from: string;
 	to: string;
 }
+
+/** Implication-node ids (the mint law: newGraphChainId in core/graph.ts).
+ *  On the canvas an imp node is PURE GEOMETRY (owner, rendering arc
+ *  2026-09-30): invisible — no disc, no label — and UNPICKABLE,
+ *  excluded from every hit-test path. Exported for the test pin. */
+export const isImpNodeId = (id: string): boolean => id.startsWith("arg_");
 
 /** One cluster region: member node ids + the LLM-coined label (or null). */
 export interface CanvasCluster {
@@ -1048,6 +1057,7 @@ export class GraphCanvasRenderer {
 		const projected: { id: string; x: number; y: number }[] = [];
 		for (const n of this.data.nodes) {
 			if (this.visible && !this.visible.has(n.id)) continue;
+			if (isImpNodeId(n.id)) continue; // pure geometry — never picked
 			projected.push({ id: n.id, x: n.x * k + tx, y: n.y * k + ty });
 		}
 		const hit = pickNearest(projected, px, py, maxDist);
@@ -1218,21 +1228,24 @@ export class GraphCanvasRenderer {
 		const visible = this.visible;
 		const isVisible = (id: string) => !visible || visible.has(id);
 
-		// Node discs: one Path2D, one fill() per frame.
+		// Node discs: one Path2D, one fill() per frame. Implication nodes
+		// are pure geometry — never a disc, never a label, never picked.
 		const nodesPath = new Path2D();
 		for (const n of data.nodes) {
-			if (!isVisible(n.id)) continue;
+			if (!isVisible(n.id) || isImpNodeId(n.id)) continue;
 			nodesPath.moveTo(n.x + nodeR, n.y);
 			nodesPath.arc(n.x, n.y, nodeR, 0, Math.PI * 2);
 		}
 		this.nodesPath = nodesPath;
 
-		// Edge shafts + arrowheads: tip lands on the target disc edge. Both
-		// relation types draw the same arrow for now — the double-shaft
-		// glyph was rejected (2026-09-15); differentiation is pending a new
-		// approach. Two owner rulings 2026-09-29: the supports draw toggle
-		// CHAINS-PRIMARY (2026-09-30): one path family — every derived arrow
-		// is an implication, double-shafted + arrowheaded uniformly.
+		// Edge shafts + arrowheads (rendering arc, owner 2026-09-30): all
+		// arrows are PLAIN single shafts — the old double-shaft glyph is
+		// gone entirely. An argument's geometry: lines INTO an implication
+		// node are HEADLESS and run all the way to the imp node's CENTER
+		// (co-premise lines converge to a point); the line OUT of it starts
+		// at the center and its arrowhead lands on the conclusion's disc
+		// edge. Single-premise arguments arrive here as ordinary
+		// proposition→proposition edges and draw exactly like any arrow.
 		const arrowLen = settings.arrowLength;
 		const shafts = new Path2D();
 		const heads = new Path2D();
@@ -1241,14 +1254,22 @@ export class GraphCanvasRenderer {
 			const a = this.nodeById.get(e.from);
 			const b = this.nodeById.get(e.to);
 			if (!a || !b) continue;
-			const g = arrowGeometry(a, b, nodeR, nodeR, arrowLen);
+			const intoImp = isImpNodeId(e.to);
+			const outOfImp = isImpNodeId(e.from);
+			const g = arrowGeometry(a, b, outOfImp ? 0 : nodeR, intoImp ? 0 : nodeR, arrowLen);
 			if (!g) continue;
 			shafts.moveTo(g.shaftFrom.x, g.shaftFrom.y);
-			shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
-			heads.moveTo(g.tip.x, g.tip.y);
-			heads.lineTo(g.left.x, g.left.y);
-			heads.lineTo(g.right.x, g.right.y);
-			heads.closePath();
+			if (intoImp) {
+				// toRadius 0 put the tip AT the imp node's center: the
+				// headless shaft terminates there (no head triangle).
+				shafts.lineTo(g.tip.x, g.tip.y);
+			} else {
+				shafts.lineTo(g.shaftTo.x, g.shaftTo.y);
+				heads.moveTo(g.tip.x, g.tip.y);
+				heads.lineTo(g.left.x, g.left.y);
+				heads.lineTo(g.right.x, g.right.y);
+				heads.closePath();
+			}
 		}
 		this.shaftsPath = shafts;
 		this.headsPath = heads;
@@ -1266,7 +1287,7 @@ export class GraphCanvasRenderer {
 		ctx.font = this.worldLabelFont;
 		const maxW = LABEL_MAX_WIDTH * (settings.labelSize / LABEL_SIZE);
 		for (const n of data.nodes) {
-			if (isVisible(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
+			if (isVisible(n.id) && !isImpNodeId(n.id)) this.labelLines.set(n.id, wrapLabel(ctx, n.label, maxW));
 		}
 		ctx.font = prevFont;
 	}
