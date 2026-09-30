@@ -92,6 +92,11 @@ export interface ExtractionRunUsage {
 	stages: {
 		extractor: ExtractionStageUsage;
 		auditor: ExtractionStageUsage;
+		/** The spine stage (2026-09-30): cross-stretch chain assembly.
+		 *  OPTIONAL — records written before the stage existed (and runs
+		 *  whose digest was empty, so the call was skipped) carry no
+		 *  entry; readers default it to an empty step-set. */
+		spine?: ExtractionStageUsage;
 	};
 }
 

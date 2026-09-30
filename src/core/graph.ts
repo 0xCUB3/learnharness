@@ -7,15 +7,21 @@
  *
  *   extractor (LLM)  → SessionFindings: the raw reasoning chains —
  *                      propositions (lonely relevant ones included) and
- *                      follows/supports edges,
- *                      from the source ALONE (whole session as markdown,
- *                      or raw notes). Fully trusted: no stage re-checks it.
+ *                      chains, from the stretch alone (one batch of the
+ *                      source). Fully trusted: no stage re-checks it.
+ *   spine (LLM)      → the ASSEMBLY stage (2026-09-30): cross-stretch
+ *                      chains + connective propositions joining the
+ *                      fresh stretch to the same-source digest (the span
+ *                      law is mechanical — src/agent/subagents/spine.ts).
+ *                      No links — identity stays the auditor's.
  *   auditor (LLM)    → AuditVerdicts: identity links (local id → an existing
  *                      node, or create) via graph-exploration tools —
  *                      links ONLY (owner, 2026-09-28 evening: the auditor
  *                      never mints edges; cross-source connection happens
  *                      solely through identified equivalences). Never sees
- *                      the source; never drops.
+ *                      the source; never drops; never sees chains — its
+ *                      input is the chunk propositions + the spine's
+ *                      connectives, propositions only.
  *   merger (HERE)    → mergeFindings(): deterministic ledger appends
  *
  * The merger is deliberately the ONLY stage that touches the ledgers, and it
@@ -194,10 +200,11 @@ export function mergeFindings(
 		mapping.set(p.id, graphNodeId);
 	}
 
-	// 2. Chains — the extractor's own, the ONLY chain source; the stored
-	//    truth (chains-primary, owner 2026-09-30). Endpoints are this
-	//    job's local proposition ids and resolve through the job-local
-	//    map; chains carry the run's chat-level provenance point and
+	// 2. Chains — the extractor's and the spine's (the two chain sources;
+	//    the stored truth, chains-primary, owner 2026-09-30). Endpoints
+	//    resolve through the job-local map OR pass through verbatim when
+	//    they name an existing node (the spine references digest ids
+	//    directly); chains carry the run's chat-level provenance point and
 	//    dedupe by (premises, conclusion) already asserted by THIS chat —
 	//    an assertion by another chat stays untouched (provenance unions
 	//    at read time; a known argument re-stated appends under the SAME
@@ -211,7 +218,13 @@ export function mergeFindings(
 		if (line.provenance.some((pt) => pt.chatId === chatId)) assertedByChat.add(key);
 	}
 	const emitChain = (chain: ExtractedChain): void => {
-		const resolve = (endpoint: string): string | undefined => mapping.get(endpoint);
+		// Mixed namespace (spine stage, 2026-09-30): an endpoint resolves
+		// through the job-local map (this submit's propositions — chunk
+		// findings and spine connectives alike) OR passes through verbatim
+		// when it names an existing node (a spine chain referencing digest
+		// ids directly). Anything else is unresolvable — skip.
+		const resolve = (endpoint: string): string | undefined =>
+			mapping.get(endpoint) ?? (existingIds.has(endpoint) ? endpoint : undefined);
 		const conclusion = resolve(chain.conclusion);
 		if (conclusion === undefined) return; // unresolvable endpoint — skip
 		// Duplicate local ids resolving to one node (two phrasings of one
@@ -228,7 +241,7 @@ export function mergeFindings(
 		assertedByChat.add(key);
 		stats.chains!++;
 	};
-	for (const chain of findings.chains) emitChain(chain); // the extractor's chains — the ONLY chain source // the extractor's edges — the ONLY edge source
+	for (const chain of findings.chains) emitChain(chain); // the extractor's chains + the spine's spanning chains — the two chain sources
 
 	// 3. Checkpoint — THE COVERAGE DISCIPLINE (vision-extraction-coverage.md):
 	//    only now, after every append succeeded, is the batch covered. The

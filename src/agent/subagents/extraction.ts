@@ -30,7 +30,17 @@ import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts"
 import { teacherProseBlocks } from "../../core/coverage.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { auditorGraphTools } from "../tools/graph.ts";
-import { runSubmitAgent } from "./submit-agent.ts";
+import { runSubmitAgent, healStringifiedArrays } from "./submit-agent.ts";
+import {
+	SPINE_INSTRUCTIONS,
+	NOTES_SPINE_INSTRUCTIONS,
+	SPINE_EMPTY,
+	buildSpinePrompt,
+	combineFindings,
+	runSpine,
+	spineHasDigest,
+	type SpineSubmit,
+} from "./spine.ts";
 
 /**
  * The extraction pipeline (vision §1 construction, 2026-09-02 redesign;
@@ -199,32 +209,6 @@ const auditSchema = Type.Object({
 type NotesFindings = SessionFindings;
 type NotesAuditResult = AuditVerdicts;
 
-// ── the weak-model string-heal (owner, 2026-09-28) ──
-//
-// OpenRouter log evidence: weak models under a big submit payload often
-// emit the whole `propositions` array as ONE JSON-STRING instead of a
-// native array ("propositions.0: must be object"). pi-agent-core runs
-// `prepareArguments` BEFORE TypeBox validation — the sanctioned shim
-// point (same doctrine as restoreMathEscapes at the display seam: heal
-// weak-model wire behavior, don't punish it with a retry). Best-effort:
-// heal only a string that parses to an array; anything else passes
-// through untouched and fails validation exactly as before.
-function healStringifiedArrays(raw: unknown): unknown {
-	if (typeof raw !== "object" || raw === null) return raw;
-	const out: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
-	for (const key of ["propositions", "chains"]) {
-		const v = out[key];
-		if (typeof v !== "string" || v.trim().length === 0) continue;
-		try {
-			const parsed: unknown = JSON.parse(v);
-			if (Array.isArray(parsed)) out[key] = parsed;
-		} catch {
-			// not a clean stringify (e.g. truncated) — leave for validation
-		}
-	}
-	return out;
-}
-
 // ── the submit seam (owner, 2026-09-28; redesigned 2026-09-30) ──
 //
 // Every top-level field on each submit tool is REQUIRED — a payload
@@ -314,9 +298,11 @@ teacher, or this reading: not "the learner understands X" but X. A misconception
 correction. Each statement is one self-contained reasoning step at full precision.
 
 Extract the load-bearing ideas of the subject — what a reference on it would teach — not the full run of
-the discourse. Every proposition must stand alone for a reader who never saw this source: names and
-statements may not lean on the source's own scaffolding (claim numbering, axiom tags, arc labels); a
-claim that only matters as part of how this document is organized is not knowledge — drop it.
+the discourse. The graph stores propositions as STEPS OF REASONING: a proposition earns its place only
+when the source's arguments run through it — examples, notation glosses, and restatements that no
+argument needs are not steps. Every proposition must stand alone for a reader who never saw this source:
+names and statements may not lean on the source's own scaffolding (claim numbering, axiom tags, arc
+labels); a claim that only matters as part of how this document is organized is not knowledge — drop it.
 
 SUBMIT with one submit_findings call: every proposition with a short name and a precise statement, and
 every chain as premises + conclusion. Premises within one chain are used TOGETHER — independent arguments
@@ -460,7 +446,7 @@ function runAuditor(
  *  audit+merge critical section is queued behind another job's; the
  *  extractor is done but the auditor may not start until the graph is
  *  stable. */
-export type ExtractionPhase = "queued" | "extracting" | "waiting" | "auditing" | "merging";
+export type ExtractionPhase = "queued" | "extracting" | "waiting" | "assembling" | "auditing" | "merging";
 
 /** One in-flight pipeline run. Module-level: one process, one registry.
  *  Exported for the status payload's consumer typing (the dock). */
@@ -487,6 +473,7 @@ export interface RunningExtraction {
 	 *  context-window blobs read this through /api/graph/status). */
 	usage: {
 		extractor?: ExtractionStageUsage;
+		spine?: ExtractionStageUsage;
 		auditor?: ExtractionStageUsage;
 	};
 	/** True-cancellation handle (the dock's abort button): one controller per
@@ -556,6 +543,7 @@ export interface ExtractionModels {
 	/** Test seam: a scripted engine per stage — checked FIRST, ahead of the
 	 *  engineFor chain (production wires no direct values). */
 	extractor?: PiEngine;
+	spine?: PiEngine;
 	auditor?: PiEngine;
 	/** Settings-resolved engine per role — the same slot treatment the
 	 *  job runner got, read FRESH per stage call (a settings PUT between
@@ -634,6 +622,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	function refuseIfStagesUnready(): void {
 		const stages: readonly [ModelRole, PiEngine | undefined][] = [
 			["extractor", stageEngine("extractor", deps.extractor)],
+			["spine", stageEngine("spine", deps.spine)],
 			["auditor", stageEngine("auditor", deps.auditor)],
 		];
 		const missing = new Set<ModelSlotName>();
@@ -682,7 +671,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	}
 
 	/** Accumulate one billed step into the run's registry entry (live). */
-	function recordStep(jobKey: string, stage: "extractor" | "auditor", usage: CallUsage, model: string): void {
+	function recordStep(jobKey: string, stage: "extractor" | "spine" | "auditor", usage: CallUsage, model: string): void {
 		const run = runningExtractions.get(jobKey);
 		if (!run) return; // not running (tests driving stages directly)
 		run.usage[stage] ??= { model, steps: [] };
@@ -746,6 +735,50 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		);
 		console.info(`[extraction ${jobKey}] extractor done in ${Math.round(performance.now() - t0)}ms`);
 		return findings;
+	}
+
+	/** THE SPINE (owner, 2026-09-30): the assembly stage between extract
+	 *  and audit, INSIDE the serialized section (it reads the graph-so-far
+	 *  digest; its output rides the same audit + merge). Skipped without a
+	 *  call when the source owns nothing yet (first stretch — nothing to
+	 *  join). Identity stays the auditor's: the spine submits chains +
+	 *  connective propositions only, and the audit sees the COMBINED
+	 *  propositions — chunk findings plus connectives — never chains. */
+	async function assemble(
+		jobKey: string,
+		sourceId: string,
+		kind: "chat" | "notes",
+		findings: SessionFindings,
+	): Promise<SessionFindings> {
+		const signal = runningExtractions.get(jobKey)?.controller.signal;
+		signal?.throwIfAborted();
+		const graph = getGraph(graphStore);
+		if (!spineHasDigest(graph, sourceId)) {
+			console.info(`[extraction ${jobKey}] spine skipped — empty digest (first stretch)`);
+			return findings;
+		}
+		console.info(
+				`[extraction ${jobKey}] spine starting (${graph.nodes.length} graph nodes, ` +
+				`${findings.propositions.length} fresh propositions)`,
+		);
+		const t0 = performance.now();
+		const spine: SpineSubmit = await runSpine(
+			stageEngine("spine", deps.spine),
+			kind === "chat" ? SPINE_INSTRUCTIONS : NOTES_SPINE_INSTRUCTIONS,
+			buildSpinePrompt(graph, sourceId, findings),
+			new Set(findings.propositions.map((p) => p.id)),
+			new Set(graph.nodes.map((n) => n.id)),
+			signal,
+			(usage, model, step, finishReason, tools) => {
+				recordStep(jobKey, "spine", callUsage(usage), model);
+				console.info(`[extraction] spine step ${step}: ${finishReason}, tools: ${tools}`);
+			},
+		);
+		console.info(
+				`[extraction ${jobKey}] spine done in ${Math.round(performance.now() - t0)}ms — ` +
+				`${spine.chains.length} chain(s), ${spine.propositions.length} connective(s)`,
+		);
+		return spine === SPINE_EMPTY ? findings : combineFindings(findings, spine);
 	}
 
 	async function audit(jobKey: string, findings: SessionFindings): Promise<AuditVerdicts> {
@@ -816,6 +849,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			stats,
 			stages: {
 				extractor: run.usage.extractor ?? { model: "unknown", steps: [] },
+				spine: run.usage.spine ?? { model: "unknown", steps: [] },
 				auditor: run.usage.auditor ?? { model: "unknown", steps: [] },
 			},
 		};
@@ -935,10 +969,14 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 						// SERIALIZED AUDIT (owner 2026-09-28): audit + merge are the
 						// graph-mutating critical section — one job at a time,
 						// process-wide, so the auditor explores the graph as it
-						// stands AFTER every earlier job's merge.
+						// stands AFTER every earlier job's merge. The spine rides the
+						// same section (owner order, 2026-09-30): extract → spine →
+						// audit → merge.
 						return withAuditLock(jobKey, "chat", undefined, async () => {
+							setPhase(jobKey, "assembling", "chat", undefined, part);
+							const combined = await assemble(jobKey, chatId, "chat", findings);
 							setPhase(jobKey, "auditing", "chat", undefined, part);
-							const auditResult = await audit(jobKey, findings);
+							const auditResult = await audit(jobKey, combined);
 							setPhase(jobKey, "merging", "chat", undefined, part);
 							// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
 							// merge. The deletion route aborts this run first and runs its purge
@@ -955,7 +993,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 							// merges in), the stored fingerprint won't match its new
 							// one and it re-opens: honest by construction.
 							const foldedAt = new Date().toISOString();
-							const batchStats = mergeFindings(chatId, findings, auditResult, { chatStore, graphStore }, {
+							const batchStats = mergeFindings(chatId, combined, auditResult, { chatStore, graphStore }, {
 								foldedAt,
 								coverage: batch
 									.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
@@ -1088,14 +1126,17 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 						// parallel, but audit + merge one at a time, process-wide —
 						// the auditor explores the graph as it stands AFTER every
 						// earlier job's merge. Reacquired per chunk so runs
-						// interleave fairly.
+						// interleave fairly. The spine rides the same section
+						// (owner order, 2026-09-30): extract → spine → audit → merge.
 						return withAuditLock(jobKey, "notes", input.filePath, async () => {
+							setPhase(jobKey, "assembling", "notes", input.filePath, part);
+							const combined = await assemble(jobKey, id, "notes", findings);
 							setPhase(jobKey, "auditing", "notes", input.filePath, part);
-							const auditResult = await audit(jobKey, findings);
+							const auditResult = await audit(jobKey, combined);
 							setPhase(jobKey, "merging", "notes", input.filePath, part);
 							const merged = mergeFindings(
 								id,
-								findings,
+								combined,
 								auditResult,
 								{ chatStore, graphStore },
 								{ foldedAt: input.importedAt },

@@ -42,8 +42,8 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.sessionNameSerif, true);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 900);
 		// wave 7 collapse: the master switch ONLY + the redesign's chunk
-		// budget — absent record resolves the factory 4096 (the old config constant)
-		assert.deepEqual(eff.graph, { enabled: true, extractionChunkTokens: 4096 });
+		// budget — absent record resolves the factory 8192 (the 2026-09-30 bump)
+		assert.deepEqual(eff.graph, { enabled: true, extractionChunkTokens: 8192 });
 	});
 
 	it("explicit record values win over every factory default", () => {
@@ -75,8 +75,8 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.proseFontSize, 20);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 600);
 		// wave 7 collapse: the section IS the master switch (absent budget
-		// field = factory 4096 — a pre-redesign record resolves cleanly).
-		assert.deepEqual(eff.graph, { enabled: false, extractionChunkTokens: 4096 });
+		// field = factory 8192 — a pre-redesign record resolves cleanly).
+		assert.deepEqual(eff.graph, { enabled: false, extractionChunkTokens: 8192 });
 		// The chunk budget rides the same resolution: stored value wins.
 		const budgeted = resolveSettings({ version: 1, graph: { extractionChunkTokens: 2000 } });
 		assert.deepEqual(budgeted.graph, { enabled: true, extractionChunkTokens: 2000 });

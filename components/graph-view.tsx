@@ -309,9 +309,14 @@ export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
 	totalDollars: number;
 	unpricedRuns: number;
 } {
+	// The three live stages (spine joined 2026-09-30); empty spines
+	// contribute zero — the fold leaves them at 0 when a run never
+	// called the spine (first-stretch skip / pre-spine records).
 	return {
-		totalDollars: costs.stages.extraction.dollars + costs.stages.audit.dollars,
-		unpricedRuns: costs.stages.extraction.unpricedRuns + costs.stages.audit.unpricedRuns,
+		totalDollars:
+			costs.stages.extraction.dollars + costs.stages.spine.dollars + costs.stages.audit.dollars,
+		unpricedRuns:
+			costs.stages.extraction.unpricedRuns + costs.stages.spine.unpricedRuns + costs.stages.audit.unpricedRuns,
 	};
 }
 
@@ -368,6 +373,7 @@ function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 	const stageRows: [string, GraphCostSummary["stages"]["extraction"]][] = [
 		["Extraction", costs.stages.extraction],
+		["Assembly", costs.stages.spine],
 		["Audit", costs.stages.audit],
 	];
 	// The displayed figures come from displayCostTotals (naming excluded —

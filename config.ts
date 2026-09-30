@@ -53,6 +53,7 @@ export type ModelRole =
 	| "visualMaker"
 	| "pdfReader"
 	| "extractor"
+	| "spine"
 	| "auditor"
 	| "partitioner"
 	| "problemGenerator"

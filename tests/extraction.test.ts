@@ -52,6 +52,15 @@ import {
 	EXTRACTOR_INSTRUCTIONS,
 	NOTES_EXTRACTOR_INSTRUCTIONS,
 } from "../src/agent/subagents/extraction.ts";
+import {
+	SPINE_CORE,
+	SPINE_INSTRUCTIONS,
+	NOTES_SPINE_INSTRUCTIONS,
+	validateSpine,
+	buildSpinePrompt,
+	spineHasDigest,
+	type SpineSubmit,
+} from "../src/agent/subagents/spine.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError, providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts";
 import { coverageOf, messageViewLines } from "../src/core/coverage.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -275,6 +284,15 @@ function submitModel(name: string, input: unknown, onCall?: () => void): PiEngin
  *  the timing control for the serialized-audit tests (owner 2026-09-28):
  *  the model call has STARTED (onCall fired, the run holds the audit
  *  gate) but will not resolve until the test opens the gate. */
+
+/** The spine fixture every pipeline construction carries (stage gate is
+ *  strict, owner 2026-09-30): the honest common case — the stretch stands
+ *  alone, empty submit. One-shot; multi-batch tests that need a REAL
+ *  spanning spine build their own submitModel("submit_spine", …). */
+function spineModel(): PiEngine {
+	return submitModel("submit_spine", { propositions: [], chains: [] });
+}
+
 function gatedSubmitModel(name: string, input: unknown, gate: Promise<void>, onCall?: () => void): PiEngine {
 	return fauxEngine([
 		async () => {
@@ -384,7 +402,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chains: FINDINGS.chains,
 		});
 
-		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers, extractor, auditor: submitModel("submit_review", verdict) });
+		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers, extractor, spine: spineModel(), auditor: submitModel("submit_review", verdict) });
 		const stats = await pipeline.runExtraction(chatId);
 		assert.deepEqual(stats, { nodes: 2, chains: 1 });
 	});
@@ -400,6 +418,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor,
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
@@ -428,6 +447,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", verdict),
 		});
 		const stats = await pipeline.runExtraction(chatId);
@@ -476,7 +496,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers });
 		await assert.rejects(pipeline.runExtraction(chatId), (err: unknown) => {
 			assert.ok(err instanceof ModelsNotConfiguredError);
-			assert.deepEqual(err.envelope.missing, ["cheap"]); // extractor + auditor are the cheap tier
+			assert.deepEqual(err.envelope.missing, ["cheap", "strong"]); // extractor + auditor cheap, spine strong
 			assert.equal(err.envelope.code, "models_not_configured");
 			return true;
 		});
@@ -494,6 +514,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor,
+			spine: spineModel(),
 			auditor,
 			providerKeyMissing: (provider, tier) => {
 				seen.push([provider, tier]);
@@ -521,14 +542,15 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: fauxEngine([]),
+			spine: spineModel(),
 			auditor: fauxEngine([]),
-			providerKeyMissing: (provider, tier) => (calls++ === 0 ? null : providerKeyMissing(provider, [tier])),
+			providerKeyMissing: (provider, tier) => (calls++ < 2 ? null : providerKeyMissing(provider, [tier])),
 		});
 		await assert.rejects(pipeline.runExtraction(chatId), (err: unknown) => {
-			assert.ok(err instanceof ProviderKeyMissingError, "the auditor's refusal surfaces after the extractor passed");
+			assert.ok(err instanceof ProviderKeyMissingError, "the auditor's refusal surfaces after extractor + spine passed");
 			return true;
 		});
-		assert.equal(calls, 2, "both stages were checked, in order");
+		assert.equal(calls, 3, "all three stages were checked, in order");
 		assert.equal(ledgers.readCoverage().length, 0);
 	});
 
@@ -541,6 +563,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", verdict),
 		});
 		const stats = await pipeline.runExtraction(chatId);
@@ -566,17 +589,17 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			engineFor: (role) => {
 				consulted.push(role);
 				if (role === "extractor") return submitModel("submit_findings", FINDINGS);
+				if (role === "spine") return submitModel("submit_spine", { propositions: [], chains: [] });
 				if (role === "auditor") return submitModel("submit_review", verdict);
 				return submitModel("submit_labels", { labels: [] });
 			},
 		});
 		const stats = await pipeline.runExtraction(chatId);
 		assert.equal(stats.nodes, 2, "the chain-fed pipeline ran end to end — both propositions merged");
-		// The stages were resolved through the chain, in pipeline order (the
-		// labeler is fire-and-forget garnish — extractor + auditor are the
-		// pinned order).
-		assert.equal(consulted[0], "extractor");
-		assert.equal(consulted[1], "auditor");
+		// The stages were resolved through the chain, in pipeline order
+		// (extractor → spine → auditor; the labeler is fire-and-forget
+		// garnish for any other role).
+		assert.deepEqual(consulted.slice(0, 3), ["extractor", "spine", "auditor"]);
 	});
 
 	it("direct test values still WIN over engineFor (the priority pin)", async () => {
@@ -587,6 +610,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", verdict),
 			// If the direct values did NOT win, this throw would surface.
 			engineFor: (role) => {
@@ -605,6 +629,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
+			spine: spineModel(),
 			auditor: silentModel(), // never submits the review
 		});
 		// The old run-level throw is gone: one failed job is absorbed at
@@ -618,6 +643,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: silentModel(),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await failingExtractor.runExtraction(chatId), { nodes: 0, chains: 0 });
@@ -639,8 +665,15 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const mixed = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
+			// 4096 budget: the fixture is sized to split in two (the factory
+			// default doubled to 8192 with the spine stage, 2026-09-30).
+			getChunkTokens: () => 4096,
 			engineFor: (role) =>
-				role === "extractor" ? fauxEngine([countingStep]) : submitModel("submit_review", { links: [] }),
+				role === "extractor"
+					? fauxEngine([countingStep])
+					: role === "spine"
+						? submitModel("submit_spine", { propositions: [], chains: [] })
+						: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await mixed.runExtraction(chunkyId), { nodes: 2, chains: 1 }, "batch 1's merge survives batch 2's failure");
 		assert.equal(invocations, 2);
@@ -675,6 +708,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			// Each stage's first generate is the observation point: the
 			// registry must already carry this chat at the right phase.
 			extractor: submitModel("submit_findings", FINDINGS, () => seen.push(phaseOf())),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", verdict, () => seen.push(phaseOf())),
 		});
 		await pipeline.runExtraction(chatId);
@@ -701,6 +735,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", findingsA),
+			spine: spineModel(),
 			auditor: gatedSubmitModel("submit_review", { links: [] }, gate, () => {
 				aAuditing = true;
 			}),
@@ -718,6 +753,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			// THE pin: when B's auditor is finally invoked, A's merge must
 			// already be in the ledgers — B explores the post-merge graph,
 			// which is the entire point of the gate.
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }, () => {
 				bAuditorCalled = true;
 				bSawAlphasMerge = ledgers.readNodes().some((n) => n.name === "Alpha claim");
@@ -755,6 +791,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pa", "Alpha claim", "Alpha statement")),
+			spine: spineModel(),
 			auditor: gatedSubmitModel("submit_review", { links: [] }, gate),
 		});
 		const runA = pipelineA.runExtraction(a.chatId);
@@ -765,6 +802,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pb", "Beta claim", "Beta statement")),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }, () => {
 				bAuditorCalled = true;
 			}),
@@ -787,6 +825,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pc", "Gamma claim", "Gamma statement")),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await pipelineC.runExtraction(c.chatId), { nodes: 1, chains: 0 });
@@ -814,6 +853,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			// During the auditor's generate, the registry must already carry
 			// the extractor's fully accumulated live usage (2 steps × 10/5).
 			extractor: submitModel("submit_findings", FINDINGS),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", verdict, () =>
 				usageSeen.push(extractionStatuses().find((r) => r.chatId === chatId)?.usage.extractor?.steps.at(-1)?.inputTokens),
 			),
@@ -852,6 +892,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: hangingModel(), // hangs until aborted — no step finishes
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		const runPromise = pipeline.runExtraction(chatId);
@@ -902,6 +943,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: gatedExtractor,
+			spine: spineModel(),
 			auditor: silentModel(),
 		});
 
@@ -938,6 +980,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: gatedExtractor,
+			spine: spineModel(),
 			auditor: silentModel(),
 		});
 		// A SECOND instance over DIFFERENT ledgers — the observer a separate
@@ -947,6 +990,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: memoryLedgers(),
 			extractor: silentModel(),
+			spine: spineModel(),
 			auditor: silentModel(),
 		});
 
@@ -973,6 +1017,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: silentModel(),
+			spine: spineModel(),
 			auditor: silentModel(),
 		});
 		await assert.rejects(pipeline.runExtraction("chat_does_not_exist"), /Chat not found/);
@@ -1042,6 +1087,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			chatStore,
 			graphStore: ledgers,
 			extractor,
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 3, chains: 1 });
@@ -1077,6 +1123,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			chatStore,
 			graphStore: ledgers,
 			extractor,
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		// Independent arguments for the same conclusion are separate chains;
@@ -1097,6 +1144,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			chatStore,
 			graphStore: ledgers,
 			extractor,
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
@@ -1141,6 +1189,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			chatStore,
 			graphStore: ledgers,
 			extractor: retryEngine(bad, FINDINGS),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		// The first submit was schema-VALID — only the chain law caught it;
@@ -1159,6 +1208,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			chatStore,
 			graphStore: ledgers,
 			extractor: retryEngine(bad, FINDINGS),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
@@ -1175,6 +1225,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			chatStore,
 			graphStore: ledgers,
 			extractor: retryEngine(bad, FINDINGS),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
 		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
@@ -1223,6 +1274,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", NOTES_FINDINGS),
 			// During the auditor's call the registry must show the notes run.
+			spine: spineModel(),
 			auditor: submitModel("submit_review", NOTES_VERDICT, () => {
 				const run = extractionStatuses().find((r) => r.chatId.startsWith("src_"));
 				seen.push({ kind: run?.kind, label: run?.label });
@@ -1282,7 +1334,9 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 			engineFor: (role) =>
 				role === "extractor"
 					? extractorStep()
-					: submitModel("submit_review", { links: [] }),
+					: role === "spine"
+						? submitModel("submit_spine", { propositions: [], chains: [] })
+						: submitModel("submit_review", { links: [] }),
 			getChunkTokens: () => 20, // 80 chars/line-groups → several chunks
 		});
 		const stats = await pipeline.importNotes({ filePath: "/vault/big.md", text });
@@ -1335,6 +1389,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 				chatStore,
 				graphStore: ledgers,
 					extractor: submitModel("submit_findings", NOTES_FINDINGS),
+				spine: spineModel(),
 				auditor: submitModel("submit_review", NOTES_VERDICT),
 			});
 		const first = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
@@ -1365,6 +1420,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: hangingModel(),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", NOTES_VERDICT),
 		});
 		const runPromise = pipeline.importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
@@ -1445,7 +1501,11 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
+			// 4096 budget: the fixture is sized to split in two (the factory
+			// default doubled to 8192 with the spine stage, 2026-09-30).
+			getChunkTokens: () => 4096,
 			extractor: fauxEngine([findingsStep((v) => views.push(v)), findingsStep((v) => views.push(v))]),
+			spine: spineModel(),
 			auditor: fauxEngine([passThroughAuditStep(), passThroughAuditStep()]),
 		});
 		const stats = await pipeline.runExtraction(chatId);
@@ -1493,6 +1553,9 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
+			// 4096 budget: the fixture is sized to split in two (the factory
+			// default doubled to 8192 with the spine stage, 2026-09-30).
+			getChunkTokens: () => 4096,
 			// Batch 1 submits and merges; batch 2's extractor call HANGS
 			// until the abort fires — the dock's abort button, mid-run.
 			extractor: fauxEngine([
@@ -1507,6 +1570,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 						sig?.addEventListener("abort", () => resolve(fauxAssistantMessage("late")), { once: true });
 					}),
 			]),
+			spine: spineModel(),
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
 		const runPromise = pipeline.runExtraction(chatId);
@@ -1537,6 +1601,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: fauxEngine([findingsStep((v) => reRunViews.push(v))]),
+			spine: spineModel(),
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
 		await finisher.runExtraction(chatId);
@@ -1561,6 +1626,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: fauxEngine([findingsStep()]),
+			spine: spineModel(),
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
 		await pipeline.runExtraction(chatId);
@@ -1596,6 +1662,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: fauxEngine([findingsStep((v) => reRunViews.push(v))]),
+			spine: spineModel(),
 			auditor: fauxEngine([passThroughAuditStep()]),
 		});
 		await reOpener.runExtraction(chatId);
@@ -1697,10 +1764,19 @@ describe("per-chunk parallel jobs (owner, 2026-09-28)", () => {
 			auditInFlight--;
 			return reviewMessage;
 		};
+		const spineMessage = fauxAssistantMessage(
+			[fauxToolCall("submit_spine", { propositions: [], chains: [] } as unknown as ToolCall["arguments"], { id: "spine-call" })],
+			{ stopReason: "toolUse" },
+		);
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
-			engineFor: (role) => (role === "extractor" ? fauxEngine([slowExtract]) : fauxEngine([slowAudit])),
+			engineFor: (role) =>
+				role === "extractor"
+					? fauxEngine([slowExtract])
+					: role === "spine"
+						? fauxEngine([() => spineMessage])
+						: fauxEngine([slowAudit]),
 			getChunkTokens: () => 20,
 		});
 		const stats = await pipeline.importNotes({ filePath: "/vault/parallel-2.md", text: wideText() });
@@ -1726,6 +1802,7 @@ describe("the session-deletion guard (chat deleted mid-run)", () => {
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", FINDINGS),
+			spine: spineModel(),
 			auditor: submitModel("submit_review", { links: [] }, () => chatStore.deleteChat(chatId)),
 		});
 		const stats = await pipeline.runExtraction(chatId);
@@ -1747,5 +1824,251 @@ describe("the session-deletion guard (chat deleted mid-run)", () => {
 		assert.equal(extractionStatuses().some((run) => run.chatId === chatId), false);
 		// And its partial spend died with the chat — no usage row on a ghost.
 		assert.equal(chatStore.getChat(chatId), null);
+	});
+});
+
+// ─── the spine stage (owner, 2026-09-30): extract → spine → audit → merge ────
+
+describe("the spine stage (cross-stretch assembly)", () => {
+	it("the system prompt is goal-first: span doctrine + doctrines carried over, one shared core", () => {
+		assert.match(SPINE_CORE, /carry the source's line of argument ACROSS stretches/);
+		assert.match(SPINE_CORE, /may not all come from the same stretch/);
+		assert.match(SPINE_CORE, /JOINTLY entail the conclusion/);
+		assert.match(SPINE_CORE, /[Ee]ntailment is the\s+only link that earns a chain/);
+		assert.match(SPINE_CORE, /when in doubt, omit/);
+		assert.match(SPINE_CORE, /build your chains on\s+the EXISTING id, not the restatement/);
+		assert.match(SPINE_CORE, /SUBMIT with one submit_spine call/);
+		// Assembly: each front door = its preamble + the shared core.
+		assert.ok(SPINE_INSTRUCTIONS.includes(SPINE_CORE));
+		assert.ok(NOTES_SPINE_INSTRUCTIONS.includes(SPINE_CORE));
+		assert.match(SPINE_INSTRUCTIONS, /a teaching session/);
+		assert.match(NOTES_SPINE_INSTRUCTIONS, /the author's personal notes/);
+	});
+
+	it("validateSpine enforces the span law: every chain joins fresh material to existing material", () => {
+		const chunkIds = new Set(["p1"]);
+		const existing = new Set(["n_a", "n_b"]);
+		const ok: SpineSubmit = { propositions: [], chains: [{ premises: ["n_a", "p1"], conclusion: "n_b" }] };
+		assert.equal(validateSpine(ok, chunkIds, existing), null);
+
+		// Connectives count as fresh; existing endpoints may sit anywhere.
+		const connective: SpineSubmit = {
+			propositions: [{ id: "s1", name: "C", statement: "c", aliases: [] }],
+			chains: [{ premises: ["s1", "p1"], conclusion: "n_a" }],
+		};
+		assert.equal(validateSpine(connective, chunkIds, existing), null);
+
+		// Empty submit is VALID — the honest common case (stretch stands alone).
+		assert.equal(validateSpine({ propositions: [], chains: [] }, chunkIds, existing), null);
+
+		// All-existing: the graph already had its chance — rejected.
+		assert.match(
+			validateSpine({ propositions: [], chains: [{ premises: ["n_a"], conclusion: "n_b" }] }, chunkIds, existing) ?? "",
+			/entirely existing material/,
+		);
+		// All-fresh: the stretch extractor's own work — rejected.
+		assert.match(
+			validateSpine(
+				{ propositions: [{ id: "s1", name: "C", statement: "c", aliases: [] }], chains: [{ premises: ["p1"], conclusion: "s1" }] },
+				chunkIds,
+				existing,
+			) ?? "",
+			/entirely inside the fresh stretch/,
+		);
+		// Unknown ids never pass silently.
+		assert.match(
+			validateSpine({ propositions: [], chains: [{ premises: ["p1"], conclusion: "zz" }] }, chunkIds, existing) ?? "",
+			/not an existing digest id/,
+		);
+		// Self-reference and id collisions are loud.
+		assert.match(
+			validateSpine({ propositions: [], chains: [{ premises: ["n_a", "p1"], conclusion: "p1" }] }, chunkIds, existing) ?? "",
+			/cannot be its own premise/,
+		);
+		assert.match(
+			validateSpine(
+				{ propositions: [{ id: "p1", name: "X", statement: "x", aliases: [] }], chains: [] },
+				chunkIds,
+				existing,
+			) ?? "",
+			/collides with an id this submission does not own/,
+		);
+	});
+
+	it("buildSpinePrompt renders the digest verbatim-id + the fresh stretch; spineHasDigest is same-source only", () => {
+		const graph = {
+			nodes: [
+				{
+					id: "n_a",
+					name: "Self-ownership",
+					statement: "s",
+					provenance: [{ chatId: "src_1" }],
+				},
+				{ id: "n_b", name: "Foreign", statement: "s", provenance: [{ chatId: "src_2" }] },
+			],
+			chains: [
+				{
+					id: "arg_x",
+					premises: ["n_a"],
+					conclusion: "n_b",
+					provenance: [{ chatId: "src_1" }],
+				},
+			],
+		} as unknown as Parameters<typeof buildSpinePrompt>[0];
+		const findings: SessionFindings = {
+			propositions: [{ id: "p1", name: "Fresh", statement: "f", aliases: [] }],
+			chains: [],
+		};
+		const prompt = buildSpinePrompt(graph, "src_1", findings);
+		assert.match(prompt, /THE GRAPH SO FAR/);
+		assert.match(prompt, /n_a \| Self-ownership/);
+		assert.doesNotMatch(prompt, /n_b \| Foreign/); // other sources' nodes stay out
+		assert.match(prompt, /\[n_a ⟹ n_b\]/); // recorded chains shown as ids
+		assert.match(prompt, /THE FRESH STRETCH/);
+		assert.match(prompt, /p1 \| Fresh/);
+		// The chain line names the foreign conclusion via the id-name map —
+		// ids always render, names come from anywhere in the graph.
+		assert.match(prompt, /Self-ownership ⟹ Foreign/);
+
+		assert.equal(spineHasDigest(graph, "src_1"), true);
+		assert.equal(spineHasDigest(graph, "src_9"), false);
+	});
+
+	it("a seeded digest joins a fresh stretch: the spanning chain + connective ride the audit and merge, billed as the spine stage", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		// A PREVIOUS stretch's residue: two nodes already in the graph,
+		// provenance on this chat — the spine's digest.
+		const seed = (id: string, name: string): GraphNode => ({
+			id,
+			name,
+			statement: `statement of ${name}`,
+			aliases: [],
+			createdAt: "2026-09-30T00:00:00.000Z",
+			provenance: [{ chatId, messageId: "m0" }],
+		});
+		ledgers.appendNode(seed("n_a", "Self-ownership"));
+		ledgers.appendNode(seed("n_b", "Scarcity"));
+		const FINDINGS_B: SessionFindings = {
+			propositions: [{ id: "p1", name: "First-use survives", statement: "c", aliases: [] }],
+			chains: [],
+		};
+		const spineViews: string[] = [];
+		let spineCalls = 0;
+		const phases: string[] = [];
+		type LiveUsage = NonNullable<ReturnType<typeof extractionStatuses>[number]["usage"]>;
+		const usages: LiveUsage[] = [];
+		const spineEngine = fauxEngine([
+			(context) => {
+				spineCalls++;
+				spineViews.push(capturedView(context));
+				phases.push(extractionStatuses().find((r) => r.chatId === chatId)?.phase ?? "?");
+				const submit: SpineSubmit = {
+					propositions: [{ id: "s1", name: "Appropriation axiom", statement: "d", aliases: [] }],
+					chains: [{ premises: ["n_a", "p1"], conclusion: "s1" }],
+				};
+				return fauxAssistantMessage([fauxToolCall("submit_spine", submit as unknown as ToolCall["arguments"], { id: "sp1" })], { stopReason: "toolUse" });
+			},
+		]);
+		const reviewMessage = () =>
+			fauxAssistantMessage([fauxToolCall("submit_review", { links: [] } as unknown as ToolCall["arguments"], { id: "rv" })], { stopReason: "toolUse" });
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", FINDINGS_B),
+			spine: spineEngine,
+			auditor: fauxEngine([
+				() => {
+					usages.push(extractionStatuses().find((r) => r.chatId === chatId)?.usage ?? {});
+					return reviewMessage();
+				},
+			]),
+		});
+		const stats = await pipeline.runExtraction(chatId);
+
+		// The spine ran once, under its own phase, seeing the digest and the
+		// fresh stretch rendered together (existing ids verbatim).
+		assert.equal(spineCalls, 1);
+		assert.deepEqual(phases, ["assembling"]);
+		assert.match(spineViews[0]!, /THE GRAPH SO FAR/);
+		assert.match(spineViews[0]!, /n_a \| Self-ownership/);
+		assert.match(spineViews[0]!, /p1 \| First-use survives/);
+
+		// 2 nodes this run (the fresh proposition + the connective), 1 spanning chain.
+		assert.deepEqual(stats, { nodes: 2, chains: 1 });
+		const stored = ledgers.readChains();
+		assert.equal(stored.length, 1);
+		const nodes = ledgers.readNodes();
+		const byName = new Map(nodes.map((n) => [n.name, n.id]));
+		// Mixed namespace resolved: the existing n_a passes through
+		// VERBATIM; fresh p1/s1 resolve through the job-local map.
+		assert.deepEqual(stored[0]!.premises, ["n_a", byName.get("First-use survives")]);
+		assert.equal(stored[0]!.conclusion, byName.get("Appropriation axiom"));
+
+		// Billing: the spine is its own stage — one extractor step, one
+		// spine step, one auditor step, live in the registry.
+		assert.equal(usages[0]!.extractor?.steps.length, 1);
+		assert.equal(usages[0]!.spine?.steps.length, 1);
+	});
+
+	it("a non-spanning spine submit is REFUSED with the problem and retried: only the spanning retry merges", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const seed = (id: string, name: string): GraphNode => ({
+			id,
+			name,
+			statement: `statement of ${name}`,
+			aliases: [],
+			createdAt: "2026-09-30T00:00:00.000Z",
+			provenance: [{ chatId, messageId: "m0" }],
+		});
+		ledgers.appendNode(seed("n_a", "Self-ownership"));
+		ledgers.appendNode(seed("n_b", "Scarcity"));
+		const FINDINGS_B: SessionFindings = {
+			propositions: [{ id: "p1", name: "First-use survives", statement: "c", aliases: [] }],
+			chains: [],
+		};
+		const spineEngine = fauxEngine([
+			// All-existing chain: the graph already had its chance — refused
+			// with the problem, error-back to the model.
+			() =>
+				fauxAssistantMessage(
+					[
+						fauxToolCall(
+							"submit_spine",
+							{ propositions: [], chains: [{ premises: ["n_a"], conclusion: "n_b" }] } as unknown as ToolCall["arguments"],
+							{ id: "sp-bad" },
+						),
+					],
+					{ stopReason: "toolUse" },
+				),
+			// The retry spans: existing n_a + fresh p1 ⟹ existing n_b.
+			() =>
+				fauxAssistantMessage(
+					[
+						fauxToolCall(
+							"submit_spine",
+							{ propositions: [], chains: [{ premises: ["n_a", "p1"], conclusion: "n_b" }] } as unknown as ToolCall["arguments"],
+							{ id: "sp-good" },
+						),
+					],
+					{ stopReason: "toolUse" },
+				),
+		]);
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", FINDINGS_B),
+			spine: spineEngine,
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		const stats = await pipeline.runExtraction(chatId);
+		// The refused attempt left nothing; the retry's spanning chain merged.
+		assert.deepEqual(stats, { nodes: 1, chains: 1 });
+		const stored = ledgers.readChains();
+		assert.equal(stored.length, 1);
+		const firstUse = ledgers.readNodes().find((n) => n.name === "First-use survives")!;
+		assert.deepEqual(stored[0]!.premises, ["n_a", firstUse.id]);
+		assert.equal(stored[0]!.conclusion, "n_b");
 	});
 });

@@ -22,8 +22,9 @@ describe("FACTORY_SETTINGS (the compiled factory layer)", () => {
 		assert.equal(CURRENT_SETTINGS_VERSION, 1);
 		assert.deepEqual(FACTORY_SETTINGS.general, { autoUpdate: true });
 		// wave 7 collapse: the master switch ONLY + the extraction-UX
-		// redesign's chunk budget (2026-09-24) — default = the old config constant
-		assert.deepEqual(FACTORY_SETTINGS.graph, { enabled: true, extractionChunkTokens: 4096 });
+		// redesign's chunk budget (2024-09-24); default doubled 8192 with
+		// the spine stage (owner, 2026-09-30)
+		assert.deepEqual(FACTORY_SETTINGS.graph, { enabled: true, extractionChunkTokens: 8192 });
 		const a = FACTORY_SETTINGS.appearance;
 		assert.equal(a.mode, "dark");
 		assert.equal(a.background, null); // the mode's own default, not a factory hex
@@ -202,12 +203,13 @@ describe("sanitizeUserSettings", () => {
 		assert.deepEqual(out.agent?.tools, { quiz: false, demo: true });
 	});
 
-	it("BACKGROUND_MODEL_ROLES matches the eight background roles (practice trio added, owner 2026-09-29)", () => {
+	it("BACKGROUND_MODEL_ROLES matches the nine background roles (spine added 2026-09-30; practice trio 2026-09-29)", () => {
 		assert.deepEqual([...BACKGROUND_MODEL_ROLES], [
 			"researcher",
 			"demoBuilder",
 			"visualMaker",
 			"extractor",
+			"spine",
 			"auditor",
 			"partitioner",
 			"problemGenerator",

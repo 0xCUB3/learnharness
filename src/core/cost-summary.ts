@@ -61,6 +61,7 @@ export interface GraphCostSummary {
 	 *  historical spend on either is simply not displayed.) */
 	stages: {
 		extraction: StageCost;
+		spine: StageCost;
 		audit: StageCost;
 	};
 	/** Newest first, capped at `recentCap` (default 10). */
@@ -112,17 +113,30 @@ function mergeTokens(into: CallUsage, steps: readonly CallUsage[]): void {
  *  same output — no clock, no fs, no store reads. */
 export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	const extraction = emptyStage();
+	const spine = emptyStage();
 	const audit = emptyStage();
 	const runs: RecentRun[] = [];
 
 	const foldExtractionRun = (run: ExtractionRunUsage, title: string) => {
 		const stages = run.stages ?? { extractor: { model: "unknown", steps: [] }, auditor: { model: "unknown", steps: [] } };
+		// The spine stage is OPTIONAL on the record (2026-09-30): records
+		// written before it existed (and runs whose digest was empty, so
+		// the call was skipped) carry no entry — default to empty steps.
+		const spineStage = stages.spine ?? { model: "unknown", steps: [] };
 		// Per-stage: tokens always count; dollars only when priced.
 		extraction.runs++;
 		mergeTokens(extraction.tokens, stages.extractor.steps);
 		const extDollars = stageDollars(stages.extractor.model, stages.extractor.steps);
 		if (extDollars === null) extraction.unpricedRuns++;
 		else extraction.dollars += extDollars;
+
+		if (spineStage.steps.length > 0) {
+			spine.runs++;
+			mergeTokens(spine.tokens, spineStage.steps);
+			const spDollars = stageDollars(spineStage.model, spineStage.steps);
+			if (spDollars === null) spine.unpricedRuns++;
+			else spine.dollars += spDollars;
+		}
 
 		audit.runs++;
 		mergeTokens(audit.tokens, stages.auditor.steps);
@@ -135,7 +149,7 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 		const runDollars = allStages.every((d) => d === null)
 			? null
 			: allStages.reduce<number>((a, d) => a + (d ?? 0), 0);
-		const allSteps = [...stages.extractor.steps, ...stages.auditor.steps];
+		const allSteps = [...stages.extractor.steps, ...spineStage.steps, ...stages.auditor.steps];
 		runs.push({
 			startedAt: run.startedAt,
 			at: run.at,
@@ -163,7 +177,7 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	return {
 		totalDollars: extraction.dollars + audit.dollars,
 		unpricedRuns,
-		stages: { extraction, audit },
+		stages: { extraction, spine, audit },
 		runs: capped,
 	};
 }
