@@ -457,6 +457,20 @@ describe("the merger (mergeFindings)", () => {
 		assert.ok(mine, "the trio is one cluster");
 		assert.equal(mine!.id, "src_clusterfixture");
 		assert.equal(mine!.label, "/vault/cluster notes.md", "a notes file is a birth-session — the label is its path");
+
+		// Chains-primary split (owner, 2026-09-30): `nodes` is the canvas
+		// image (propositions + derived implication nodes), `propositions`
+		// is the stored truth alone — the chain table's input. The store is
+		// shared across this suite, so assert the INVARIANT, not counts:
+		// image = truth + one imp node per fully-live stored chain, and the
+		// truth never carries an arg_ id.
+		const stored = graphStore.readChains();
+		const live = new Set(snap.propositions.map((n) => n.id));
+		const liveChains = stored.filter((c) => live.has(c.conclusion) && c.premises.every((p) => live.has(p)));
+		assert.ok(snap.propositions.every((n) => !n.id.startsWith("arg_")), "the stored-truth list never carries imp nodes");
+		assert.equal(snap.nodes.length, snap.propositions.length + liveChains.length, "image = truth + one imp node per live chain");
+		const imp = snap.nodes.filter((n) => n.id.startsWith("arg_"));
+		assert.ok(imp.length === liveChains.length && imp.every((n) => snap.propositions.every((p) => p.id !== n.id)), "the extra nodes are exactly the derived implication nodes");
 	});
 
 	it("derives the sessions index in graphSnapshot", () => {

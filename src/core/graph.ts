@@ -409,6 +409,7 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 
 	return {
 		nodes,
+		propositions: graph.nodes,
 		edges: view.edges,
 		chains: graph.chains,
 		sessions,

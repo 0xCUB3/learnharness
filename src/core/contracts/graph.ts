@@ -307,6 +307,10 @@ export interface GraphSnapshot {
 	/** Proposition nodes + the DERIVED implication nodes (one per chain,
 	 *  id = chain id) — what the canvas renders. */
 	nodes: GraphNode[];
+	/** The STORED proposition nodes alone (no derived implication nodes)
+	 *  — the stored truth, like `chains`: consumers that read the world
+	 *  (the chain table) take this list, never the canvas image. */
+	propositions: GraphNode[];
 	/** DERIVED untyped arrows: premise → imp → conclusion. A lossy image
 	 *  of the stored chains — rebuilt after every change, never stored. */
 	edges: GraphEdge[];

@@ -1656,7 +1656,7 @@ export function GraphView() {
 			    here.) */}
 			<ChainTableOverlay
 				open={chainsOpen && !isEmpty}
-				nodes={snapshot?.nodes ?? []}
+				nodes={snapshot?.propositions ?? []}
 				chains={snapshot?.chains ?? []}
 				sessions={snapshot?.sessions ?? {}}
 				fileSources={snapshot?.fileSources ?? {}}
