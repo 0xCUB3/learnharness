@@ -27,18 +27,18 @@ import {
 	type RunningPractice,
 } from "../src/agent/subagents/practice-pipeline.ts";
 import { chainCoverage } from "../src/core/practice.ts";
-import type { GraphEdge, GraphNode, ProblemSet } from "../src/core/contracts.ts";
+import type { GraphChain, GraphNode, ProblemSet } from "../src/core/contracts.ts";
 import type { ChatStore, GraphStore, PracticeStore } from "../src/core/ports.ts";
 import { ModelsNotConfiguredError } from "../src/core/settings.ts";
 
 // ─── in-memory stores ────────────────────────────────────────────────────────
 
-function memoryGraph(nodes: GraphNode[], edges: GraphEdge[]): GraphStore {
+function memoryGraph(nodes: GraphNode[], chains: GraphChain[]): GraphStore {
 	return {
 		appendNode: () => {},
 		readNodes: () => nodes.map((n) => ({ ...n, provenance: [...n.provenance], aliases: [...n.aliases] })),
-		appendEdge: () => {},
-		readEdges: () => edges.map((e) => ({ ...e, provenance: [...e.provenance] })),
+		appendChain: () => {},
+		readChains: () => chains.map((c) => ({ ...c, premises: [...c.premises], provenance: [...c.provenance] })),
 		appendCheckpoint: () => {},
 		readCheckpoints: () => [],
 		appendCoverage: () => {},
@@ -284,15 +284,16 @@ function diamondGraph(): GraphStore {
 		createdAt: NOW,
 		provenance: pt("chat_1"),
 	});
-	const edge = (from: string, to: string, type: "follows" | "supports" = "follows"): GraphEdge => ({
-		from,
-		to,
-		type,
+	const chain = (from: string, to: string): GraphChain => ({
+		id: to, // fixture id = conclusion id (the form the generator prompt renders)
+		premises: [from],
+		conclusion: to,
 		provenance: pt("chat_1"),
+		createdAt: NOW,
 	});
 	return memoryGraph(
 		[node("a", "A"), node("b", "B"), node("c", "C"), node("d", "D"), node("e", "E")],
-		[edge("a", "b"), edge("a", "c"), edge("b", "d"), edge("c", "d")],
+		[chain("a", "b"), chain("a", "c"), { id: "d", premises: ["b", "c"], conclusion: "d", provenance: pt("chat_1"), createdAt: NOW }],
 	);
 }
 
@@ -372,7 +373,7 @@ describe("createProblemSet (generation)", () => {
 
 		assert.match(set.id, /^ps_/);
 		assert.equal(set.status, "partitioning");
-		assert.equal(set.title, "Practice — 2026-09-29"); // nodeIds path: dated fallback title
+		assert.equal(set.title, `Practice — ${new Date().toISOString().slice(0, 10)}`); // nodeIds path: dated fallback title
 
 		// Stubs appear the moment the partition lands — numbered, generating.
 		await until(() => f.practice.store.getSet(set.id)?.status === "generating");

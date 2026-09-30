@@ -33,7 +33,7 @@ import type {
 	AuditVerdicts,
 	CoverageEntry,
 	ExtractionRunUsage,
-	GraphEdge,
+	GraphChain,
 	GraphNode,
 
 	NotesSource,
@@ -74,7 +74,7 @@ function fauxEngine(steps: FauxResponseStep[]): PiEngine {
 /** An in-memory GraphStore (core/ports.ts) — this suite never touches data/graph. */
 function memoryLedgers() {
 	const nodes: GraphNode[] = [];
-	const edges: GraphEdge[] = [];
+	const chains: GraphChain[] = [];
 	const checkpoints: SessionCheckpoint[] = [];
 	const coverage: CoverageEntry[] = [];
 	const sources = new Map<string, NotesSource>();
@@ -82,8 +82,8 @@ function memoryLedgers() {
 		return {
 		appendNode: (n: GraphNode) => void nodes.push(n),
 		readNodes: () => nodes.map((n) => ({ ...n })),
-		appendEdge: (e: GraphEdge) => void edges.push(e),
-		readEdges: () => edges.map((e) => ({ ...e })),
+		appendChain: (c: GraphChain) => void chains.push(c),
+		readChains: () => chains.map((c) => ({ ...c, premises: [...c.premises], provenance: [...c.provenance] })),
 		appendCheckpoint: (c: SessionCheckpoint) => void checkpoints.push(c),
 		readCheckpoints: () => checkpoints.map((c) => ({ ...c })),
 		// Extraction coverage (vision-extraction-coverage.md) — append-only;
@@ -114,7 +114,7 @@ function memoryLedgers() {
 		// store: replace the provided ledgers' full contents.
 		rewriteLedgers: (next) => {
 			if (next.nodes) nodes.splice(0, nodes.length, ...next.nodes.map((n) => ({ ...n, provenance: [...n.provenance], aliases: [...n.aliases] })));
-			if (next.edges) edges.splice(0, edges.length, ...next.edges.map((e) => ({ ...e, provenance: [...e.provenance] })));
+			if (next.chains) chains.splice(0, chains.length, ...next.chains.map((c) => ({ ...c, premises: [...c.premises], provenance: [...c.provenance] })));
 			if (next.coverage) coverage.splice(0, coverage.length, ...next.coverage.map((c) => ({ ...c })));
 			if (next.checkpoints) checkpoints.splice(0, checkpoints.length, ...next.checkpoints.map((c) => ({ ...c })));
 		},
@@ -386,7 +386,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 
 		const pipeline = createExtractionPipeline({ chatStore, graphStore: ledgers, extractor, auditor: submitModel("submit_review", verdict) });
 		const stats = await pipeline.runExtraction(chatId);
-		assert.deepEqual(stats, { nodes: 2, edges: 1 });
+		assert.deepEqual(stats, { nodes: 2, chains: 1 });
 	});
 
 	it("stringified-payload heal: the CHAINS array arriving as ONE JSON string still validates (redesign, 2026-09-30)", async () => {
@@ -402,7 +402,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			extractor,
 			auditor: submitModel("submit_review", { links: [] }),
 		});
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
 	});
 
 	it("runs end to end: findings → audit verdict (identity) → deterministic merge + checkpoint", async () => {
@@ -436,7 +436,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// p1 creates no node, p2 creates one, and the extractor's edge
 		// resolves through them. (The old echo form could silently drop
 		// content by omitting it; that accidental drop channel is gone.)
-		assert.deepEqual(stats, { nodes: 1, edges: 1 });
+		assert.deepEqual(stats, { nodes: 1, chains: 1 });
 
 		// Link-append: the phrasing joined the existing node's aliases and
 		// the provenance unioned; p2's create line is its own node.
@@ -544,7 +544,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			auditor: submitModel("submit_review", verdict),
 		});
 		const stats = await pipeline.runExtraction(chatId);
-		assert.deepEqual(stats, { nodes: 2, edges: 1 }); // full findings merge (verdicts-only)
+		assert.deepEqual(stats, { nodes: 2, chains: 1 }); // full findings merge (verdicts-only)
 		// Wave 7 (950ddfd): birth-session clusters carry session-name labels,
 		// so the post-merge naming garnish is gone — no model spend, no
 		// naming-run records, no label writes.
@@ -609,7 +609,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		});
 		// The old run-level throw is gone: one failed job is absorbed at
 		// the fan-out — the run resolves with what actually merged (zeros).
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, edges: 0 });
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, chains: 0 });
 		assert.equal(ledgers.readNodes().length, 0);
 		assert.equal(ledgers.readCheckpoints().length, 0, "no checkpoint — the next trigger re-runs");
 		assert.equal(ledgers.readCoverage().length, 0);
@@ -620,7 +620,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			extractor: silentModel(),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
-		assert.deepEqual(await failingExtractor.runExtraction(chatId), { nodes: 0, edges: 0 });
+		assert.deepEqual(await failingExtractor.runExtraction(chatId), { nodes: 0, chains: 0 });
 		assert.equal(ledgers.readCheckpoints().length, 0);
 
 		// THE isolation pin: a two-batch chat whose SECOND extractor call
@@ -642,7 +642,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			engineFor: (role) =>
 				role === "extractor" ? fauxEngine([countingStep]) : submitModel("submit_review", { links: [] }),
 		});
-		assert.deepEqual(await mixed.runExtraction(chunkyId), { nodes: 2, edges: 1 }, "batch 1's merge survives batch 2's failure");
+		assert.deepEqual(await mixed.runExtraction(chunkyId), { nodes: 2, chains: 1 }, "batch 1's merge survives batch 2's failure");
 		assert.equal(invocations, 2);
 		assert.equal(ledgers.readCoverage().length, 3, "batch 1 checkpointed its three messages");
 		assert.equal(
@@ -731,8 +731,8 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		assert.equal(extractionStatuses().find((r) => r.chatId === a.chatId)?.phase, "auditing", "A still audits while B waits");
 
 		gateOpen();
-		assert.deepEqual(await runA, { nodes: 1, edges: 0 });
-		assert.deepEqual(await runB, { nodes: 1, edges: 0 });
+		assert.deepEqual(await runA, { nodes: 1, chains: 0 });
+		assert.deepEqual(await runB, { nodes: 1, chains: 0 });
 		assert.ok(bAuditorCalled);
 		assert.ok(bSawAlphasMerge, "B's auditor saw A's merged node — audit serialized after merge");
 		assert.equal(extractionStatuses().length, 0, "both runs left the registry");
@@ -774,7 +774,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 
 		// The dock's abort button, pressed while B queues.
 		assert.equal(abortExtraction(b.chatId), true);
-		assert.deepEqual(await runB, { nodes: 0, edges: 0 }, "aborted before auditing — zero emissions");
+		assert.deepEqual(await runB, { nodes: 0, chains: 0 }, "aborted before auditing — zero emissions");
 		assert.ok(!bAuditorCalled, "B's auditor was never invoked");
 		assert.ok(!extractionStatuses().some((r) => r.chatId === b.chatId), "B left the registry");
 		assert.equal(ledgers.readCoverage().some((row) => row.chatId === b.chatId), false, "B checkpointed nothing");
@@ -782,14 +782,14 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		// The chain link B abandoned still resolved: A finishes, and a
 		// THIRD run audits normally — no deadlock residue.
 		gateOpen();
-		assert.deepEqual(await runA, { nodes: 1, edges: 0 });
+		assert.deepEqual(await runA, { nodes: 1, chains: 0 });
 		const pipelineC = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
 			extractor: submitModel("submit_findings", single("pc", "Gamma claim", "Gamma statement")),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
-		assert.deepEqual(await pipelineC.runExtraction(c.chatId), { nodes: 1, edges: 0 });
+		assert.deepEqual(await pipelineC.runExtraction(c.chatId), { nodes: 1, chains: 0 });
 	});
 
 	it("captures per-stage usage live, persists the run's usage into the chat record", async () => {
@@ -862,7 +862,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const stats = await runPromise;
 
 		// A deliberate stop, not a failure: zero emissions, no throw.
-		assert.deepEqual(stats, { nodes: 0, edges: 0 });
+		assert.deepEqual(stats, { nodes: 0, chains: 0 });
 		assert.equal(extractionStatuses().length, 0, "the registry clears");
 		assert.equal(ledgers.readNodes().length, 0, "nothing merged");
 		assert.equal(ledgers.readCheckpoints().length, 0, "nothing checkpointed — the next trigger re-runs");
@@ -907,13 +907,13 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 
 		const first = pipeline.runExtraction(chatId);
 		const second = await pipeline.runExtraction(chatId); // in-flight → zeros
-		assert.deepEqual(second, { nodes: 0, edges: 0 });
+		assert.deepEqual(second, { nodes: 0, chains: 0 });
 
 		release();
 		// The gated extractor never submits — an ISOLATED job failure now
 		// (per-chunk jobs, owner 2026-09-28): the run resolves with zeros
 		// instead of throwing.
-		assert.deepEqual(await first, { nodes: 0, edges: 0 });
+		assert.deepEqual(await first, { nodes: 0, chains: 0 });
 	});
 
 	it("registers runs on the process-wide registry (route-instance safety): a second pipeline instance sees the same single-flight state", async () => {
@@ -959,10 +959,10 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		);
 		const g = globalThis as { __lhExtractionRuns?: { running: Map<string, unknown> } };
 		assert.ok(g.__lhExtractionRuns?.running.has(chatId), "the registry lives on globalThis — no module-instance split can hide runs");
-		assert.deepEqual(await observer.runExtraction(chatId), { nodes: 0, edges: 0 }, "single-flight spans pipeline instances");
+		assert.deepEqual(await observer.runExtraction(chatId), { nodes: 0, chains: 0 }, "single-flight spans pipeline instances");
 
 		release();
-		assert.deepEqual(await first, { nodes: 0, edges: 0 }, "isolated job failure — the run resolves zeros");
+		assert.deepEqual(await first, { nodes: 0, chains: 0 }, "isolated job failure — the run resolves zeros");
 		assert.ok(!extractionStatuses().some((run) => run.chatId === chatId), "the registry entry clears when the run ends (however it ends)");
 		assert.ok(!g.__lhExtractionRuns?.running.has(chatId), "nothing leaks into the global registry");
 	});
@@ -1027,7 +1027,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 		]);
 	}
 
-	it("co-premises fan out at the seam: ONE chain with two premises becomes TWO follows-edges into the conclusion", async () => {
+	it("co-premises ride as ONE stored argument — the fan-out to arrows is the derived view, not the store", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();
 		const extractor = submitModel("submit_findings", {
@@ -1044,16 +1044,16 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			extractor,
 			auditor: submitModel("submit_review", { links: [] }),
 		});
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 3, edges: 2 });
-		// Both edges point INTO the conclusion's resolved node; the two
-		// from-ends are exactly the two premises (node ids are random —
-		// assert set-wise, never by ledger order).
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 3, chains: 1 });
+		// The stored chain's premises are exactly the two premises; the
+		// conclusion is C's resolved node (ids are random — assert
+		// set-wise, never by ledger order).
 		const byName = new Map(ledgers.readNodes().map((n) => [n.name, n.id]));
 		const conclusion = byName.get("C")!;
-		const edges = ledgers.readEdges();
-		assert.ok(edges.every((e) => e.to === conclusion), "both edges point INTO the conclusion");
+		const chains = ledgers.readChains();
+		assert.ok(chains.every((c) => c.conclusion === conclusion), "chains point INTO the conclusion");
 		assert.deepEqual(
-			edges.map((e) => e.from).sort(),
+			chains.flatMap((c) => c.premises).sort(),
 			[byName.get("A")!, byName.get("B")!].sort(),
 		);
 	});
@@ -1079,11 +1079,11 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			extractor,
 			auditor: submitModel("submit_review", { links: [] }),
 		});
-		// Independent arguments for the same conclusion are separate chains
-		// → two edges into C; the bare p4 rides the propositions list alone.
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 4, edges: 2 });
+		// Independent arguments for the same conclusion are separate chains;
+		// the bare p4 rides the propositions list alone.
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 4, chains: 2 });
 		const lonely = ledgers.readNodes().find((n) => n.name === "Lonely")!;
-		assert.ok(ledgers.readEdges().every((e) => e.from !== lonely.id && e.to !== lonely.id));
+		assert.ok(ledgers.readChains().every((c) => !c.premises.includes(lonely.id) && c.conclusion !== lonely.id));
 	});
 
 	it("identical chains dedupe SILENTLY at the expansion — restating an argument is a no-op, not an error", async () => {
@@ -1099,7 +1099,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			extractor,
 			auditor: submitModel("submit_review", { links: [] }),
 		});
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
 	});
 
 	it("the OLD wire shape (an edges array, no chains) is dead: validation fails every turn — nothing merges", async () => {
@@ -1127,7 +1127,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			graphStore: ledgers,
 			engineFor: (role) => (role === "extractor" ? oldShape() : submitModel("submit_review", { links: [] })),
 		});
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, edges: 0 });
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, chains: 0 });
 	});
 
 	it("validate error-back: a chain referencing an UNKNOWN id is rejected, the model re-submits clean", async () => {
@@ -1145,7 +1145,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 		});
 		// The first submit was schema-VALID — only the chain law caught it;
 		// the retry merges in full.
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
 	});
 
 	it("validate error-back: a conclusion in its OWN premises is rejected, the model re-submits clean", async () => {
@@ -1161,7 +1161,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			extractor: retryEngine(bad, FINDINGS),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
 	});
 
 	it("empty premises never pass: the schema's minItems rejects, the model re-submits clean", async () => {
@@ -1177,7 +1177,7 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 			extractor: retryEngine(bad, FINDINGS),
 			auditor: submitModel("submit_review", { links: [] }),
 		});
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, edges: 1 });
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 1 });
 	});
 
 	it("the system prompt is goal-first: ONE shared core, both preambles assembled onto it", () => {
@@ -1226,7 +1226,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		});
 		const stats = await pipeline.importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
 
-		assert.deepEqual(stats, { nodes: 1, edges: 0 });
+		assert.deepEqual(stats, { nodes: 1, chains: 0 });
 		// The run surfaced as a NOTES run labeled with the file path.
 		assert.deepEqual(seen, [{ kind: "notes", label: "/vault/learn vim.md" }]);
 		assert.equal(extractionStatuses().length, 0, "the registry clears when the run ends");
@@ -1290,7 +1290,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		// independently (owner, 2026-09-29 — the mappings ledger is gone);
 		// cross-chunk identity is the auditor's linkTo verdict, and these
 		// fixtures submit none.
-		assert.deepEqual(stats, { nodes: calls, edges: 0 });
+		assert.deepEqual(stats, { nodes: calls, chains: 0 });
 		assert.equal(ledgers.readNodes().length, calls);
 	});
 
@@ -1319,7 +1319,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		});
 		// Isolated job failure (per-chunk jobs, owner 2026-09-28): the run
 		// resolves zeros — no throw — and still nothing merged.
-		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, edges: 0 });
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, chains: 0 });
 		assert.equal(ledgers.readNodes().length, 0);
 		assert.equal(ledgers.readCoverage().length, 0, "nothing checkpointed — the messages stay re-runnable");
 	});
@@ -1334,13 +1334,13 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 				auditor: submitModel("submit_review", NOTES_VERDICT),
 			});
 		const first = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
-		assert.deepEqual(first, { nodes: 1, edges: 0 });
+		assert.deepEqual(first, { nodes: 1, chains: 0 });
 
 		// Unchanged text: the content fingerprint matches — no extraction
 		// at all (no model calls, no usage record; the mappings ledger
 		// used to give this no-op at merge time by accident).
 		const second = await mk().importNotes({ filePath: "/vault/learn vim.md", text: NOTES_TEXT });
-		assert.deepEqual(second, { nodes: 0, edges: 0 }, "unchanged content is a true no-op");
+		assert.deepEqual(second, { nodes: 0, chains: 0 }, "unchanged content is a true no-op");
 
 		assert.equal(ledgers.readSources().length, 1, "one source identity — the path hashes to the same id");
 		assert.equal(ledgers.readSources()[0]!.extractions?.length, 1, "only the real run billed its usage");
@@ -1350,7 +1350,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 		// whole file re-runs (fresh merge; the auditor's links would dedupe
 		// identity on a real model).
 		const third = await mk().importNotes({ filePath: "/vault/learn vim.md", text: `${NOTES_TEXT}\nA new closing line.` });
-		assert.deepEqual(third, { nodes: 1, edges: 0 }, "changed content re-extracts");
+		assert.deepEqual(third, { nodes: 1, chains: 0 }, "changed content re-extracts");
 		assert.equal(ledgers.readSources()[0]!.extractions?.length, 2, "the re-run bills its usage");
 		assert.equal(ledgers.readNodes().length, 2);
 	});
@@ -1367,7 +1367,7 @@ describe("the notes front door (importNotes — format-agnostic)", () => {
 
 		const srcId = extractionStatuses().find((r) => r.chatId.startsWith("src_"))!.chatId;
 		assert.equal(abortExtraction(srcId), true);
-		assert.deepEqual(await runPromise, { nodes: 0, edges: 0 });
+		assert.deepEqual(await runPromise, { nodes: 0, chains: 0 });
 		assert.equal(ledgers.readNodes().length, 0, "nothing merged");
 		assert.equal(ledgers.readCheckpoints().length, 0, "nothing checkpointed");
 		assert.equal(ledgers.readSources()[0]!.extractions?.length, 1, "partial usage still persisted");
@@ -1462,7 +1462,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		// SEPARATE job's namespace (owner, 2026-09-29 — no mapping table)
 		// — its propositions merge again as fresh nodes. Cross-batch
 		// identity is the auditor's linkTo verdict, never the merger's.
-		assert.deepEqual(stats, { nodes: 4, edges: 2 });
+		assert.deepEqual(stats, { nodes: 4, chains: 2 });
 
 		// Per-batch coverage: every message checkpointed, nothing legacy.
 		const coverage = ledgers.readCoverage();
@@ -1474,7 +1474,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		// new usage entry (no money spent on covered ground).
 		const before = views.length;
 		const again = await pipeline.runExtraction(chatId);
-		assert.deepEqual(again, { nodes: 0, edges: 0 });
+		assert.deepEqual(again, { nodes: 0, chains: 0 });
 		assert.equal(views.length, before);
 		// PER-CHUNK JOBS (owner 2026-09-28): one usage record per batch job
 		// (two), and the no-op run adds none.
@@ -1521,7 +1521,7 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		const stats = await runPromise;
 
 		// Batch 1's emissions are kept and its messages stay covered.
-		assert.deepEqual(stats, { nodes: 2, edges: 1 });
+		assert.deepEqual(stats, { nodes: 2, chains: 1 });
 		assert.equal(ledgers.readCoverage().length, 3, "batch 1 checkpointed its three messages");
 		const cov = coverageOf(record.messages, ledgers.readCoverage(), chatId);
 		assert.equal(cov.uncoveredCount, 2, "the in-flight batch's messages stay uncovered");
@@ -1654,7 +1654,7 @@ describe("per-chunk parallel jobs (owner, 2026-09-28)", () => {
 
 		// SOURCE-WIDE abort: every chunk job of the fan-out dies together.
 		assert.equal(abortExtraction(srcId), true);
-		assert.deepEqual(await runPromise, { nodes: 0, edges: 0 });
+		assert.deepEqual(await runPromise, { nodes: 0, chains: 0 });
 		assert.equal(extractionStatuses().filter((r) => r.chatId === srcId).length, 0, "all rows leave the registry");
 		assert.equal(ledgers.readNodes().length, 0, "nothing merged");
 		// Per-job usage: all 8 chunk jobs persisted their (failed) spend.
@@ -1706,7 +1706,7 @@ describe("per-chunk parallel jobs (owner, 2026-09-28)", () => {
 		// Identical findings in every chunk, one merge PER chunk (jobs are
 		// independent — owner, 2026-09-29): 8 chunks × 2 propositions,
 		// 8 × 1 edge. The auditor's links, not the merger, dedupe identity.
-		assert.deepEqual(stats, { nodes: 16, edges: 8 });
+		assert.deepEqual(stats, { nodes: 16, chains: 8 });
 		assert.equal(ledgers.readNodes().length, 16);
 	});
 });
@@ -1730,12 +1730,12 @@ describe("the session-deletion guard (chat deleted mid-run)", () => {
 		// emissions (stats present but empty — nothing merged).
 		assert.ok(stats);
 		assert.equal(stats.nodes, 0);
-		assert.equal(stats.edges, 0);
+		assert.equal(stats.chains, 0);
 
 		// Nothing merged, nothing checkpointed — the deleted chat leaves no
 		// trace for a later snapshot to resurrect.
 		assert.equal(ledgers.readNodes().length, 0);
-		assert.equal(ledgers.readEdges().length, 0);
+		assert.equal(ledgers.readChains().length, 0);
 		assert.equal(ledgers.readCoverage().length, 0);
 		assert.equal(ledgers.readCheckpoints().length, 0);
 

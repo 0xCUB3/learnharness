@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createGraphSimulation, incrementalLayout, inferenceDepths } from "../src/core/layout.ts";
 import { settleGraphLayout } from "../src/core/layout-settle.ts";
-import type { GraphNode, GraphEdge, Position } from "../src/core/contracts.ts";
+import type { GraphChain, GraphNode, Position } from "../src/core/contracts.ts";
 
 const node = (id: string): GraphNode => ({
 	id,
@@ -18,7 +18,9 @@ const node = (id: string): GraphNode => ({
 	createdAt: "2026-09-13T00:00:00.000Z",
 	provenance: [],
 });
-const edge = (from: string, to: string): GraphEdge => ({ from, to, type: "supports", provenance: [] });
+const chain = (id: string, premises: string[], conclusion: string): GraphChain => ({ id, premises, conclusion, provenance: [], createdAt: "2026-09-13T00:00:00.000Z" });
+/** incrementalLayout's link shape — the DERIVED untyped arrow. */
+const edge = (from: string, to: string): { from: string; to: string } => ({ from, to });
 
 const mean = (positions: Map<string, Position>, ids: string[]): { x: number; y: number } => ({
 	x: ids.reduce((s, id) => s + positions.get(id)!.x, 0) / ids.length,
@@ -107,20 +109,20 @@ describe("settleGraphLayout", () => {
 		const lines = [node("a"), node("b"), node("a")]; // "a" appended twice
 		const store = {
 			readNodes: () => lines.map((l) => ({ ...l })),
-			readEdges: () => [edge("a", "b")],
+			readChains: () => [chain("arg_ab", ["a"], "b")],
 			readPositions: () => ({} as Record<string, Position>),
 			writePositions: (p: Record<string, Position>) => void written.push(p),
 		};
 		settleGraphLayout(store);
 		assert.equal(written.length, 1);
-		assert.deepEqual(Object.keys(written[0]!).sort(), ["a", "b"], "one position per UNIQUE node");
+		assert.deepEqual(Object.keys(written[0]!).sort(), ["a", "arg_ab", "b"], "one position per unique node AND the derived implication node");
 	});
 
 	it("does nothing on an empty graph", () => {
 		const written: Record<string, Position>[] = [];
 		settleGraphLayout({
 			readNodes: () => [],
-			readEdges: () => [],
+			readChains: () => [],
 			readPositions: () => ({} as Record<string, Position>),
 			writePositions: (p) => void written.push(p),
 		});

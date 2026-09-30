@@ -19,20 +19,28 @@ const depthMode: "off" | "vertical" | "radial" =
 	depthArg === "--depth=vertical" ? "vertical" : depthArg === "--depth=radial" ? "radial" : "off";
 import { incrementalLayout } from "../src/core/layout.ts";
 import { birthSessionPartition } from "../src/core/session-clusters.ts";
+import { deriveView, getGraph } from "../src/core/graph.ts";
 import type { GraphNode, Position } from "../src/core/contracts.ts";
 
 function main() {
 	const t0 = Date.now();
 
-	// Unique nodes (lines may repeat an id — first defines).
-	const seen = new Set<string>();
-	const nodes: GraphNode[] = [];
-	for (const line of graphStore.readNodes()) {
-		if (seen.has(line.id)) continue;
-		seen.add(line.id);
-		nodes.push(line);
-	}
-	const edges = graphStore.readEdges();
+	// CHAINS-PRIMARY (2026-09-30): the stored truth is nodes + chains; the
+	// replay lays out the DERIVED view (implication nodes included, untyped
+	// arrows) exactly like the real settle.
+	const graph = getGraph(graphStore);
+	const nodes = graph.nodes; // getGraph already merges lines by id
+	const view = deriveView(graph);
+	const edges = view.edges;
+	const viewNodeById = new Map(view.nodes.map((n) => [n.id, n]));
+	const chains = graph.chains;
+	// An implication node is delivered the moment its chain is complete
+	// (conclusion + every premise delivered).
+	const chainReady = (id: string): boolean => {
+		const chain = chains.find((c) => c.id === id);
+		if (!chain) return delivered.has(id);
+		return delivered.has(chain.conclusion) && chain.premises.every((p) => delivered.has(p));
+	};
 	// The cluster source (wave 7): the birth-session partition, derived on
 	// read — same as the real settle (core/layout-settle.ts).
 	const birthClusters = birthSessionPartition(nodes);
@@ -58,7 +66,7 @@ function main() {
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const unmappedFallback = sources[sources.length - 1]?.id ?? "";
 
-	console.log(`[replay] ${nodes.length} unique nodes, ${edges.length} edge lines, ${sources.length} sources`);
+	console.log(`[replay] ${nodes.length} nodes, ${chains.length} chains, ${sources.length} sources`);
 	let maxOldShift = 0;
 	let shiftReport = "";
 	for (const source of sources) {
@@ -74,13 +82,18 @@ function main() {
 			}
 		}
 		for (const n of batch) delivered.add(n.id);
+		// Ready chains' implication nodes ride the same batch (they have no
+		// provenance of their own — the chain's completeness delivers them).
+		for (const chain of chains) {
+			if (chainReady(chain.id)) delivered.add(chain.id);
+		}
 
 		// Edges activate once BOTH endpoints exist (a later file can claim
 		// one endpoint — the edge lights up then).
 		const activeEdges = edges.filter((e) => delivered.has(e.from) && delivered.has(e.to));
 
 		const before = new Map(positions);
-		const batchNodes = nodes.filter((n) => delivered.has(n.id));
+		const batchNodes = view.nodes.filter((n) => delivered.has(n.id));
 		positions = incrementalLayout(batchNodes, activeEdges, positions, {
 			// The same partition the real settle would see for this batch:
 			// the birth-session clusters, filtered to delivered nodes.

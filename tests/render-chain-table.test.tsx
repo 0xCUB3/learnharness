@@ -29,7 +29,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import { ChainTableBody } from "../components/chain-table.tsx";
 import type { ChainSort } from "../components/chain-table.tsx";
-import type { GraphEdge, GraphNode } from "../src/core/contracts.ts";
+import type { GraphChain, GraphNode } from "../src/core/contracts.ts";
 
 /** The fixture graph — two follows-chains + one standalone:
  *  a → c1 ← b  (chain one, conclusion born chat1), d → e (chain two,
@@ -58,15 +58,14 @@ const NODES: GraphNode[] = [
 	node("orphan", "Orphan", "Statement O.", null),
 ];
 
-const EDGES: GraphEdge[] = [
-	{ from: "a", to: "c1", type: "follows" },
-	{ from: "b", to: "c1", type: "follows" },
-	{ from: "d", to: "e", type: "follows" },
-] as GraphEdge[];
+const CHAINS: GraphChain[] = [
+	{ id: "c1", premises: ["a", "b"], conclusion: "c1", provenance: [], createdAt: "2026-09-20T10:00:00.000Z" },
+	{ id: "e", premises: ["d"], conclusion: "e", provenance: [], createdAt: "2026-09-20T10:00:00.000Z" },
+];
 
 const BASE = {
 	nodes: NODES,
-	edges: EDGES,
+	chains: CHAINS,
 	sessions: { chat1: "Ethics lesson", chat2: "Second chat" },
 	fileSources: { notes1: "notes/raw/ethics.md" },
 	query: "",

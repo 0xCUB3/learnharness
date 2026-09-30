@@ -2,16 +2,15 @@
  * Practice-module core — the chain bijection + coverage (slice 1 of the
  * 2026-09-29 plan). Pure, no I/O.
  *
- * chainsForSelection(): the graph → chains translation — group by
- * conclusion over FOLLOWS edges only (supports are invisible to practice,
- * owner 2026-09-29: "no edges"). chainsToGraph(): the exact inverse — the
- * bijection the chain notation promises (renderable back to the graph
- * with no information loss; the round-trip is pinned in
- * tests/practice.test.ts). chainCoverage(): the set's completeness law —
- * the union of the problems' chains must equal the set's chains; the
- * partitioner's submit is validated against it.
+ * chainsForSelection(): the stored CHAINS (chains-primary, owner
+ *  2026-09-30) filtered to a selection — a chain rides along iff ALL of
+ *  its members are selected; nodes in no surviving chain become singleton
+ *  chains. formatChainLine(): one world-facing line per chain.
+ *  chainCoverage(): the set's completeness law — the union of the
+ *  problems' chains must equal the set's chains; the partitioner's submit
+ *  is validated against it.
  */
-import type { CueDistance, GraphEdge, GraphNode, LadderRung, Presentation, Problem, ReasoningChain } from "./contracts.ts";
+import type { CueDistance, GraphChain, GraphNode, LadderRung, Presentation, Problem, ReasoningChain } from "./contracts.ts";
 
 /** The named levels (owner-approved 2026-09-29) — definitions verbatim
  *  from the ladder doctrine / the contract's tables. The UI's stepped
@@ -36,81 +35,34 @@ export const PRESENTATIONS: Record<Presentation, { name: string; definition: str
 	application: { name: "Application", definition: "a concrete worldly affair — a case, episode, system, or story — in which the proposition's structure appears in the wild." },
 };
 
-/** The selection's follows-edges as chains: every edge into a node joins
- *  that node's (one) chain; a node with no in- AND no out-follows-edge in
- *  the selection is a singleton chain. Premise-only nodes are NOT separate
- *  chains — they are covered inside the chains they feed. Deterministic:
- *  chains sorted by id, premises sorted. */
+/** The stored chains filtered to a selection (chains-primary, owner
+ *  2026-09-30): a chain rides along iff its conclusion AND every premise
+ *  are selected; a node in no surviving chain is a singleton chain
+ *  (premises: []). Premise-only nodes whose chain was excluded are
+ *  singletons — the same inclusion law as the pre-chains edge grouping.
+ *  Every stored chain keeps its OWN id (arg_…) — two independent
+ *  arguments for one conclusion stay distinct. Deterministic: chains
+ *  sorted by id, premises sorted. */
 export function chainsForSelection(
 	nodes: ReadonlyArray<Pick<GraphNode, "id">>,
-	edges: ReadonlyArray<Pick<GraphEdge, "from" | "to" | "type">>,
+	chains: ReadonlyArray<Pick<GraphChain, "id" | "premises" | "conclusion">>,
 ): ReasoningChain[] {
 	const selected = new Set(nodes.map((n) => n.id));
-	const premisesByConclusion = new Map<string, Set<string>>();
-	for (const edge of edges) {
-		if (edge.type !== "follows") continue; // supports are NO edges here (owner, 2026-09-29)
-		if (!selected.has(edge.from) || !selected.has(edge.to)) continue;
-		const premises = premisesByConclusion.get(edge.to) ?? new Set<string>();
-		premises.add(edge.from);
-		premisesByConclusion.set(edge.to, premises);
-	}
 	const chained = new Set<string>();
-	const chains: ReasoningChain[] = [];
-	for (const [conclusion, premises] of premisesByConclusion) {
-		chains.push({ id: conclusion, premises: [...premises].sort(), conclusion });
-		chained.add(conclusion);
-		for (const premise of premises) chained.add(premise);
+	const included: ReasoningChain[] = [];
+	for (const chain of chains) {
+		if (!selected.has(chain.conclusion)) continue;
+		if (!chain.premises.every((premise) => selected.has(premise))) continue;
+		included.push({ id: chain.id, premises: [...chain.premises].sort(), conclusion: chain.conclusion });
+		chained.add(chain.conclusion);
+		for (const premise of chain.premises) chained.add(premise);
 	}
 	for (const node of nodes) {
 		if (!chained.has(node.id)) {
-			chains.push({ id: node.id, premises: [], conclusion: node.id });
+			included.push({ id: node.id, premises: [], conclusion: node.id });
 		}
 	}
-	return chains.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-}
-
-/** The exact inverse of chainsForSelection: node ids = every chain member,
- *  edges = one follows-edge per (premise, conclusion) pair. Deterministic:
- *  node ids sorted, edges sorted by (from, to). */
-export function chainsToGraph(
-	chains: ReadonlyArray<Pick<ReasoningChain, "premises" | "conclusion">>,
-): {
-	nodeIds: string[];
-	edges: Array<{ from: string; to: string; type: "follows" }>;
-} {
-	const nodeIds = new Set<string>();
-	const edges: Array<{ from: string; to: string; type: "follows" }> = [];
-	for (const chain of chains) {
-		nodeIds.add(chain.conclusion);
-		for (const premise of chain.premises) {
-			nodeIds.add(premise);
-			edges.push({ from: premise, to: chain.conclusion, type: "follows" });
-		}
-	}
-	edges.sort((a, b) => (a.from !== b.from ? (a.from < b.from ? -1 : 1) : a.to < b.to ? -1 : 1));
-	return { nodeIds: [...nodeIds].sort(), edges };
-}
-
-/** The extraction seam's chain→edge expansion (extractor redesign,
- *  2026-09-30): the extractor SUBMITS chains (premises + conclusion);
- *  the pipeline's internal findings carry follows-EDGES downstream
- *  (auditor, merger, coverage — all unchanged). Each premise becomes
- *  one edge into the conclusion — chainsToGraph's edge law, shared
- *  (one math, one place). Identical (premise-set, conclusion) chains
- *  dedupe SILENTLY here: the model restating an argument is a no-op,
- *  never an error (validation errors are the loud channel; see the
- *  extractor's validate hook). */
-export function chainsToEdges(
-	chains: ReadonlyArray<Pick<ReasoningChain, "premises" | "conclusion">>,
-): Array<{ from: string; to: string; type: "follows" }> {
-	const seen = new Set<string>();
-	const deduped = chains.filter((chain) => {
-		const key = `${[...chain.premises].sort().join("+")}>${chain.conclusion}`;
-		if (seen.has(key)) return false;
-		seen.add(key);
-		return true;
-	});
-	return chainsToGraph(deduped).edges;
+	return included.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 /** A chain as one world-facing line — the propositions' NAMES joined

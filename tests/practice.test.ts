@@ -1,115 +1,107 @@
 /**
- * PRACTICE-MODULE CORE (slice 1, 2026-09-29 plan): the chain bijection —
- * chainsForSelection (group by conclusion, FOLLOWS ONLY — supports are
- * invisible to practice, owner ruling) / chainsToGraph (the exact inverse,
- * round-trip pinned) — and chainCoverage (the set's completeness law:
- * union of the problems' chains must equal the set's chains).
+ * PRACTICE-MODULE CORE: chainsForSelection over the STORED chains
+ * (chains-primary, owner 2026-09-30: a chain rides along iff every member
+ * is selected; nodes in no surviving chain are singletons) and
+ * chainCoverage (the set's completeness law: union of the problems' chains
+ * must equal the set's chains).
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { EdgeType } from "../src/core/contracts.ts";
-import { chainCoverage, chainsForSelection, chainsToEdges, chainsToGraph, formatChainLine } from "../src/core/practice.ts";
+import type { GraphChain } from "../src/core/contracts.ts";
+import { chainCoverage, chainsForSelection, formatChainLine } from "../src/core/practice.ts";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
 const n = (id: string) => ({ id });
-const e = (from: string, to: string, type: EdgeType = "follows") => ({ from, to, type });
+const arg = (id: string, premises: string[], conclusion: string): GraphChain => ({
+	id,
+	premises,
+	conclusion,
+	provenance: [],
+	createdAt: "2026-09-30T00:00:00.000Z",
+});
 
-/** The plan's canonical shape: diamond a→b, a→c, b→d, c→d. */
-const diamond = {
-	nodes: [n("a"), n("b"), n("c"), n("d")],
-	edges: [e("a", "b"), e("a", "c"), e("b", "d"), e("c", "d")],
-};
-const diamondChains = [
-	{ id: "b", premises: ["a"], conclusion: "b" },
-	{ id: "c", premises: ["a"], conclusion: "c" },
-	{ id: "d", premises: ["b", "c"], conclusion: "d" },
-];
+/** The plan's canonical shape: diamond a→b, a→c, b∧c→d — three stored
+ *  arguments (each its own arg_ id, conclusion ids may repeat). */
+const diamondNodes = [n("a"), n("b"), n("c"), n("d")];
+const diamondArgs = [arg("arg_b", ["a"], "b"), arg("arg_c", ["a"], "c"), arg("arg_d", ["b", "c"], "d")];
 
 // ─── chainsForSelection ──────────────────────────────────────────────────────
 
 describe("chainsForSelection", () => {
-	it("groups by conclusion: the diamond a→b, a→c, b→d, c→d is three chains", () => {
-		assert.deepEqual(chainsForSelection(diamond.nodes, diamond.edges), diamondChains);
+	it("keeps every fully-selected stored argument, each under its own id", () => {
+		assert.deepEqual(chainsForSelection(diamondNodes, diamondArgs), [
+			{ id: "arg_b", premises: ["a"], conclusion: "b" },
+			{ id: "arg_c", premises: ["a"], conclusion: "c" },
+			{ id: "arg_d", premises: ["b", "c"], conclusion: "d" },
+		]);
 	});
 
-	it("a premise-only node is NOT its own chain — it lives inside the chains it feeds", () => {
-		const ids = chainsForSelection(diamond.nodes, diamond.edges).map((c) => c.id);
+	it("a premise-only node is NOT its own chain — it lives inside the arguments it feeds", () => {
+		const ids = chainsForSelection(diamondNodes, diamondArgs).map((c) => c.id);
 		assert.ok(!ids.includes("a")); // a is only ever a premise
 	});
 
 	it("an isolated node becomes a singleton chain", () => {
-		const chains = chainsForSelection([...diamond.nodes, n("z")], diamond.edges);
+		const chains = chainsForSelection([...diamondNodes, n("z")], diamondArgs);
 		assert.deepEqual(chains.at(-1), { id: "z", premises: [], conclusion: "z" });
 	});
 
-	it("supports edges are NO edges — nodes joined only by supports are singletons", () => {
-		const chains = chainsForSelection([n("x"), n("y")], [e("x", "y", "supports")]);
+	it("two independent arguments for one conclusion stay DISTINCT chains", () => {
+		// The bijection problem that killed edge-grouping (owner, 2026-09-30):
+		// A∧B⇒E and C∧D⇒E must never union into A∧B∧C∧D⇒E.
+		const chains = chainsForSelection(
+			[n("a"), n("b"), n("c"), n("d"), n("e")],
+			[arg("arg_e1", ["a", "b"], "e"), arg("arg_e2", ["c", "d"], "e")],
+		);
 		assert.deepEqual(chains, [
-			{ id: "x", premises: [], conclusion: "x" },
-			{ id: "y", premises: [], conclusion: "y" },
+			{ id: "arg_e1", premises: ["a", "b"], conclusion: "e" },
+			{ id: "arg_e2", premises: ["c", "d"], conclusion: "e" },
 		]);
 	});
 
-	it("an edge with an endpoint outside the selection is excluded entirely", () => {
-		// a→out would chain a; out is not selected, so the edge is gone and
+	it("an argument with ANY member outside the selection is excluded entirely", () => {
+		// arg_ab needs b; b is not selected, so the argument is gone and
 		// a (nothing else left) falls back to a singleton.
-		const chains = chainsForSelection([n("a")], [e("a", "out"), e("in", "a")]);
+		const chains = chainsForSelection([n("a")], [arg("arg_ab", ["a"], "b"), arg("arg_ia", ["in"], "a")]);
 		assert.deepEqual(chains, [{ id: "a", premises: [], conclusion: "a" }]);
 	});
 
-	it("duplicate edge assertions collapse into one premise", () => {
-		const chains = chainsForSelection([n("a"), n("b")], [e("a", "b"), e("a", "b")]);
-		assert.deepEqual(chains, [{ id: "b", premises: ["a"], conclusion: "b" }]);
+	it("a chain referencing unknown node ids simply never applies", () => {
+		const chains = chainsForSelection([n("a"), n("b")], [arg("arg_ghost", ["ghost"], "b")]);
+		assert.deepEqual(chains, [
+			{ id: "a", premises: [], conclusion: "a" },
+			{ id: "b", premises: [], conclusion: "b" },
+		]);
 	});
 
-	it("is deterministic — chains and premises sorted by id", () => {
+	it("is deterministic — chains sorted by id, premises sorted", () => {
 		const shuffled = chainsForSelection(
 			[n("d"), n("c"), n("b"), n("a")],
-			[e("c", "d"), e("a", "c"), e("a", "b"), e("b", "d")],
+			[arg("arg_d", ["c", "b"], "d"), arg("arg_c", ["a"], "c"), arg("arg_b", ["a"], "b")],
 		);
-		assert.deepEqual(shuffled, diamondChains);
-	});
-});
-
-// ─── chainsToGraph — the bijection ───────────────────────────────────────────
-
-describe("chainsToGraph (the inverse)", () => {
-	it("reproduces exactly the selection's follows-edges (both ends selected)", () => {
-		const supportsNoise = e("x", "y", "supports");
-		const outside = e("a", "out");
-		const { edges } = chainsToGraph(chainsForSelection(diamond.nodes, [...diamond.edges, supportsNoise, outside]));
-		assert.deepEqual(edges, [...diamond.edges]);
-	});
-
-	it("round-trips a canonical chain list — singletons survive only for edge-less nodes", () => {
-		// NOTE: the bijection is over chainsForSelection's IMAGE — lists where a
-		// singleton's node never also appears as a premise/conclusion elsewhere.
-		// (A "singleton + premise elsewhere" list is degenerate: not something
-		// the translation ever produces.)
-		const canonical = [
-			{ id: "p1", premises: ["a", "b"], conclusion: "p1" },
-			{ id: "p9", premises: [], conclusion: "p9" },
-			{ id: "c1", premises: ["p1"], conclusion: "c1" },
-		];
-		const nodeIds = [...new Set(canonical.flatMap((c) => [c.conclusion, ...c.premises]))];
-		const roundTripped = chainsForSelection(nodeIds.map(n), chainsToGraph(canonical).edges);
-		assert.deepEqual(roundTripped, [
-			{ id: "c1", premises: ["p1"], conclusion: "c1" },
-			{ id: "p1", premises: ["a", "b"], conclusion: "p1" },
-			{ id: "p9", premises: [], conclusion: "p9" },
+		assert.deepEqual(shuffled, [
+			{ id: "arg_b", premises: ["a"], conclusion: "b" },
+			{ id: "arg_c", premises: ["a"], conclusion: "c" },
+			{ id: "arg_d", premises: ["b", "c"], conclusion: "d" },
 		]);
 	});
 });
 
 // ─── chainCoverage ───────────────────────────────────────────────────────────
 
+const diamondChains = [
+	{ id: "arg_b", premises: ["a"], conclusion: "b" },
+	{ id: "arg_c", premises: ["a"], conclusion: "c" },
+	{ id: "arg_d", premises: ["b", "c"], conclusion: "d" },
+];
+
 describe("chainCoverage", () => {
 	it("complete cover: every chain exercised, no missing", () => {
 		const set = {
 			chains: diamondChains,
-			problems: [{ chains: ["b", "c"] }, { chains: ["d"] }],
+			problems: [{ chains: ["arg_b", "arg_c"] }, { chains: ["arg_d"] }],
 		};
 		assert.deepEqual(chainCoverage(set), { missing: [], duplicated: [] });
 	});
@@ -117,23 +109,23 @@ describe("chainCoverage", () => {
 	it("missing: a chain no problem exercises", () => {
 		const set = {
 			chains: diamondChains,
-			problems: [{ chains: ["d"] }],
+			problems: [{ chains: ["arg_d"] }],
 		};
-		assert.deepEqual(chainCoverage(set), { missing: ["b", "c"], duplicated: [] });
+		assert.deepEqual(chainCoverage(set), { missing: ["arg_b", "arg_c"], duplicated: [] });
 	});
 
 	it("duplicated is informational — a chain exercised twice is allowed", () => {
 		const set = {
 			chains: diamondChains,
-			problems: [{ chains: ["b", "c", "d"] }, { chains: ["b", "d"] }],
+			problems: [{ chains: ["arg_b", "arg_c", "arg_d"] }, { chains: ["arg_b", "arg_d"] }],
 		};
-		assert.deepEqual(chainCoverage(set), { missing: [], duplicated: ["b", "d"] });
+		assert.deepEqual(chainCoverage(set), { missing: [], duplicated: ["arg_b", "arg_d"] });
 	});
 
 	it("problems claiming chain ids outside the set neither cover nor fail anything", () => {
 		const set = {
-			chains: [{ id: "b" }] as Array<{ id: string }>,
-			problems: [{ chains: ["b", "ghost"] }],
+			chains: [{ id: "arg_b" }] as Array<{ id: string }>,
+			problems: [{ chains: ["arg_b", "ghost"] }],
 		};
 		assert.deepEqual(chainCoverage(set), { missing: [], duplicated: [] });
 	});
@@ -157,40 +149,5 @@ describe("formatChainLine (the chain table's one-line shape, 2026-09-29)", () =>
 
 	it("unknown ids fall back to the raw id (honest, never guessed)", () => {
 		assert.equal(formatChainLine({ premises: ["ghost"], conclusion: "c1" }, props), "ghost → Conclusion");
-	});
-});
-
-// ─── chainsToEdges — the extraction seam's expansion (2026-09-30) ────────────
-
-describe("chainsToEdges (the extractor redesign's translation seam)", () => {
-	it("each premise becomes ONE follows-edge into the conclusion", () => {
-		const edges = chainsToEdges([{ premises: ["p1", "p2"], conclusion: "c1" }]);
-		assert.deepEqual(edges, [
-			{ from: "p1", to: "c1", type: "follows" },
-			{ from: "p2", to: "c1", type: "follows" },
-		]);
-	});
-
-	it("chains sharing a conclusion union their premises; the result stays sorted", () => {
-		const edges = chainsToEdges([
-			{ premises: ["p2"], conclusion: "c1" },
-			{ premises: ["p1"], conclusion: "c1" },
-		]);
-		assert.deepEqual(edges, [
-			{ from: "p1", to: "c1", type: "follows" },
-			{ from: "p2", to: "c1", type: "follows" },
-		]);
-	});
-
-	it("identical (premise-set, conclusion) chains dedupe silently — restating is a no-op", () => {
-		const chain = { premises: ["p1", "p2"], conclusion: "c1" };
-		assert.deepEqual(chainsToEdges([chain, chain, { premises: ["p2", "p1"], conclusion: "c1" }]), [
-			{ from: "p1", to: "c1", type: "follows" },
-			{ from: "p2", to: "c1", type: "follows" },
-		]);
-	});
-
-	it("empty in, empty out — bare propositions ride the propositions list alone", () => {
-		assert.deepEqual(chainsToEdges([]), []);
 	});
 });

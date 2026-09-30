@@ -1,5 +1,5 @@
 /**
- * GraphStore — the fs JSONL adapter: four append-only ledgers at
+ * GraphStore — the fs JSONL adapter: the append-only ledgers at
  * config.LEDGER_FILES (contracts.ts "v1 emission").
  *   nodes.jsonl     GraphNode        — one line per node write: the FIRST
  *                                      line for an id defines it; a later
@@ -7,10 +7,18 @@
  *                                      link-append (session phrasings join
  *                                      aliases, provenance unions); reads
  *                                      merge by id (core/graph.ts getGraph)
- *   edges.jsonl    GraphEdge        — one line per edge ASSERTION (a second
- *                                      session asserting the same (from,to,type)
- *                                      appends another line; reads merge)
+ *   chains.jsonl    GraphChain       — one line per chain ASSERTION (a second
+ *                                      session asserting the same
+ *                                      (premises, conclusion) appends
+ *                                      another line; readers merge)
  *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
+ *   coverage.jsonl  CoverageEntry    — per-message extraction coverage
+ *
+ * CHAINS-PRIMARY (owner, 2026-09-30): there is NO edges ledger — the edge
+ * view (implication nodes + untyped arrows) is derived in core/graph.ts on
+ * every read and never persisted. A stale edges.jsonl left by a pre-chains
+ * build is deleted once, here, at adapter load (same doctrine as the
+ * events-ledger purge below).
  *
  * Plus config.SOURCES_FILE (sources.json): the imported-notes bookkeeping
  * (NOT a ledger) — one JSON map, src-id → NotesSource, read-modify-write
@@ -28,7 +36,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { LEDGER_FILES, POSITIONS_FILE, SOURCES_FILE } from "../../config.ts";
 import type {
-	GraphEdge,
+	GraphChain,
 	GraphNode,
 	ExtractionRunUsage,
 	NotesSource,
@@ -94,15 +102,20 @@ const isGraphNode = (v: unknown): v is GraphNode =>
 	Array.isArray(v.provenance) &&
 	v.provenance.every(isProvenancePoint);
 
-const EDGE_TYPES = ["follows", "supports"] as const;
-
-const isGraphEdge = (v: unknown): v is GraphEdge =>
+/** A chain line: premises ≥ 1 (a chain IS an argument — bare propositions
+ *  ride the node ledger alone), every member a string, conclusion a string.
+ *  Endpoint EXISTENCE is the derivation's concern (it drops dangling
+ *  chains); the store only shapes. */
+const isGraphChain = (v: unknown): v is GraphChain =>
 	isRecord(v) &&
-	isString(v.from) &&
-	isString(v.to) &&
-	(EDGE_TYPES as readonly string[]).includes(v.type as string) &&
+	isString(v.id) &&
+	Array.isArray(v.premises) &&
+	v.premises.length > 0 &&
+	v.premises.every(isString) &&
+	isString(v.conclusion) &&
 	Array.isArray(v.provenance) &&
-	v.provenance.every(isProvenancePoint);
+	v.provenance.every(isProvenancePoint) &&
+	isString(v.createdAt);
 
 const isCheckpoint = (v: unknown): v is SessionCheckpoint =>
 	isRecord(v) && isString(v.chatId) && isString(v.foldedAt);
@@ -123,12 +136,13 @@ export const graphStore: GraphStore = {
 		return readValid(LEDGER_FILES.nodes, isGraphNode);
 	},
 
-	/** Append one edge ASSERTION; readers merge lines by (from,to,type). */
-	appendEdge(assertion: GraphEdge): void {
-		appendLine(LEDGER_FILES.edges, assertion);
+	/** Append one chain ASSERTION; readers merge lines by (premises,
+	 *  conclusion). */
+	appendChain(assertion: GraphChain): void {
+		appendLine(LEDGER_FILES.chains, assertion);
 	},
-	readEdges(): GraphEdge[] {
-		return readValid(LEDGER_FILES.edges, isGraphEdge);
+	readChains(): GraphChain[] {
+		return readValid(LEDGER_FILES.chains, isGraphChain);
 	},
 
 	appendCheckpoint(checkpoint: SessionCheckpoint): void {
@@ -184,13 +198,13 @@ export const graphStore: GraphStore = {
 	 *  as "nothing yet", same as never-emitted. */
 	rewriteLedgers(next: {
 		nodes?: GraphNode[];
-		edges?: GraphEdge[];
+		chains?: GraphChain[];
 		coverage?: CoverageEntry[];
 		checkpoints?: SessionCheckpoint[];
 	}): void {
 		const files = {
 			nodes: LEDGER_FILES.nodes,
-			edges: LEDGER_FILES.edges,
+			chains: LEDGER_FILES.chains,
 			coverage: LEDGER_FILES.coverage,
 			checkpoints: LEDGER_FILES.sessions,
 		} as const;
@@ -290,20 +304,21 @@ function writeSourceMap(map: Record<string, NotesSource>): void {
 	fs.writeFileSync(SOURCES_FILE, JSON.stringify(map, null, "\t"), "utf-8");
 }
 
-// ─── one-way migration: the events ledger is gone (2026-09-27) ────────────────
-// Quiz outcomes and understanding observations are no longer formalized in
-// the graph — the pipeline writes nodes + edges only. A stale events.jsonl
-// left by an earlier build is deleted once, here, at adapter load: dead
-// ledgers are exactly the confusion the cleanup removes (owner ruling).
+// ─── one-way purges at adapter load: dead ledgers are exactly the confusion
+// the cleanup removes (owner doctrine — nothing reads them, nothing writes
+// them, a stale file lying around is a lie). ────────────────────────────────
 {
-	const legacyEvents = path.join(path.dirname(LEDGER_FILES.nodes), "events.jsonl");
-	try {
-		if (fs.existsSync(legacyEvents)) {
-			fs.rmSync(legacyEvents);
-			console.info(`[graph-store] purged legacy events ledger: ${legacyEvents}`);
+	const graphDir = path.dirname(LEDGER_FILES.nodes);
+	for (const legacy of ["edges.jsonl", "events.jsonl"]) {
+		const file = path.join(graphDir, legacy);
+		try {
+			if (fs.existsSync(file)) {
+				fs.rmSync(file);
+				console.info(`[graph-store] purged legacy ledger: ${file}`);
+			}
+		} catch (err) {
+			console.warn(`[graph-store] could not purge legacy ledger ${file}:`, err);
 		}
-	} catch (err) {
-		console.warn(`[graph-store] could not purge legacy events ledger:`, err);
 	}
 }
 

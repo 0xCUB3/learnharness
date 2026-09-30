@@ -68,7 +68,7 @@ import {
 	XIcon,
 } from "lucide-react";
 import { chainsForSelection, formatChainLine, fuzzyScore } from "@/src/core";
-import type { GraphEdge, GraphNode } from "@/src/core";
+import type { GraphChain, GraphNode } from "@/src/core";
 import { TopBar } from "@/components/top-bar";
 import { PracticeDialog } from "@/components/practice-dialog";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog";
@@ -99,7 +99,7 @@ interface ClusterGroup {
  *  via props; the overlay wrapper below owns it. */
 export function ChainTableBody({
 	nodes,
-	edges,
+	chains: storedChains,
 	sessions,
 	fileSources,
 	query,
@@ -118,7 +118,7 @@ export function ChainTableBody({
 	onClose,
 }: {
 	nodes: GraphNode[];
-	edges: GraphEdge[];
+	chains: GraphChain[];
 	sessions: Record<string, string>;
 	fileSources: Record<string, string>;
 	query: string;
@@ -140,7 +140,7 @@ export function ChainTableBody({
 	onClose: () => void;
 }) {
 	const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
-	const chains = useMemo(() => chainsForSelection(nodes, edges), [nodes, edges]);
+	const chains = useMemo(() => chainsForSelection(nodes, storedChains), [nodes, storedChains]);
 	const searching = query.trim() !== "";
 
 	// The fuzzy filter: a chain is visible when ANY member matches on
@@ -223,8 +223,8 @@ export function ChainTableBody({
 	// The derived shape under the floating bar (the agents' ACTUAL input).
 	const derived = useMemo(() => {
 		const selectedNodes = [...selection].map((id) => byId.get(id)).filter((n): n is GraphNode => n !== undefined);
-		return chainsForSelection(selectedNodes, edges);
-	}, [selection, byId, edges]);
+		return chainsForSelection(selectedNodes, storedChains);
+	}, [selection, byId, storedChains]);
 
 	const nameOf = (id: string) => byId.get(id)?.name ?? id;
 	const dateOf = (id: string) => byId.get(id)?.createdAt.slice(0, 10) ?? "";
@@ -583,14 +583,14 @@ function RowCheckbox({
 export function ChainTableOverlay({
 	open,
 	nodes,
-	edges,
+	chains: storedChains,
 	sessions,
 	fileSources,
 	onClose,
 }: {
 	open: boolean;
 	nodes: GraphNode[];
-	edges: GraphEdge[];
+	chains: GraphChain[];
 	sessions: Record<string, string>;
 	fileSources: Record<string, string>;
 	onClose: () => void;
@@ -618,7 +618,7 @@ export function ChainTableOverlay({
 
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const selectedNodes = [...selection].map((id) => byId.get(id)).filter((n): n is GraphNode => n !== undefined);
-	const derived = chainsForSelection(selectedNodes, edges);
+	const derived = chainsForSelection(selectedNodes, storedChains);
 	const nodeIds = [...selection].sort();
 
 	const toggleNodes = (ids: string[], next: boolean) =>
@@ -645,7 +645,7 @@ export function ChainTableOverlay({
 			>
 				<ChainTableBody
 					nodes={nodes}
-					edges={edges}
+					chains={storedChains}
 					sessions={sessions}
 					fileSources={fileSources}
 					query={query}

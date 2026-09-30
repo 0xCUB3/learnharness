@@ -118,8 +118,6 @@ describe("sanitizeRenderSettings", () => {
 			arrowLength: 3,
 			labelZoom: 2,
 			labelSize: 4,
-			showSupports: false,
-			supportsWidth: 0.3,
 			clusterLabels: false,
 			clusterLabelSize: 20,
 			regions: DEFAULT_REGION_TUNING,
@@ -128,27 +126,13 @@ describe("sanitizeRenderSettings", () => {
 		assert.deepEqual(sanitizeRenderSettings(valid), valid); // every value a ladder member
 	});
 
-	test("showSupports (2026-09-29): boolean-only, default on — the draw toggle", () => {
-		// A render-only hide for supports edges: anything but a real boolean
-		// (missing key, legacy file, garbage) loads as ON (today's look); a
-		// real false round-trips untouched.
-		assert.equal(sanitizeRenderSettings({}).showSupports, true);
-		assert.equal(sanitizeRenderSettings({ showSupports: false }).showSupports, false);
-		assert.equal(sanitizeRenderSettings({ showSupports: "no" }).showSupports, true);
-		assert.equal(sanitizeRenderSettings({ showSupports: 0 }).showSupports, true);
-	});
-
-	test("supportsWidth (2026-09-29): linear 0–1 ratio of edgeWidth, default 0.5", () => {
-		// The supports shaft-thickness multiplier: LINEAR (not a ladder —
-		// it's a ratio), real numbers clamp to [0, 1], anything else resets
-		// to the default. The 0 end floors to a hairline in the renderer.
-		assert.equal(sanitizeRenderSettings({}).supportsWidth, 0.5);
-		assert.equal(sanitizeRenderSettings({ supportsWidth: 0 }).supportsWidth, 0);
-		assert.equal(sanitizeRenderSettings({ supportsWidth: 1 }).supportsWidth, 1);
-		assert.equal(sanitizeRenderSettings({ supportsWidth: 0.37 }).supportsWidth, 0.37);
-		assert.equal(sanitizeRenderSettings({ supportsWidth: 1.7 }).supportsWidth, 1);
-		assert.equal(sanitizeRenderSettings({ supportsWidth: -0.3 }).supportsWidth, 0);
-		assert.equal(sanitizeRenderSettings({ supportsWidth: "thick" }).supportsWidth, 0.5);
+	test("supports settings are GONE (chains-primary, 2026-09-30): stale keys silently drop", () => {
+		// Supports edges were retired; showSupports/supportsWidth no longer
+		// exist. A legacy file carrying them loads without the keys — the
+		// sanitizer drops unknown fields by construction.
+		const cleaned = sanitizeRenderSettings({ showSupports: false, supportsWidth: 0.9 } as never);
+		assert.equal("showSupports" in cleaned, false);
+		assert.equal("supportsWidth" in cleaned, false);
 	});
 
 	test("the pre-2026-09-13 stored shape (flat, no regions/physics) still loads", () => {

@@ -14,7 +14,7 @@ import type {
 	ChatRecord,
 	ChatSettings,
 	ChatSummary,
-	GraphEdge,
+	GraphChain,
 	GraphNode,
 	JobKind,
 	JobRecord,
@@ -65,11 +65,12 @@ export interface ChatStore {
 }
 
 // ─── GraphStore — the append-only evidence ledgers (data/graph) ──────────────
-// v1 surface = the five JSONL ledgers (nodes / edges / events / mappings /
-// sessions). Reads return the raw append-order lines; merging edge assertions
-// by (from, to, type) is DERIVED in core/graph.ts — the store never decides.
-// The extraction pipeline (next stage) becomes the sole writer; this read
-// surface stays.
+// Chains are the stored truth (owner, 2026-09-30): nodes + reasoning
+// chains; edges are a DERIVED view (core/graph.ts) and never touch this
+// seam. Reads return the raw append-order lines; merging chain assertions
+// by (premises, conclusion) is DERIVED in core/graph.ts — the store never
+// decides. The extraction pipeline is the sole writer; this read surface
+// stays.
 
 export interface GraphStore {
 	/** Append one GraphNode (ids are unique — no merging needed). */
@@ -77,12 +78,10 @@ export interface GraphStore {
 	/** Raw node lines in append order. */
 	readNodes(): GraphNode[];
 
-	/** Append one edge ASSERTION (a second session asserting the same
-	 *  (from, to, type) appends another line; readers merge). */
-	appendEdge(assertion: GraphEdge): void;
-	readEdges(): GraphEdge[];
-
-	/** Append one quiz outcome / understanding observation. */
+	/** Append one chain ASSERTION (a second session asserting the same
+	 *  (premises, conclusion) appends another line; readers merge). */
+	appendChain(assertion: GraphChain): void;
+	readChains(): GraphChain[];
 
 	/** Append one emission checkpoint. */
 	appendCheckpoint(checkpoint: SessionCheckpoint): void;
@@ -122,7 +121,7 @@ export interface GraphStore {
 	 *  replacement atomic. */
 	rewriteLedgers(next: {
 		nodes?: GraphNode[];
-		edges?: GraphEdge[];
+		chains?: GraphChain[];
 		coverage?: CoverageEntry[];
 		checkpoints?: SessionCheckpoint[];
 	}): void;

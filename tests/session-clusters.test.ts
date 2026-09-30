@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { GraphEdge, GraphNode, NotesSource, ChatSummary } from "../src/core/contracts.ts";
+import type { GraphChain, GraphNode, NotesSource, ChatSummary } from "../src/core/contracts.ts";
 import type { ChatStore, GraphStore } from "../src/core/ports.ts";
 import {
 	graphSessionIndex,
@@ -40,10 +40,10 @@ function fakeStores(
 		sources?: Array<Pick<NotesSource, "id" | "filePath" | "importedAt">>;
 	} = {},
 ): GraphDeps {
-	const edges: GraphEdge[] = [];
+	const chains: GraphChain[] = [];
 	const graphStore: GraphStore = {
 		readNodes: () => nodes,
-		readEdges: () => edges,
+		readChains: () => chains,
 		readCheckpoints: () => [],
 		readCoverage: () => [],
 		readSources: () =>

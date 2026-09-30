@@ -9,11 +9,17 @@
  * orchestration) owns the cross-store choreography (chat record, jobs,
  * extraction wind-down); this module owns the LEDGERS.
  *
+ * CHAINS-PRIMARY (owner, 2026-09-30): the stored truth is propositions +
+ * reasoning chains; edges are a derived view. Deletion therefore operates
+ * on CHAIN LINES where it used to operate on edge lines — a chain dies
+ * when its provenance empties or any member node died — and the derived
+ * view follows on the next read, never rewritten here.
+ *
  * Two modes (owner-locked semantics):
  *
  *   preserve-graph  the chat's extraction bookkeeping dies — its coverage
  *                   rows and its legacy checkpoint lines — and NOTHING else:
- *                   nodes and edges stay byte-identical.
+ *                   nodes and chains stay byte-identical.
  *                   The graph keeps the session's contributions; the
  *                   snapshot simply no longer resolves the dead chatId to
  *                   a title (nodeSessions filters unknown ids at read
@@ -21,17 +27,16 @@
  *
  *   delete-nodes    "this session never happened": every trace of the
  *                   chat leaves the ledgers — its provenance points on
- *                   every node and edge line, its link lines (their
+ *                   every node and chain line, its link lines (their
  *                   phrasings die with them), its coverage/checkpoint
  *                   rows — and orphans die: a node
  *                   whose references all came from this chat disappears
- *                   entirely, pruned from the positions and embedding
- *                   ledgers too (dead members would break cluster hulls).
+ *                   entirely, pruned from the positions ledger too (dead
+ *                   members would break cluster hulls).
  *
  * Shared nodes survive automatically (the ruling): a node lives iff ANY
  * surviving reference remains — a provenance point from another chat or
- * notes source, or a surviving event (another session's quiz outcome /
- * observation) naming it. The create line of a surviving node is special:
+ * notes source. The create line of a surviving node is special:
  * name/statement/createdAt are the node's IDENTITY — the shared anchor
  * other sessions' link verdicts recognized — so they stay even when the
  * deleted chat created the node; but that session's phrasings (the line's
@@ -39,9 +44,6 @@
  * 2026-09-23: all traces, identity survives).
  *
  * Not touched, by design:
- *   - cluster-labels.jsonl — immutable history by contract, and the
- *     namer is graph-global (tied to no session); core-survival renames
- *     communities whose core shrank below half.
  *   - imported-notes sources (src_…) — a different front door with its
  *     own lifecycle (re-import dedupes by path hash); this wave deletes
  *     CHATS.
@@ -55,7 +57,7 @@
 
 import type {
 	CoverageEntry,
-	GraphEdge,
+	GraphChain,
 	GraphNode,
 	SessionCheckpoint,
 } from "./contracts.ts";
@@ -71,8 +73,8 @@ export type ChatDeleteMode = "preserve-graph" | "delete-nodes";
 export interface ChatDeletionStats {
 	/** Distinct nodes that died entirely (all their lines). */
 	nodesRemoved: number;
-	/** Edge assertion LINES removed (empty-provenance or dead endpoint). */
-	edgesRemoved: number;
+	/** Chain assertion LINES removed (empty-provenance or dead member). */
+	chainsRemoved: number;
 	/** Coverage rows removed. */
 	coverageRemoved: number;
 	/** Checkpoint lines removed. */
@@ -81,7 +83,7 @@ export interface ChatDeletionStats {
 
 const EMPTY_STATS: ChatDeletionStats = {
 	nodesRemoved: 0,
-	edgesRemoved: 0,
+	chainsRemoved: 0,
 	coverageRemoved: 0,
 	checkpointsRemoved: 0,
 };
@@ -116,7 +118,7 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 
 	// ── delete-nodes: the full purge ──────────────────────────────────────
 	const nodeLines = graphStore.readNodes();
-	const edgeLines = graphStore.readEdges();
+	const chainLines = graphStore.readChains();
 
 	// Does the chat touch the graph at all? (A never-extracted chat still
 	// needs its coverage rows dropped above, but no ledger rewrite — keeps
@@ -124,7 +126,7 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 	// changed.)
 	const touched =
 		nodeLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId)) ||
-		edgeLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId));
+		chainLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId));
 	if (!touched) {
 		if (stats.coverageRemoved > 0 || stats.checkpointsRemoved > 0) {
 			graphStore.rewriteLedgers({ coverage, checkpoints });
@@ -133,14 +135,12 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 	}
 
 	// 1. Survival: a node lives iff a reference from ANY surviving source
-	//    remains — another chat/src's provenance point on any of its lines,
-	//    a surviving mapping line (notes-front-door nodes carry EMPTY
-	//    provenance: the file IS the anchor, recorded through the mapping
-	//    line). (Edge endpoints are deliberately
-	//    NOT survival references: an edge's asserting session always left
-	//    provenance on its endpoints, so endpoint-only liveness cannot
-	//    occur in a consistent ledger — and counting it would keep nodes
-	//    alive whose lines we would then drop, dangling the edge.)
+	//    remains — another chat/src's provenance point on any of its lines.
+	//    (Chain members are deliberately NOT survival references: a
+	//    chain's asserting session always left provenance on its endpoints,
+	//    so endpoint-only liveness cannot occur in a consistent ledger —
+	//    and counting it would keep nodes alive whose lines we would then
+	//    drop, dangling the chain.)
 	const survives = (points: ReadonlyArray<{ chatId: string }>): boolean =>
 		points.some((pt) => pt.chatId !== chatId);
 	const live = new Set<string>();
@@ -182,41 +182,49 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 		// else: the deleted chat's link line — dies with its phrasings.
 	}
 
-	// 3. Edges: strip the chat's points; an assertion dies when its
-	//    provenance empties or either endpoint died IN THIS DELETION.
-	//    (Only nodes that existed and died count — an edge whose endpoints
-	//    never resolved as nodes is foreign data the deletion leaves alone:
-	//    destructive rewriting may not exceed the deleted chat's blast
-	//    radius.)
+	// 3. Chains: strip the chat's points; an assertion dies when its
+	//    provenance empties or ANY member node (premise or conclusion)
+	//    died IN THIS DELETION. (Only nodes that existed and died count —
+	//    a chain whose members never resolved as nodes is foreign data the
+	//    deletion leaves alone: destructive rewriting may not exceed the
+	//    deleted chat's blast radius.)
 	const deadNodes = new Set([...new Set(nodeLines.map((line) => line.id))].filter((id) => !live.has(id)));
-	const outEdges: GraphEdge[] = [];
-	for (const line of edgeLines) {
-		if (deadNodes.has(line.from) || deadNodes.has(line.to)) continue;
+	const outChains: GraphChain[] = [];
+	for (const line of chainLines) {
+		if (deadNodes.has(line.conclusion) || line.premises.some((premise) => deadNodes.has(premise))) continue;
 		const points = line.provenance.filter((pt) => pt.chatId !== chatId);
 		// An assertion dies when THIS deletion empties its provenance — a
 		// line that already had no points is foreign/legacy data, not this
 		// chat's trace; it rides untouched.
 		if (line.provenance.length > 0 && points.length === 0) continue;
-		outEdges.push(points.length === line.provenance.length ? line : { ...line, provenance: points });
+		outChains.push(points.length === line.provenance.length ? line : { ...line, provenance: points });
 	}
 
 	stats.nodesRemoved = [...new Set(nodeLines.map((line) => line.id))].filter((id) => !live.has(id)).length;
-	stats.edgesRemoved = edgeLines.length - outEdges.length;
+	stats.chainsRemoved = chainLines.length - outChains.length;
 
 	graphStore.rewriteLedgers({
 		nodes: outNodes,
-		edges: outEdges,
+		chains: outChains,
 		coverage,
 		checkpoints,
 	});
 
-	// 5. Positions: prune dead nodes (stale resting spots would pin
-	//    nothing — but pruning keeps the ledger honest and the revision
-	//    moving for exactly the right reason).
+	// 4. Positions: prune dead nodes AND dead chains (an argument's derived
+	//    implication node carries the chain's arg_ id — stale resting spots
+	//    would pin nothing; pruning keeps the ledger honest and the
+	//    revision moving for exactly the right reason).
+	const deadChainIds = new Set(
+		chainLines
+			.filter((line) => !outChains.includes(line))
+			.map((line) => line.id),
+	);
 	const positions = graphStore.readPositions();
 	const knownNodeIds = new Set(nodeLines.map((line) => line.id));
 	const prunedPositions = Object.fromEntries(
-		Object.entries(positions).filter(([id]) => live.has(id) || !knownNodeIds.has(id)),
+		Object.entries(positions).filter(
+			([id]) => (live.has(id) || !knownNodeIds.has(id)) && !deadChainIds.has(id),
+		),
 	);
 	if (Object.keys(prunedPositions).length !== Object.keys(positions).length) {
 		graphStore.writePositions(prunedPositions);
@@ -224,6 +232,7 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
 
 	return stats;
 }
+
 // ─── single-node deletion (node interlude, owner-locked full-death) ───────────
 
 /**
@@ -236,13 +245,15 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
  * one deletes a NODE and takes its every trace —
  *
  *   - every line of the node (create + link lines)
- *   - every EDGE touching it (from or to), whatever session asserted it
- *   - every mapping line that anchored it (the audit trail; for a
- *     notes-born node the file IS the anchor — its mapping line is the
- *     only one)
- *   - its resting position
+ *   - every CHAIN referencing it (as premise or conclusion), whatever
+ *     session asserted it — a chain with a dead member is not a chain
+ *   - its resting position (and every dead chain's)
  *
- * The blast radius is exactly the rows naming the node id: other nodes'
+ * An ARGUMENT deletion is the same call with an arg_-prefixed id (owner,
+ * 2026-09-30: the chain table's fenced delete kills chains): the "node"
+ * is the derived implication node whose id IS the chain's id.
+ *
+ * The blast radius is exactly the rows naming the id: other nodes'
  * provenance, aliases, and sessions are untouched (full death is
  * NODE-scoped, not session-scoped), and the source records of notes
  * imports stay (the import's bookkeeping; deleting one proposition is not
@@ -256,43 +267,68 @@ export function deleteChatTraces(graphStore: GraphStore, chatId: string, mode: C
  * second run finds no lines and changes nothing.
  */
 export interface NodeDeletionStats {
-	/** Edge assertion LINES removed (every edge touching the node). */
-	edgesRemoved: number;
+	/** Chain assertion LINES removed (every chain referencing the node). */
+	chainsRemoved: number;
 }
 
 function nodeLinesOf(graphStore: GraphStore, nodeId: string): GraphNode[] {
 	return graphStore.readNodes().filter((line) => line.id === nodeId);
 }
 
+function chainLinesOf(graphStore: GraphStore, chainId: string): GraphChain[] {
+	return graphStore.readChains().filter((line) => line.id === chainId);
+}
+
 /**
- * Full-death one node. Returns null when no such node exists (the
- * orchestration maps that to 404); rewrites only the ledgers that
- * changed (unchanged files keep their mtimes — the version stamp moves
- * only when something really did).
+ * Full-death one node (or one argument, by its arg_ id). Returns null
+ * when no such node/chain exists (the orchestration maps that to 404);
+ * rewrites only the ledgers that changed (unchanged files keep their
+ * mtimes — the version stamp moves only when something really did).
  */
 export function deleteNodeTraces(graphStore: GraphStore, nodeId: string): NodeDeletionStats | null {
+	const chainLines = graphStore.readChains();
+
+	// The argument branch: an arg_ id names a CHAIN, not a proposition —
+	// its lines die, and that is the whole death (the member propositions
+	// survive: deleting an argument spares its premises/conclusion).
+	if (nodeId.startsWith("arg_")) {
+		const outChains = chainLines.filter((line) => line.id !== nodeId);
+		if (outChains.length === chainLines.length) return null; // unknown argument
+		graphStore.rewriteLedgers({ chains: outChains });
+		const positions = graphStore.readPositions();
+		if (positions[nodeId] !== undefined) {
+			const { [nodeId]: _dead, ...rest } = positions;
+			graphStore.writePositions(rest);
+		}
+		return { chainsRemoved: chainLines.length - outChains.length };
+	}
+
 	const nodeLines = nodeLinesOf(graphStore, nodeId);
 	if (nodeLines.length === 0) return null;
 
-	const edgeLines = graphStore.readEdges();
-	const outEdges = edgeLines.filter((line) => line.from !== nodeId && line.to !== nodeId);
+	const outChains = chainLines.filter(
+		(line) => line.conclusion !== nodeId && !line.premises.includes(nodeId),
+	);
 
 	// Only the touched ledgers: the node's own lines always die (its file
 	// must move), everything else rewrites only when rows actually drop.
 	const outNodes = graphStore.readNodes().filter((line) => line.id !== nodeId);
 	graphStore.rewriteLedgers({
 		nodes: outNodes,
-		...(outEdges.length !== edgeLines.length ? { edges: outEdges } : {}),
+		...(outChains.length !== chainLines.length ? { chains: outChains } : {}),
 	});
 
-	// The resting position dies with the node.
+	// The resting positions die with the node and every dead chain.
+	const deadChainIds = new Set(chainLines.filter((line) => !outChains.includes(line)).map((line) => line.id));
 	const positions = graphStore.readPositions();
-	if (positions[nodeId] !== undefined) {
-		const { [nodeId]: _dead, ...rest } = positions;
-		graphStore.writePositions(rest);
+	const prunedPositions = Object.fromEntries(
+		Object.entries(positions).filter(([id]) => id !== nodeId && !deadChainIds.has(id)),
+	);
+	if (Object.keys(prunedPositions).length !== Object.keys(positions).length) {
+		graphStore.writePositions(prunedPositions);
 	}
 
 	return {
-		edgesRemoved: edgeLines.length - outEdges.length,
+		chainsRemoved: chainLines.length - outChains.length,
 	};
 }

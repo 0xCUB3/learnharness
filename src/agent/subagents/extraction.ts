@@ -28,7 +28,6 @@ import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts";
 import { teacherProseBlocks } from "../../core/coverage.ts";
-import { chainsToEdges } from "../../core/practice.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { auditorGraphTools } from "../tools/graph.ts";
 import { runSubmitAgent } from "./submit-agent.ts";
@@ -266,17 +265,15 @@ function validateFindingsChains(value: FindingsSubmit): string | null {
 	return null;
 }
 
-/** The translation seam (extractor redesign, 2026-09-30): the wire
- *  speaks CHAINS, the pipeline speaks follows-EDGES — SessionFindings
- *  and everything downstream (auditor, resolution, merge, coverage,
- *  store) is UNCHANGED. One math, one place: chainsToEdges sits next
- *  to chainsToGraph in core/practice.ts. */
-function expandFindings(raw: FindingsSubmit): SessionFindings {
-	return {
-		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
-		edges: chainsToEdges(raw.chains),
-	};
-}
+/** (chains-primary, owner 2026-09-30) the wire IS the pipeline shape
+ *  now: propositions + chains, no translation — the stores keep the
+ *  chains and the derived edge view is recomputed on read. The fill
+ *  already ran inside runSubmitAgent; this only re-asserts the
+ *  aliases-filled type. */
+const asSessionFindings = (raw: FindingsSubmit): SessionFindings => ({
+	propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
+	chains: raw.chains,
+});
 
 function fillAudit(raw: Static<typeof auditSchema>): AuditVerdicts {
 	return {
@@ -346,7 +343,7 @@ function runExtractor(
 		onStep,
 		neverSubmitted: "the extractor never submitted findings",
 		prepareArguments: healStringifiedArrays,
-	}).then(expandFindings);
+	}).then(asSessionFindings);
 }
 
 /** The extractor over ONE source of raw personal notes (the format-agnostic
@@ -371,7 +368,7 @@ function runNotesExtractor(
 		onStep,
 		neverSubmitted: "the extractor never submitted findings",
 		prepareArguments: healStringifiedArrays,
-	}).then(expandFindings);
+	}).then(asSessionFindings);
 }
 
 // ─── the auditor ───────────────────────────────────────────────────────────
@@ -379,7 +376,7 @@ function runNotesExtractor(
 
 const AUDITOR_INSTRUCTIONS = `You are the linking stage of a learning application's extraction pipeline. An extractor
 has read a source (a teaching session, or the author's personal notes) and reported findings: propositions and
-the follows edges of their reasoning chains. You NEVER see the source itself — the extractor is fully trusted, and you do not re-check
+their reasoning chains. You NEVER see the source itself — the extractor is fully trusted, and you do not re-check
 its work. Your job is IDENTITY: connecting those findings to the CURRENT knowledge graph, preparing the merge.
 
 You explore the graph through your tools: list_sessions, list_propositions, and find (glob over names +
@@ -406,8 +403,8 @@ IDENTITY — links, per proposition:
   propositions — different claims about the world — stay apart. You are NOT guarding against wrong merges; you are
   hunting for right ones.
 
-Your deliverable is ONLY the identity verdicts: "links". NEVER restate the propositions or the extractor's edges —
-the merger already has them. You NEVER create edges — relations between the new propositions come from the
+Your deliverable is ONLY the identity verdicts: "links". NEVER restate the propositions —
+the merger already has them. You NEVER create relations between propositions — they come from the
 extractor alone, and the batch connects to the existing graph ONLY through the equivalences you identify. Your
 entire deliverable is ONE submit_review call.
 
@@ -748,7 +745,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		signal?.throwIfAborted(); // an abort during the extract→audit gap ends here
 		const graph = getGraph(graphStore);
 		console.info(
-			`[extraction ${jobKey}] auditor starting (${findings.propositions.length} propositions, ${findings.edges.length} edges, ` +
+			`[extraction ${jobKey}] auditor starting (${findings.propositions.length} propositions, ` +
 				`${graph.nodes.length} graph nodes)`,
 		);
 		const t0 = performance.now();
@@ -758,8 +755,8 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		// exploration tools instead of an injected dump.
 		const auditResult = await runAuditor(
 			stageEngine("auditor", deps.auditor),
-			`Proposed findings from the extractor (the source itself is not available to you — the extractor is fully trusted):\n\n` +
-				`${JSON.stringify(findings, null, 2)}\n\n` +
+			`Proposed findings from the extractor (the source itself is not available to you — the extractor is fully trusted; the propositions only — the reasoning chains are the merger's business, owner 2026-09-30):\n\n` +
+				`${JSON.stringify({ propositions: findings.propositions }, null, 2)}\n\n` +
 				`The current knowledge graph has ${graph.nodes.length} node(s). Explore it with your tools and link what links.`,
 			signal,
 			(usage, model, step, finishReason, tools) => {
@@ -848,13 +845,13 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	 *  per job and never throw — the source's run returns what actually
 	 *  merged. */
 	function aggregateJobs(sourceId: string, settled: PromiseSettledResult<EmissionStats>[]): EmissionStats {
-		const stats: EmissionStats = { nodes: 0, edges: 0 };
+		const stats: EmissionStats = { nodes: 0, chains: 0 };
 		let aborted = false;
 		let failed = 0;
 		for (const result of settled) {
 			if (result.status === "fulfilled") {
 				stats.nodes += result.value.nodes;
-				stats.edges += result.value.edges;
+				stats.chains! += result.value.chains ?? 0;
 				continue;
 			}
 			const err = result.reason;
@@ -874,7 +871,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	}
 
 	async function runExtraction(chatId: string): Promise<EmissionStats> {
-		if (inFlight.has(chatId)) return { nodes: 0, edges: 0 };
+		if (inFlight.has(chatId)) return { nodes: 0, chains: 0 };
 		inFlight.add(chatId);
 		const t0 = performance.now();
 		// COVERAGE (vision-extraction-coverage.md, 2026-09-15): extract ONLY
@@ -895,7 +892,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			const covered = coverageOf(record.messages, graphStore.readCoverage(), chatId);
 			if (covered.uncovered.length === 0) {
 				console.info(`[extraction ${chatId}] nothing uncovered — no-op`);
-				return { nodes: 0, edges: 0 };
+				return { nodes: 0, chains: 0 };
 			}
 			const chunkTokens = deps.getChunkTokens?.() ?? FACTORY_SETTINGS.graph.extractionChunkTokens;
 			// The batcher's one rule (owner, Wave D): a tool-call message and
@@ -960,7 +957,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 							// next snapshot fetch must already reflect the new nodes).
 							settleGraphLayout(graphStore);
 							console.info(
-								`[extraction ${jobKey}] merged: ${batchStats.nodes} nodes, ${batchStats.edges} edges`,
+								`[extraction ${jobKey}] merged: ${batchStats.nodes} nodes, ${batchStats.chains ?? 0} chains`,
 							);
 							return batchStats;
 						});
@@ -969,7 +966,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			);
 			const stats = aggregateJobs(chatId, settled);
 			console.info(
-				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.edges} edges ` +
+				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.chains ?? 0} chains ` +
 					`(${Math.round(performance.now() - t0)}ms total, ${batches.length} batch job(s))`,
 			);
 			return stats;
@@ -1047,7 +1044,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 
 	async function runNotesExtraction(input: { id: string; filePath: string; text: string; importedAt: string }): Promise<EmissionStats> {
 		const { id } = input;
-		if (inFlight.has(id)) return { nodes: 0, edges: 0 };
+		if (inFlight.has(id)) return { nodes: 0, chains: 0 };
 		inFlight.add(id);
 		const t0 = performance.now();
 		try {
@@ -1098,7 +1095,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 							// The layout ledger evolves with each merge — the next
 							// snapshot fetch reflects every finished chunk.
 							settleGraphLayout(graphStore);
-							console.info(`[extraction ${jobKey}] merged: ${merged.nodes} nodes, ${merged.edges} edges`);
+							console.info(`[extraction ${jobKey}] merged: ${merged.nodes} nodes, ${merged.chains ?? 0} chains`);
 							return merged;
 						});
 					});
@@ -1106,7 +1103,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			);
 			const stats = aggregateJobs(id, settled);
 			console.info(
-				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.edges} edges ` +
+				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.chains ?? 0} chains ` +
 					`(${Math.round(performance.now() - t0)}ms total, ${chunks.length} chunk job(s))`,
 			);
 			return stats;
@@ -1133,7 +1130,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		const contentFp = crypto.createHash("sha256").update(input.text).digest("hex").slice(0, 16);
 		if (graphStore.readSources().find((s) => s.id === id)?.contentFp === contentFp) {
 			console.info(`[extraction ${id}] re-import with unchanged content (fp match) — skipping`);
-			return { nodes: 0, edges: 0 };
+			return { nodes: 0, chains: 0 };
 		}
 		const importedAt = new Date().toISOString();
 		graphStore.upsertSource({ id, filePath: input.filePath, importedAt, contentFp });

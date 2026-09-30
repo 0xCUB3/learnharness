@@ -1,6 +1,7 @@
-import type { GraphEdge, GraphNode, Position } from "./contracts.ts";
+import type { GraphChain, GraphNode, Position } from "./contracts.ts";
 import { incrementalLayout } from "./layout.ts";
 import { birthSessionPartition } from "./session-clusters.ts";
+import { deriveView, getGraph } from "./graph.ts";
 
 /**
  * The merge-time settle: recompute the resting layout from the CURRENT
@@ -10,6 +11,12 @@ import { birthSessionPartition } from "./session-clusters.ts";
  * commit (client positions become the anchor set). Synchronous — it must
  * finish before the next /api/graph fetch reflects the change.
  *
+ * CHAINS-PRIMARY (owner, 2026-09-30): the settle lays out the DERIVED
+ * view — propositions AND the derived implication nodes (one per chain,
+ * arg_ ids) over the derived untyped arrows — so positions exist for
+ * every node the canvas renders. Implication nodes participate in the
+ * physics as regular nodes (rendering specialization comes later).
+ *
  * SPLIT FROM layout.ts deliberately (2026-09-13): layout.ts is in the
  * browser barrel, and the settle needs the cluster partition for the
  * cluster centroid pull — this module must not ship in the client bundle.
@@ -18,27 +25,20 @@ import { birthSessionPartition } from "./session-clusters.ts";
  */
 export function settleGraphLayout(graphStore: {
 	readNodes(): GraphNode[];
-	readEdges(): GraphEdge[];
+	readChains(): GraphChain[];
 	readPositions(): Record<string, Position>;
 	writePositions(positions: Record<string, Position>): void;
 }): void {
-	const nodes = graphStore.readNodes();
-	if (nodes.length === 0) return;
-	// Node LINES may repeat an id (link-appends) — dedupe, first defines.
-	const seen = new Set<string>();
-	const unique = nodes.filter((n) => {
-		if (seen.has(n.id)) return false;
-		seen.add(n.id);
-		return true;
-	});
-	const edges = graphStore.readEdges();
+	const graph = getGraph(graphStore);
+	if (graph.nodes.length === 0) return;
+	const view = deriveView(graph);
 	const previous = new Map(Object.entries(graphStore.readPositions()));
 	// The cluster partition for the centroid pull: the SAME birth-session
 	// partition the snapshot renders (derived from provenance on read —
 	// core/session-clusters.ts, wave 7) — one cluster concept everywhere.
-	// The unique list is the deduped set the partition needs (lines may
-	// repeat an id — first defines).
-	const communities = birthSessionPartition(unique);
-	const next = incrementalLayout(unique, edges, previous, { clusters: communities });
+	// PROPOSITIONS ONLY (owner, 2026-09-30): implication nodes never
+	// partition; the stored world clusters, its image follows.
+	const communities = birthSessionPartition(graph.nodes);
+	const next = incrementalLayout(view.nodes, view.edges, previous, { clusters: communities });
 	graphStore.writePositions(Object.fromEntries(next));
 }

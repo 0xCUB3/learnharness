@@ -54,19 +54,6 @@ export interface GraphRenderSettings {
 	labelZoom: number;
 	/** Node + hover label font size, WORLD units (scales with camera). */
 	labelSize: number;
-	/** Draw `supports` edges at all (owner, 2026-09-29): off hides them
-	 *  from the canvas — a DRAW toggle only. The physics sim still feels
-	 *  them (settings never shift the graph: camera, one frame), and node
-	 *  detail cards still list them. */
-	showSupports: boolean;
-	/** Relative SHAFT thickness of supports edges (owner, 2026-09-29):
-	 *  a 0–1 multiplier of edgeWidth — default 0.5, the single-line
-	 *  relation reads as the lighter one. SHAFT ONLY: arrowheads keep
-	 *  full Arrowhead-size geometry (owner pick). Linear, not a ladder —
-	 *  it's a ratio; exactly 0 floors to a hairline in the renderer
-	 *  (canvas cannot stroke a true 0-width line; hiding is the toggle's
-	 *  job). */
-	supportsWidth: number;
 	/** Toggle for the cluster region labels (hulls always draw). */
 	clusterLabels: boolean;
 	/** Cluster label font size, px on screen (camera-compensated —
@@ -108,14 +95,6 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 		arrowLength: legacySizes ? DEFAULT_RENDER_SETTINGS.arrowLength : ladd(r.arrowLength, ARROW_LENGTH_LADDER, DEFAULT_RENDER_SETTINGS.arrowLength),
 		labelZoom: ladd(r.labelZoom, LABEL_ZOOM_LADDER, DEFAULT_RENDER_SETTINGS.labelZoom),
 		labelSize: legacySizes ? DEFAULT_RENDER_SETTINGS.labelSize : ladd(r.labelSize, LABEL_SIZE_LADDER, DEFAULT_RENDER_SETTINGS.labelSize),
-		showSupports:
-			typeof r.showSupports === "boolean" ? r.showSupports : DEFAULT_RENDER_SETTINGS.showSupports,
-		// Linear ratio, not a ladder: real numbers clamp to [0, 1]; anything
-		// else resets to the default.
-		supportsWidth:
-			typeof r.supportsWidth === "number" && Number.isFinite(r.supportsWidth)
-				? clamp(r.supportsWidth, 0, 1)
-				: DEFAULT_RENDER_SETTINGS.supportsWidth,
 		clusterLabels:
 			typeof r.clusterLabels === "boolean" ? r.clusterLabels : DEFAULT_RENDER_SETTINGS.clusterLabels,
 		clusterLabelSize: ladd(
@@ -283,8 +262,6 @@ export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 	arrowLength: 2,
 	labelZoom: 4,
 	labelSize: 3,
-	showSupports: true,
-	supportsWidth: 0.5,
 	clusterLabels: true,
 	clusterLabelSize: 14,
 	regions: DEFAULT_REGION_TUNING,

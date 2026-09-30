@@ -60,11 +60,12 @@ export type ModelRole =
 
 /**
  * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction
- * pipeline. Line shapes: src/core/contracts.ts.
+ * pipeline. Line shapes: src/core/contracts.ts. CHAINS ARE THE STORED
+ * TRUTH (owner, 2026-09-30): edges are a derived view, never stored.
  */
 export const LEDGER_FILES = {
 	nodes: path.join(PATHS.graph, "nodes.jsonl"),
-	edges: path.join(PATHS.graph, "edges.jsonl"),
+	chains: path.join(PATHS.graph, "chains.jsonl"),
 	sessions: path.join(PATHS.graph, "sessions.jsonl"),
 	/** Per-message extraction coverage (contracts/graph.ts CoverageEntry;
 	 *  the checkpoint's replacement for chat extractions — notes keep

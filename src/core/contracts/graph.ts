@@ -18,20 +18,51 @@
  */
 // ─── Knowledge graph (vision §1 — global, cross-session) ────────────────────
 
-/** Two relations only (DECIDED 2026-09-02): follows = b is derivable from a;
- *  supports = a grounds b without entailing it. No scalars, no encoded
- *  strength — strength is derived at read time from topology. */
 import type { CallUsage, ExtractionRunUsage } from "./chat.ts";
 
-export type EdgeType = "follows" | "supports";
+/** One relation of the DERIVED view — chains are the stored truth (owner,
+ *  2026-09-30: "the graph is a lossy image of what is truly stored"), and
+ *  the snapshot derives UNTYPED arrows from them: every premise → the
+ *  chain's implication node, the implication node → the conclusion.
+ *  Nothing stores or mutates these — they are rebuilt after every change
+ *  and never converted back. */
+export interface GraphEdge {
+	from: string;
+	to: string;
+}
+
+/** One stored REASONING CHAIN — an argument: premises that JOINTLY entail
+ *  the conclusion (chains-primary, owner 2026-09-30). Independent arguments
+ *  for the same conclusion are separate chains (they may share `conclusion`);
+ *  co-premises within one chain are used TOGETHER. The snapshot derives an
+ *  implication NODE per chain (id = the chain id — the arg_ namespace is its
+ *  own, collision-free with n_) plus untyped edges premises → imp →
+ *  conclusion. A chain referencing a dead node dies with it (full death
+ *  cascades through every referencing chain). */
+export interface GraphChain {
+	/** "arg_" + nanoid-like (store-assigned, the node-minting pattern). */
+	id: string;
+	/** Node ids of the argument's premises — at least one, jointly
+	 *  sufficient. Extractor-local at the wire; node ids after resolution. */
+	premises: string[];
+	/** The node id the premises jointly imply. */
+	conclusion: string;
+	/** Every (chat, message) point where this argument was asserted —
+	 *  unioned across assertion lines at read time. */
+	provenance: ProvenancePoint[];
+	createdAt: string;
+}
 
 /** What one extraction run merged into the graph ledgers — the merger's
- *  output, also persisted in extraction-run usage records (contracts/chat). */
+ *  output, also persisted in extraction-run usage records (contracts/chat).
+ *  `chains` is OPTIONAL IN OLD RECORDS ONLY: usage history from the
+ *  pre-chains era carries `edges` instead — tolerated at read, never
+ *  written again (no-backward-compat regime, owner 2026-09-30). */
 export interface EmissionStats {
 	/** New graph nodes appended. */
 	nodes: number;
-	/** New edge assertions appended. */
-	edges: number;
+	/** New reasoning chains appended. */
+	chains?: number;
 }
 
 /** One provenance point — message-granular (DECIDED 2026-09-02): nodes and
@@ -107,14 +138,6 @@ export interface GraphNode {
 	provenance: ProvenancePoint[];
 }
 
-export interface GraphEdge {
-	from: string;
-	to: string;
-	type: EdgeType;
-	/** Every (chat, message) point where this relation was asserted. */
-	provenance: ProvenancePoint[];
-}
-
 /** sessions.jsonl line — the emission checkpoint for one chat (which chats
  *  have been folded, and through which updatedAt — never fold twice). */
 export interface SessionCheckpoint {
@@ -143,7 +166,9 @@ export interface CoverageEntry {
 
 /**
  * Store format (src/store/graph.ts): JSONL ledgers at config.LEDGER_FILES
- * (nodes/edges/mappings/sessions), all append-only.
+ * (nodes/chains/sessions), all append-only. Edges are NEVER stored — the
+ * derived view (implication nodes + untyped arrows) is rebuilt from chains
+ * on every read (chains-primary, owner 2026-09-30).
  *
  *   nodes.jsonl    one line per node — the FIRST line for an id defines
  *                  name/statement/createdAt; later lines for the
@@ -151,8 +176,9 @@ export interface CoverageEntry {
  *                  their statements/aliases join `aliases`, their
  *                  provenance unions; the name stays the first line's.
  *                  getGraph merges by id.
- *   edges.jsonl    one line per edge ASSERTION; readers merge by
- *                  (from,to,type), unioning provenance.
+ *   chains.jsonl   one line per chain ASSERTION; readers merge by
+ *                  (premises, conclusion), unioning provenance — the
+ *                  first line's arg_ id is the chain's identity.
  *
  * The derived graph is rebuilt by reading the ledgers — store events,
  * derive state. sessions.jsonl is the extraction checkpoint: which chats
@@ -202,21 +228,20 @@ export interface ExtractedProposition {
 	 * + structure, nothing else. */
 }
 
-/** One proposed relation. Endpoints are extractor-local proposition ids
- *  ("p1", …) — the extractor is the ONLY stage that ever proposes edges
- *  (the auditor's edges argument is gone, owner 2026-09-28 evening). */
-export interface ExtractedEdge {
-	/** Proposition id that is followed / supported. */
-	from: string;
-	/** Proposition id that follows / is supported. */
-	to: string;
-	type: EdgeType;
+/** One proposed argument (extractor redesign, 2026-09-30). Endpoints are
+ *  extractor-local proposition ids ("p1", …) — the extractor is the ONLY
+ *  stage that ever proposes chains; the merger resolves them to node ids. */
+export interface ExtractedChain {
+	/** Proposition ids that JOINTLY entail the conclusion. */
+	premises: string[];
+	/** The proposition id the premises jointly imply. */
+	conclusion: string;
 }
 
 /** The extractor's output shape: the raw reasoning chains. */
 export interface SessionFindings {
 	propositions: ExtractedProposition[];
-	edges: ExtractedEdge[];
+	chains: ExtractedChain[];
 }
 
 /** One identity verdict: the extractor's local proposition id → the
@@ -279,8 +304,16 @@ export interface GraphClusterGroup {
 }
 
 export interface GraphSnapshot {
+	/** Proposition nodes + the DERIVED implication nodes (one per chain,
+	 *  id = chain id) — what the canvas renders. */
 	nodes: GraphNode[];
+	/** DERIVED untyped arrows: premise → imp → conclusion. A lossy image
+	 *  of the stored chains — rebuilt after every change, never stored. */
 	edges: GraphEdge[];
+	/** The STORED reasoning chains (merged by (premises, conclusion) at
+	 *  read): the chain table's and the practice pipeline's input — they
+	 * read the truth, never the derived fan-out. */
+	chains: GraphChain[];
 	/** chatId → title, for every chat that touched the graph. */
 	sessions: Record<string, string>;
 	/** srcId → file path, for every IMPORTED NOTES file that touched the

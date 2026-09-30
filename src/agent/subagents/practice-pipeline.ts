@@ -45,6 +45,7 @@
 import type { GraphStore, PracticeStore } from "../../core/ports.ts";
 import type { Problem, ProblemSet, ReasoningChain } from "../../core/contracts.ts";
 import { chainsForSelection } from "../../core/practice.ts";
+import { getGraph } from "../../core/graph.ts";
 import {
 	createPracticeAgents,
 	type PracticeModels,
@@ -444,10 +445,10 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		const wanted = new Set(nodeIds);
 		const selected = deps.graphStore.readNodes().filter((n) => wanted.has(n.id));
 		const selectedIds = new Set(selected.map((n) => n.id));
-		const edges = deps
-			.graphStore.readEdges()
-			.filter((e) => e.type === "follows" && selectedIds.has(e.from) && selectedIds.has(e.to));
-		const chains = chainsForSelection(selected, edges);
+		// The STORED chains (chains-primary, owner 2026-09-30): chainsForSelection
+		// keeps a chain iff every member is selected — the same inclusion law as
+		// the pre-chains edge grouping; never the derived fan-out.
+		const chains = chainsForSelection(selected, getGraph(deps.graphStore).chains);
 		if (chains.length === 0) throw new EmptySelectionError();
 		const propositions: PropositionSnapshot = {};
 		for (const n of selected) propositions[n.id] = { name: n.name, statement: n.statement };

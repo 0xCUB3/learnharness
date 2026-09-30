@@ -51,10 +51,9 @@
  *
  * Rendering settings (2026-09-13): the gear in the search panel reveals
  * five sliders (node size, edge width, arrowhead length, label size, the
- * zoom threshold), the supports-edges draw toggle (2026-09-29: off hides
- * supports edges from the canvas — draw-only; physics and detail cards
- * still see them) with its shaft-thickness slider (0–1 × Edge width,
- * default 0.5; heads stay full), and the cluster-labels checkbox. SERVER-persisted
+ * zoom threshold), and the cluster-labels checkbox. (The supports-edge
+ * draw toggle + thickness slider died with supports edges themselves —
+ * chains-primary, 2026-09-30.) SERVER-persisted
  * (data/render-settings.json via /api/graph/render-settings): loaded
  * once after mount, saved debounced on every user change — one source
  * of truth shared by every browser. The label-zoom slider is log-scaled
@@ -532,36 +531,7 @@ function GraphSettingsControl({
 								onChange={(p) =>
 									changeSettings((cur) => ({ ...cur, labelZoom: fromLadderPosition(p, LABEL_ZOOM_LADDER) }))}
 							/>
-							{/* Supports draw toggle (owner, 2026-09-29): hides the single-line
-							    supports edges from the canvas — follows (⟹-meant) stay. Draw-only:
-							    physics + detail cards still see them. Last rows of the FIRST
-							    section; the border-t below starts Regions. */}
-							<label className="flex cursor-pointer items-center justify-between text-[11px] text-muted-foreground">
-								<span>Supports edges</span>
-								<input
-									type="checkbox"
-									checked={settings.showSupports}
-									onChange={(e) =>
-										changeSettings((cur) => ({ ...cur, showSupports: e.target.checked }))}
-									className="accent-primary"
-								/>
-							</label>
-							{/* Supports shaft thickness (owner, 2026-09-29): a LINEAR 0–1
-							    ratio of Edge width (not a ladder — it's a ratio; default 0.5
-							    dead-center anyway, step 0.1 = 11 stops). Grayed out by the
-							    toggle above (the Dilation pattern); 0 floors to a hairline in
-							    the renderer — arrowheads never scale (shaft-only ruling). */}
-							<SettingSlider
-								label="Supports thickness"
-								disabled={!settings.showSupports}
-								min={0}
-								max={1}
-								step={0.1}
-								value={settings.supportsWidth}
-								display={`${Math.round(settings.supportsWidth * 100) / 100}×`}
-								onChange={(v) => changeSettings((cur) => ({ ...cur, supportsWidth: v }))}
-							/>
-						{/* Regions: the blurred cluster tints. Sliders + a fixed-set
+							{/* Regions: the blurred cluster tints. Sliders + a fixed-set
 						    dropdown for the bitmap resolution (it's a discrete
 						    choice, not a free number). Server-persisted like the
 						    sizes; every range end was sweep-validated on the real
@@ -1411,7 +1381,7 @@ export function GraphView() {
 				y: positions.get(n.id)?.y ?? 0,
 				label: n.name,
 			})),
-			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to, type: e.type })),
+			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to })),
 			clusters: snapshot.clusters.map((c) => ({ id: c.id, label: c.label, members: c.members })),
 			colors: {
 				node: tokenHex(NODE_COLOR_TOKEN),
@@ -1637,53 +1607,6 @@ export function GraphView() {
 				>
 					<div className="text-sm font-medium leading-snug">{selected.node.name}</div>
 					<div className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.node.statement}</div>
-					{(() => {
-						// EDGES (owner 2026-09-27): edge classification was entirely
-						// hidden in the UI — the card now shows every edge this node
-						// participates in, grouped by direction + type, above the
-						// sessions list. Semantics (owner 2026-09-28): an edge A→B means A implies/
-						// supports B — OUTGOING edges list under "What follows from this" /
-						// "What this supports", INCOMING under "Follows from" / "Supported by".
-						// Only present groups render.
-						const id = selected.node.id;
-						const nodeById = new Map((snapshot?.nodes ?? []).map((n) => [n.id, n]));
-						const label = (nid: string) => nodeById.get(nid)?.name ?? nid;
-						const groups: { title: string; names: string[] }[] = [
-							{
-								title: "What follows from this",
-								names: (snapshot?.edges ?? []).filter((e) => e.from === id && e.type === "follows").map((e) => label(e.to)),
-							},
-							{
-								title: "What this supports",
-								names: (snapshot?.edges ?? []).filter((e) => e.from === id && e.type === "supports").map((e) => label(e.to)),
-							},
-							{
-								title: "Follows from",
-								names: (snapshot?.edges ?? []).filter((e) => e.to === id && e.type === "follows").map((e) => label(e.from)),
-							},
-							{
-								title: "Supported by",
-								names: (snapshot?.edges ?? []).filter((e) => e.to === id && e.type === "supports").map((e) => label(e.from)),
-							},
-						].filter((g) => g.names.length > 0);
-						if (groups.length === 0) return null;
-						return (
-							<div className="mt-3 flex flex-col gap-1">
-								{groups.map((g) => (
-									<div key={g.title} className="flex flex-col gap-0.5">
-										<div className="text-xs text-muted-foreground">{g.title}</div>
-										<div className="flex flex-wrap gap-1">
-											{g.names.map((name, i) => (
-												<span key={`${name}-${i}`} className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
-													{name}
-												</span>
-											))}
-										</div>
-									</div>
-								))}
-							</div>
-						);
-					})()}
 					{selected.sourceIds.length > 0 ? (
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>
@@ -1734,7 +1657,7 @@ export function GraphView() {
 			<ChainTableOverlay
 				open={chainsOpen && !isEmpty}
 				nodes={snapshot?.nodes ?? []}
-				edges={snapshot?.edges ?? []}
+				chains={snapshot?.chains ?? []}
 				sessions={snapshot?.sessions ?? {}}
 				fileSources={snapshot?.fileSources ?? {}}
 				onClose={() => setChainsOpen(false)}

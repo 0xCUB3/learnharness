@@ -15,7 +15,7 @@ import { createProberTools } from "../src/agent/tools.ts";
 import { auditorGraphTools } from "../src/agent/tools/graph.ts";
 import type { ChatStore, GraphStore, JobStore } from "../src/core/ports.ts";
 import type { ChatSummary } from "../src/core/contracts/chat.ts";
-import type { GraphEdge, GraphNode } from "../src/core/contracts/graph.ts";
+import type { GraphChain, GraphNode } from "../src/core/contracts/graph.ts";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
 
@@ -39,10 +39,10 @@ function fakeStores(
 		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt">>;
 	} = {},
 ): { chatStore: ChatStore; graphStore: GraphStore } {
-	const edges: GraphEdge[] = [];
+	const chains: GraphChain[] = [];
 	const graphStore: GraphStore = {
 		readNodes: () => nodes,
-		readEdges: () => edges,
+		readChains: () => chains,
 		readCheckpoints: () => [],
 		readCoverage: () => [],
 		readSources: () => [],

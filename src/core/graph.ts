@@ -45,7 +45,8 @@ import { randomBytes } from "node:crypto";
 import type { CoverageEntry } from "./contracts/graph.ts";
 import type {
 	AuditVerdicts,
-	ExtractedEdge,
+	ExtractedChain,
+	GraphChain,
 	SessionFindings,
 	Cluster,
 	EmissionStats,
@@ -56,6 +57,7 @@ import type {
 } from "./contracts.ts";
 import { MIN_CLUSTER_SIZE } from "./clusters.ts";
 import { birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
+import { formatChainLine } from "./practice.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
 /** The storage ports every graph operation needs, passed explicitly. */
@@ -67,6 +69,18 @@ export interface GraphDeps {
 /** "n_" + 12 hex chars (contracts.ts GraphNode.id — store-assigned). */
 function newGraphNodeId(): string {
 	return `n_${randomBytes(6).toString("hex")}`;
+}
+
+/** "arg_" + 12 hex chars — the implication-node namespace (a chain's id
+ *  IS its derived node's id; collision-free with n_ by construction). */
+function newGraphChainId(): string {
+	return `arg_${randomBytes(6).toString("hex")}`;
+}
+
+/** A chain's merge key: sorted premises + conclusion — the identity an
+ *  assertion re-stating the same argument merges under. */
+function chainKey(premises: ReadonlyArray<string>, conclusion: string): string {
+	return `${[...premises].sort().join("+")}>${conclusion}`;
 }
 
 /** What one merge run merges FROM (the caller supplies it — the merger never
@@ -127,7 +141,7 @@ export function mergeFindings(
 	source: MergeSource,
 ): EmissionStats {
 	const { graphStore: ledgers } = deps;
-	const stats: EmissionStats = { nodes: 0, edges: 0 };
+	const stats: EmissionStats = { nodes: 0, chains: 0 };
 
 	// 1. Resolution: THIS job's propositions → graph node ids, built
 	//    in-memory as the propositions resolve (owner, 2026-09-29: the
@@ -180,31 +194,41 @@ export function mergeFindings(
 		mapping.set(p.id, graphNodeId);
 	}
 
-	// 2. Edges — the extractor's own, the ONLY edge source (the auditor's
-	//    edges argument is gone, owner 2026-09-28 evening). Endpoints are
-	//    this job's local proposition ids and resolve through the job-local
-	//    map; edges carry the run's chat-level provenance point and dedupe
-	//    by (from,to,type) already asserted by THIS chat — an assertion by
-	//    another chat stays untouched (provenance unions at read time).
+	// 2. Chains — the extractor's own, the ONLY chain source; the stored
+	//    truth (chains-primary, owner 2026-09-30). Endpoints are this
+	//    job's local proposition ids and resolve through the job-local
+	//    map; chains carry the run's chat-level provenance point and
+	//    dedupe by (premises, conclusion) already asserted by THIS chat —
+	//    an assertion by another chat stays untouched (provenance unions
+	//    at read time; a known argument re-stated appends under the SAME
+	//    arg_ id — link-style, exactly like node link-appends; the first
+	//    line's premises/createdAt stand at read time).
 	const assertedByChat = new Set<string>();
-	for (const line of ledgers.readEdges()) {
-		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
+	const idOfKey = new Map<string, string>();
+	for (const line of ledgers.readChains()) {
+		const key = chainKey(line.premises, line.conclusion);
+		if (!idOfKey.has(key)) idOfKey.set(key, line.id);
 		if (line.provenance.some((pt) => pt.chatId === chatId)) assertedByChat.add(key);
 	}
-	const emitEdge = (edge: ExtractedEdge): void => {
-		// Extractor-local ids only — the auditor's bridging edges are gone
-		// (owner, 2026-09-28 evening), so raw node-id endpoints no longer occur.
+	const emitChain = (chain: ExtractedChain): void => {
 		const resolve = (endpoint: string): string | undefined => mapping.get(endpoint);
-		const from = resolve(edge.from);
-		const to = resolve(edge.to);
-		if (!from || !to || from === to) return; // unresolvable endpoint — skip
-		const key = `${from}\u0000${to}\u0000${edge.type}`;
-		if (assertedByChat.has(key)) return;
-		ledgers.appendEdge({ from, to, type: edge.type, provenance: pointOf(chatId) });
+		const conclusion = resolve(chain.conclusion);
+		if (conclusion === undefined) return; // unresolvable endpoint — skip
+		// Duplicate local ids resolving to one node (two phrasings of one
+		// premise) collapse; a premise equal to the conclusion is dropped.
+		const premises = [...new Set(chain.premises.map(resolve))].filter(
+			(p): p is string => p !== undefined && p !== conclusion,
+		);
+		if (premises.length === 0) return; // a chain IS an argument — bare propositions ride the node ledger alone
+		const key = chainKey(premises, conclusion);
+		if (assertedByChat.has(key)) return; // this chat already asserted this argument
+		const id = idOfKey.get(key) ?? newGraphChainId();
+		ledgers.appendChain({ id, premises, conclusion, createdAt: now, provenance: pointOf(chatId) });
+		idOfKey.set(key, id);
 		assertedByChat.add(key);
-		stats.edges++;
+		stats.chains!++;
 	};
-	for (const edge of findings.edges) emitEdge(edge); // the extractor's edges — the ONLY edge source
+	for (const chain of findings.chains) emitChain(chain); // the extractor's chains — the ONLY chain source // the extractor's edges — the ONLY edge source
 
 	// 3. Checkpoint — THE COVERAGE DISCIPLINE (vision-extraction-coverage.md):
 	//    only now, after every append succeeded, is the batch covered. The
@@ -222,21 +246,26 @@ export function mergeFindings(
 
 // ─── derivation (reads only — everything below is recomputable) ─────────────
 
+/** The merged STORED truth: propositions + chains (chains-primary, owner
+ *  2026-09-30). `nodes` are PROPOSITIONS ONLY — no derived implication
+ *  nodes; the auditor's and prober's views see the world, not the
+ *  rendering. The canvas-facing VIEW (implication nodes + untyped
+ *  arrows) is deriveView() below — the lossy image. */
 export interface DerivedGraph {
 	nodes: GraphNode[];
-	edges: GraphEdge[];
+	chains: GraphChain[];
 }
 
 /**
  * The whole graph from the ledgers. Node LINES may repeat an id (link-
  * appends): the FIRST line defines name/statement/createdAt; later
  * lines' statements and aliases join `aliases`, provenance unions — the
- * name never changes after creation. Edge
- * LINES are assertions, merged by (from,to,type) with unioned provenance,
- * first-seen order. `store events, derive state` — this is the only reader
- * that matters.
+ * name never changes after creation. Chain LINES are assertions, merged
+ * by (premises, conclusion) with unioned provenance; the first line's
+ * arg_ id / premises / createdAt are the chain's identity.
+ * `store events, derive state` — this is the only reader that matters.
  */
-export function getGraph(graphStore: GraphStore): DerivedGraph {
+export function getGraph(graphStore: Pick<GraphStore, "readNodes" | "readChains">): DerivedGraph {
 	// Merge node lines by id (first line defines; later lines add phrasings).
 	const byId = new Map<string, GraphNode>();
 	for (const line of graphStore.readNodes()) {
@@ -254,29 +283,68 @@ export function getGraph(graphStore: GraphStore): DerivedGraph {
 		}
 	}
 
-	const merged: GraphEdge[] = [];
-	const byKey = new Map<string, GraphEdge>();
-	for (const line of graphStore.readEdges()) {
-		const key = `${line.from}\u0000${line.to}\u0000${line.type}`;
+	// Merge chain assertion lines by (premises, conclusion): the first
+	// line's id/premises/createdAt stand, provenance unions.
+	const chains: GraphChain[] = [];
+	const byKey = new Map<string, GraphChain>();
+	for (const line of graphStore.readChains()) {
+		const key = chainKey(line.premises, line.conclusion);
 		const existing = byKey.get(key);
 		if (existing) {
 			for (const pt of line.provenance) {
 				if (!existing.provenance.some((q) => samePoint(q, pt))) existing.provenance.push(pt);
 			}
 		} else {
-			const edge: GraphEdge = { ...line, provenance: [...line.provenance] };
-			byKey.set(key, edge);
-			merged.push(edge);
+			const chain: GraphChain = { ...line, premises: [...line.premises], provenance: [...line.provenance] };
+			byKey.set(key, chain);
+			chains.push(chain);
 		}
 	}
-	return { nodes: [...byId.values()], edges: merged };
+	return { nodes: [...byId.values()], chains };
+}
+
+/** The DERIVED view — what the canvas renders. One implication NODE per
+ *  chain (id = the chain's arg_ id; name "⟹"; statement = the chain
+ *  line; the chain's provenance/createdAt) plus UNTYPED arrows: each
+ *  premise → the implication node, the implication node → the
+ *  conclusion. Rendering specialization (invisible / physics-free)
+ *  comes later (owner, 2026-09-30: physics is fine with imp nodes as
+ *  regular nodes for now). Dangling chains (a member node missing)
+ *  drop here — the deletion cascades should prevent them; this is the
+ *  honest belt. */
+export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: GraphEdge[] } {
+	const names: Record<string, { name: string }> = {};
+	for (const node of graph.nodes) names[node.id] = { name: node.name };
+	const live = new Set(graph.nodes.map((node) => node.id));
+	const impNodes: GraphNode[] = [];
+	const edges: GraphEdge[] = [];
+	for (const chain of graph.chains) {
+		if (!live.has(chain.conclusion) || !chain.premises.every((premise) => live.has(premise))) continue;
+		impNodes.push({
+			id: chain.id,
+			name: "⟹",
+			statement: formatChainLine(chain, names),
+			aliases: [],
+			createdAt: chain.createdAt,
+			provenance: [...chain.provenance],
+		});
+		for (const premise of chain.premises) edges.push({ from: premise, to: chain.id });
+		edges.push({ from: chain.id, to: chain.conclusion });
+	}
+	return { nodes: [...graph.nodes, ...impNodes], edges };
 }
 
 // ─── the /api/graph payload ──────────────────────────────────────────────────
 
 /** Everything the home graph view needs, in one fetch (shape: contracts). */
 export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
-	const { nodes, edges } = getGraph(deps.graphStore);
+	const graph = getGraph(deps.graphStore);
+	// The canvas-facing lossy image: propositions + derived implication
+	// nodes, untyped arrows. `chains` (the stored truth) ride along for
+	// the chain table and the practice pipeline — they read the truth,
+	// never the derived fan-out.
+	const view = deriveView(graph);
+	const nodes = view.nodes;
 
 	const nodeChats = new Map<string, Set<string>>();
 	const touch = (nodeId: string, chatId: string): void => {
@@ -290,13 +358,6 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 	for (const node of nodes) {
 		for (const pt of node.provenance) touch(node.id, pt.chatId);
 	}
-	for (const edge of edges) {
-		for (const pt of edge.provenance) {
-			touch(edge.from, pt.chatId);
-			touch(edge.to, pt.chatId);
-		}
-	}
-
 	// Labels for every source the graph can point back at: real chats
 	// (title, deep-linkable) and imported notes files (path, static — the
 	// format-agnostic front door's provenance).
@@ -330,7 +391,9 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 	// presentation rule (a region needs >= 3 propositions for a hull). A
 	// birth session whose record is gone (deleted chat) keeps its members
 	// but renders unlabeled — honest, never guessed.
-	const communities = birthSessionPartition(nodes);
+	// PROPOSITIONS ONLY (owner, 2026-09-30): derived implication nodes
+	// never partition — the stored world clusters, its image follows.
+	const communities = birthSessionPartition(graph.nodes);
 	const clusters: Cluster[] = communities
 		.filter((community) => community.members.length >= MIN_CLUSTER_SIZE)
 		.map((community) => ({
@@ -346,7 +409,8 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 
 	return {
 		nodes,
-		edges,
+		edges: view.edges,
+		chains: graph.chains,
 		sessions,
 		fileSources,
 		nodeSessions,
