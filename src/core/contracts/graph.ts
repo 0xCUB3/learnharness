@@ -322,8 +322,11 @@ export interface GraphSnapshot {
 	fileSources: Record<string, string>;
 	/** nodeId → chatIds that touched the node (click-through provenance). */
 	nodeSessions: Record<string, string[]>;
-	/** Structural communities (Louvain over follows+supports), size ≥ 3,
-	 * joined with persisted LLM labelings. Purely structural — never
+	/** Birth-session communities (core/session-clusters.ts: each
+	 * proposition joins the cluster of the session that birthed it —
+	 * session provenance, no Louvain, no embeddings), MIN_CLUSTER_SIZE
+	 * ≥ 3 as the hull presentation rule. Propositions only — implication
+	 * nodes are never partitioned. Purely provenance-derived — never
 	 * depends on layout. */
 	clusters: Cluster[];
 	/** Resting layout positions per node id, when a positions ledger

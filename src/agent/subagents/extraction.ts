@@ -137,10 +137,9 @@ const propositionProps = {
 };
 
 // The extractor redesign (owner, 2026-09-30): the extractor submits
-// REASONING CHAINS — premises + conclusion — and the seam expands each
-// premise to one follows-edge (chainsToEdges, core/practice.ts). The
-// old follows/supports edges array is GONE from the wire; supports stay
-// in the graph contract/store/UI/old data, but no stage mints one again.
+// REASONING CHAINS — premises + conclusion — stored AS-IS (chains-primary,
+// same evening: chains.jsonl is the truth; edges are a derived view, and
+// supports edges are retired entirely).
 const chainSchema = Type.Object({
 	premises: Type.Array(Type.String(), {
 		minItems: 1,
@@ -171,8 +170,9 @@ const findingsSchema = Type.Object(findingsProps);
 
 /** What the extractor SUBMITS (the redesign's wire shape) — propositions
  *  + chains. fillFindings normalizes it; validateFindingsChains checks
- *  the chain laws; expandFindings translates it to SessionFindings at
- *  the seam. */
+ *  the chain laws; asSessionFindings lifts it straight into
+ *  SessionFindings — chains are stored AS-IS (chains-primary, owner
+ *  2026-09-30: no edge translation at any seam). */
 type FindingsSubmit = Static<typeof findingsSchema>;
 
 // VERDICTS-ONLY (owner, 2026-09-28): the auditor never alters the
@@ -246,8 +246,8 @@ function fillFindings(raw: FindingsSubmit): FindingsSubmit {
  *  runSubmitAgent turns a problem string into an error tool result and
  *  the model re-submits within its turns (the practice-proven hook).
  *  Identical (premise-set, conclusion) chains are NOT errors — they
- *  dedupe silently at the expansion (chainsToEdges): restating an
- *  argument is a no-op. */
+ *  dedupe silently at the merge (chainKey): restating an argument is a
+ *  no-op. */
 function validateFindingsChains(value: FindingsSubmit): string | null {
 	const ids = new Set(value.propositions.map((p) => p.id));
 	for (const chain of value.chains) {
