@@ -56,7 +56,7 @@ import type {
 	GraphSnapshot,
 } from "./contracts.ts";
 import { MIN_CLUSTER_SIZE } from "./clusters.ts";
-import { birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
+import { attachImpToCommunities, birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
 import { formatChainLine } from "./practice.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
@@ -316,14 +316,27 @@ export function getGraph(graphStore: Pick<GraphStore, "readNodes" | "readChains"
  *  regular citizens (half link distance — layout.ts). Dangling chains
  *  (a member node missing) drop here — the deletion cascades should
  *  prevent them; this is the honest belt. */
-export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: GraphEdge[] } {
+export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: GraphEdge[]; logicalEdges: GraphEdge[] } {
 	const names: Record<string, { name: string }> = {};
 	for (const node of graph.nodes) names[node.id] = { name: node.name };
 	const live = new Set(graph.nodes.map((node) => node.id));
 	const impNodes: GraphNode[] = [];
 	const edges: GraphEdge[] = [];
+	// The LOGICAL edge set (owner, 2026-09-30): every chain contracted to
+	// direct premise→conclusion arrows over PROPOSITION ids only —
+	// what inference semantics (the depth pass) consumes. The drawn edges
+	// are the canvas image; these are the meaning.
+	const logicalEdges: GraphEdge[] = [];
+	const logicalSeen = new Set<string>();
+	const emitLogical = (from: string, to: string): void => {
+		const key = from + "\u0000" + to;
+		if (logicalSeen.has(key)) return;
+		logicalSeen.add(key);
+		logicalEdges.push({ from, to });
+	};
 	for (const chain of graph.chains) {
 		if (!live.has(chain.conclusion) || !chain.premises.every((premise) => live.has(premise))) continue;
+		for (const premise of chain.premises) emitLogical(premise, chain.conclusion);
 		// Single premise: the argument IS a plain arrow — no geometry
 		// point needed (the 1-in/1-out collapse; rendering arc, owner).
 		if (chain.premises.length === 1) {
@@ -341,7 +354,7 @@ export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: Gr
 		for (const premise of chain.premises) edges.push({ from: premise, to: chain.id });
 		edges.push({ from: chain.id, to: chain.conclusion });
 	}
-	return { nodes: [...graph.nodes, ...impNodes], edges };
+	return { nodes: [...graph.nodes, ...impNodes], edges, logicalEdges };
 }
 
 // ─── the /api/graph payload ──────────────────────────────────────────────────
@@ -411,6 +424,13 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 			label: sessions[community.id] ?? fileSources[community.id] ?? null,
 			members: community.members,
 		}));
+	// IMP-NODE CLUSTER ASSIGNMENT (owner, 2026-09-30): majority among the
+	// premises' birth sessions, ties to the chain's own birth — attached
+	// AFTER the hull filter so a two-proposition community + its bundle
+	// never resurrects a hull (the filter counts propositions). Both
+	// cluster-membership consumers — the sim's centroid pull and the
+	// canvas's region rasterization — read it through this one list.
+	attachImpToCommunities(clusters, graph.nodes, graph.chains);
 
 	// Resting layout (Option A): the positions ledger, when the settle has
 	// ever run. Absent on a fresh graph — the view falls back to its own
@@ -421,6 +441,7 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		nodes,
 		propositions: graph.nodes,
 		edges: view.edges,
+		logicalEdges: view.logicalEdges,
 		chains: graph.chains,
 		sessions,
 		fileSources,

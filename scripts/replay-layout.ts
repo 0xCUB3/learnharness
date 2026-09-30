@@ -32,6 +32,7 @@ function main() {
 	const nodes = graph.nodes; // getGraph already merges lines by id
 	const view = deriveView(graph);
 	const edges = view.edges;
+	const logicalEdges = view.logicalEdges;
 	const viewNodeById = new Map(view.nodes.map((n) => [n.id, n]));
 	const chains = graph.chains;
 	// An implication node is delivered the moment its chain is complete
@@ -91,6 +92,7 @@ function main() {
 		// Edges activate once BOTH endpoints exist (a later file can claim
 		// one endpoint — the edge lights up then).
 		const activeEdges = edges.filter((e) => delivered.has(e.from) && delivered.has(e.to));
+		const activeLogical = logicalEdges.filter((e) => delivered.has(e.from) && delivered.has(e.to));
 
 		const before = new Map(positions);
 		const batchNodes = view.nodes.filter((n) => delivered.has(n.id));
@@ -109,6 +111,7 @@ function main() {
 							spacing: 60,
 							...(depthMode === "radial" ? { baseRadius: 220 } : {}),
 						},
+						logicalEdges: activeLogical,
 					}),
 		});
 		for (const [id, prev] of before) {

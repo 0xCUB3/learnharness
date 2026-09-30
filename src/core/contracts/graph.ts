@@ -314,6 +314,11 @@ export interface GraphSnapshot {
 	/** DERIVED untyped arrows: premise → imp → conclusion. A lossy image
 	 *  of the stored chains — rebuilt after every change, never stored. */
 	edges: GraphEdge[];
+	/** DERIVED LOGICAL arrows: every chain contracted to direct premise→
+	 *  conclusion over PROPOSITION ids only (the imp hop collapsed). The
+	 *  depth pass consumes these — inference depth is a property of
+	 *  propositions, never of the geometry point (owner, 2026-09-30). */
+	logicalEdges: GraphEdge[];
 	/** The STORED reasoning chains (merged by (premises, conclusion) at
 	 *  read): the chain table's and the practice pipeline's input — they
 	 * read the truth, never the derived fan-out. */

@@ -1062,4 +1062,21 @@ describe("deriveView (the argument's geometry)", () => {
 		assert.deepEqual(view.nodes.map((n) => n.id), ["a"]);
 		assert.deepEqual(view.edges, []);
 	});
+
+	it("LOGICAL edges: every chain contracts to direct premise→conclusion arrows (all chains, deduped)", () => {
+		const view = deriveView({
+			nodes: [prop("a"), prop("b"), prop("c")],
+			chains: [chain("arg_ab", ["a", "b"], "c"), chain("arg_ac", ["a"], "c")],
+		});
+		// arg_ab: a→c AND b→c; arg_ac: a→c again → deduped to one arrow.
+		assert.deepEqual(
+			[...view.logicalEdges].sort((x, y) => (x.from < y.from ? -1 : x.from > y.from ? 1 : x.to < y.to ? -1 : 1)),
+			[
+				{ from: "a", to: "c" },
+				{ from: "b", to: "c" },
+			],
+		);
+		// Proposition ids only — no arg_ endpoint ever rides the logical set.
+		assert.ok(view.logicalEdges.every((e) => !e.from.startsWith("arg_") && !e.to.startsWith("arg_")));
+	});
 });

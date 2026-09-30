@@ -199,6 +199,70 @@ describe("clusterPull (the centroid force)", () => {
 	});
 });
 
+describe("depths over the LOGICAL graph (physics arc, owner 2026-09-30)", () => {
+	it("a multi-premise conclusion sits at premises'+1 — NOT +2 — over logical edges", () => {
+		const props = [{ id: "a" }, { id: "b" }, { id: "c" }];
+		const logical = [
+			{ from: "a", to: "c" },
+			{ from: "b", to: "c" },
+		];
+		const depths = inferenceDepths(props, logical);
+		assert.equal(depths.get("c"), 1, "one inference hop from BOTH premises — the imp point is not a hop");
+	});
+
+	it("the imp node is ABSENT from the rank map (depth is a property of propositions)", () => {
+		const nodes = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "arg_x" }];
+		const logical = [
+			{ from: "a", to: "c" },
+			{ from: "b", to: "c" },
+		];
+		const depths = inferenceDepths(
+			nodes.filter((n) => !n.id.startsWith("arg_")),
+			logical,
+		);
+		assert.ok(!depths.has("arg_x"), "geometry points carry no inference rank");
+		assert.equal(depths.get("c"), 1);
+	});
+
+	it("the depth force EXEMPTS the imp node like an orphan (full gravity, never pinned to a row)", () => {
+		const mk = (id: string, x: number, y: number) => ({ id, x, y });
+		const sim = createGraphSimulation(
+			[mk("a", 0, 0), mk("b", 40, 0), mk("c", 0, -480), mk("arg_x", 20, -100)],
+			// Drawn edges: the imp fan (springs ride these).
+			[
+				{ from: "a", to: "arg_x" },
+				{ from: "b", to: "arg_x" },
+				{ from: "arg_x", to: "c" },
+			],
+			{
+				// The logical edges: what depth consumes.
+				logicalEdges: [
+					{ from: "a", to: "c" },
+					{ from: "b", to: "c" },
+				],
+				depthAnchor: { mode: "vertical", strength: 1, spacing: 500 },
+				gravity: { x: 0, y: 0, strength: 0.1 },
+				chargeStrength: 0,
+				// Weak springs: the rows pin crisply while the exempt imp
+				// node still floats (its signal is WHERE it isn't — on
+				// no row).
+				linkStrength: 0.05,
+			},
+		);
+		for (let i = 0; i < 400; i++) sim.tick();
+		const pos = new Map((sim.nodes() as unknown as { id: string; x: number; y: number }[]).map((n) => [n.id, n]));
+		// Propositions pin to their rows: a/b at depth 0 (y≈0), c at
+		// depth 1 (y≈-500 — targetY = baseY − depth·spacing).
+		assert.ok(Math.abs(pos.get("a")!.y) < 50, `a on row 0 (got ${pos.get("a")!.y.toFixed(1)})`);
+		assert.ok(Math.abs(pos.get("b")!.y) < 50, `b on row 0 (got ${pos.get("b")!.y.toFixed(1)})`);
+		assert.ok(Math.abs(pos.get("c")!.y + 500) < 50, `c on row 1 (got ${pos.get("c")!.y.toFixed(1)})`);
+		// The imp node is exempt: pulled by full gravity toward the
+		// center, NOT stamped onto c's row (old behavior pinned it to
+		// −500 as a depth-1 "node").
+		assert.ok(Math.abs(pos.get("arg_x")!.y) < 250, `arg_x unpinned, floats between levels (got ${pos.get("arg_x")!.y.toFixed(1)})`);
+	});
+});
+
 describe("inferenceDepths (SCC-safe ranking)", () => {
 	const nodes = (ids: string[]) => ids.map((id) => ({ id }));
 

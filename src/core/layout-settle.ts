@@ -1,6 +1,6 @@
 import type { GraphChain, GraphNode, Position } from "./contracts.ts";
 import { incrementalLayout } from "./layout.ts";
-import { birthSessionPartition } from "./session-clusters.ts";
+import { attachImpToCommunities, birthSessionPartition } from "./session-clusters.ts";
 import { deriveView, getGraph } from "./graph.ts";
 
 /**
@@ -39,6 +39,15 @@ export function settleGraphLayout(graphStore: {
 	// PROPOSITIONS ONLY (owner, 2026-09-30): implication nodes never
 	// partition; the stored world clusters, its image follows.
 	const communities = birthSessionPartition(graph.nodes);
-	const next = incrementalLayout(view.nodes, view.edges, previous, { clusters: communities });
+	// The SAME imp-node assignment the snapshot renders (majority among
+	// premises' births — core/session-clusters.ts): the resting ledger and
+	// the live sim must agree on where bundles belong, or the first live
+	// tick would fight the settle. Unfiltered here (settle pulls every
+	// community, hulls are a canvas-only concern).
+	attachImpToCommunities(communities, graph.nodes, graph.chains);
+	const next = incrementalLayout(view.nodes, view.edges, previous, {
+		clusters: communities,
+		logicalEdges: view.logicalEdges,
+	});
 	graphStore.writePositions(Object.fromEntries(next));
 }

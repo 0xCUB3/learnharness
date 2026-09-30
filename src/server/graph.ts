@@ -33,7 +33,10 @@ export function graphView(): GraphSnapshot {
  *  honest, never guessed. A corrupt/empty graph is an empty list. */
 export function graphClusters(): GraphClusterGroup[] {
 	const snap = graphSnapshot(stores);
-	return birthSessionPartition(snap.nodes).map((group) => ({
+	// PROPOSITIONS ONLY: snap.nodes is the canvas image (imp nodes ride
+	// it); the picker offers propositions — an arg_ id in nodeIds would
+	// silently vanish inside chainsForSelection and lie about nodeCount.
+	return birthSessionPartition(snap.propositions).map((group) => ({
 		key: group.id,
 		kind: group.id in snap.sessions ? "chat" : "notes",
 		label: snap.sessions[group.id] ?? snap.fileSources[group.id] ?? null,

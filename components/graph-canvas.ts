@@ -122,6 +122,11 @@ export interface CanvasColors {
 export interface CanvasData {
 	nodes: CanvasNode[];
 	edges: CanvasEdge[];
+	/** The LOGICAL arrows (proposition→conclusion, imp contracted) the
+	 *  depth force consumes — absent = the sim derives depth from the
+	 *  drawn edges (legacy). Optional so non-graph callers of the
+	 *  renderer stay simple. */
+	logicalEdges?: CanvasEdge[];
 	clusters: CanvasCluster[];
 	colors: CanvasColors;
 	/** Body font family (labels must match the app typography). */
@@ -1304,6 +1309,7 @@ export class GraphCanvasRenderer {
 		}
 		const t = this.physicsTuning;
 		this.sim = createGraphSimulation(data.nodes, data.edges, {
+			logicalEdges: data.logicalEdges,
 			gravity: { x: this.simCenter.x, y: this.simCenter.y, strength: t.gravity },
 			alphaDecay: LIVE_ALPHA_DECAY,
 			velocityDecay: t.velocityDecay,

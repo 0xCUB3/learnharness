@@ -177,6 +177,11 @@ export interface SimOptions {
 	velocityDecay?: number;
 	/** Inference-depth anchoring (see DepthAnchor). Off by default. */
 	depthAnchor?: DepthAnchor;
+	/** The LOGICAL edge list (proposition→conclusion, imp hops
+	 *  contracted) for the depth machinery — orphan detection AND the
+	 *  rank pass (owner, 2026-09-30). Absent = `edges` (legacy
+	 *  behavior). Springs ALWAYS run over `edges` — the drawn arrows. */
+	logicalEdges?: ReadonlyArray<LayoutEdge>;
 	/** Cluster centroid pull (the "virtual node" without the node):
 	 *  members of each cluster accelerate toward their own cluster's
 	 *  centroid. Two O(n) passes per tick — cheaper than a real virtual
@@ -288,11 +293,14 @@ export function createGraphSimulation(
 	// depth force and keep the REGULAR view's forces instead (full center
 	// gravity + full cluster pull, unprojected).
 	const mode = options.depthAnchor?.mode ?? "off";
+	// The depth machinery reads the LOGICAL edge list when supplied —
+	// structure is inference over propositions, not the drawn geometry.
+	const depthEdges = options.logicalEdges ?? edges;
 	let orphan: Uint8Array | null = null;
 	if (mode !== "off") {
 		const connected = new Set<string>();
 		const valid = new Set(nodes.map((n) => n.id));
-		for (const e of edges) {
+		for (const e of depthEdges) {
 			// Self-loops and dangling endpoints are not a structure (same
 			// guards as inferenceDepths).
 			if (e.from === e.to || !valid.has(e.from) || !valid.has(e.to)) continue;
@@ -301,7 +309,12 @@ export function createGraphSimulation(
 		}
 		orphan = new Uint8Array(nodes.length);
 		nodes.forEach((n, i) => {
-			if (!connected.has(n.id)) orphan![i] = 1;
+			// IMP EXEMPTION joins the mask (owner, 2026-09-30): depth is a
+			// property of inference over PROPOSITIONS; an implication node
+			// is pure geometry — never pinned to a level, keeps the full
+			// regular forces (gravity, cluster pull, springs), and settles
+			// naturally between premise and conclusion levels.
+			if (!connected.has(n.id) || n.id.startsWith(IMP_ID_PREFIX)) orphan![i] = 1;
 		});
 	}
 	const g = options.gravity;
@@ -402,7 +415,12 @@ export function createGraphSimulation(
 	// organic sag.
 	const da = options.depthAnchor;
 	if (da && da.mode !== "off" && da.strength > 0) {
-		const depths = inferenceDepths(nodes, edges);
+		// Propositions only: imp ids are absent from the rank map by
+		// construction (belt under the orphan-mask exemption).
+		const depths = inferenceDepths(
+			nodes.filter((n) => !n.id.startsWith(IMP_ID_PREFIX)),
+			depthEdges,
+		);
 		const strength = da.strength;
 		const spacing = da.spacing;
 		const c = da.center ?? { x: 0, y: 0 };
@@ -460,6 +478,8 @@ export interface IncrementalLayoutOptions {
 	/** Inference-depth anchoring (see DepthAnchor). `center` defaults to
 	 *  the anchored core's centroid. */
 	depthAnchor?: DepthAnchor;
+	/** The LOGICAL edge list for the depth pass (see SimOptions). */
+	logicalEdges?: ReadonlyArray<LayoutEdge>;
 }
 
 /**
@@ -598,6 +618,7 @@ export function incrementalLayout(
 			options.depthAnchor && options.depthAnchor.mode !== "off"
 				? { ...options.depthAnchor, center: options.depthAnchor.center ?? { x: cx, y: cy } }
 				: options.depthAnchor,
+		logicalEdges: options.logicalEdges,
 	});
 	const dMode = options.depthAnchor?.mode ?? "off";
 	const dCenter = options.depthAnchor?.center ?? { x: cx, y: cy };
