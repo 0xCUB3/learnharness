@@ -1383,6 +1383,7 @@ export function GraphView() {
 			})),
 			edges: snapshot.edges.map((e) => ({ from: e.from, to: e.to })),
 			logicalEdges: snapshot.logicalEdges.map((e) => ({ from: e.from, to: e.to })),
+			impLinks: snapshot.impLinks,
 			clusters: snapshot.clusters.map((c) => ({ id: c.id, label: c.label, members: c.members })),
 			colors: {
 				node: tokenHex(NODE_COLOR_TOKEN),

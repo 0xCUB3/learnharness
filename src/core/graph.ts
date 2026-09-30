@@ -316,7 +316,12 @@ export function getGraph(graphStore: Pick<GraphStore, "readNodes" | "readChains"
  *  regular citizens (half link distance — layout.ts). Dangling chains
  *  (a member node missing) drop here — the deletion cascades should
  *  prevent them; this is the honest belt. */
-export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: GraphEdge[]; logicalEdges: GraphEdge[] } {
+export function deriveView(graph: DerivedGraph): {
+	nodes: GraphNode[];
+	edges: GraphEdge[];
+	logicalEdges: GraphEdge[];
+	impLinks: Array<{ id: string; premises: string[]; conclusion: string }>;
+} {
 	const names: Record<string, { name: string }> = {};
 	for (const node of graph.nodes) names[node.id] = { name: node.name };
 	const live = new Set(graph.nodes.map((node) => node.id));
@@ -326,6 +331,7 @@ export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: Gr
 	// direct premise→conclusion arrows over PROPOSITION ids only —
 	// what inference semantics (the depth pass) consumes. The drawn edges
 	// are the canvas image; these are the meaning.
+	const impLinks: Array<{ id: string; premises: string[]; conclusion: string }> = [];
 	const logicalEdges: GraphEdge[] = [];
 	const logicalSeen = new Set<string>();
 	const emitLogical = (from: string, to: string): void => {
@@ -351,10 +357,13 @@ export function deriveView(graph: DerivedGraph): { nodes: GraphNode[]; edges: Gr
 			createdAt: chain.createdAt,
 			provenance: [...chain.provenance],
 		});
+		// The junction's linkage — what the depth pass needs for the
+		// midpoint anchor (owner, 2026-09-30).
+		impLinks.push({ id: chain.id, premises: [...chain.premises], conclusion: chain.conclusion });
 		for (const premise of chain.premises) edges.push({ from: premise, to: chain.id });
 		edges.push({ from: chain.id, to: chain.conclusion });
 	}
-	return { nodes: [...graph.nodes, ...impNodes], edges, logicalEdges };
+	return { nodes: [...graph.nodes, ...impNodes], edges, logicalEdges, impLinks };
 }
 
 // ─── the /api/graph payload ──────────────────────────────────────────────────
@@ -442,6 +451,7 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 		propositions: graph.nodes,
 		edges: view.edges,
 		logicalEdges: view.logicalEdges,
+		impLinks: view.impLinks,
 		chains: graph.chains,
 		sessions,
 		fileSources,

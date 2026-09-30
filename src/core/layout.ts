@@ -182,6 +182,14 @@ export interface SimOptions {
 	 *  rank pass (owner, 2026-09-30). Absent = `edges` (legacy
 	 *  behavior). Springs ALWAYS run over `edges` — the drawn arrows. */
 	logicalEdges?: ReadonlyArray<LayoutEdge>;
+	/** The derived imp nodes' chain linkage (id + members), straight
+	 *  from deriveView. Drives the IMP MIDPOINT ANCHOR (owner,
+	 *  2026-09-30): an implication node's depth is the average of the
+	 *  HIGHEST premise row and the conclusion's row — strictly above
+	 *  every premise, strictly below the conclusion, uniform in vertical
+	 *  (a row) and radial (a ring) modes. Absent = imp nodes keep the
+	 *  legacy orphan exemption (never depth-anchored). */
+	impLinks?: ReadonlyArray<ImpLink>;
 	/** Cluster centroid pull (the "virtual node" without the node):
 	 *  members of each cluster accelerate toward their own cluster's
 	 *  centroid. Two O(n) passes per tick — cheaper than a real virtual
@@ -198,6 +206,15 @@ export interface SimOptions {
 export interface LayoutEdge {
 	from: string;
 	to: string;
+}
+
+/** A derived implication node's chain linkage — what the depth pass needs
+ *  to anchor the junction between its premises and their conclusion. */
+export interface ImpLink {
+	/** The imp node's id (arg_-prefixed — the stored chain's id). */
+	id: string;
+	premises: ReadonlyArray<string>;
+	conclusion: string;
 }
 
 export const LINK_DISTANCE = 40;
@@ -301,6 +318,7 @@ export function createGraphSimulation(
 	// structure is inference over propositions, not the drawn geometry.
 	const depthEdges = options.logicalEdges ?? edges;
 	let orphan: Uint8Array | null = null;
+	let depthsComputed: Map<string, number> | null = null;
 	if (mode !== "off") {
 		const connected = new Set<string>();
 		const valid = new Set(nodes.map((n) => n.id));
@@ -311,15 +329,42 @@ export function createGraphSimulation(
 			connected.add(e.from);
 			connected.add(e.to);
 		}
+		// Proposition ranks first; then the IMP MIDPOINT ANCHOR (owner,
+		// 2026-09-30): an implication node's depth = (highest premise row
+		// + conclusion row) / 2 — the junction sits strictly above every
+		// premise and strictly below the conclusion (a conclusion is
+		// always ≥ highest premise + 1), uniform in both modes: a row in
+		// vertical, a ring in radial. Imp ids WITHOUT a supplied link
+		// keep the legacy exemption.
+		depthsComputed = inferenceDepths(
+			nodes.filter((n) => !n.id.startsWith(IMP_ID_PREFIX)),
+			depthEdges,
+		);
+		const anchored = new Set<string>();
+		if (options.impLinks) {
+			for (const link of options.impLinks) {
+				const conclusionDepth = depthsComputed.get(link.conclusion);
+				if (conclusionDepth === undefined || link.premises.length === 0) continue;
+				let highest = -Infinity;
+				let complete = true;
+				for (const premise of link.premises) {
+					const d = depthsComputed.get(premise);
+					if (d === undefined) {
+						complete = false;
+						break;
+					}
+					if (d > highest) highest = d;
+				}
+				if (!complete) continue;
+				depthsComputed.set(link.id, (highest + conclusionDepth) / 2);
+				anchored.add(link.id);
+			}
+		}
 		orphan = new Uint8Array(nodes.length);
 		nodes.forEach((n, i) => {
-			// IMP EXEMPTION joins the mask (owner, 2026-09-30): depth is a
-			// property of inference over PROPOSITIONS; an implication node
-			// is pure geometry — never pinned to a level, keeps the
-			// regular forces (cluster pull, springs, and gravity —
-			// horizontal-only in vertical mode, like everyone), and
-			// settles naturally between premise and conclusion levels.
-			if (!connected.has(n.id) || n.id.startsWith(IMP_ID_PREFIX)) orphan![i] = 1;
+			// IMP nodes with a midpoint anchor are STRUCTURED (they sit on
+			// their half-row); unlinked arg_ ids keep the orphan exemption.
+			if (!connected.has(n.id) && !(n.id.startsWith(IMP_ID_PREFIX) && anchored.has(n.id))) orphan![i] = 1;
 		});
 	}
 	const g = options.gravity;
@@ -422,12 +467,9 @@ export function createGraphSimulation(
 	// organic sag.
 	const da = options.depthAnchor;
 	if (da && da.mode !== "off" && da.strength > 0) {
-		// Propositions only: imp ids are absent from the rank map by
-		// construction (belt under the orphan-mask exemption).
-		const depths = inferenceDepths(
-			nodes.filter((n) => !n.id.startsWith(IMP_ID_PREFIX)),
-			depthEdges,
-		);
+		// The rank map (propositions + imp midpoint anchors) was computed
+		// with the orphan mask above — one pass, shared.
+		const depths = depthsComputed!;
 		const strength = da.strength;
 		const spacing = da.spacing;
 		const c = da.center ?? { x: 0, y: 0 };
@@ -487,6 +529,8 @@ export interface IncrementalLayoutOptions {
 	depthAnchor?: DepthAnchor;
 	/** The LOGICAL edge list for the depth pass (see SimOptions). */
 	logicalEdges?: ReadonlyArray<LayoutEdge>;
+	/** The imp chain linkage for the midpoint anchor (see SimOptions). */
+	impLinks?: ReadonlyArray<ImpLink>;
 }
 
 /**
@@ -626,6 +670,7 @@ export function incrementalLayout(
 				? { ...options.depthAnchor, center: options.depthAnchor.center ?? { x: cx, y: cy } }
 				: options.depthAnchor,
 		logicalEdges: options.logicalEdges,
+		impLinks: options.impLinks,
 	});
 	const dMode = options.depthAnchor?.mode ?? "off";
 	const dCenter = options.depthAnchor?.center ?? { x: cx, y: cy };

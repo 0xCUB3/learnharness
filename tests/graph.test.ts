@@ -1079,4 +1079,12 @@ describe("deriveView (the argument's geometry)", () => {
 		// Proposition ids only — no arg_ endpoint ever rides the logical set.
 		assert.ok(view.logicalEdges.every((e) => !e.from.startsWith("arg_") && !e.to.startsWith("arg_")));
 	});
+
+	it("impLinks: one linkage per MULTI-premise chain — the depth pass's midpoint input", () => {
+		const view = deriveView({
+			nodes: [prop("a"), prop("b"), prop("c")],
+			chains: [chain("arg_ab", ["a", "b"], "c"), chain("arg_ac", ["a"], "c")],
+		});
+		assert.deepEqual(view.impLinks, [{ id: "arg_ab", premises: ["a", "b"], conclusion: "c" }]);
+	});
 });

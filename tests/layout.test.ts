@@ -244,7 +244,7 @@ describe("depths over the LOGICAL graph (physics arc, owner 2026-09-30)", () => 
 		assert.ok(Math.abs(pos.get("lonely")!.y - 400) < 5, `lonely y free (got ${pos.get("lonely")!.y.toFixed(1)})`);
 	});
 
-	it("the depth force EXEMPTS the imp node like an orphan (never pinned to a row)", () => {
+	it("the IMP MIDPOINT ANCHOR: the junction pins halfway between premises and conclusion (owner, 2026-09-30)", () => {
 		const mk = (id: string, x: number, y: number) => ({ id, x, y });
 		const sim = createGraphSimulation(
 			[mk("a", 0, 0), mk("b", 40, 0), mk("c", 0, -480), mk("arg_x", 20, -100)],
@@ -260,26 +260,86 @@ describe("depths over the LOGICAL graph (physics arc, owner 2026-09-30)", () => 
 					{ from: "a", to: "c" },
 					{ from: "b", to: "c" },
 				],
+				// The junction's linkage: premises a,b (row 0), conclusion
+				// c (row 1) → the anchor is the AVERAGE, 0.5.
+				impLinks: [{ id: "arg_x", premises: ["a", "b"], conclusion: "c" }],
 				depthAnchor: { mode: "vertical", strength: 1, spacing: 500 },
 				gravity: { x: 0, y: 0, strength: 0.1 },
 				chargeStrength: 0,
-				// Weak springs: the rows pin crisply while the exempt imp
-				// node still floats (its signal is WHERE it isn't — on
-				// no row).
 				linkStrength: 0.05,
 			},
 		);
 		for (let i = 0; i < 400; i++) sim.tick();
 		const pos = new Map((sim.nodes() as unknown as { id: string; x: number; y: number }[]).map((n) => [n.id, n]));
 		// Propositions pin to their rows: a/b at depth 0 (y≈0), c at
-		// depth 1 (y≈-500 — targetY = baseY − depth·spacing).
+		// depth 1 (y≈−500 — targetY = baseY − depth·spacing).
 		assert.ok(Math.abs(pos.get("a")!.y) < 50, `a on row 0 (got ${pos.get("a")!.y.toFixed(1)})`);
 		assert.ok(Math.abs(pos.get("b")!.y) < 50, `b on row 0 (got ${pos.get("b")!.y.toFixed(1)})`);
 		assert.ok(Math.abs(pos.get("c")!.y + 500) < 50, `c on row 1 (got ${pos.get("c")!.y.toFixed(1)})`);
-		// The imp node is exempt: NOT stamped onto c's row (old behavior
-		// pinned it to −500 as a depth-1 "node"); springs alone place
-		// it between the levels.
-		assert.ok(Math.abs(pos.get("arg_x")!.y) < 250, `arg_x unpinned, floats between levels (got ${pos.get("arg_x")!.y.toFixed(1)})`);
+		// The junction pins EXACTLY halfway: (0 + 1)/2 = 0.5 → y≈−250 —
+		// strictly above the premises, strictly below the conclusion.
+		assert.ok(Math.abs(pos.get("arg_x")!.y + 250) < 40, `arg_x on the half-row (got ${pos.get("arg_x")!.y.toFixed(1)})`);
+	});
+
+	it("mixed-depth premises: the HIGHEST premise row is the premises side of the average", () => {
+		const mk = (id: string, x: number, y: number) => ({ id, x, y });
+		const sim = createGraphSimulation(
+			[mk("a", 0, 0), mk("b", 10, 0), mk("c", 0, 0), mk("arg_x", 5, 0)],
+			[
+				{ from: "a", to: "arg_x" },
+				{ from: "b", to: "arg_x" },
+				{ from: "arg_x", to: "c" },
+			],
+			{
+				// a→b→c ladder: b at depth 1, c at depth 2; the chain's
+				// premises are a (0) and b (1), conclusion c (2).
+				logicalEdges: [
+					{ from: "a", to: "b" },
+					{ from: "a", to: "c" },
+					{ from: "b", to: "c" },
+				],
+				impLinks: [{ id: "arg_x", premises: ["a", "b"], conclusion: "c" }],
+				depthAnchor: { mode: "vertical", strength: 1, spacing: 400 },
+				gravity: { x: 0, y: 0, strength: 0.1 },
+				chargeStrength: 0,
+				linkStrength: 0.05,
+			},
+		);
+		for (let i = 0; i < 400; i++) sim.tick();
+		const pos = new Map((sim.nodes() as unknown as { id: string; x: number; y: number }[]).map((n) => [n.id, n]));
+		assert.ok(Math.abs(pos.get("a")!.y) < 40, `a on row 0 (got ${pos.get("a")!.y.toFixed(1)})`);
+		assert.ok(Math.abs(pos.get("b")!.y + 400) < 40, `b on row 1 (got ${pos.get("b")!.y.toFixed(1)})`);
+		assert.ok(Math.abs(pos.get("c")!.y + 800) < 40, `c on row 2 (got ${pos.get("c")!.y.toFixed(1)})`);
+		// (highest premise 1 + conclusion 2) / 2 = 1.5 → y≈−600.
+		assert.ok(Math.abs(pos.get("arg_x")!.y + 600) < 40, `arg_x on the 1.5 half-row (got ${pos.get("arg_x")!.y.toFixed(1)})`);
+	});
+
+	it("WITHOUT impLinks the imp node keeps the legacy exemption (never depth-anchored)", () => {
+		const mk = (id: string, x: number, y: number) => ({ id, x, y });
+		const sim = createGraphSimulation(
+			[mk("a", 0, 0), mk("b", 40, 0), mk("c", 0, -480), mk("arg_x", 20, -100)],
+			[
+				{ from: "a", to: "arg_x" },
+				{ from: "b", to: "arg_x" },
+				{ from: "arg_x", to: "c" },
+			],
+			{
+				logicalEdges: [
+					{ from: "a", to: "c" },
+					{ from: "b", to: "c" },
+				],
+				depthAnchor: { mode: "vertical", strength: 1, spacing: 500 },
+				gravity: { x: 0, y: 0, strength: 0.1 },
+				chargeStrength: 0,
+				linkStrength: 0.05,
+			},
+		);
+		for (let i = 0; i < 400; i++) sim.tick();
+		const pos = new Map((sim.nodes() as unknown as { id: string; x: number; y: number }[]).map((n) => [n.id, n]));
+		assert.ok(Math.abs(pos.get("c")!.y + 500) < 50, "c on row 1");
+		// No linkage supplied: no half-row, no stamping — springs alone
+		// place it between the levels.
+		assert.ok(Math.abs(pos.get("arg_x")!.y) < 250, `arg_x unanchored (got ${pos.get("arg_x")!.y.toFixed(1)})`);
 	});
 });
 

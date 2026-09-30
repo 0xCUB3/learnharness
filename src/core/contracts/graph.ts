@@ -319,6 +319,11 @@ export interface GraphSnapshot {
 	 *  depth pass consumes these — inference depth is a property of
 	 *  propositions, never of the geometry point (owner, 2026-09-30). */
 	logicalEdges: GraphEdge[];
+	/** DERIVED imp linkage (one per MULTI-premise live chain): the depth
+	 *  pass anchors each junction at the average of the highest premise
+	 *  row and the conclusion's row (owner, 2026-09-30) — strictly
+	 *  above the premises, strictly below the conclusion. */
+	impLinks: Array<{ id: string; premises: string[]; conclusion: string }>;
 	/** The STORED reasoning chains (merged by (premises, conclusion) at
 	 *  read): the chain table's and the practice pipeline's input — they
 	 * read the truth, never the derived fan-out. */

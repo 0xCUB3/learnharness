@@ -48,6 +48,7 @@ export function settleGraphLayout(graphStore: {
 	const next = incrementalLayout(view.nodes, view.edges, previous, {
 		clusters: communities,
 		logicalEdges: view.logicalEdges,
+		impLinks: view.impLinks,
 	});
 	graphStore.writePositions(Object.fromEntries(next));
 }

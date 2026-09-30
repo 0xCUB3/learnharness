@@ -33,6 +33,7 @@ function main() {
 	const view = deriveView(graph);
 	const edges = view.edges;
 	const logicalEdges = view.logicalEdges;
+	const impLinks = view.impLinks;
 	const viewNodeById = new Map(view.nodes.map((n) => [n.id, n]));
 	const chains = graph.chains;
 	// An implication node is delivered the moment its chain is complete
@@ -112,6 +113,9 @@ function main() {
 							...(depthMode === "radial" ? { baseRadius: 220 } : {}),
 						},
 						logicalEdges: activeLogical,
+						// A junction's anchor lights up exactly when the
+						// chain is delivered (its members all arrived).
+						impLinks: impLinks.filter((l) => delivered.has(l.id)),
 					}),
 		});
 		for (const [id, prev] of before) {

@@ -127,6 +127,9 @@ export interface CanvasData {
 	 *  drawn edges (legacy). Optional so non-graph callers of the
 	 *  renderer stay simple. */
 	logicalEdges?: CanvasEdge[];
+	/** The imp chain linkage — the depth pass anchors each junction at
+	 *  the premises/conclusion midpoint (owner, 2026-09-30). */
+	impLinks?: ReadonlyArray<{ id: string; premises: ReadonlyArray<string>; conclusion: string }>;
 	clusters: CanvasCluster[];
 	colors: CanvasColors;
 	/** Body font family (labels must match the app typography). */
@@ -1310,6 +1313,7 @@ export class GraphCanvasRenderer {
 		const t = this.physicsTuning;
 		this.sim = createGraphSimulation(data.nodes, data.edges, {
 			logicalEdges: data.logicalEdges,
+			impLinks: data.impLinks,
 			gravity: { x: this.simCenter.x, y: this.simCenter.y, strength: t.gravity },
 			alphaDecay: LIVE_ALPHA_DECAY,
 			velocityDecay: t.velocityDecay,
