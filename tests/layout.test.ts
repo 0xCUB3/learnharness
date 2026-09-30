@@ -224,7 +224,27 @@ describe("depths over the LOGICAL graph (physics arc, owner 2026-09-30)", () => 
 		assert.equal(depths.get("c"), 1);
 	});
 
-	it("the depth force EXEMPTS the imp node like an orphan (full gravity, never pinned to a row)", () => {
+	it("VERTICAL mode: the central pole is horizontal-ONLY for everyone — orphans included (owner, 2026-09-30)", () => {
+		const mk = (id: string, x: number, y: number) => ({ id, x, y });
+		const sim = createGraphSimulation(
+			[mk("a", 0, 0), mk("b", 40, 0), mk("lonely", 500, 400)],
+			[{ from: "a", to: "b" }],
+			{
+				depthAnchor: { mode: "vertical", strength: 1, spacing: 60 },
+				gravity: { x: 0, y: 0, strength: 0.1 },
+				chargeStrength: 0,
+			},
+		);
+		for (let i = 0; i < 400; i++) sim.tick();
+		const pos = new Map((sim.nodes() as unknown as { id: string; x: number; y: number }[]).map((n) => [n.id, n]));
+		// The orphan converges on x (the pole is still a pole)...
+		assert.ok(Math.abs(pos.get("lonely")!.x) < 50, `lonely x pulled to center (got ${pos.get("lonely")!.x.toFixed(1)})`);
+		// ...but its y is UNTOUCHED — no row to sit on, no sag toward the
+		// pole (old behavior dragged it to y≈0).
+		assert.ok(Math.abs(pos.get("lonely")!.y - 400) < 5, `lonely y free (got ${pos.get("lonely")!.y.toFixed(1)})`);
+	});
+
+	it("the depth force EXEMPTS the imp node like an orphan (never pinned to a row)", () => {
 		const mk = (id: string, x: number, y: number) => ({ id, x, y });
 		const sim = createGraphSimulation(
 			[mk("a", 0, 0), mk("b", 40, 0), mk("c", 0, -480), mk("arg_x", 20, -100)],
@@ -256,9 +276,9 @@ describe("depths over the LOGICAL graph (physics arc, owner 2026-09-30)", () => 
 		assert.ok(Math.abs(pos.get("a")!.y) < 50, `a on row 0 (got ${pos.get("a")!.y.toFixed(1)})`);
 		assert.ok(Math.abs(pos.get("b")!.y) < 50, `b on row 0 (got ${pos.get("b")!.y.toFixed(1)})`);
 		assert.ok(Math.abs(pos.get("c")!.y + 500) < 50, `c on row 1 (got ${pos.get("c")!.y.toFixed(1)})`);
-		// The imp node is exempt: pulled by full gravity toward the
-		// center, NOT stamped onto c's row (old behavior pinned it to
-		// −500 as a depth-1 "node").
+		// The imp node is exempt: NOT stamped onto c's row (old behavior
+		// pinned it to −500 as a depth-1 "node"); springs alone place
+		// it between the levels.
 		assert.ok(Math.abs(pos.get("arg_x")!.y) < 250, `arg_x unpinned, floats between levels (got ${pos.get("arg_x")!.y.toFixed(1)})`);
 	});
 });
@@ -363,27 +383,30 @@ describe("depthAnchor force", () => {
 		assert.ok(child.y < old.y - 40, `child rises above its premises (child=${child.y.toFixed(1)}, old=${old.y.toFixed(1)})`);
 	});
 
-	it("orphans are exempt from depth anchoring — regular forces govern them (ORPHAN RULE)", () => {
+	it("orphans are exempt from depth anchoring — y is FREE, the pole is horizontal (ORPHAN RULE, amended 2026-09-30)", () => {
 		// A premise→conclusion chain plus an unconnected loner. Gravity's
-		// center is FAR from the baseline, so the two are distinguishable:
-		// a depth-stamped orphan would sit on the baseline; an exempt one
-		// follows gravity instead.
+		// center is FAR off-axis, so the forces are distinguishable: a
+		// depth-stamped orphan would sit on the baseline; the pre-amend
+		// exempt one sagged to gravity's y. Since the owner's 2026-09-30
+		// amendment the vertical pole is horizontal-ONLY for everyone —
+		// the orphan keeps its y and follows gravity on x alone.
 		const ns = [
 			{ id: "base", x: 0, y: 0 },
 			{ id: "derived", x: 10, y: 0 },
-			{ id: "loner", x: 0, y: 0 },
+			{ id: "loner", x: 400, y: -80 },
 		];
 		const sim = createGraphSimulation(ns, [{ from: "base", to: "derived" }], {
 			gravity: { x: 0, y: 500, strength: 0.1 },
 			depthAnchor: { mode: "vertical", strength: 1.5, spacing: 120, center: { x: 0, y: 0 } },
+			chargeStrength: 0,
 		});
 		for (let i = 0; i < 400; i++) sim.tick();
 		const byId = new Map(sim.nodes().map((n) => [n.id, n]));
 		assert.ok(Math.abs(byId.get("base")!.y!) < 40, "structured base sits on the baseline");
 		assert.ok(byId.get("derived")!.y! < -60, "derived rises a level");
-		const lonerY = byId.get("loner")!.y!;
-		assert.ok(lonerY > 250, `the orphan follows gravity, not the baseline (y=${lonerY.toFixed(0)})`);
-		assert.ok(Math.abs(lonerY - 500) < 120, `the orphan converges on gravity's center (y=${lonerY.toFixed(0)})`);
+		const loner = byId.get("loner")!;
+		assert.ok(Math.abs(loner.y! - (-80)) < 5, `the orphan's y is untouched (y=${loner.y!.toFixed(0)})`);
+		assert.ok(Math.abs(loner.x!) < 60, `the orphan still converges on the pole horizontally (x=${loner.x!.toFixed(0)})`);
 	});
 
 	it("radial: orphans are exempt — they gather at the center, not on the base ring", () => {

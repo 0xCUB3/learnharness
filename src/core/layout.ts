@@ -291,7 +291,11 @@ export function createGraphSimulation(
 	// stamping unconnected propositions onto the baseline / base ring
 	// assigns them meaning they don't have. Orphans are exempt from the
 	// depth force and keep the REGULAR view's forces instead (full center
-	// gravity + full cluster pull, unprojected).
+	// gravity + full cluster pull, unprojected). AMENDED (owner,
+	// 2026-09-30 physics follow-up): in VERTICAL mode the central pole is
+	// a HORIZONTAL force for everyone — structured and orphan/imp alike —
+	// y belongs to the depth rows and to nothing else; the full regular
+	// pull survives only in radial mode (where the rings own the radius).
 	const mode = options.depthAnchor?.mode ?? "off";
 	// The depth machinery reads the LOGICAL edge list when supplied —
 	// structure is inference over propositions, not the drawn geometry.
@@ -311,9 +315,10 @@ export function createGraphSimulation(
 		nodes.forEach((n, i) => {
 			// IMP EXEMPTION joins the mask (owner, 2026-09-30): depth is a
 			// property of inference over PROPOSITIONS; an implication node
-			// is pure geometry — never pinned to a level, keeps the full
-			// regular forces (gravity, cluster pull, springs), and settles
-			// naturally between premise and conclusion levels.
+			// is pure geometry — never pinned to a level, keeps the
+			// regular forces (cluster pull, springs, and gravity —
+			// horizontal-only in vertical mode, like everyone), and
+			// settles naturally between premise and conclusion levels.
 			if (!connected.has(n.id) || n.id.startsWith(IMP_ID_PREFIX)) orphan![i] = 1;
 		});
 	}
@@ -323,19 +328,21 @@ export function createGraphSimulation(
 		sim.force("y", forceY<LayoutNode>(g.y).strength(g.strength));
 	} else if (g) {
 		// Mode-projected gravity, EXACTLY d3's forceX/forceY math (restoring
-		// force × strength × alpha): structured nodes get x-only in vertical
-		// mode (the depth force owns y) and none in radial mode (the rings
-		// own the radius); ORPHANS get the full regular-view pull in every
-		// mode.
+		// force × strength × alpha). VERTICAL (owner, 2026-09-30 physics
+		// follow-up): the central pole is horizontal-ONLY for EVERY node —
+		// structured (the depth force owns y) and orphan/imp alike (an
+		// unstructured node has no row to sit on and no pole to sag
+		// toward; its y is free). RADIAL: orphans keep the full regular
+		// pull; structured nodes get nothing (the rings own the radius).
 		const orphanMask = orphan!;
 		sim.force("gravity", (alpha: number) => {
 			for (let i = 0; i < nodes.length; i++) {
 				const n = nodes[i]!;
-				if (orphanMask[i]) {
+				if (mode === "vertical") {
+					n.vx = (n.vx ?? 0) + (g.x - (n.x ?? 0)) * g.strength * alpha;
+				} else if (orphanMask[i]) {
 					n.vx = (n.vx ?? 0) + (g.x - (n.x ?? 0)) * g.strength * alpha;
 					n.vy = (n.vy ?? 0) + (g.y - (n.y ?? 0)) * g.strength * alpha;
-				} else if (mode === "vertical") {
-					n.vx = (n.vx ?? 0) + (g.x - (n.x ?? 0)) * g.strength * alpha;
 				}
 				// radial + structured: nothing — the rings own the radius.
 			}
