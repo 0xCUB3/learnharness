@@ -45,7 +45,6 @@ export const BACKGROUND_MODEL_ROLES = [
 	"demoBuilder",
 	"visualMaker",
 	"extractor",
-	"spine",
 	"auditor",
 	"partitioner",
 	"problemGenerator",
@@ -227,10 +226,6 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	researcher: "cheap",
 	demoBuilder: "cheap",
 	extractor: "cheap",
-	// The spine (2026-09-30): cross-stretch assembly — judgment-dense
-	// work over the whole same-source digest, strong tier like the
-	// practice trio.
-	spine: "strong",
 	auditor: "cheap",
 	visualMaker: "vision",
 	pdfReader: "vision",

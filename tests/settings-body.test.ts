@@ -49,7 +49,7 @@ describe("parseAgentSettingsBody", () => {
 		});
 		const bad = parseAgentSettingsBody({ models: { teacher: {} } });
 		assert.equal(bad.ok, false);
-		if (!bad.ok) assert.match(bad.error, /unknown role "teacher" \(supported: researcher, demoBuilder, visualMaker, extractor, spine, auditor, partitioner, problemGenerator, grader\)/);
+		if (!bad.ok) assert.match(bad.error, /unknown role "teacher" \(supported: researcher, demoBuilder, visualMaker, extractor, auditor, partitioner, problemGenerator, grader\)/);
 		const malformed = parseAgentSettingsBody({ models: { researcher: { model: { provider: 1, id: "x" } } } });
 		assert.equal(malformed.ok, false);
 	});

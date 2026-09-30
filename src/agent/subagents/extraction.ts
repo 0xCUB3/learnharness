@@ -23,7 +23,7 @@ import type {
 	ExtractionStageUsage,
 	SessionFindings,
 } from "../../core/contracts.ts";
-import { getGraph, mergeFindings, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
+import { getGraph, mergeFindings, type DerivedGraph, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
 import type { GraphStore } from "../../core/ports.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts";
@@ -31,38 +31,43 @@ import { teacherProseBlocks } from "../../core/coverage.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { auditorGraphTools } from "../tools/graph.ts";
 import { runSubmitAgent, healStringifiedArrays } from "./submit-agent.ts";
-import {
-	SPINE_INSTRUCTIONS,
-	NOTES_SPINE_INSTRUCTIONS,
-	SPINE_EMPTY,
-	buildSpinePrompt,
-	combineFindings,
-	runSpine,
-	spineHasDigest,
-	type SpineSubmit,
-} from "./spine.ts";
 
 /**
  * The extraction pipeline (vision §1 construction, 2026-09-02 redesign;
  * relinked 2026-09-27) — the sole graph writer. Three stages, one
- * orchestrator:
+ * orchestrator (the spine stage came and went, 2026-09-30: serialized
+ * digest-aware extraction replaced it — the owner's live test showed
+ * the post-hoc assembly pass added complexity without perceptible
+ * gain; the extractor itself is the assembler now):
  *
  *   extractor (LLM)  the ONE stage that sees the raw source (a session
  *                    rendered as the teacher's prose, or a notes file
- *                    verbatim) → submits propositions + REASONING CHAINS
- *                    (owner redesign, 2026-09-30), expanded at the seam to
- *                    SessionFindings' follows-edges. TREE-BLIND,
- *                    graph-blind, FULLY TRUSTED — nothing downstream
- *                    re-checks it.
+ *                    verbatim, walked in stretches) → submits NEW core
+ *                    ideas + reasoning chains (owner redesign,
+ *                    2026-09-30). DIGEST-AWARE (2026-09-30 evening):
+ *                    when the source already yielded material, the
+ *                    prompt carries THE GRAPH SO FAR (that source's
+ *                    propositions + chains, ids verbatim) and the
+ *                    extractor builds on it — referencing existing ids
+ *                    instead of restating, leaning on established
+ *                    conclusions as premises. Stretches of one source
+ *                    run SERIALLY (each extract reads every earlier
+ *                    merge); tree-blind, FULLY TRUSTED — nothing
+ *                    downstream re-checks it.
  *   auditor (LLM)    never sees the source. Its job is IDENTITY: for each
- *                    proposition, linkTo an existing graph node or create —
- *                    decided by EXPLORING the graph through tools (find /
- *                    list_sessions / list_propositions), not by an injected
- *                    graph dump (context bloat, owner 2026-09-27). Links are
- *                    its ONLY deliverable — it never mints edges (owner
- *                    2026-09-28: the graph connects across sources solely
- *                    through identified equivalences).
- *   merger (core)    mergeFindings() → deterministic ledger appends
+ *                    NEW proposition, linkTo an existing graph node or
+ *                    create — decided by EXPLORING the graph through
+ *                    tools (find / list_sessions / list_propositions),
+ *                    not by an injected graph dump (context bloat,
+ *                    owner 2026-09-27). Links are its ONLY deliverable
+ *                    — it never mints edges (owner 2026-09-28: the
+ *                    graph connects across sources solely through
+ *                    identified equivalences). Input is PROPOSITIONS
+ *                    only — never chains (owner 2026-09-30).
+ *   merger (core)    mergeFindings() → deterministic ledger appends +
+ *                    chain simplification (2026-09-30 evening: the
+ *                    ancestry-cover / prefer-fewest-premises pass that
+ *                    strips redundant derivations — core/graph.ts)
  *
  * The events ledger is GONE (2026-09-27): quiz outcomes and understanding
  * observations are no longer formalized in the graph — the graph is purely
@@ -126,7 +131,7 @@ function proseView(messages: ReadonlyArray<LhMessage>, title?: string): string {
 // ─── the extractor ──────────────────────────────────────────────────────────
 
 const propositionProps = {
-	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by chains.' }),
+	id: Type.String({ description: 'Local id: "p1", "p2", … — referenced by chains in this call.' }),
 	name: Type.String({
 		description:
 			"A very short label — established terminology, the term the discipline itself uses, a glossary " +
@@ -135,7 +140,7 @@ const propositionProps = {
 	}),
 	statement: Type.String({
 		description:
-			"One true, self-contained, world-facing reasoning step at full precision. Never about the " +
+			"One true, self-contained, world-facing core idea at full precision. Never about the " +
 			'learner, the teacher, or the reading: not "the learner understands X" but "X". A misconception ' +
 			"enters as its TRUE correction.",
 	}),
@@ -150,13 +155,20 @@ const propositionProps = {
 // REASONING CHAINS — premises + conclusion — stored AS-IS (chains-primary,
 // same evening: chains.jsonl is the truth; edges are a derived view, and
 // supports edges are retired entirely).
+const endpoint = (role: string) =>
+	Type.String({
+		description:
+			`The id this ${role} — EITHER an existing graph idea id from THE GRAPH SO FAR in the prompt, ` +
+			'verbatim ("n_…"), OR the local id of a proposition in this submission ("p1", …).',
+	});
+
 const chainSchema = Type.Object({
-	premises: Type.Array(Type.String(), {
+	premises: Type.Array(endpoint("premise uses"), {
 		minItems: 1,
 		description:
-			"Proposition ids used TOGETHER: they jointly entail the conclusion; independent reasons are separate chains.",
+			"Premise ids used TOGETHER: they jointly entail the conclusion; independent reasons are separate chains.",
 	}),
-	conclusion: Type.String({ description: "The proposition id the premises jointly imply." }),
+	conclusion: endpoint("conclusion is"),
 });
 
 // Weak-model tolerance (owner, 2026-09-25): the old zod `.default([])` /
@@ -166,13 +178,15 @@ const chainSchema = Type.Object({
 // no zod left in the agent band.
 const findingsProps = {
 	propositions: Type.Array(Type.Object(propositionProps), {
-		description: "The propositions themselves — every distinct proposition the source's reasoning uses.",
+		description:
+			"Only the NEW core ideas this stretch contributes — ideas the prompt's THE GRAPH SO FAR already " +
+			"holds are referenced by id in chains, never restated here.",
 	}),
 	chains: Type.Array(chainSchema, {
 		description:
-			"Every argument the source makes; conclusions reusable by id as premises of later chains; " +
-			"bare propositions (no argument) ride the propositions list alone; pass [] when none — " +
-			"never omit the field.",
+			"Every argument this stretch makes — including arguments that join new ideas to established " +
+			"ones; conclusions reusable by id as premises of later chains; bare ideas (no argument) ride " +
+			"the propositions list alone; pass [] when none — never omit the field.",
 	}),
 };
 
@@ -226,21 +240,24 @@ function fillFindings(raw: FindingsSubmit): FindingsSubmit {
 	};
 }
 
-/** The chain laws (extractor redesign, 2026-09-30) — the LOUD channel:
- *  runSubmitAgent turns a problem string into an error tool result and
- *  the model re-submits within its turns (the practice-proven hook).
- *  Identical (premise-set, conclusion) chains are NOT errors — they
- *  dedupe silently at the merge (chainKey): restating an argument is a
- *  no-op. */
-function validateFindingsChains(value: FindingsSubmit): string | null {
+/** The chain laws (extractor redesign, 2026-09-30; digest-aware
+ *  2026-09-30 evening) — the LOUD channel: runSubmitAgent turns a
+ *  problem string into an error tool result and the model re-submits
+ *  within its turns (the practice-proven hook). The MIXED NAMESPACE: an
+ *  endpoint resolves when it is a submitted proposition id OR an
+ *  existing graph node id (the extractor continues a partly-extracted
+ *  source and references digest ids verbatim). Identical (premise-set,
+ *  conclusion) chains are NOT errors — they dedupe silently at the
+ *  merge (chainKey): restating an argument is a no-op. */
+function validateFindingsChains(value: FindingsSubmit, existingIds: ReadonlySet<string>): string | null {
 	const ids = new Set(value.propositions.map((p) => p.id));
 	for (const chain of value.chains) {
 		if (chain.premises.length === 0) {
 			return "chains: premises must name at least one proposition — a proposition with no argument stays in the propositions list alone.";
 		}
-		const unknown = [...chain.premises, chain.conclusion].find((id) => !ids.has(id));
+		const unknown = [...chain.premises, chain.conclusion].find((id) => !ids.has(id) && !existingIds.has(id));
 		if (unknown !== undefined) {
-			return `chains: "${unknown}" is not one of the submitted proposition ids — every premise and conclusion must appear in this call's propositions.`;
+			return `chains: "${unknown}" is neither a submitted proposition id nor an existing idea id from THE GRAPH SO FAR — every premise and conclusion must resolve.`;
 		}
 		if (chain.premises.includes(chain.conclusion)) {
 			return "chains: a conclusion cannot be its own premise.";
@@ -277,59 +294,98 @@ function fillAudit(raw: Static<typeof auditSchema>): AuditVerdicts {
 // 2026-09-28 teacher-prose ruling and is simply omitted.)
 
 export const SESSION_PREAMBLE =
-	"You are the extraction stage of a learning application. You read one source — a teaching session, " +
-	"rendered as the teacher's prose in reading order — and report what it teaches as findings for the " +
-	"learner's global knowledge graph.";
+	"You are the extraction stage of a learning application. You read one stretch of a source — a teaching " +
+	"session, rendered as the teacher's prose in reading order — and report what it teaches as findings " +
+	"for the learner's global knowledge graph, building on everything already extracted from this source.";
 
 export const NOTES_PREAMBLE =
-	"You are the extraction stage of a learning application. You read one source — one chunk of the " +
+	"You are the extraction stage of a learning application. You read one stretch of a source — the " +
 	"author's personal notes, rendered in reading order — and report what it teaches as findings for the " +
-	"learner's global knowledge graph.";
+	"learner's global knowledge graph, building on everything already extracted from this source.";
 
-export const EXTRACTION_CORE = `THE GOAL: extract the source's REASONING CHAINS. The source teaches by making arguments — propositions
-worked out from other propositions. Your deliverable is twofold: the propositions themselves, and every
-argument the source makes. Each argument is a chain: premises that JOINTLY entail a conclusion.
-Entailment is the only link that earns a chain — where the real connection is historical or narrative
-(who argued what, how a debate or exposition unfolds), there is no chain; keep the pieces as bare
-propositions or drop them.
+export const EXTRACTION_CORE = `THE GOAL: uncover the source's CORE IDEAS and show how everything derives from the foundations. The
+source teaches by arguing — ideas worked out from other ideas, down to a foundation the rest stands on.
+Your deliverable is twofold: the core ideas themselves, and the chains of reasoning that derive them.
+Each chain is premises that JOINTLY entail a conclusion. Entailment is the only link that earns a
+chain — where the real connection is historical or narrative (who argued what, how a debate or
+exposition unfolds), there is no chain; keep the pieces as bare ideas or drop them. The direction of
+the graph is upward: foundational ideas at the bottom, derived ideas above them, each chain showing
+how its conclusion follows from what is more established — do not submit connections that carry no
+derivation.
 
-The graph holds TRUE propositions about the world, nothing else — never anything about the learner, the
+The graph holds TRUE ideas about the world, nothing else — never anything about the learner, the
 teacher, or this reading: not "the learner understands X" but X. A misconception enters as its TRUE
-correction. Each statement is one self-contained reasoning step at full precision.
+correction. Each statement is one self-contained idea at full precision.
 
-Extract the load-bearing ideas of the subject — what a reference on it would teach — not the full run of
-the discourse. The graph stores propositions as STEPS OF REASONING: a proposition earns its place only
-when the source's arguments run through it — examples, notation glosses, and restatements that no
-argument needs are not steps. Every proposition must stand alone for a reader who never saw this source:
-names and statements may not lean on the source's own scaffolding (claim numbering, axiom tags, arc
-labels); a claim that only matters as part of how this document is organized is not knowledge — drop it.
+Extract the load-bearing ideas of the subject — what a reference on it would teach — not the full run
+of the discourse. An idea earns its place only when the source's arguments run through it — examples,
+notation glosses, and restatements that no argument needs are not core ideas. Every idea must stand
+alone for a reader who never saw this source: names and statements may not lean on the source's own
+scaffolding (claim numbering, axiom tags, arc labels); a claim that only matters as part of how this
+document is organized is not knowledge — drop it.
 
-SUBMIT with one submit_findings call: every proposition with a short name and a precise statement, and
-every chain as premises + conclusion. Premises within one chain are used TOGETHER — independent arguments
-for the same conclusion are separate chains. A conclusion may reappear, by id, as a premise of later
-chains. Include every field even when empty — "chains": [] when the source makes no arguments. The
-tool's field descriptions carry the details.`;
+When the prompt carries THE GRAPH SO FAR, you are continuing a source already partly extracted: build
+on it. Reference an existing idea by its id ("n_…") instead of restating it, and prefer chains that
+lean on established conclusions as premises — derive new material from what is already derived. Do
+not re-derive a conclusion the graph already holds unless the route is genuinely different.
+
+SUBMIT with one submit_findings call: every NEW core idea with a short name and a precise statement,
+and every chain as premises + conclusion. A chain's premises and conclusion may be ids from this
+submission OR existing ids from THE GRAPH SO FAR, verbatim. Premises within one chain are used
+TOGETHER — independent arguments for the same conclusion are separate chains. A conclusion may
+reappear, by id, as a premise of later chains. A bare idea that no argument uses rides the
+propositions list alone. Include every field even when empty — "chains": [] when the source makes no
+arguments. The tool's field descriptions carry the details.`;
 
 export const EXTRACTOR_INSTRUCTIONS = `${SESSION_PREAMBLE}\n\n${EXTRACTION_CORE}`;
 export const NOTES_EXTRACTOR_INSTRUCTIONS = `${NOTES_PREAMBLE}\n\n${EXTRACTION_CORE}`;
+
+// ── the same-source digest (owner, 2026-09-30 evening) ──
+//
+// Serialized digest-aware extraction REPLACED the spine stage (owner
+// ruling after the live test: the post-hoc assembly pass added
+// complexity without perceptible gain — the extractor itself is the
+// assembler when it can see what its source has already yielded). Pure
+// string fold over the derived graph; "" when the source owns nothing
+// yet (the first stretch runs bare). Ids ride VERBATIM — that is what
+// the extractor references in its chains (the merger's mixed-namespace
+// resolution passes them through).
+export function sourceDigest(graph: DerivedGraph, sourceId: string): string {
+	const nameOf = new Map(graph.nodes.map((n) => [n.id, n.name]));
+	const ours = graph.nodes.filter((n) => n.provenance.some((pt) => pt.chatId === sourceId));
+	const ourChains = graph.chains.filter((c) => c.provenance.some((pt) => pt.chatId === sourceId));
+	if (ours.length === 0 && ourChains.length === 0) return "";
+	const lines: string[] = [];
+	lines.push("THE GRAPH SO FAR — everything already extracted from this source (reference these ids verbatim):");
+	for (const n of ours) lines.push(`  ${n.id} | ${n.name} | ${n.statement.replace(/\s+/g, " ")}`);
+	if (ourChains.length > 0) {
+		lines.push("DERIVATIONS ALREADY RECORDED (build on these; do not re-derive them):");
+		for (const c of ourChains) {
+			const names = c.premises.map((p) => nameOf.get(p) ?? p).join(" ∧ ");
+			lines.push(`  [${c.premises.join(" + ")} ⇒ ${c.conclusion}]  ${names} ⇒ ${nameOf.get(c.conclusion) ?? c.conclusion}`);
+		}
+	}
+	return lines.join("\n");
+}
 
 /** The extractor over ONE session transcript (the chat front door). */
 function runExtractor(
 	engine: PiEngine | undefined,
 	prompt: string,
+	existingIds: ReadonlySet<string>,
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
 ): Promise<SessionFindings> {
-	// Chains in (the wire), follows-edges out (the pipeline) — the
-	// translation seam of the 2026-09-30 redesign. Validation runs at the
-	// submit seam (error-back); expansion runs once, after a clean submit.
+	// Chains in (the wire), chains out (the store) — no translation seam
+	// since chains-primary. Validation runs at the submit seam (error-back)
+	// over the MIXED namespace: local ids + existing graph ids.
 	return runSubmitAgent<FindingsSubmit>({
 		role: "extractor",
 		toolName: "submit_findings",
 		toolDescription: "Submit the session findings.",
 		parameters: findingsSchema,
 		fill: fillFindings,
-		validate: validateFindingsChains,
+		validate: (value) => validateFindingsChains(value, existingIds),
 		systemPrompt: EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -345,6 +401,7 @@ function runExtractor(
 function runNotesExtractor(
 	engine: PiEngine | undefined,
 	prompt: string,
+	existingIds: ReadonlySet<string>,
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
 ): Promise<NotesFindings> {
@@ -354,7 +411,7 @@ function runNotesExtractor(
 		toolDescription: "Submit the notes findings.",
 		parameters: findingsSchema,
 		fill: fillFindings,
-		validate: validateFindingsChains,
+		validate: (value) => validateFindingsChains(value, existingIds),
 		systemPrompt: NOTES_EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -446,7 +503,7 @@ function runAuditor(
  *  audit+merge critical section is queued behind another job's; the
  *  extractor is done but the auditor may not start until the graph is
  *  stable. */
-export type ExtractionPhase = "queued" | "extracting" | "waiting" | "assembling" | "auditing" | "merging";
+export type ExtractionPhase = "queued" | "extracting" | "waiting" | "auditing" | "merging";
 
 /** One in-flight pipeline run. Module-level: one process, one registry.
  *  Exported for the status payload's consumer typing (the dock). */
@@ -473,7 +530,6 @@ export interface RunningExtraction {
 	 *  context-window blobs read this through /api/graph/status). */
 	usage: {
 		extractor?: ExtractionStageUsage;
-		spine?: ExtractionStageUsage;
 		auditor?: ExtractionStageUsage;
 	};
 	/** True-cancellation handle (the dock's abort button): one controller per
@@ -543,7 +599,6 @@ export interface ExtractionModels {
 	/** Test seam: a scripted engine per stage — checked FIRST, ahead of the
 	 *  engineFor chain (production wires no direct values). */
 	extractor?: PiEngine;
-	spine?: PiEngine;
 	auditor?: PiEngine;
 	/** Settings-resolved engine per role — the same slot treatment the
 	 *  job runner got, read FRESH per stage call (a settings PUT between
@@ -622,7 +677,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	function refuseIfStagesUnready(): void {
 		const stages: readonly [ModelRole, PiEngine | undefined][] = [
 			["extractor", stageEngine("extractor", deps.extractor)],
-			["spine", stageEngine("spine", deps.spine)],
 			["auditor", stageEngine("auditor", deps.auditor)],
 		];
 		const missing = new Set<ModelSlotName>();
@@ -671,7 +725,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 	}
 
 	/** Accumulate one billed step into the run's registry entry (live). */
-	function recordStep(jobKey: string, stage: "extractor" | "spine" | "auditor", usage: CallUsage, model: string): void {
+	function recordStep(jobKey: string, stage: "extractor" | "auditor", usage: CallUsage, model: string): void {
 		const run = runningExtractions.get(jobKey);
 		if (!run) return; // not running (tests driving stages directly)
 		run.usage[stage] ??= { model, steps: [] };
@@ -718,15 +772,28 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		}
 	}
 
-	async function extract(jobKey: string, view: string): Promise<SessionFindings> {
+	async function extract(jobKey: string, sourceId: string, view: string): Promise<SessionFindings> {
 		const signal = runningExtractions.get(jobKey)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during a sync gap ends the job here
-		console.info(`[extraction ${jobKey}] extractor starting (${view.split("\n").length} markdown lines)`);
+		// THE DIGEST (owner, 2026-09-30 evening): the extractor continues a
+		// partly-extracted source — it sees everything this source has
+		// already yielded (propositions + chains, ids verbatim) and builds
+		// on it. Serialized batches make this read the post-merge graph of
+		// every earlier batch (cross-source runs stay parallel — the
+		// digest is source-scoped, so only SAME-source order matters).
+		const graph = getGraph(graphStore);
+		const digest = sourceDigest(graph, sourceId);
+		const prompt = digest === "" ? view : `${digest}\n\n${view}`;
+		console.info(
+			`[extraction ${jobKey}] extractor starting (${view.split("\n").length} markdown lines` +
+				`${digest === "" ? "" : `, digest ${digest.split("\n").length} lines`})`,
+		);
 		const t0 = performance.now();
 
 		const findings = await runExtractor(
 			stageEngine("extractor", deps.extractor),
-			view,
+			prompt,
+			new Set(graph.nodes.map((n) => n.id)),
 			signal,
 			(usage, model, step, finishReason, tools) => {
 				recordStep(jobKey, "extractor", callUsage(usage), model);
@@ -735,50 +802,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		);
 		console.info(`[extraction ${jobKey}] extractor done in ${Math.round(performance.now() - t0)}ms`);
 		return findings;
-	}
-
-	/** THE SPINE (owner, 2026-09-30): the assembly stage between extract
-	 *  and audit, INSIDE the serialized section (it reads the graph-so-far
-	 *  digest; its output rides the same audit + merge). Skipped without a
-	 *  call when the source owns nothing yet (first stretch — nothing to
-	 *  join). Identity stays the auditor's: the spine submits chains +
-	 *  connective propositions only, and the audit sees the COMBINED
-	 *  propositions — chunk findings plus connectives — never chains. */
-	async function assemble(
-		jobKey: string,
-		sourceId: string,
-		kind: "chat" | "notes",
-		findings: SessionFindings,
-	): Promise<SessionFindings> {
-		const signal = runningExtractions.get(jobKey)?.controller.signal;
-		signal?.throwIfAborted();
-		const graph = getGraph(graphStore);
-		if (!spineHasDigest(graph, sourceId)) {
-			console.info(`[extraction ${jobKey}] spine skipped — empty digest (first stretch)`);
-			return findings;
-		}
-		console.info(
-				`[extraction ${jobKey}] spine starting (${graph.nodes.length} graph nodes, ` +
-				`${findings.propositions.length} fresh propositions)`,
-		);
-		const t0 = performance.now();
-		const spine: SpineSubmit = await runSpine(
-			stageEngine("spine", deps.spine),
-			kind === "chat" ? SPINE_INSTRUCTIONS : NOTES_SPINE_INSTRUCTIONS,
-			buildSpinePrompt(graph, sourceId, findings),
-			new Set(findings.propositions.map((p) => p.id)),
-			new Set(graph.nodes.map((n) => n.id)),
-			signal,
-			(usage, model, step, finishReason, tools) => {
-				recordStep(jobKey, "spine", callUsage(usage), model);
-				console.info(`[extraction] spine step ${step}: ${finishReason}, tools: ${tools}`);
-			},
-		);
-		console.info(
-				`[extraction ${jobKey}] spine done in ${Math.round(performance.now() - t0)}ms — ` +
-				`${spine.chains.length} chain(s), ${spine.propositions.length} connective(s)`,
-		);
-		return spine === SPINE_EMPTY ? findings : combineFindings(findings, spine);
 	}
 
 	async function audit(jobKey: string, findings: SessionFindings): Promise<AuditVerdicts> {
@@ -849,7 +872,6 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			stats,
 			stages: {
 				extractor: run.usage.extractor ?? { model: "unknown", steps: [] },
-				spine: run.usage.spine ?? { model: "unknown", steps: [] },
 				auditor: run.usage.auditor ?? { model: "unknown", steps: [] },
 			},
 		};
@@ -894,6 +916,10 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			if (result.status === "fulfilled") {
 				stats.nodes += result.value.nodes;
 				stats.chains! += result.value.chains ?? 0;
+				// Simplification maintenance, summed like appends — but ABSENT
+				// when nothing dropped (deep-equal pins read cleaner).
+				if (result.value.droppedChains)
+					stats.droppedChains = (stats.droppedChains ?? 0) + result.value.droppedChains;
 				continue;
 			}
 			const err = result.reason;
@@ -945,71 +971,82 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 				`[extraction ${chatId}] pipeline start — ${covered.uncoveredTokens} uncovered tok, ` +
 					`${covered.uncoveredCount} messages, ${batches.length} batch(es) of ≤${chunkTokens} tok`,
 			);
-			// PER-CHUNK JOBS (owner, 2026-09-28): every batch is its own job —
-			// extracts fan out behind the global 3-slot semaphore ("queued"),
-			// audits serialize through the process-wide gate ("waiting"). A
-			// batch that fails is ISOLATED (its messages stay uncovered —
-			// honestly re-runnable); its siblings keep merging.
-			const settled = await Promise.allSettled(
-				batches.map((batch, i) => {
-					const part = batches.length > 1 ? { i: i + 1, n: batches.length } : undefined;
-					return runJob({ id: chatId, kind: "chat", part }, async (jobKey) => {
-						// The batch's source view: TEACHER PROSE ONLY (owner,
-						// 2026-09-28) — plain paragraphs, same selection as the
-						// coverage fingerprints (messageViewLines parity).
-						const view = proseView(
-							batch.map((slot) => slot.message),
-							record.title,
-						);
-						setPhase(jobKey, "queued", "chat", undefined, part);
-						const findings = await withExtractSlot(jobKey, async () => {
-							setPhase(jobKey, "extracting", "chat", undefined, part);
-							return extract(jobKey, view);
-						});
-						// SERIALIZED AUDIT (owner 2026-09-28): audit + merge are the
-						// graph-mutating critical section — one job at a time,
-						// process-wide, so the auditor explores the graph as it
-						// stands AFTER every earlier job's merge. The spine rides the
-						// same section (owner order, 2026-09-30): extract → spine →
-						// audit → merge.
-						return withAuditLock(jobKey, "chat", undefined, async () => {
-							setPhase(jobKey, "assembling", "chat", undefined, part);
-							const combined = await assemble(jobKey, chatId, "chat", findings);
-							setPhase(jobKey, "auditing", "chat", undefined, part);
-							const auditResult = await audit(jobKey, combined);
-							setPhase(jobKey, "merging", "chat", undefined, part);
-							// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
-							// merge. The deletion route aborts this run first and runs its purge
-							// as one sync block; this closes the last window — a run that slipped
-							// past the wind-down finds the chat gone HERE and rides the existing
-							// abort path (info, not error): nothing merged, nothing checkpointed.
-							if (!chatStore.getChat(chatId)) {
-								const gone = new Error(`chat deleted mid-run: ${chatId}`);
-								gone.name = "AbortError";
-								throw gone;
-							}
-							// The batch's messages, snapshotted when the run computed
-							// coverage — if a message mutates mid-run (a quiz answer
-							// merges in), the stored fingerprint won't match its new
-							// one and it re-opens: honest by construction.
-							const foldedAt = new Date().toISOString();
-							const batchStats = mergeFindings(chatId, combined, auditResult, { chatStore, graphStore }, {
-								foldedAt,
-								coverage: batch
-									.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
-									.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
-							});
-							// The layout ledger evolves with the merge (sync — the
-							// next snapshot fetch must already reflect the new nodes).
-							settleGraphLayout(graphStore);
-							console.info(
-								`[extraction ${jobKey}] merged: ${batchStats.nodes} nodes, ${batchStats.chains ?? 0} chains`,
+			// PER-CHUNK JOBS (owner, 2026-09-28), SERIALIZED PER SOURCE (owner,
+			// 2026-09-30 evening): every batch is its own job — registry row,
+			// because each batch's extractor continues the source's digest
+			// (everything the earlier batches merged). Cross-source runs stay
+			// parallel; the 3-slot extract semaphore still caps concurrent
+			// extracts process-wide ("queued"); audits serialize through the
+			// process-wide gate ("waiting"). A batch that fails is ISOLATED
+			// (its messages stay uncovered — honestly re-runnable); its
+			// siblings keep merging.
+			const settled: PromiseSettledResult<EmissionStats>[] = [];
+			for (const [batchIndex, batch] of batches.entries()) {
+				const part = batches.length > 1 ? { i: batchIndex + 1, n: batches.length } : undefined;
+				try {
+					settled.push({
+						status: "fulfilled",
+						value: await runJob({ id: chatId, kind: "chat", part }, async (jobKey) => {
+							// The batch's source view: TEACHER PROSE ONLY (owner,
+							// 2026-09-28) — plain paragraphs, same selection as the
+							// coverage fingerprints (messageViewLines parity).
+							const view = proseView(
+								batch.map((slot) => slot.message),
+								record.title,
 							);
-							return batchStats;
-						});
+							setPhase(jobKey, "queued", "chat", undefined, part);
+							const findings = await withExtractSlot(jobKey, async () => {
+								setPhase(jobKey, "extracting", "chat", undefined, part);
+								return extract(jobKey, chatId, view);
+							});
+							// SERIALIZED AUDIT (owner, 2026-09-28): audit + merge are the
+							// graph-mutating critical section — one job at a time,
+							// process-wide, so the auditor explores the graph as it
+							// stands AFTER every earlier job's merge.
+							return withAuditLock(jobKey, "chat", undefined, async () => {
+								setPhase(jobKey, "auditing", "chat", undefined, part);
+								const auditResult = await audit(jobKey, findings);
+								setPhase(jobKey, "merging", "chat", undefined, part);
+								// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
+								// merge. The deletion route aborts this run first and runs its purge
+								// as one sync block; this closes the last window — a run that slipped
+								// past the wind-down finds the chat gone HERE and rides the existing
+								// abort path (info, not error): nothing merged, nothing checkpointed.
+								if (!chatStore.getChat(chatId)) {
+									const gone = new Error(`chat deleted mid-run: ${chatId}`);
+									gone.name = "AbortError";
+									throw gone;
+								}
+								// The batch's messages, snapshotted when the run computed
+								// coverage — if a message mutates mid-run (a quiz answer
+								// merges in), the stored fingerprint won't match its new
+								// one and it re-opens: honest by construction.
+								const foldedAt = new Date().toISOString();
+								const batchStats = mergeFindings(chatId, findings, auditResult, { chatStore, graphStore }, {
+									foldedAt,
+									coverage: batch
+										.filter((slot) => messageViewLines(slot.message, slot.message.id).length > 0)
+										.map((slot) => ({ chatId, fp: slot.fp, tokens: slot.tokens, foldedAt })),
+								});
+								// The layout ledger evolves with the merge (sync — the
+								// next snapshot fetch must already reflect the new nodes).
+								settleGraphLayout(graphStore);
+								console.info(
+									`[extraction ${jobKey}] merged: ${batchStats.nodes} nodes, ${batchStats.chains ?? 0} chains`,
+								);
+								return batchStats;
+							});
+						}),
 					});
-				}),
-			);
+				} catch (err) {
+					settled.push({ status: "rejected", reason: err });
+					// A source-wide abort (user abort / session deletion)
+					// ends the WHOLE run: later batches would mint fresh,
+					// un-aborted jobs and hang — stop here. Isolated
+					// FAILURES keep going (siblings still merge).
+					if (err instanceof Error && err.name === "AbortError") break;
+				}
+			}
 			const stats = aggregateJobs(chatId, settled);
 			console.info(
 				`[extraction ${chatId}] merged: ${stats.nodes} nodes, ${stats.chains ?? 0} chains ` +
@@ -1070,11 +1107,20 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		const signal = runningExtractions.get(jobKey)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during a sync gap ends the job here
 		const view = notesView(input);
-		console.info(`[extraction ${jobKey}] notes extractor starting (${view.split("\n").length} source lines)`);
+		// Same digest law as the chat door (owner, 2026-09-30 evening): the
+		// chunk extractor continues its own source, ids verbatim.
+		const graph = getGraph(graphStore);
+		const digest = sourceDigest(graph, input.id);
+		const prompt = digest === "" ? view : `${digest}\n\n${view}`;
+		console.info(
+			`[extraction ${jobKey}] notes extractor starting (${view.split("\n").length} source lines` +
+				`${digest === "" ? "" : `, digest ${digest.split("\n").length} lines`})`,
+		);
 		const t0 = performance.now();
 		const findings = await runNotesExtractor(
 			stageEngine("extractor", deps.extractor),
-			view,
+			prompt,
+			new Set(graph.nodes.map((n) => n.id)),
 			signal,
 			(usage, model, step, finishReason, tools) => {
 				recordStep(jobKey, "extractor", callUsage(usage), model);
@@ -1107,49 +1153,56 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			console.info(
 				`[extraction ${id}] notes pipeline start (${input.filePath}) — ${chunks.length} chunk(s) of ≤${chunkTokens} tok`,
 			);
-			// PER-CHUNK JOBS (owner, 2026-09-28): every chunk is its own job —
-			// registry row, usage record, failure domain. Extracts fan out in
-			// parallel behind the global 3-slot extract semaphore ("queued");
-			// audits serialize through the process-wide gate exactly as before
-			// ("waiting"). The part rides the registry entry (feed suffix
-			// "· i/N") only when the file actually chunked.
-			const settled = await Promise.allSettled(
-				chunks.map((chunk, i) => {
-					const part = chunks.length > 1 ? { i: i + 1, n: chunks.length } : undefined;
-					return runJob({ id, kind: "notes", label: input.filePath, part }, async (jobKey) => {
-						setPhase(jobKey, "queued", "notes", input.filePath, part);
-						const findings = await withExtractSlot(jobKey, async () => {
-							setPhase(jobKey, "extracting", "notes", input.filePath, part);
-							return notesExtract(jobKey, { ...input, text: chunk, part });
-						});
-						// SERIALIZED AUDIT (owner, 2026-09-28): extracts run in
-						// parallel, but audit + merge one at a time, process-wide —
-						// the auditor explores the graph as it stands AFTER every
-						// earlier job's merge. Reacquired per chunk so runs
-						// interleave fairly. The spine rides the same section
-						// (owner order, 2026-09-30): extract → spine → audit → merge.
-						return withAuditLock(jobKey, "notes", input.filePath, async () => {
-							setPhase(jobKey, "assembling", "notes", input.filePath, part);
-							const combined = await assemble(jobKey, id, "notes", findings);
-							setPhase(jobKey, "auditing", "notes", input.filePath, part);
-							const auditResult = await audit(jobKey, combined);
-							setPhase(jobKey, "merging", "notes", input.filePath, part);
-							const merged = mergeFindings(
-								id,
-								combined,
-								auditResult,
-								{ chatStore, graphStore },
-								{ foldedAt: input.importedAt },
-							);
-							// The layout ledger evolves with each merge — the next
-							// snapshot fetch reflects every finished chunk.
-							settleGraphLayout(graphStore);
-							console.info(`[extraction ${jobKey}] merged: ${merged.nodes} nodes, ${merged.chains ?? 0} chains`);
-							return merged;
-						});
+			// PER-CHUNK JOBS (owner, 2026-09-28), SERIALIZED PER SOURCE (owner,
+			// 2026-09-30 evening): same law as the chat door — chunks run
+			// STRICTLY IN ORDER, each chunk's extractor continuing the
+			// source's digest (everything earlier chunks merged). Cross-source
+			// runs stay parallel; the semaphore caps concurrent extracts
+			// process-wide; audits serialize through the gate as before. The
+			// part rides the registry entry (feed suffix "· i/N") only when
+			// the file actually chunked.
+			const settled: PromiseSettledResult<EmissionStats>[] = [];
+			for (const [chunkIndex, chunk] of chunks.entries()) {
+				const part = chunks.length > 1 ? { i: chunkIndex + 1, n: chunks.length } : undefined;
+				try {
+					settled.push({
+						status: "fulfilled",
+						value: await runJob({ id, kind: "notes", label: input.filePath, part }, async (jobKey) => {
+							setPhase(jobKey, "queued", "notes", input.filePath, part);
+							const findings = await withExtractSlot(jobKey, async () => {
+								setPhase(jobKey, "extracting", "notes", input.filePath, part);
+								return notesExtract(jobKey, { ...input, text: chunk, part });
+							});
+							// SERIALIZED AUDIT (owner, 2026-09-28): audit + merge one
+							// at a time, process-wide — the auditor explores the graph
+							// as it stands AFTER every earlier job's merge. Reacquired
+							// per chunk so cross-source runs interleave fairly.
+							return withAuditLock(jobKey, "notes", input.filePath, async () => {
+								setPhase(jobKey, "auditing", "notes", input.filePath, part);
+								const auditResult = await audit(jobKey, findings);
+								setPhase(jobKey, "merging", "notes", input.filePath, part);
+								const merged = mergeFindings(
+									id,
+									findings,
+									auditResult,
+									{ chatStore, graphStore },
+									{ foldedAt: input.importedAt },
+								);
+								// The layout ledger evolves with each merge — the next
+								// snapshot fetch reflects every finished chunk.
+								settleGraphLayout(graphStore);
+								console.info(`[extraction ${jobKey}] merged: ${merged.nodes} nodes, ${merged.chains ?? 0} chains`);
+								return merged;
+							});
+						}),
 					});
-				}),
-			);
+				} catch (err) {
+					settled.push({ status: "rejected", reason: err });
+					// Same source-wide-abort law as the chat door: stop the
+					// run; isolated failures keep going.
+					if (err instanceof Error && err.name === "AbortError") break;
+				}
+			}
 			const stats = aggregateJobs(id, settled);
 			console.info(
 				`[extraction ${id}] merged: ${stats.nodes} nodes, ${stats.chains ?? 0} chains ` +

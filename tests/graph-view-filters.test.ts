@@ -54,7 +54,6 @@ describe("displayCostTotals (naming-free cost fold)", () => {
 	const costs = {
 		stages: {
 			extraction: stage(1.25, 1),
-			spine: stage(0), // spine channel exists since 2026-09-30 — zero spend here
 			audit: stage(0.75),
 			naming: stage(9.99, 2), // dead channel — must never reach the display
 		},

@@ -7,22 +7,22 @@
  *
  *   extractor (LLM)  → SessionFindings: the raw reasoning chains —
  *                      propositions (lonely relevant ones included) and
- *                      chains, from the stretch alone (one batch of the
- *                      source). Fully trusted: no stage re-checks it.
- *   spine (LLM)      → the ASSEMBLY stage (2026-09-30): cross-stretch
- *                      chains + connective propositions joining the
- *                      fresh stretch to the same-source digest (the span
- *                      law is mechanical — src/agent/subagents/spine.ts).
- *                      No links — identity stays the auditor's.
+ *                      chains, from the stretch (one batch) PLUS the
+ *                      same-source digest (digest-aware, 2026-09-30
+ *                      evening: the extractor continues its own source,
+ *                      references existing ids verbatim, assembles
+ *                      cross-stretch itself). Fully trusted: no stage
+ *                      re-checks it.
  *   auditor (LLM)    → AuditVerdicts: identity links (local id → an existing
  *                      node, or create) via graph-exploration tools —
  *                      links ONLY (owner, 2026-09-28 evening: the auditor
  *                      never mints edges; cross-source connection happens
  *                      solely through identified equivalences). Never sees
  *                      the source; never drops; never sees chains — its
- *                      input is the chunk propositions + the spine's
- *                      connectives, propositions only.
+ *                      input is the fresh propositions only.
  *   merger (HERE)    → mergeFindings(): deterministic ledger appends
+ *                      + the chain-simplification maintenance pass
+ *                      (2026-09-30 evening — simplifyChains below).
  *
  * The merger is deliberately the ONLY stage that touches the ledgers, and it
  * is pure code: the LLM supplies exactly the judgment calls (what the
@@ -200,11 +200,12 @@ export function mergeFindings(
 		mapping.set(p.id, graphNodeId);
 	}
 
-	// 2. Chains — the extractor's and the spine's (the two chain sources;
-	//    the stored truth, chains-primary, owner 2026-09-30). Endpoints
+	// 2. Chains — the extractor's alone since the digest-aware redesign
+	//    (owner, 2026-09-30 evening: the extractor continues its own
+	//    source, so ITS chains may span stretches and digests). Endpoints
 	//    resolve through the job-local map OR pass through verbatim when
-	//    they name an existing node (the spine references digest ids
-	//    directly); chains carry the run's chat-level provenance point and
+	//    they name an existing node (digest references, ids verbatim);
+	//    chains carry the run's chat-level provenance point and
 	//    dedupe by (premises, conclusion) already asserted by THIS chat —
 	//    an assertion by another chat stays untouched (provenance unions
 	//    at read time; a known argument re-stated appends under the SAME
@@ -218,11 +219,11 @@ export function mergeFindings(
 		if (line.provenance.some((pt) => pt.chatId === chatId)) assertedByChat.add(key);
 	}
 	const emitChain = (chain: ExtractedChain): void => {
-		// Mixed namespace (spine stage, 2026-09-30): an endpoint resolves
-		// through the job-local map (this submit's propositions — chunk
-		// findings and spine connectives alike) OR passes through verbatim
-		// when it names an existing node (a spine chain referencing digest
-		// ids directly). Anything else is unresolvable — skip.
+		// Mixed namespace (digest-aware extraction, 2026-09-30): an
+		// endpoint resolves through the job-local map (this submit's
+		// propositions) OR passes through verbatim when it names an
+		// existing node (THE GRAPH SO FAR references, ids verbatim).
+		// Anything else is unresolvable — skip.
 		const resolve = (endpoint: string): string | undefined =>
 			mapping.get(endpoint) ?? (existingIds.has(endpoint) ? endpoint : undefined);
 		const conclusion = resolve(chain.conclusion);
@@ -241,7 +242,27 @@ export function mergeFindings(
 		assertedByChat.add(key);
 		stats.chains!++;
 	};
-	for (const chain of findings.chains) emitChain(chain); // the extractor's chains + the spine's spanning chains — the two chain sources
+	for (const chain of findings.chains) emitChain(chain); // the extractor's chains — the one chain source (digest-aware, owner 2026-09-30)
+
+	// 2b. Simplification (owner, 2026-09-30 evening) — the deterministic
+	//     dedupe pass over the WHOLE chain ledger (this merge runs inside
+	//     the serialized audit section, so the rewrite is race-free). Two
+	//     rules, decided per conclusion group, greedy in (premiseCount,
+	//     createdAt, key) order — the leanest, earliest derivation stands:
+	//     • prefer-fewest-premises: a chain whose premise set strictly
+	//       contains a kept chain's premise set is redundant;
+	//     • ancestry-cover: a chain whose every premise is a premise of a
+	//       kept chain, or derivable from one (transitively, through the
+	//       FULL pre-simplification chain set) is redundant — [A,B]⟹X
+	//       plus [X,C]⟹Y makes [A,B,C]⟹Y redundant.
+	//     Dropped keys take every provenance line with them (the rewrite is
+	//     atomic); stats count APPENDS only — simplification is maintenance.
+	const allChains = ledgers.readChains();
+	const keptChains = simplifyChains(allChains);
+	if (keptChains.length !== allChains.length) {
+		ledgers.rewriteLedgers({ chains: keptChains });
+		stats.droppedChains = allChains.length - keptChains.length;
+	}
 
 	// 3. Checkpoint — THE COVERAGE DISCIPLINE (vision-extraction-coverage.md):
 	//    only now, after every append succeeded, is the batch covered. The
@@ -255,6 +276,99 @@ export function mergeFindings(
 		ledgers.appendCheckpoint({ chatId, foldedAt: source.foldedAt });
 	}
 	return stats;
+}
+
+/** The deterministic chain-simplification pass (owner, 2026-09-30
+ *  evening): strips redundant derivations — same-conclusion chains whose
+ *  premises add nothing a leaner kept chain doesn't already derive. Pure
+ *  over the input list; the caller owns the ledger rewrite. Exported for
+ *  tests.
+ *
+ *  Same (premises, conclusion) lines are ONE logical chain (read-time
+ *  merge semantics) — a key is kept or dropped as a whole, every
+ *  provenance line with it. */
+export function simplifyChains(lines: GraphChain[]): GraphChain[] {
+	if (lines.length < 2) return lines;
+
+	// Group lines by chain key (logical chains).
+	const groups = new Map<string, GraphChain[]>();
+	for (const line of lines) {
+		const key = chainKey(line.premises, line.conclusion);
+		const bucket = groups.get(key);
+		if (bucket === undefined) groups.set(key, [line]);
+		else bucket.push(line);
+	}
+
+	// Ancestry over the FULL chain set: every node id reachable as a
+	// premise behind an id (A⟹X makes A an ancestor of X; [X,C]⟹Y makes
+	// both A and C ancestors of Y). Memoized walk, cycle-guarded (a cycle
+	// cannot be minted by the extractor — a premise equal to the
+	// conclusion is refused — but the walk stays honest if one ever lands).
+	const premisesOf = new Map<string, string[][]>();
+	for (const line of lines) {
+		const bucket = premisesOf.get(line.conclusion);
+		if (bucket === undefined) premisesOf.set(line.conclusion, [line.premises]);
+		else bucket.push(line.premises);
+	}
+	const ancestryMemo = new Map<string, Set<string>>();
+	const ancestry = (id: string, visiting: Set<string>): Set<string> => {
+		const memo = ancestryMemo.get(id);
+		if (memo !== undefined) return memo;
+		const out = new Set<string>();
+		if (visiting.has(id)) return out;
+		visiting.add(id);
+		for (const premises of premisesOf.get(id) ?? []) {
+			for (const premise of premises) {
+				out.add(premise);
+				for (const ancestor of ancestry(premise, visiting)) out.add(ancestor);
+			}
+		}
+		visiting.delete(id);
+		ancestryMemo.set(id, out);
+		return out;
+	};
+
+	// Per conclusion: greedy in (premiseCount, createdAt, key).
+	const byConclusion = new Map<
+		string,
+		Array<{ key: string; premises: string[]; createdAt: string }>
+	>();
+	for (const [key, bucket] of groups) {
+		const head = bucket[0]!; // the representative — its premises stand
+		const entry = { key, premises: head.premises, createdAt: head.createdAt };
+		const list = byConclusion.get(head.conclusion);
+		if (list === undefined) byConclusion.set(head.conclusion, [entry]);
+		else list.push(entry);
+	}
+	const droppedKeys = new Set<string>();
+	for (const candidates of byConclusion.values()) {
+		candidates.sort(
+				(a, b) =>
+					a.premises.length - b.premises.length ||
+					a.createdAt.localeCompare(b.createdAt) ||
+					a.key.localeCompare(b.key),
+		);
+		const kept: typeof candidates = [];
+		for (const candidate of candidates) {
+			const candidateSet = new Set(candidate.premises);
+			const redundant = kept.some((k) => {
+					// Rule 1 — prefer-fewest-premises: strict subset (equal keys are
+					// grouped, so a kept ⊆ candidate with fewer premises is strict).
+					if (k.premises.every((p) => candidateSet.has(p))) return true;
+					// Rule 2 — ancestry-cover: every candidate premise is a kept
+					// premise, or reachable behind one.
+					const covered = new Set(k.premises);
+					for (const p of k.premises) {
+						for (const ancestor of ancestry(p, new Set())) covered.add(ancestor);
+					}
+					return candidate.premises.every((p) => covered.has(p));
+			});
+			if (redundant) droppedKeys.add(candidate.key);
+			else kept.push(candidate);
+		}
+	}
+	if (droppedKeys.size === 0) return lines;
+	return lines.filter((line) => !droppedKeys.has(chainKey(line.premises, line.conclusion)));
 }
 
 // ─── derivation (reads only — everything below is recomputable) ─────────────

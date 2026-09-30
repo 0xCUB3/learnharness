@@ -16,8 +16,8 @@ import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 
 // ── the weak-model string-heal (owner, 2026-09-28; moved here from
-// extraction.ts with the spine stage, 2026-09-30 — the heal is wire-format
-// medicine shared by every submit agent) ──
+// extraction.ts with the digest-aware redesign, 2026-09-30 — the heal
+// is wire-format medicine shared by every submit agent) ──
 //
 // OpenRouter log evidence: weak models under a big submit payload often
 // emit a whole array as ONE JSON-STRING instead of a native array

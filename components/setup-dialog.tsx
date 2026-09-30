@@ -49,7 +49,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 /** The pickers' slot identity — same roster language as the Agent
  *  section's slot rows. */
 const SLOT_META: Record<ModelSlotName, { label: string; roster: string }> = {
-	strong: { label: "Strong", roster: "Prober, teacher, spine, practice trio" },
+	strong: { label: "Strong", roster: "Prober, teacher, practice trio" },
 	cheap: { label: "Cheap", roster: "Researcher, demo builder, extractor, auditor" },
 	vision: { label: "Vision", roster: "Visual maker + PDF reader" },
 };

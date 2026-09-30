@@ -63,6 +63,12 @@ export interface EmissionStats {
 	nodes: number;
 	/** New reasoning chains appended. */
 	chains?: number;
+	/** Chains the simplification pass removed in this merge (owner,
+	 *  2026-09-30 evening — ancestry-cover / prefer-fewest-premises).
+	 *  Maintenance, not extraction: appends are counted in `chains`
+	 *  regardless. Undefined when nothing dropped (pre-simplification
+	 *  records read as zero). */
+	droppedChains?: number;
 }
 
 /** One provenance point — message-granular (DECIDED 2026-09-02): nodes and
