@@ -1184,6 +1184,10 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 		// The core carries the goal + submission mechanics.
 		assert.match(EXTRACTION_CORE, /JOINTLY entail a conclusion/);
 		assert.match(EXTRACTION_CORE, /for the same conclusion are separate chains/);
+		assert.match(EXTRACTION_CORE, /Entailment is the only link that earns a chain/);
+		assert.match(EXTRACTION_CORE, /what a reference on it would teach/);
+		assert.match(EXTRACTION_CORE, /stand alone for a reader who never saw this source/);
+		assert.match(EXTRACTION_CORE, /may not lean on the source's own scaffolding/);
 		assert.match(EXTRACTION_CORE, /SUBMIT with one submit_findings call/);
 		assert.match(EXTRACTION_CORE, /"chains": \[\] when the source makes no arguments/);
 

@@ -305,10 +305,18 @@ export const NOTES_PREAMBLE =
 export const EXTRACTION_CORE = `THE GOAL: extract the source's REASONING CHAINS. The source teaches by making arguments — propositions
 worked out from other propositions. Your deliverable is twofold: the propositions themselves, and every
 argument the source makes. Each argument is a chain: premises that JOINTLY entail a conclusion.
+Entailment is the only link that earns a chain — where the real connection is historical or narrative
+(who argued what, how a debate or exposition unfolds), there is no chain; keep the pieces as bare
+propositions or drop them.
 
 The graph holds TRUE propositions about the world, nothing else — never anything about the learner, the
 teacher, or this reading: not "the learner understands X" but X. A misconception enters as its TRUE
 correction. Each statement is one self-contained reasoning step at full precision.
+
+Extract the load-bearing ideas of the subject — what a reference on it would teach — not the full run of
+the discourse. Every proposition must stand alone for a reader who never saw this source: names and
+statements may not lean on the source's own scaffolding (claim numbering, axiom tags, arc labels); a
+claim that only matters as part of how this document is organized is not knowledge — drop it.
 
 SUBMIT with one submit_findings call: every proposition with a short name and a precise statement, and
 every chain as premises + conclusion. Premises within one chain are used TOGETHER — independent arguments
