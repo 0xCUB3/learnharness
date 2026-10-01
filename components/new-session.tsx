@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
-import { DictationBar, useDictation } from "@/components/dictation";
+import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { TopBar } from "@/components/top-bar";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
@@ -52,6 +52,9 @@ export async function startDraftSession(
 
 /** The pure shell (no router) — the render-test seam: the draft view's
  *  visible surface, assembled from the same pieces a fresh chat shows. */
+/* FINISH-FIRST SEND + RUN-END FOCUS live in the shell (it owns the
+ * dictation instance); the truth of the text stays in the parent, whose
+ * send reads a REF mirror — see NewSession below. */
 export function DraftShell({
 	busy,
 	text,
@@ -68,12 +71,40 @@ export function DraftShell({
 	 *  NewSession, which owns the configured state and the SetupDialog. */
 	setupCta?: ReactNode;
 }) {
-	const canSend = text.trim().length > 0;
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
-	// draft text; the strip lives in the stats bar's middle slot.
+	// draft text (via the parent's onChange — the truth lives there); the
+	// strip lives in the stats bar's middle slot.
 	const dictation = useDictation({
-		append: (t) => onChange(text ? text.replace(/\s+$/, "") + " " + t : t),
+		append: (t) => onChange(joinDictation(text, t)),
 	});
+	// A LIVE dictation keeps the composer sendable ("nothing gets lost"
+	// round, owner 2026-10-01): the spoken text is deferred in the run's
+	// buffer — Enter must reach the finish-first send, not be gated out by
+	// an empty textarea. Nothing said → the send no-ops.
+	const canSend = text.trim().length > 0 || dictation.active;
+	/* FINISH DICTATION FIRST (owner, 2026-10-01): stop the run, let the
+	 * last finals land through onChange, THEN call the parent's send —
+	 * which reads its REF mirror, so the post-await timing of React's
+	 * re-render cannot eat the dictated tail. */
+	const handleSend = () => {
+		if (dictation.active) {
+			void dictation.finish().then(onSend);
+			return;
+		}
+		onSend();
+	};
+	/* Run end focuses the composer (owner, 2026-10-01): the hands are on
+	 * the keyboard from the stop — falling edge of `active` only. */
+	const composerInputRef = useRef<HTMLTextAreaElement>(null);
+	const dictationWasActiveRef = useRef(false);
+	useEffect(() => {
+		if (dictation.active) {
+			dictationWasActiveRef.current = true;
+		} else if (dictationWasActiveRef.current) {
+			dictationWasActiveRef.current = false;
+			composerInputRef.current?.focus();
+		}
+	}, [dictation.active]);
 	return (
 		<div className="flex h-dvh">
 			<div className="flex min-w-0 flex-1 flex-col">
@@ -106,9 +137,10 @@ export function DraftShell({
 										busy={busy}
 										value={text}
 										onChange={onChange}
-										onSend={onSend}
+										onSend={handleSend}
 										onStop={() => {}}
 										canSend={canSend}
+										inputRef={composerInputRef}
 										autoFocus
 										onEscape={dictation.active ? dictation.cancel : undefined}
 										// The opening question, same as the graph view's new-session
@@ -134,6 +166,15 @@ export function DraftShell({
 export function NewSession({ initialConfigured }: { initialConfigured: boolean }) {
 	const router = useRouter();
 	const [text, setText] = useState("");
+	/* The draft MIRROR ("nothing gets lost" round, 2026-10-01): the shell's
+	 * finish-first send calls THIS send after the dictation flush — which
+	 * landed via setState and may not have re-rendered yet. The send reads
+	 * the mirror; every write keeps it current. */
+	const textRef = useRef("");
+	const applyText = (v: string) => {
+		textRef.current = v;
+		setText(v);
+	};
 	const [busy, setBusy] = useState(false);
 
 	// First-run gate (model-slots wave, owner 2026-09-20): the send
@@ -151,7 +192,8 @@ export function NewSession({ initialConfigured }: { initialConfigured: boolean }
 	const [setupOpen, setSetupOpen] = useState(false);
 
 	const send = useCallback((force = false) => {
-		if (!text.trim() || busy) return;
+		const draft = textRef.current.trim();
+		if (!draft || busy) return;
 		// `force` is the onDone path — the captured `configured` is still
 		// the pre-save value; the state update hasn't landed yet.
 		if (!configured && !force) {
@@ -169,20 +211,20 @@ export function NewSession({ initialConfigured }: { initialConfigured: boolean }
 			return;
 		}
 		setBusy(true);
-		void startDraftSession(text, fetch)
+		void startDraftSession(draft, fetch)
 			.then((target) => {
 				if (target) router.push(target);
 				else setBusy(false);
 			})
 			.catch(() => setBusy(false));
-	}, [text, busy, router, configured, zeroKeys, strongKeyless]);
+	}, [busy, router, configured, zeroKeys, strongKeyless]);
 
 	return (
 		<>
 			<DraftShell
 				busy={busy}
 				text={text}
-				onChange={setText}
+				onChange={applyText}
 				onSend={send}
 				setupCta={
 					zeroKeys ? (

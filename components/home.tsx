@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
-import { DictationBar, useDictation } from "@/components/dictation";
+import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
 import type { TurnUsage } from "@/src/core";
@@ -20,6 +20,11 @@ import type { TurnUsage } from "@/src/core";
 export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 	const router = useRouter();
 	const [topic, setTopic] = useState("");
+	/* The topic MIRROR ("nothing gets lost" round, 2026-10-01 — same
+	 * mechanics as the chat composer, owner's consistency ruling): a
+	 * dictation flush lands via setState, invisible to a closure that
+	 * waited through `await finish()`. Kept current at every write. */
+	const topicRef = useRef("");
 	// First-run gate (model-slots wave, owner 2026-09-20): chats cannot
 	// start until the user has picked all three slots — no defaults for
 	// 33 providers. The dock shows the CTA while unconfigured; submitting
@@ -37,12 +42,43 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// topic draft; the strip lives in the stats bar's middle slot.
 	const dictation = useDictation({
-		append: (t) => setTopic((v) => (v ? v.replace(/\s+$/, "") + " " + t : t)),
+		// Ref-first: the join reads the mirror so the send resuming after
+		// `await finish()` sees the dictated tail.
+		append: (t) => {
+			const v = joinDictation(topicRef.current, t);
+			topicRef.current = v;
+			setTopic(v);
+		},
 	});
 	const [busy, setBusy] = useState(false);
+	/* Run end focuses the topic input (owner, 2026-10-01): the hands are on
+	 * the keyboard from the stop. Falling edge only; this surface's only
+	 * dictation target IS this textarea, so no case-split is needed. */
+	const topicInputRef = useRef<HTMLTextAreaElement>(null);
+	const dictationWasActiveRef = useRef(false);
+	useEffect(() => {
+		if (dictation.active) {
+			dictationWasActiveRef.current = true;
+		} else if (dictationWasActiveRef.current) {
+			dictationWasActiveRef.current = false;
+			topicInputRef.current?.focus();
+		}
+	}, [dictation.active]);
 
-	const start = async (force = false) => {
-		const t = topic.trim();
+	/* FINISH DICTATION FIRST (owner, 2026-10-01): Enter may arrive while a
+	 * run is live with the topic still deferred in the run's buffer — stop
+	 * the run, let the last finals land, THEN read the REF mirror (not the
+	 * state closure) and run. Applies before the setup/key guards too, so
+	 * an intercepted draft is the complete one. */
+	const start = (force = false) => {
+		if (!dictation.active) {
+			void begin(force);
+			return;
+		}
+		void dictation.finish().then(() => begin(force));
+	};
+	const begin = async (force = false) => {
+		const t = topicRef.current.trim();
 		if (!t || busy) return;
 		// Unconfigured: the send INTERCEPTS into the setup flow (the draft
 		// stays in the textarea; Save completes and this re-runs). `force`
@@ -141,8 +177,12 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 					}}
 				>
 					<textarea
+						ref={topicInputRef}
 						value={topic}
-						onChange={(e) => setTopic(e.target.value)}
+						onChange={(e) => {
+							topicRef.current = e.target.value;
+							setTopic(e.target.value);
+						}}
 						onKeyDown={(e) => {
 							// Esc ends dictation (the dictate decisions: click-again or
 							// Esc) — stopPropagation claims it (keyboard wave A) so
@@ -168,7 +208,7 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 					<button
 						type="submit"
 						aria-label="Start session"
-						disabled={!topic.trim() || busy}
+						disabled={(!topic.trim() && !dictation.active) || busy}
 						className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-40"
 					>
 						<CornerDownLeftIcon className="size-5" />
