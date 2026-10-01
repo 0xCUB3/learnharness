@@ -135,11 +135,30 @@ export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
 	return false;
 }
 
+/** Does this content array carry anything VISIBLE (owner, optimistic
+ *  round 2, 2026-10-02)? A text/thinking block with text, or a tool call
+ *  being written (the live tool card renders from its first streamed
+ *  block). Empty leading parts (headers, empty message starts) do NOT
+ *  count — the placeholder lives until real content, past agent_start. */
+function contentHasVisible(content: unknown): boolean {
+	if (!Array.isArray(content)) return false;
+	return content.some((b) => {
+		const block = b as { type?: string; text?: string };
+		return block?.type === "toolCall" || (typeof block?.text === "string" && block.text.length > 0);
+	});
+}
+
 export interface SessionState {
 	messages: LhViewMessage[];
 	nativeMessages: LhMessage[];
 	status: SessionStatus;
 	error: { message: string } | null;
+	/** A turn is running (this client submitted or reattached) and has
+	 *  produced NO visible content yet — the Thinking… placeholder's
+	 *  honest gate: protocol events (agent_start) do not release it, the
+	 *  turn's first content does, and the release is sticky for the rest
+	 *  of the turn (owner, optimistic round 2, 2026-10-02). */
+	awaitingFirstChunk: boolean;
 }
 
 export interface SessionModelOptions extends SessionModelDeps {
@@ -174,6 +193,9 @@ export class SessionModel {
 	private streamingMessageId: string | null = null;
 	private statusValue: SessionStatus = "ready";
 	private errorValue: { message: string } | null = null;
+	/** Sticky per-consume: this turn has shown visible content (see
+	 *  SessionState.awaitingFirstChunk). Reset at every consume start. */
+	private sawContentValue = false;
 	// The single live consume (POST response or reattach stream): a newer
 	// consume cancels the older — one reader at a time.
 	private consumeAbort: AbortController | null = null;
@@ -209,6 +231,8 @@ export class SessionModel {
 			nativeMessages: [...this.base, ...this.tail],
 			status: this.statusValue,
 			error: this.errorValue,
+			awaitingFirstChunk:
+				(this.statusValue === "submitted" || this.statusValue === "streaming") && !this.sawContentValue,
 		};
 	}
 
@@ -289,6 +313,7 @@ export class SessionModel {
 					const mid = message.id;
 					if (mid === undefined) return;
 					this.mutate(() => {
+						this.sawContentValue = true; // a rendered marker is content
 						const idx = this.tail.findIndex((m) => m.id === mid);
 						this.tail =
 							idx === -1 ? [...this.tail, message as LhMessage] : this.tail.with(idx, message as LhMessage);
@@ -309,14 +334,17 @@ export class SessionModel {
 				// the wire) still wins.
 				const id = message.id ?? this.streamingMessageId ?? localId();
 				const withId = { ...message, id } as LhMessage;
+				const hasContent = contentHasVisible((message as { content?: unknown }).content);
 				if (agent.type === "message_start") {
 					this.streamingMessageId = id;
 					this.streamingIds.add(id);
 					this.mutate(() => {
+						this.sawContentValue ||= hasContent;
 						this.tail = [...this.tail, withId];
 					});
 				} else {
 					this.mutate(() => {
+						this.sawContentValue ||= hasContent;
 						const idx = this.tail.findIndex((m) => m.id === id);
 						this.tail = idx === -1 ? [...this.tail, withId] : this.tail.with(idx, withId);
 					});
@@ -354,6 +382,7 @@ export class SessionModel {
 				// The results batch: append as native messages (client-stamped
 				// ids — the settle sync lands the server canon).
 				this.mutate(() => {
+					this.sawContentValue = true; // rendered results are content
 					this.tail = [
 						...this.tail,
 						...(agent.toolResults as ToolResultMessage[]).map(
@@ -374,6 +403,7 @@ export class SessionModel {
 		if (!res.body) throw new Error("The turn stream body is empty.");
 		const reader = res.body.getReader();
 		let sawEvent = false;
+		this.sawContentValue = false; // fresh consume: nothing visible yet
 		try {
 			for await (const event of sseEvents(reader)) {
 				if (event.type === "turn-settled") {

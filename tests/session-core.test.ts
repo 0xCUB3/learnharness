@@ -492,7 +492,7 @@ describe("resumeStream (the reattach path)", () => {
 		// (the earlier test in this block pins that order).
 	});
 
-	it("OPTIMISTIC SUBMIT (owner, optimistic round 2026-10-02): send/reattach flip status synchronously — the Thinking… placeholder shows before the first token, however slow the provider", async () => {
+	it("OPTIMISTIC SUBMIT (owner, optimistic round 2026-10-02): send flips status synchronously — the placeholder is live before the server answers anything", async () => {
 		let release!: (r: Response) => void;
 		const gate = new Promise<Response>((res) => (release = res));
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -510,8 +510,88 @@ describe("resumeStream (the reattach path)", () => {
 		release(Response.json({ messages: [] }));
 		await p;
 		// the reattach path is the same synchronous flip (resumeStream sets
-		// submitted at entry, before its fetches) — pinned by the handshake
-		// test above reading status mid-fetch.
+		// submitted at entry, before its fetches).
+	});
+
+	it("CONTENT-GATED, not status-gated (owner, optimistic round 2): agent_start does NOT release the placeholder — the first visible content does", async () => {
+		// The old bug: the server emits agent_start instantly (pre-provider),
+		// the first wire event flipped status to streaming, and the line
+		// VANISHED into an empty wait until the provider's first token.
+		let release!: () => void;
+		const gate = new Promise<void>((res) => (release = res));
+		const body = new ReadableStream<Uint8Array>({
+			async start(c) {
+				const enc = new TextEncoder();
+				c.enqueue(enc.encode(sse({ type: "agent_start" }, { type: "turn_start" })));
+				await gate; // the provider is slow — nothing but protocol so far
+				c.enqueue(
+					enc.encode(
+						sse({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }),
+					),
+				);
+				c.enqueue(enc.encode(sse({ type: "agent_end", messages: [] }, "[DONE]")));
+				c.close();
+			},
+		});
+		globalThis.fetch = (async () =>
+			new Response(body, { headers: { "Content-Type": "text/event-stream" } })) as typeof globalThis.fetch;
+		const m = model();
+		const p = m.send({ type: "text", text: "q" });
+		assert.equal(m.getState().awaitingFirstChunk, true, "submitted: placeholder up");
+		await new Promise((r) => setTimeout(r, 25)); // let agent_start arrive + consume
+		assert.equal(m.getState().status, "streaming", "agent_start arrived — status flipped");
+		assert.equal(m.getState().awaitingFirstChunk, true, "protocol events release NOTHING: no vanish into the empty wait");
+		release();
+		await p;
+		assert.equal(m.getState().status, "ready");
+		assert.equal(m.getState().awaitingFirstChunk, false, "the turn ended with content — nothing awaited");
+	});
+
+	it("EMPTY leading parts do not release; the release is STICKY for the rest of the turn", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((res) => (release = res));
+		const body = new ReadableStream<Uint8Array>({
+			async start(c) {
+				const enc = new TextEncoder();
+				// message_start with EMPTY content: an empty thinking header,
+				// nothing renderable — the placeholder must stay.
+				c.enqueue(enc.encode(sse({ type: "message_start", message: { role: "assistant", content: [] } })));
+				await gate;
+				c.enqueue(
+					enc.encode(
+						sse({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", text: "pondering" }] } }),
+					),
+				);
+				c.enqueue(
+					enc.encode(
+						sse({ type: "message_end", message: { role: "assistant", content: [{ type: "thinking", text: "pondering" }], stopReason: "stop" } }),
+					),
+				);
+				// a SECOND assistant message opens with empty content — the
+				// release must NOT flash the placeholder back mid-turn.
+				c.enqueue(enc.encode(sse({ type: "message_start", message: { role: "assistant", content: [] } })));
+				await new Promise((r) => setTimeout(r, 10));
+				c.enqueue(
+					enc.encode(
+						sse({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" } }),
+					),
+				);
+				c.enqueue(enc.encode(sse({ type: "agent_end", messages: [] }, "[DONE]")));
+				c.close();
+			},
+		});
+		globalThis.fetch = (async () =>
+			new Response(body, { headers: { "Content-Type": "text/event-stream" } })) as typeof globalThis.fetch;
+		const m = model();
+		const p = m.send({ type: "text", text: "q" });
+		await new Promise((r) => setTimeout(r, 25)); // message_start (empty) consumed
+		assert.equal(m.getState().status, "streaming");
+		assert.equal(m.getState().awaitingFirstChunk, true, "empty leading parts render nothing — placeholder stays");
+		release();
+		await new Promise((r) => setTimeout(r, 25)); // first thinking delta + second empty message_start
+		assert.equal(m.getState().awaitingFirstChunk, false, "first content released — sticky through the empty second start");
+		await p;
+		assert.equal(m.getState().awaitingFirstChunk, false);
 	});
 
 	it("turn-settled fires the settle hook and ends cleanly", async () => {

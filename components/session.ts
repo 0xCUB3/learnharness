@@ -86,6 +86,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight }: U
 		nativeMessages: state.nativeMessages,
 		status: state.status,
 		error: state.error,
+		awaitingFirstChunk: state.awaitingFirstChunk,
 		send,
 		submitAnswer,
 		setMessages,
