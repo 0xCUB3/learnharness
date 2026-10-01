@@ -134,14 +134,22 @@ const ACTIVITY_LABELS: Record<string, string> = {
 	probe_done: "Concluding the assessment…",
 };
 
+/** The activity label for ONE running tool (owner, streaming round
+ *  2026-10-01): the live tool-input card carries it inline — spinner +
+ *  shimmered label on the card itself, replacing the retired transcript
+ *  bottom line. Question tools are excluded here: their input-streaming
+ *  part renders in the dock, never a live card. */
+export function toolActivityLabel(tool: string): string {
+	if ((QUESTION_TOOLS as readonly string[]).includes(tool)) return "Writing a question…";
+	return ACTIVITY_LABELS[tool] ?? "Working…";
+}
+
 export function streamingToolActivity(messages: UIMessage[]): string | null {
 	const last = messages.at(-1);
 	if (!last || last.role !== "assistant") return null;
 	for (const part of last.parts) {
 		if (isToolUIPart(part) && part.state === "input-streaming") {
-			const tool = part.type.slice("tool-".length);
-			if ((QUESTION_TOOLS as readonly string[]).includes(tool)) return "Writing a question…";
-			return ACTIVITY_LABELS[tool] ?? "Working…";
+			return toolActivityLabel(part.type.slice("tool-".length));
 		}
 	}
 	return null;

@@ -15,6 +15,7 @@ import {
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { LiveToolCard } from "@/components/artifacts/live-tool-card";
 import { Separator } from "@/components/ui/separator";
 import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
@@ -36,7 +37,7 @@ import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsag
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import { CoverageRing } from "@/components/extraction-coverage";
-import { findPendingToolCall, phaseAt3, phaseTimeline, streamingToolActivity } from "@/src/core";
+import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
 import { slotsConfigured, type ModelsSettings } from "@/src/core";
 import { useSettingsSaved } from "@/components/settings-signal";
 
@@ -374,13 +375,6 @@ export function Chat({
 	// color-coded dotted divider at each boundary; the header chip reads the
 	// session's current phase.
 	const phases = useMemo(() => phaseTimeline(messages), [messages]);
-
-	// A tool call still streaming its input: the teacher is mid-activity. The
-	// label names the ACTUAL tool (a long grep used to shimmer as “Writing a
-	// question…” for minutes — a part stays input-streaming through its whole
-	// execution, see streamingToolActivity); shown as the transcript shimmer,
-	// exactly like the thinking indicator.
-	const streamingActivity = !pending ? streamingToolActivity(messages) : null;
 
 	const [text, setText] = useState("");
 	/* The composer's value MIRROR ("nothing gets lost" round, owner
@@ -1170,6 +1164,14 @@ export function Chat({
 														return null;
 													}
 													default: {
+														// A tool call being WRITTEN (owner, streaming round 2026-10-01):
+														// input-streaming spans the whole execution, and the live card —
+														// spinner + shimmered activity label, the input watchable on expand
+														// — replaces the retired transcript bottom line. On settling, the
+														// registry's card takes over below.
+														if (part.type.startsWith("tool-") && part.state === "input-streaming") {
+															return <LiveToolCard key={pi} part={part as ArtifactPartProps["part"]} />;
+														}
 														// Artifact extension point (contracts.ts): job
 														// parts and future artifacts render via the
 														// registry — add renderers there, not here.
@@ -1187,8 +1189,16 @@ export function Chat({
 								</Fragment>
 							))}
 
-							{(status === "submitted" || turnInFlight) && <Shimmer className="text-sm">Thinking…</Shimmer>}
-							{streamingActivity && <Shimmer className="text-sm">{streamingActivity}</Shimmer>}
+							{/* The pre-first-chunk line only (owner, streaming round
+							    2026-10-01): once a tool call starts writing, its LIVE card
+							    carries the activity inline — the old bottom tool-activity
+							    line retired rather than double-render. Same glimmer recipe
+							    as the thinking row: duration 1. */}
+							{(status === "submitted" || turnInFlight) && (
+								<Shimmer duration={1} className="text-sm">
+									Thinking…
+								</Shimmer>
+							)}
 							{error && (
 								<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
 									Something went wrong: {error.message}

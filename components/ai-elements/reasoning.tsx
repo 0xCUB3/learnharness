@@ -7,7 +7,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { BrainIcon, ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
+import { BrailleSpinner } from "@/components/braille-spinner";
 import type { ComponentProps, ReactNode } from "react";
 import {
   createContext,
@@ -65,9 +66,13 @@ export const Reasoning = memo(
     children,
     ...props
   }: ReasoningProps) => {
-    const resolvedDefaultOpen = defaultOpen ?? isStreaming;
-    // Track if defaultOpen was explicitly set to false (to prevent auto-open)
-    const isExplicitlyClosed = defaultOpen === false;
+    // COLLAPSED BY DEFAULT, ALWAYS (owner, streaming round 2026-10-01):
+    // the old default opened on streaming and an auto-open effect
+    // re-fought a manual collapse — the block "wasn't collapsible until
+    // it finished". Collapsed is the default; opening is always the
+    // learner's click; the auto-close after the stream still tidies a
+    // row the learner had opened.
+    const resolvedDefaultOpen = defaultOpen ?? false;
 
     const [isOpen, setIsOpen] = useControllableState<boolean>({
       defaultProp: resolvedDefaultOpen,
@@ -95,13 +100,6 @@ export const Reasoning = memo(
         startTimeRef.current = null;
       }
     }, [isStreaming, setDuration]);
-
-    // Auto-open when streaming starts (unless explicitly closed)
-    useEffect(() => {
-      if (isStreaming && !isOpen && !isExplicitlyClosed) {
-        setIsOpen(true);
-      }
-    }, [isStreaming, isOpen, setIsOpen, isExplicitlyClosed]);
 
     // Auto-close when streaming ends (once only, and only if it ever streamed)
     useEffect(() => {
@@ -182,7 +180,11 @@ export const ReasoningTrigger = memo(
       >
         {children ?? (
           <>
-            <BrainIcon className="size-4" />
+            {/* The working-state grammar (owner, streaming round
+                2026-10-01): the Braille spinner replaces the brain icon
+                WHILE STREAMING ONLY — motion is the signal, so a finished
+                row carries no icon at all, just text + chevron. */}
+            {isStreaming && <BrailleSpinner label="Thinking" className="size-4" />}
             {getThinkingMessage(isStreaming, duration)}
             <ChevronDownIcon
               className={cn(
