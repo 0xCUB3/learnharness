@@ -387,7 +387,15 @@ function QuestionDockForm({
 		if (!active || rowCount === 0) return;
 		const onKeyDown = (e: KeyboardEvent) => {
 			const t = e.target as HTMLElement | null;
-			const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+			// A TYPING field is where keys mean text (owner round 4): the
+			// thinking/answer fields, search boxes, renames — never a range
+			// input, whose focus after a click or drag must not kill the
+			// arrow cycling. Everywhere else the arrows act.
+			const typing =
+				!!t &&
+				((t.tagName === "INPUT" && (t as HTMLInputElement).type !== "range") ||
+					t.tagName === "TEXTAREA" ||
+					t.isContentEditable);
 			// Alt/Cmd/Ctrl combos are never ours (Alt+arrows cycle sessions
 			// globally — they must not ALSO walk the question rows).
 			const modded = e.altKey || e.metaKey || e.ctrlKey;
@@ -612,18 +620,18 @@ function QuestionDockForm({
 			</div>
 
 			{/* Confidence (owner, 2026-10-01; UI rounds same day): a snapped
-			    slider below the options and above "Your thinking" — the
-			    learner's stated probability that his selected answer is
-			    correct. The thumb's POSITION is the raw fraction (50 sits
-			    halfway); fill + handle wear the stop's ramp color (the disc
-			    carries a dark rim so it never bleeds into its own fill);
-			    the bar is the original thin rail over #141414, with dashed
-			    stop ticks INSIDE — background layers behind the fill, so
-			    they show only on the empty side, never over the color.
-			    Keyboard: GLOBAL ←/→ (the ↑/↓ pattern; the ring is gone
-			    app-wide). Clicking and dragging are native. "I don't know"
-			    GRAYS it out — the layout holds, no value is sent, the IDK
-			    signal stands alone. */}
+				slider below the options and above "Your thinking" — the
+				learner's stated probability that his selected answer is
+				correct. The thumb's POSITION is the raw fraction; the painted
+				RAIL overlays exactly the thumb-center range (inset half a disc
+				per side), so 0 and 100 rest flush against the rail's very
+				ends. Fill + handle wear the stop's ramp color; SOLID stop
+				ticks are background layers behind the fill (empty side only,
+				never over the color; 0/100 need no tick — the flush ends say
+				them). Keyboard: GLOBAL ←/→ (the ↑/↓ pattern; the ring is gone
+				app-wide). Clicking and dragging are native. "I don't know"
+				GRAYS it out — the layout holds, no value is sent, the IDK
+				signal stands alone. */}
 			{kind === "quiz" && (
 				<div className="border-t border-border/60 px-4 py-2.5">
 					<div className="flex items-center gap-3">
@@ -635,7 +643,38 @@ function QuestionDockForm({
 						>
 							Confidence
 						</span>
-						<div className="relative min-w-0 flex-1" data-testid="confidence-track">
+						<div
+							className={cn("relative min-w-0 flex-1", sel.dontKnow && "opacity-40")}
+							data-testid="confidence-track"
+						>
+							{/* The RAIL is painted here, not on the input: this overlay spans
+							    exactly the thumb-CENTER range (inset 8px = half the 16px disc,
+							    left and right), so at 0 and 100 the disc sits flush against the
+							    rail's very ends — no bare stub poking past it (owner round 4).
+							    The input on top is pure interaction: full width, transparent,
+							    native drag and click. */}
+							<div
+								aria-hidden
+								data-testid="confidence-rail"
+								className="pointer-events-none absolute top-1/2 left-2 right-2 h-1.5 -translate-y-1/2 rounded-full border border-border"
+								style={{
+									// Stack: #141414 base (the darker main background), SOLID stop
+									// ticks as background LAYERS, fill on top — TRANSPARENT past the
+									// stop, so the ticks read as background and never paint over the
+									// color. Ticks skip 0 and 100 (the rail's flush ends already say
+									// those); positions are plain p% — the overlay IS the center range.
+									backgroundColor: "#141414",
+									backgroundImage: [
+										`linear-gradient(90deg, ${CONFIDENCE_COLORS[confIdx]} 0%, ${CONFIDENCE_COLORS[confIdx]} ${CONFIDENCE_STOPS[confIdx]}%, transparent ${CONFIDENCE_STOPS[confIdx]}%, transparent 100%)`,
+										...[30, 50, 70, 90].map(
+											() => "linear-gradient(90deg, rgba(230,230,230,0.35), rgba(230,230,230,0.35))",
+										),
+									].join(", "),
+									backgroundSize: ["100% 100%", "1px 100%", "1px 100%", "1px 100%", "1px 100%"].join(", "),
+									backgroundPosition: ["0 0", ...[30, 50, 70, 90].map((p) => `${p}% 0`)].join(", "),
+									backgroundRepeat: "no-repeat",
+								}}
+							/>
 							<input
 								type="range"
 								min={0}
@@ -647,28 +686,12 @@ function QuestionDockForm({
 								aria-valuetext={`${CONFIDENCE_STOPS[confIdx]} percent`}
 								title="The probability your selected answer is correct — 50% is a coin flip. Adjust with ←/→."
 								data-testid="confidence-slider"
-								onKeyDown={(e) => {
-									// Focused-here arrows step the STOP index (native
-									// would step 1% and snap straight back — dead keys);
-									// Enter submits, dock-wide intuition. The global
-									// handler skips INPUT targets, so no double-step.
-									if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-										e.preventDefault();
-										setConfIdx((i) =>
-											Math.min(
-												CONFIDENCE_STOPS.length - 1,
-												Math.max(0, i + (e.key === "ArrowRight" ? 1 : -1)),
-											),
-										);
-									} else if (e.key === "Enter" && canSubmit) {
-										e.preventDefault();
-										submit();
-									}
-								}}
 								onChange={(e) => {
-									// Snap to the nearest stop; the rendered VALUE is
-									// the stop's own percent, so the thumb always rests
-									// at its true fraction (50 = halfway).
+									// Snap to the nearest stop; the rendered VALUE is the stop's own
+									// percent, so the thumb always rests at its true fraction (50 =
+									// halfway). Keyboard needs no handler here: the dock machine treats
+									// a focused range as non-typing (see the guard above) and its ←/→
+									// branch preventDefaults, which also cancels the native 1% step.
 									const v = Number(e.target.value);
 									let best = 0;
 									for (let i = 1; i < CONFIDENCE_STOPS.length; i++) {
@@ -676,32 +699,13 @@ function QuestionDockForm({
 									}
 									setConfIdx(best);
 								}}
-								style={{
-									color: CONFIDENCE_COLORS[confIdx],
-									// The stack (owner, round 3): #141414 base (the darker
-									// main background), dashed stop ticks as background
-									// LAYERS, fill on top — TRANSPARENT past the thumb, so
-									// the ticks read as background and never paint over the
-									// filled portion. Ticks skip 0 and 100 (the rail's ends
-									// already say those) and sit at the thumb-center inset:
-									// calc(8px + (100% - 16px) * p).
-									backgroundColor: "#141414",
-									backgroundImage: [
-										`linear-gradient(90deg, ${CONFIDENCE_COLORS[confIdx]} 0%, ${CONFIDENCE_COLORS[confIdx]} ${CONFIDENCE_STOPS[confIdx]}%, transparent ${CONFIDENCE_STOPS[confIdx]}%, transparent 100%)`,
-										...[30, 50, 70, 90].map(
-											() => "repeating-linear-gradient(180deg, rgba(230,230,230,0.35) 0 1.5px, transparent 1.5px 3.5px)",
-										),
-									].join(", "),
-									backgroundSize: ["100% 100%", "1px 100%", "1px 100%", "1px 100%", "1px 100%"].join(", "),
-									backgroundPosition: ["0 0", ...[30, 50, 70, 90].map((p) => `calc(8px + (100% - 16px) * ${p / 100}) 0`)].join(", "),
-									backgroundRepeat: "no-repeat",
-								}}
+								style={{ color: CONFIDENCE_COLORS[confIdx] }}
 								className={cn(
-									"h-1.5 w-full cursor-pointer appearance-none rounded-full border border-border outline-none disabled:opacity-40",
-									"[&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent",
-									"[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#141414] [&::-webkit-slider-thumb]:bg-current [&::-webkit-slider-thumb]:-mt-1.5",
-									"[&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-transparent",
-									"[&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-[#141414] [&::-moz-range-thumb]:bg-current",
+									"h-4 w-full cursor-pointer appearance-none bg-transparent outline-none",
+									"[&::-webkit-slider-runnable-track]:h-4 [&::-webkit-slider-runnable-track]:bg-transparent",
+									"[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-current",
+									"[&::-moz-range-track]:h-4 [&::-moz-range-track]:bg-transparent",
+									"[&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-current",
 								)}
 							/>
 						</div>
