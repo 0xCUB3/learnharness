@@ -140,10 +140,6 @@ export interface SessionState {
 	nativeMessages: LhMessage[];
 	status: SessionStatus;
 	error: { message: string } | null;
-	/** A reattach handshake is in flight (resumeStream, no events yet):
-	 *  the view shows the honest “Reattaching…” placeholder instead of a
-	 *  bare Thinking shimmer (owner, reattach round 2026-10-02). */
-	reattaching: boolean;
 }
 
 export interface SessionModelOptions extends SessionModelDeps {
@@ -178,9 +174,6 @@ export class SessionModel {
 	private streamingMessageId: string | null = null;
 	private statusValue: SessionStatus = "ready";
 	private errorValue: { message: string } | null = null;
-	/** True from resumeStream() entry until its first event / settle /
-	 *  error — the handshake window (see SessionState.reattaching). */
-	private reattachingValue = false;
 	// The single live consume (POST response or reattach stream): a newer
 	// consume cancels the older — one reader at a time.
 	private consumeAbort: AbortController | null = null;
@@ -216,7 +209,6 @@ export class SessionModel {
 			nativeMessages: [...this.base, ...this.tail],
 			status: this.statusValue,
 			error: this.errorValue,
-			reattaching: this.reattachingValue,
 		};
 	}
 
@@ -393,7 +385,6 @@ export class SessionModel {
 				}
 				if (!sawEvent) {
 					sawEvent = true;
-					this.reattachingValue = false; // first event: content, not a handshake
 					if (this.statusValue !== "error") this.setStatus("streaming");
 				}
 				this.applyWireEvent(event);
@@ -401,7 +392,6 @@ export class SessionModel {
 		} finally {
 			this.streamingIds = new Set();
 			this.executions = new Map();
-			this.reattachingValue = false; // settled/aborted: no handshake anymore
 			if (this.statusValue !== "error") this.setStatus("ready");
 		}
 	}
@@ -423,7 +413,6 @@ export class SessionModel {
 		this.consumeAbort?.abort();
 		const controller = new AbortController();
 		this.consumeAbort = controller;
-		this.reattachingValue = true;
 		this.setStatus("submitted");
 		try {
 			if (refetchRecordFirst) {
@@ -447,7 +436,6 @@ export class SessionModel {
 			await this.consumeStream(res);
 		} catch (err) {
 			if ((err as Error).name === "AbortError") return; // a newer consume won
-			this.reattachingValue = false;
 			this.setError((err as Error).message);
 			this.setStatus("error");
 		}
@@ -465,7 +453,6 @@ export class SessionModel {
 		const controller = new AbortController();
 		this.consumeAbort = controller;
 		this.setError(null);
-		this.reattachingValue = false; // an aborted handshake is not a placeholder
 		this.setStatus("submitted");
 		// The optimistic appends — exactly the messages the server's
 		// write-ahead will persist (inputAppends), with LOCAL ids so
@@ -513,7 +500,6 @@ export class SessionModel {
 	stop(): void {
 		this.consumeAbort?.abort();
 		this.consumeAbort = null;
-		this.reattachingValue = false;
 		this.streamingIds = new Set();
 		this.streamingMessageId = null;
 		this.executions = new Map();

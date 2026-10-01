@@ -86,7 +86,6 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight }: U
 		nativeMessages: state.nativeMessages,
 		status: state.status,
 		error: state.error,
-		reattaching: state.reattaching,
 		send,
 		submitAnswer,
 		setMessages,

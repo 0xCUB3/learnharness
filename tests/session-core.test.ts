@@ -492,28 +492,26 @@ describe("resumeStream (the reattach path)", () => {
 		// (the earlier test in this block pins that order).
 	});
 
-	it("reattaching is honest: true during the handshake, false once events flow", async () => {
+	it("OPTIMISTIC SUBMIT (owner, optimistic round 2026-10-02): send/reattach flip status synchronously — the Thinking… placeholder shows before the first token, however slow the provider", async () => {
 		let release!: (r: Response) => void;
 		const gate = new Promise<Response>((res) => (release = res));
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
-			if (url === "/api/chats/chat_x") return gate; // the record fetch hangs
-			if (url === "/api/chats/chat_x/stream")
-				return sseResponse(
-					{ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } },
-					{ type: "agent_end", messages: [] },
-					"[DONE]",
-				);
+			if (url === "/api/chats/chat_x") return gate; // the POST hangs
 			throw new Error(`unexpected fetch: ${url}`);
 		}) as typeof globalThis.fetch;
 		const m = model();
-		const p = m.resumeStream(); // runs sync to the first await (the gated fetch)
-		assert.equal(m.getState().reattaching, true, "mid-handshake: the placeholder is Reattaching…");
-		assert.equal(m.getState().status, "submitted");
+		// send() runs synchronously to its first await — status is already
+		// "submitted" (and the optimistic user bubble is appended) before
+		// the server has answered ANYTHING.
+		const p = m.send({ type: "text", text: "q" });
+		assert.equal(m.getState().status, "submitted", "the placeholder is live pre-first-chunk");
+		assert.equal(m.getState().messages.at(-1)!.role, "user", "the optimistic bubble is up");
 		release(Response.json({ messages: [] }));
 		await p;
-		assert.equal(m.getState().reattaching, false, "first event landed: content, not a handshake");
-		assert.equal(m.getState().status, "ready");
+		// the reattach path is the same synchronous flip (resumeStream sets
+		// submitted at entry, before its fetches) — pinned by the handshake
+		// test above reading status mid-fetch.
 	});
 
 	it("turn-settled fires the settle hook and ends cleanly", async () => {

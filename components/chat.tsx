@@ -186,7 +186,7 @@ export function Chat({
 	// (core/view.ts projectView); sends are ONE explicit input event each
 	// ({chatId, input} — the stash indirection died with the SDK), and the
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
-	const { messages, nativeMessages, send, submitAnswer, setMessages, adoptRecord, status, error, reattaching, stop, clearError, resumeStream, setReattachSettled } =
+	const { messages, nativeMessages, send, submitAnswer, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initiallyInFlight });
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
@@ -1177,28 +1177,26 @@ export function Chat({
 								</Fragment>
 							))}
 
-							{/* The pre-first-chunk line only (owner, streaming round
-							    2026-10-01): once a tool call starts writing, its LIVE card
-							    carries the activity inline — the old bottom tool-activity
-							    line retired rather than double-render. Same glimmer recipe
-							    as the thinking row: duration 1. The REATTACH variant
-							    (reattach round 2026-10-02): while a fresh mount reattaches
-							    to a server-side turn, the placeholder says what is actually
-							    happening — Reattaching… + the working-state spinner —
-							    instead of a bare Thinking shimmer. */}
-							{(status === "submitted" || turnInFlight) &&
-								(reattaching ? (
-									<span className="flex items-center gap-2">
-										<BrailleSpinner label="Reattaching to the running turn" />
-										<Shimmer duration={1} className="text-sm">
-											Reattaching…
-										</Shimmer>
-									</span>
-								) : (
+							{/* THE pre-first-chunk placeholder, ONE grammar everywhere
+							    (owner, optimistic round 2026-10-02): spinner + shimmered
+							    Thinking… from the instant anything is submitted (send,
+							    answer, reattach — status flips synchronously, so it shows
+							    before the first token, however slow the provider's
+							    connection) until the first event lands, then it hands off
+							    to the live stream — minimal change: the collapsible
+							    reasoning row carries the SAME look, now with content.
+							    Never collapsible itself (there is nothing to show yet).
+							    Once a tool call starts writing, its LIVE card carries the
+							    activity inline (the bottom tool-activity line retired,
+							    streaming round 2026-10-01). */}
+							{(status === "submitted" || turnInFlight) && (
+								<span className="flex items-center gap-2">
+									<BrailleSpinner label="Thinking" />
 									<Shimmer duration={1} className="text-sm">
 										Thinking…
 									</Shimmer>
-								))}
+								</span>
+							)}
 							{error && (
 								<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
 									Something went wrong: {error.message}
