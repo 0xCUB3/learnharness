@@ -239,6 +239,27 @@ describe("render smoke tests", () => {
 		assert.ok(html.includes('data-mark="check"') && html.includes('data-mark="x"'));
 	});
 
+	it("AnsweredCard shows the confidence rail on quiz answers (record, no disc)", () => {
+		// The slider's rail, disc removed: same paint, same ticks, the % read-out.
+		const answer = buildAnswer(quizQD(), { values: ["Venus"], confidence: 70 });
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
+		assert.match(html, /data-testid="answered-confidence"/);
+		assert.match(html, /data-testid="confidence-rail"/);
+		assert.match(html, /70%/);
+		// It is a RECORD, not a control — no range input on the card.
+		assert.ok(!html.includes('type="range"'));
+	});
+
+	it("AnsweredCard hides the rail where no confidence exists (IDK, older records)", () => {
+		const idk = buildAnswer(quizQD(), { values: [], dontKnow: true });
+		const idkHtml = renderToStaticMarkup(<AnsweredCard answer={idk} />);
+		assert.ok(!idkHtml.includes("answered-confidence"), "IDK sent no confidence");
+
+		const ask = buildAnswer(askQD(), { other: "Shaky" });
+		const askHtml = renderToStaticMarkup(<AnsweredCard answer={ask} />);
+		assert.ok(!askHtml.includes("answered-confidence"), "ask never had one");
+	});
+
 	it("AnsweredCard renders the learner's own Other answer AS an option row", () => {
 		const answer = buildAnswer(askQD(), { other: "Fairly confident — but shaky on applications" });
 		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);

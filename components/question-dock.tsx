@@ -32,6 +32,7 @@ import {
 	type SelectMode,
 	type Phase3,
 } from "@/src/core";
+import { CONFIDENCE_COLORS, confidenceRailStyle } from "@/components/confidence-rail";
 
 /**
  * The question dock — a pending quiz/ask REPLACES the chat composer: the
@@ -78,19 +79,6 @@ export interface QuestionDockProps {
 	 *  stays quick (one row), teaching invites dumping (three rows). */
 	phase?: Phase3;
 }
-
-/** The six-step confidence ramp (owner, UI round 2026-10-01): color
- *  follows the number — each stop reads as its own belief level, red
- *  (believes the pick wrong) through emerald (certain), yellow the coin
- *  flip. Pairs with CONFIDENCE_STOPS index-for-index. */
-const CONFIDENCE_COLORS: readonly string[] = [
-	"#ef4444", // 0   — red
-	"#f97316", // 30  — orange
-	"#eab308", // 50  — yellow: a coin flip
-	"#84cc16", // 70  — lime
-	"#22c55e", // 90  — green
-	"#10b981", // 100 — emerald
-];
 
 export function QuestionDock({
 	toolName,
@@ -661,23 +649,7 @@ function QuestionDockForm({
 								aria-hidden
 								data-testid="confidence-rail"
 								className="pointer-events-none absolute top-1/2 left-2 right-2 h-1.5 -translate-y-1/2 rounded-full border border-border"
-								style={{
-									// Stack: #141414 base (the darker main background), SOLID stop
-									// ticks as background LAYERS, fill on top — TRANSPARENT past the
-									// stop, so the ticks read as background and never paint over the
-									// color. Ticks skip 0 and 100 (the rail's flush ends already say
-									// those); positions are plain p% — the overlay IS the center range.
-									backgroundColor: "#141414",
-									backgroundImage: [
-										`linear-gradient(90deg, ${CONFIDENCE_COLORS[confIdx]} 0%, ${CONFIDENCE_COLORS[confIdx]} ${CONFIDENCE_STOPS[confIdx]}%, transparent ${CONFIDENCE_STOPS[confIdx]}%, transparent 100%)`,
-										...[30, 50, 70, 90].map(
-											() => "linear-gradient(90deg, rgba(230,230,230,0.35), rgba(230,230,230,0.35))",
-										),
-									].join(", "),
-									backgroundSize: ["100% 100%", "1px 100%", "1px 100%", "1px 100%", "1px 100%"].join(", "),
-									backgroundPosition: ["0 0", ...[30, 50, 70, 90].map((p) => `${p}% 0`)].join(", "),
-									backgroundRepeat: "no-repeat",
-								}}
+								style={confidenceRailStyle(CONFIDENCE_STOPS[confIdx]!)}
 							/>
 							<input
 								type="range"
