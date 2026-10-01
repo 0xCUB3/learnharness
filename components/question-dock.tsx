@@ -9,6 +9,8 @@ import { cn } from "@/lib/utils";
 import {
 	buildAnswer,
 	coerceCorrectAnswer,
+	CONFIDENCE_STOPS,
+	DEFAULT_CONFIDENCE_INDEX,
 	emptyDockSelection,
 	normalizeOptions,
 	resolveCorrect,
@@ -264,6 +266,12 @@ function QuestionDockForm({
 	const [thinking, setThinking] = useState("");
 	const [other, setOther] = useState("");
 	const [text, setText] = useState("");
+	// Confidence (owner, 2026-10-01): an index into CONFIDENCE_STOPS,
+	// resting at 50 — a real coin flip by definition, untouched or
+	// deliberate (the same number, the same meaning). The dock unmounts
+	// between questions, so each question starts fresh at 50.
+	const [confIdx, setConfIdx] = useState<number>(DEFAULT_CONFIDENCE_INDEX);
+	const confidenceRef = useRef<HTMLInputElement>(null);
 	const selectMode: SelectMode = qd.mode === "multi-select" ? "multi-select" : "single-select";
 
 	// The PRIMARY dictation input (owner, STT round 1): while a question
@@ -297,6 +305,9 @@ function QuestionDockForm({
 			other: sel.otherSelected ? other : undefined,
 			text: qd.mode === "text" ? text : undefined,
 			note: qd.mode !== "text" ? thinking.trim() || undefined : undefined,
+			// Always sent on quiz answers (owner: 50 must mean 50, never
+			// "untouched"); buildAnswer drops it on "I don't know".
+			confidence: kind === "quiz" ? CONFIDENCE_STOPS[confIdx] : undefined,
 		};
 		onSubmit(buildAnswer(qd, req));
 	};
@@ -368,14 +379,19 @@ function QuestionDockForm({
 			// Alt/Cmd/Ctrl combos are never ours (Alt+arrows cycle sessions
 			// globally — they must not ALSO walk the question rows).
 			const modded = e.altKey || e.metaKey || e.ctrlKey;
-			// Plain Tab toggles focus: rows → thinking, anything else → the
-			// walked (or first) row. Shift+Tab falls through (the global
-			// thinking-level cycle owns it), so the shift check matters.
+			// Plain Tab walks the dock's focus chain forward: rows →
+			// confidence slider (quiz, when enabled) → thinking. Shift+Tab
+			// falls through (the global thinking-level cycle owns it), so the
+			// shift check matters.
 			if (e.key === "Tab" && !e.shiftKey && !modded) {
 				e.preventDefault();
 				e.stopPropagation();
-				if (t?.closest?.("[data-kbdrow]")) thinkingRef.current?.focus();
-				else {
+				if (t?.closest?.("[data-confidence]")) thinkingRef.current?.focus();
+				else if (t?.closest?.("[data-kbdrow]")) {
+					const slider = confidenceRef.current;
+					if (slider && !slider.disabled) slider.focus();
+					else thinkingRef.current?.focus();
+				} else {
 					const idx = kbdIdx ?? 0;
 					setKbdIdx(idx);
 					focusRow(idx);
@@ -572,6 +588,59 @@ function QuestionDockForm({
 					</div>
 				)}
 			</div>
+
+			{/* Confidence (owner, 2026-10-01): a snapped slider below the options
+			    and above "Your thinking" — the learner's stated probability
+			    that his selected answer is correct. ←/→ move it (native range
+			    semantics over the stop INDEX, so the uneven grid steps
+			    cleanly). "I don't know" GRAYS it out — the layout holds, no
+			    value is sent, the IDK signal stands alone. */}
+			{kind === "quiz" && (
+				<div className="border-t border-border/60 px-4 py-2.5">
+					<div className="flex items-center gap-3">
+						<span
+							className={cn(
+								"shrink-0 text-xs font-medium uppercase tracking-wide",
+								sel.dontKnow ? "text-muted-foreground/50" : "text-muted-foreground",
+							)}
+						>
+							Confidence
+						</span>
+						<input
+							ref={confidenceRef}
+							type="range"
+							min={0}
+							max={CONFIDENCE_STOPS.length - 1}
+							step={1}
+							value={confIdx}
+							disabled={sel.dontKnow}
+							aria-label="Confidence — the probability your selected answer is correct"
+							title="The probability your selected answer is correct — 50% is a coin flip"
+							data-testid="confidence-slider"
+							data-confidence=""
+							onChange={(e) => setConfIdx(Number(e.target.value))}
+							onKeyDown={(e) => {
+								// Enter submits from here too (dock-wide intuition);
+								// arrows stay native — ←/→ step the stop index.
+								if (e.key === "Enter" && canSubmit) {
+									e.preventDefault();
+									submit();
+								}
+							}}
+							className="h-1.5 min-w-0 flex-1 accent-primary disabled:opacity-40"
+						/>
+						<span
+							data-testid="confidence-value"
+							className={cn(
+								"w-9 shrink-0 text-right font-mono text-sm tabular-nums",
+								sel.dontKnow && "text-muted-foreground/50",
+							)}
+						>
+							{sel.dontKnow ? "—" : `${CONFIDENCE_STOPS[confIdx]}%`}
+						</span>
+					</div>
+				</div>
+			)}
 
 			{/* The learner's half of the dock — a composer TWIN: a labeled, bordered
 			    field with Submit docked inside, exactly like the chat composer's

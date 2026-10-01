@@ -350,6 +350,7 @@ export interface QuestionAnswerData {
 	other?: string; // ask: "Other" free text
 	text?: string; // ask/explain: text-mode answer
 	note?: string;
+	confidence?: number; // quiz only: the learner's stated probability (0-100, raw) that his selected answer is correct — never sent on "I don't know" (owner, 2026-10-01)
 	correct?: boolean; // quiz only
 	correctIndices?: number[]; // quiz only (rendering)
 	committed?: string; // explain only (rendering): the model's committed answer
@@ -375,7 +376,16 @@ export interface AnswerRequest {
 	other?: string; // ask "Other"
 	text?: string; // ask text-mode
 	note?: string;
+	confidence?: number; // quiz only: 0-100 raw probability — 50 is a real coin flip, always sent (owner, 2026-10-01)
 }
+
+/** The confidence slider's snap stops (owner, 2026-10-01): raw probability
+ *  that the selected answer is correct, uneven on purpose — resolution
+ *  concentrates at the top where the calibration signal lives (90 vs 100
+ *  separates knows from mastered). 50 is a genuine coin flip and the
+ *  resting default — untouched and deliberate 50 are the same number. */
+export const CONFIDENCE_STOPS: readonly number[] = [0, 30, 50, 70, 90, 100];
+export const DEFAULT_CONFIDENCE_INDEX = 2;
 
 // ─── dock selection (the client state machine, pure for tests) ─────────────
 
@@ -571,7 +581,6 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest): QuestionAnswe
 		note: req.note?.trim() || undefined,
 		answeredAt: new Date().toISOString(),
 	};
-
 	// resolve selected option values → OptionAnswer (in display order)
 	if (req.values && req.values.length > 0) {
 		const byValue = new Map(qd.options.map((o, i) => [o.value, { ...o, index: i + 1 }]));
@@ -589,6 +598,12 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest): QuestionAnswe
 		base.correctIndices = qd.correctIndices ?? [];
 		base.explanation = qd.explanation;
 		base.correct = base.dontKnow ? false : isCorrect(base.answers.map((a) => a.index), qd.correctIndices ?? []);
+		// The confidence slider rides on real quiz answers only — never on
+		// "I don't know" (no answer, no probability). Clamped defensively;
+		// the dock snaps to the grid, the record accepts any integer.
+		if (!base.dontKnow && req.confidence !== undefined) {
+			base.confidence = Math.max(0, Math.min(100, Math.round(req.confidence)));
+		}
 	}
 	if (qd.kind === "explain") {
 		// No client grading — the model grades in its reply, against the
@@ -620,6 +635,9 @@ export function formatAnswerMessage(ad: QuestionAnswerData): string {
 			const selectedStr = ad.answers.map((a) => `${a.index}. ${a.label}`).join(", ");
 			lines.push(`Selected: ${selectedStr || "(none)"}`);
 			lines.push(`Result: ${verdict}`);
+			if (ad.confidence !== undefined) {
+				lines.push(`Confidence: ${ad.confidence}% — the learner's stated probability that his selected answer is correct.`);
+			}
 		}
 		lines.push(`Correct: ${correctStr}`);
 	} else if (ad.kind === "explain") {

@@ -179,6 +179,7 @@ describe("the source-derived segment list", () => {
 				"system-prompt.md",
 				"prober/10-probe-doctrine.md",
 				"shared/20-question-tools.md",
+			"shared/25-confidence.md",
 				"shared/30-learner-files.md",
 				"shared/40-formatting.md",
 			],

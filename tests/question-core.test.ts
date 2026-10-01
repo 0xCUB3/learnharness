@@ -12,6 +12,8 @@ import {
 	askOptionProblems,
 	buildAnswer,
 	coerceCorrectAnswer,
+	CONFIDENCE_STOPS,
+	DEFAULT_CONFIDENCE_INDEX,
 	findPendingQuestion,
 	formatAnswerMessage,
 	isCorrect,
@@ -337,6 +339,13 @@ function quizData(overrides?: Partial<QuestionData>): QuestionData {
 	};
 }
 
+describe("confidence stops", () => {
+	it("the owner-decided grid (2026-10-01): resolution concentrates at the top", () => {
+		assert.deepEqual(CONFIDENCE_STOPS, [0, 30, 50, 70, 90, 100]);
+		assert.equal(CONFIDENCE_STOPS[DEFAULT_CONFIDENCE_INDEX], 50, "rests at a real coin flip");
+	});
+});
+
 describe("buildAnswer", () => {
 	it("grades a correct selection", () => {
 		const ad = buildAnswer(quizData(), { values: ["mercury"] });
@@ -366,6 +375,22 @@ describe("buildAnswer", () => {
 	it("ignores unknown option values", () => {
 		const ad = buildAnswer(quizData(), { values: ["mars", "mercury"] });
 		assert.deepEqual(ad.answers.map((a) => a.value), ["mercury"]);
+	});
+
+	// Confidence (owner, 2026-10-01): the slider's raw probability rides on
+	// real quiz answers only — never on "I don't know" (no answer, no
+	// probability), never on ask/explain. Clamped defensively.
+	it("carries confidence on quiz answers and clamps out-of-range values", () => {
+		assert.equal(buildAnswer(quizData(), { values: ["mercury"], confidence: 90 }).confidence, 90);
+		assert.equal(buildAnswer(quizData(), { values: ["mercury"], confidence: 150 }).confidence, 100);
+		assert.equal(buildAnswer(quizData(), { values: ["mercury"], confidence: -5 }).confidence, 0);
+		assert.equal(buildAnswer(quizData(), { values: ["mercury"] }).confidence, undefined);
+	});
+
+	it("drops confidence on dontKnow and on non-quiz kinds", () => {
+		assert.equal(buildAnswer(quizData(), { dontKnow: true, confidence: 70 }).confidence, undefined);
+		const ask = quizData({ kind: "ask", correctIndices: undefined, explanation: undefined });
+		assert.equal(buildAnswer(ask, { other: "x", confidence: 70 }).confidence, undefined);
 	});
 
 	it("multi-select grades as exact-set", () => {
@@ -410,6 +435,13 @@ describe("formatAnswerMessage", () => {
 	it("includes the note when present", () => {
 		const ad = buildAnswer(quizData(), { values: ["venus"], note: "guessed" });
 		assert.match(formatAnswerMessage(ad), /Note: guessed/);
+	});
+
+	it("states the confidence line on answered quizzes, absent on dontKnow", () => {
+		const ad = buildAnswer(quizData(), { values: ["mercury"], confidence: 70 });
+		assert.match(formatAnswerMessage(ad), /Confidence: 70% — the learner's stated probability that his selected answer is correct\./);
+		const idk = buildAnswer(quizData(), { dontKnow: true, confidence: 70 });
+		assert.ok(!formatAnswerMessage(idk).includes("Confidence:"));
 	});
 
 	it("formats ask answers", () => {
