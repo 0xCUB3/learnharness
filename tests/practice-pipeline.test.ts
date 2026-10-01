@@ -108,8 +108,11 @@ function targetOf(prompt: string): string[] {
 	const section = prompt.split("THE FULL SET")[0] ?? "";
 	const ids: string[] = [];
 	for (const line of section.split("\n")) {
-		if (line.includes("→")) ids.push(line.split("→")[1]!.trim());
-		else if (line.includes("(no premises)")) ids.push(line.replace("(no premises)", "").trim());
+		// Chain ids now LEAD every line ([arg_x] a, b → c) — strip the anchor
+		// bracket to recover the id the submit must echo.
+		const body = line.replace(/^\[[^\]]+\]\s+/, "");
+		if (body.includes("→")) ids.push(body.split("→")[1]!.trim());
+		else if (body.includes("(no premises)")) ids.push(body.replace("(no premises)", "").trim());
 	}
 	return ids;
 }

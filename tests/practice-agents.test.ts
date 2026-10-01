@@ -109,12 +109,15 @@ describe("renderParams — named levels, never a number", () => {
 });
 
 describe("rendering (the agent-facing text)", () => {
-	it("renderChains: legend with names + statements, premises → conclusion, singletons marked", () => {
+	it("renderChains: legend with names + statements, chain ids LEAD every line (the referenceable anchor)", () => {
 		const text = renderChains(chains, propositions);
 		assert.match(text, /\[n1\] Self-ownership — Each person owns themself\./);
 		assert.match(text, /\[n2\] Homesteading — Unowned goods are claimed by first use\./);
-		assert.match(text, /n1 → n3/);
-		assert.match(text, /n2 \(no premises\)/);
+		// The chain id precedes every line — the id the submit references.
+		assert.match(text, /\[n3\] n1 → n3/);
+		// A bare proposition: its own id, twice — the chain id IS the
+		// proposition id (owner fix, 2026-09-30 evening).
+		assert.match(text, /\[n2\] n2 \(no premises\)/);
 	});
 
 	it("renderPreviousProblems: numbered statements + chains; empty = first-set line", () => {

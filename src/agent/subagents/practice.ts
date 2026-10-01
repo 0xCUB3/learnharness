@@ -193,14 +193,14 @@ INPUTS (in the user message):
 - PREVIOUS PROBLEMS: problems the learner has already answered, with the chains they exercised. Do not rebuild one; keep your situation distant from theirs — cue distance counts previous problems' situations (Part I, "Cue distance").
 
 OUTPUT — your entire deliverable is ONE submit_problem call:
-- chains: the chain ids this problem exercises — echo your assigned target verbatim; the set's coverage is verified against it.
+- chains: the chain ids this problem exercises — echo YOUR TARGET's ids VERBATIM (arg_… / n_…); never re-type a chain's premises or conclusion. The set's coverage is verified against the echo.
 - statement: the full problem formulation, world-facing; never names the propositions it tests (Part II: "Never announce the target").
 - solution: the model solution from Part II step 5 — every move, in order.
 - rubric: a brief free-form grading rubric — the bullet points of what actually matters when grading an answer against your solution.`;
 
-const PARTITIONER_INSTRUCTIONS = `You are the partitioning stage of a learning application's practice system. Teaching installed a knowledge graph in the learner: propositions (nodes) and derivations (follows-edges). Practice problems will now be built to strengthen recall of those propositions across new situations. You do not write problems — you decide what each problem will be ABOUT, and how many problems there are. One generator agent then builds each problem from your partition, independently.
+const PARTITIONER_INSTRUCTIONS = `You are the partitioning stage of a learning application's practice system. Teaching installed a knowledge graph in the learner: propositions (nodes) and reasoning chains — the stored arguments that derive conclusions from premises. Practice problems will now be built to strengthen recall of those propositions across new situations. You do not write problems — you decide what each problem will be ABOUT, and how many problems there are. One generator agent then builds each problem from your partition, independently.
 
-The graph arrives as reasoning chains (a bijective re-encoding): each chain is "premises → conclusion" — every follows-edge into a conclusion node, grouped; a singleton chain is an edge-less node. A proposition legend gives each id's name and full statement.
+The graph arrives as THE CHAINS: every chain has its own id — an "arg_…" id for a derivation ("premises → conclusion"), or the proposition's own "n_…" id for a BARE proposition (a singular idea no argument uses — it is its own one-member target). A proposition legend gives each proposition id's name and full statement. You reference chains by ID ONLY — never re-type a chain's premises, never restate a chain as a line.
 
 PARTITION DOCTRINE:
 - COVER EVERYTHING, EXACTLY ONCE: every chain appears in exactly ONE problem's assignment — a true partition. Nothing dropped: a dropped chain is an uncovered proposition, and an uncovered proposition is never practiced. Nothing doubled: variety across operations accumulates ACROSS problem sets, never by double-assigning within one.
@@ -211,7 +211,7 @@ PARTITION DOCTRINE:
 - DO NOT DUPLICATE: previous problems the learner has already seen are listed with their chains. If an existing problem already covers a group of chains, re-partition so the new set differs in what it groups and how.
 - THE LEARNER'S NOTE (optional): free-form text the learner attached at creation — it may wish for grouping, count, or emphasis. Weigh it as preference; the partition laws above always win, and when the note conflicts with them, follow the laws silently.
 
-OUTPUT — your entire deliverable is ONE submit_partition call: "partitions", a list of { chains: [ids] }, one entry per problem, together containing every input chain exactly once. No empty entries; no unknown ids; no problem without a real target relationship.`;
+OUTPUT — your entire deliverable is ONE submit_partition call: "partitions", a list of { chains: [chain ids] }, one entry per problem — the ids VERBATIM from THE CHAINS ("arg_…" for derivations, a bare proposition's own "n_…"), together containing every input chain exactly once. Never re-type a chain's propositions; never invent an id. No empty entries; no unknown ids; no problem without a real target relationship.`;
 
 export const GRADER_INSTRUCTIONS = `You are the grading stage of a learning application's practice system. One practice problem — built to strengthen the learner's recall of specific propositions — has been answered. Your job is small and fast: an integer score and a one-or-two-sentence justification. You are not assessing a person; you are scoring a recall.
 
@@ -232,15 +232,43 @@ OUTPUT — your entire deliverable is ONE submit_grade call: "score" (integer 0�
 
 // ─── schemas + fills ─────────────────────────────────────────────────────────
 
-const partitionSchema = Type.Object({
-	partitions: Type.Array(Type.Object({ chains: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }) }), {
-		minItems: 1,
-	}),
-});
+const partitionSchema = Type.Object(
+	{
+		partitions: Type.Array(
+			Type.Object({
+				chains: Type.Array(
+					Type.String({
+						minLength: 1,
+						description:
+							"Chain ids VERBATIM from THE CHAINS — arg_… for derivations, the proposition's own n_… for a bare proposition. Never re-type a chain's premises or conclusion; never invent an id.",
+					}),
+					{
+						minItems: 1,
+						description: "The ids this ONE problem will exercise — its target.",
+					},
+				),
+			}),
+			{
+				minItems: 1,
+				description: "One entry per problem.",
+			},
+		),
+	},
+	{
+		description:
+			"The partition: one entry per problem; together they contain every input chain exactly once — a true partition.",
+	},
+);
 type PartitionSubmit = Static<typeof partitionSchema>;
 
 const problemSchema = Type.Object({
-	chains: Type.Array(Type.String({ minLength: 1 })),
+	chains: Type.Array(
+		Type.String({
+			minLength: 1,
+			description: "Chain ids — echo YOUR TARGET's ids verbatim (arg_… / n_…); never re-typed lines.",
+		}),
+		{ minItems: 1 },
+	),
 	statement: Type.String({ minLength: 1 }),
 	solution: Type.String({ minLength: 1 }),
 	rubric: Type.String({ minLength: 1 }),
@@ -271,12 +299,21 @@ export function renderPropositions(propositions: PropositionSnapshot): string {
 		.join("\n");
 }
 
-const chainLine = (c: Pick<ReasoningChain, "premises" | "conclusion">): string =>
-	c.premises.length > 0 ? `${c.premises.join(", ")} → ${c.conclusion}` : `${c.conclusion} (no premises)`;
+/** One chain line for the agent-facing renderings — the chain's id LEADS
+ *  (owner fix, 2026-09-30 evening: the partitioner was told to reference
+ *  chain ids but the lines never showed one, so the model re-typed whole
+ *  rendered lines into the submit and everything failed validation). A
+ *  bare proposition repeats its own id with the no-premises marker —
+ *  mechanically teaching that its chain id IS its proposition id. */
+const chainLine = (c: Pick<ReasoningChain, "id" | "premises" | "conclusion">): string =>
+	c.premises.length > 0
+		? `[${c.id}] ${c.premises.join(", ")} → ${c.conclusion}`
+		: `[${c.id}] ${c.conclusion} (no premises)`;
 
-/** The proposition legend + chain list — the partitioner sees ALL chains;
- *  the generator sees the full set too (renderChains) with its target
- *  marked separately in the prompt. */
+/** The proposition legend + chain list (ids LEAD every line — the
+ *  referenceable anchor, owner fix 2026-09-30) — the partitioner sees
+ *  ALL chains; the generator sees the full set too (renderChains) with
+ *  its target marked separately in the prompt. */
 export function renderChains(chains: ReasoningChain[], propositions: PropositionSnapshot): string {
 	return `THE PROPOSITIONS\n${renderPropositions(propositions)}\n\nTHE CHAINS\n${chains.map(chainLine).join("\n")}`;
 }
@@ -475,7 +512,7 @@ export function createPracticeAgents(deps: PracticeModels) {
 		const log: PracticeStepLog = { model: null, steps: [] };
 		const targetChains = input.fullChains.filter((c) => input.target.includes(c.id));
 		const prompt = [
-			`YOUR TARGET (the chains this problem is built to strengthen)\n${targetChains.map(chainLine).join("\n")}`,
+			`YOUR TARGET (the chains this problem is built to strengthen — reference these ids verbatim)\n${targetChains.map(chainLine).join("\n")}`,
 			`THE FULL SET — propositions and chains of the entire selection (supporting material: minimal use, maximal focus on the target)\n${renderChains(input.fullChains, input.propositions)}`,
 			renderParams(input.params),
 			learnerNoteBlock(input.note),
