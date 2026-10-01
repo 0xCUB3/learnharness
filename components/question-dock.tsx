@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { joinDictation, useDictationTarget } from "@/components/dictation";
+import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
@@ -267,6 +267,12 @@ function QuestionDockForm({
 	const [thinking, setThinking] = useState("");
 	const [other, setOther] = useState("");
 	const [text, setText] = useState("");
+	/* Refs MIRROR the two dictation-target fields ("nothing gets lost"
+	 * round, owner 2026-10-01): the run's flush lands via setState, which
+	 * a closure waiting through `await finishDictation()` cannot observe
+	 * in time — submit reads these, kept current at every write site. */
+	const thinkingTextRef = useRef("");
+	const answerTextRef = useRef("");
 	// Confidence (owner, 2026-10-01): an index into CONFIDENCE_STOPS,
 	// resting at 50 — a real coin flip by definition, untouched or
 	// deliberate (the same number, the same meaning). The dock unmounts
@@ -282,8 +288,18 @@ function QuestionDockForm({
 	useDictationTarget(
 		useCallback(
 			(t: string) => {
-				if (qd.mode === "text") setText((v) => joinDictation(v, t));
-				else setThinking((v) => joinDictation(v, t));
+				// Ref-first (see the refs block above): the join is computed from
+				// the mirror, then both mirrors agree with state — a submit
+				// resuming post-finish reads the tail, never a stale closure.
+				if (qd.mode === "text") {
+					const v = joinDictation(answerTextRef.current, t);
+					answerTextRef.current = v;
+					setText(v);
+				} else {
+					const v = joinDictation(thinkingTextRef.current, t);
+					thinkingTextRef.current = v;
+					setThinking(v);
+				}
 			},
 			[qd.mode],
 		),
@@ -299,12 +315,26 @@ function QuestionDockForm({
 
 	const submit = () => {
 		if (!canSubmit) return;
+		/* FINISH DICTATION FIRST (owner, 2026-10-01): Enter may arrive while
+		 * a run is live with reasoning still in Deepgram's hands. Stop the
+		 * run, let the last finals land in the target field, and only then
+		 * build the answer — the spoken reasoning is never lost to a
+		 * forgotten stop. The field values below come from the REF mirrors
+		 * because the flush lands via setState after an await. */
+		if (!isDictationActive()) {
+			doSubmit();
+			return;
+		}
+		void finishDictation().then(doSubmit);
+	};
+	const doSubmit = () => {
+		if (!canSubmit) return;
 		const req: AnswerRequest = {
 			dontKnow: sel.dontKnow,
 			values: [...sel.selected].map((i) => qd.options[i]!.value),
 			other: sel.otherSelected ? other : undefined,
-			text: qd.mode === "text" ? text : undefined,
-			note: qd.mode !== "text" ? thinking.trim() || undefined : undefined,
+			text: qd.mode === "text" ? answerTextRef.current : undefined,
+			note: qd.mode !== "text" ? thinkingTextRef.current.trim() || undefined : undefined,
 			// Always sent on quiz answers (owner: 50 must mean 50, never
 			// "untouched"); buildAnswer drops it on "I don't know".
 			confidence: kind === "quiz" ? CONFIDENCE_STOPS[confIdx] : undefined,
@@ -720,7 +750,10 @@ function QuestionDockForm({
 					{qd.mode === "text" ? (
 						<textarea
 							value={text}
-							onChange={(e) => setText(e.target.value)}
+							onChange={(e) => {
+								answerTextRef.current = e.target.value;
+								setText(e.target.value);
+							}}
 							onKeyDown={(e) => {
 								// Esc ends dictation (the dictate decisions: click-again
 								// or Esc) — stopPropagation claims it (keyboard wave
@@ -746,7 +779,10 @@ function QuestionDockForm({
 						<textarea
 							ref={thinkingRef}
 							value={thinking}
-							onChange={(e) => setThinking(e.target.value)}
+							onChange={(e) => {
+								thinkingTextRef.current = e.target.value;
+								setThinking(e.target.value);
+							}}
 							onKeyDown={(e) => {
 								// Esc ends dictation (the dictate decisions: click-again
 								// or Esc) — stopPropagation claims it (keyboard wave

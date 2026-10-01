@@ -20,7 +20,7 @@ import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
-import { DictationBar, useDictation } from "@/components/dictation";
+import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useActivity } from "@/components/activity-dock";
@@ -383,6 +383,15 @@ export function Chat({
 	const streamingActivity = !pending ? streamingToolActivity(messages) : null;
 
 	const [text, setText] = useState("");
+	/* The composer's value MIRROR ("nothing gets lost" round, owner
+	 * 2026-10-01): a dictation flush lands via setState, which a closure
+	 * waiting through `await finish()` cannot observe in time. Kept
+	 * current at every write site via applyText. */
+	const textRef = useRef("");
+	const applyText = useCallback((v: string) => {
+		textRef.current = v;
+		setText(v);
+	}, []);
 	// The BYOK setup flow (owner, 2026-09-22): the persistent CTA and the
 	// refusal interception share one SetupDialog mount. `configured` is
 	// seeded server-side (slotsConfigured on the record) and flips on Save.
@@ -437,7 +446,7 @@ export function Chat({
 			}
 			if (cancelled) return;
 			if (draftRef.current !== null) {
-				setText(draftRef.current);
+				applyText(draftRef.current);
 				draftRef.current = null;
 			}
 			clearError();
@@ -453,14 +462,36 @@ export function Chat({
 	// the current text (the page owns the separator, dictate-flush style);
 	// interims ghost in the stats bar's middle slot next to the meter.
 	const dictation = useDictation({
-		append: (t) => setText((v) => (v ? v.replace(/\s+$/, "") + " " + t : t)),
+		// Ref-first (see textRef): the join is computed from the mirror so a
+		// send resuming after `await finish()` reads the dictated tail.
+		append: (t) => applyText(joinDictation(textRef.current, t)),
 	});
+	/* When a dictation run ends, the bare composer takes focus (owner
+	 * 2026-10-01) — the hands are already on the keyboard from the stop.
+	 * Falling edge of `active` only (idle→idle never focuses), and ONLY the
+	 * composer: with a question pending the Composer is unmounted, the ref
+	 * is null, and the thinking field is left alone by design. */
+	const dictationWasActiveRef = useRef(false);
+	const composerInputRef = useRef<HTMLTextAreaElement>(null);
+	useEffect(() => {
+		if (dictation.active) {
+			dictationWasActiveRef.current = true;
+		} else if (dictationWasActiveRef.current) {
+			dictationWasActiveRef.current = false;
+			composerInputRef.current?.focus();
+		}
+	}, [dictation.active]);
+
 	// Jobs never gate the composer (contracts.ts "THE ASYNC PROTOCOL" §4): job
 	// tools resolve with an ack mid-turn, so the learner can interject while
 	// sub-agents run — a feature, not a race: the wake pipeline queues steers
 	// until the current turn ends. Only a QUESTION pending or a turn in
 	// flight (client or server-side wake turn) gates sending.
-	const canSend = text.trim().length > 0 && !pending && !turnInFlight;
+	// A LIVE dictation also makes the composer sendable (owner 2026-10-01):
+	// the spoken text is deferred in the run's buffer — Enter must be able
+	// to trigger the finish-first send (see onSend), not be gated out by an
+	// empty textarea. If nothing was said, the send is a harmless no-op.
+	const canSend = (text.trim().length > 0 || dictation.active) && !pending && !turnInFlight;
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
@@ -893,10 +924,23 @@ export function Chat({
 	}, [turnInFlight, chatId, syncFromServer, status, clearError]);
 
 	const onSend = () => {
-		const t = text.trim();
-		if (!t || busy || pending) return;
+		if (busy || pending) return;
+		/* FINISH DICTATION FIRST (owner, 2026-10-01): a learner who keeps
+		 * talking right through Enter must not lose the tail — stop the run,
+		 * let the last finals land in the composer, then send the REF value
+		 * (the flush lands via setState, invisible to this closure). */
+		if (!dictation.active) {
+			doSend();
+			return;
+		}
+		void dictation.finish().then(doSend);
+	};
+	const doSend = () => {
+		if (busy || pending) return;
+		const t = textRef.current.trim();
+		if (!t) return;
 		draftRef.current = t; // the refusal flow's preserve-and-replay seam
-		setText("");
+		applyText("");
 		void send({ type: "text", text: t });
 	};
 
@@ -1202,7 +1246,8 @@ export function Chat({
 							// only detach our view.
 							busy={busy}
 							value={text}
-							onChange={setText}
+							onChange={applyText}
+							inputRef={composerInputRef}
 							onSend={onSend}
 							onStop={abortInFlightTurn}
 							canSend={canSend}
@@ -1250,7 +1295,7 @@ export function Chat({
 				// into the composer at refusal time; Save sends it onward.
 				const t = text.trim();
 				if (t) {
-					setText("");
+					applyText("");
 					draftRef.current = t;
 					void send({ type: "text", text: t });
 				}

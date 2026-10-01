@@ -214,6 +214,17 @@ export function isDictationActive(): boolean {
 	return dictationActiveFlag;
 }
 
+/* The finisher registry: submit paths FAR from the hook's owner (the
+ * pending question's dock) need finish() without a prop bridge. Same
+ * module-level pattern as questionTarget — one window, one instance,
+ * one finisher. Empty registry (no hook mounted) → resolve immediately. */
+let dictationFinisher: (() => Promise<void>) | null = null;
+
+/** Finish any live dictation run before continuing (see Dictation.finish). */
+export function finishDictation(): Promise<void> {
+	return dictationFinisher ? dictationFinisher() : Promise.resolve();
+}
+
 /** Join a dictated final onto the current text (shared separator rule). */
 export function joinDictation(current: string, final: string): string {
 	return current ? current.replace(/\s+$/, "") + " " + final : final;
@@ -248,6 +259,16 @@ export type Dictation = {
 	 *  input (the Stop pill and ⌘D). */
 	toggle: () => void;
 	stop: () => void;
+	/** FINISH, THEN CONTINUE (owner, 2026-10-01 "nothing gets lost" round):
+	 *  if a run is live, stop it and resolve only when the run has fully
+	 *  ended — Deepgram's last finals have landed in the target field. A
+	 *  submit path awaits this before building its payload, so a learner
+	 *  who forgets to stop dictation before Enter never loses the spoken
+	 *  reasoning. Idle → resolves immediately (the common no-run submit
+	 *  pays nothing). Every terminal path runs cleanup(), and cleanup()
+	 *  resolves the waiters — cancel (Esc) resolves them too, by its
+	 *  discard semantics. */
+	finish: () => Promise<void>;
 	/** End + DISCARD the transcript: no flush, immediate teardown. The Esc
 	 *  semantics (owner, 2026-09-17 round 3): Esc is a cancel, not a stop —
 	 *  before, it flushed exactly like the toggle did. */
@@ -291,6 +312,9 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 	/** The deferred transcript (owner round 2): finals land here during the
 	 *  run and flush into the primary input once, at teardown. */
 	const bufferRef = useRef<string[]>([]);
+	/** Resolvers waiting for the run to fully end (finish(), owner
+	 *  2026-10-01): released by cleanup() — every terminal path runs it. */
+	const waitersRef = useRef<Array<() => void>>([]);
 
 	/** Flush the buffered transcript into the primary input — question claim
 	 *  first, composer fallback. Called exactly once per run, at cleanup; the
@@ -327,6 +351,10 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 			} catch {}
 		}
 		setPhase("idle");
+		// The finish() waiters ride until NOW — post-flush, post-teardown:
+		// a submit path resuming after `await finishDictation()` reads the
+		// target field with the dictated tail already in it.
+		for (const w of waitersRef.current.splice(0)) w();
 		// Pre-mint for the next run (mitigation D) — best-effort; a keyless
 		// page just doesn't warm.
 		warmTokens.refresh();
@@ -525,6 +553,27 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		cleanup();
 	}, [phase, cleanup]);
 
+	const finish = useCallback((): Promise<void> => {
+		return new Promise((resolve) => {
+			if (phase === "idle") {
+				resolve();
+				return;
+			}
+			waitersRef.current.push(resolve);
+			// "stopping" is already ending — the waiter just rides to cleanup.
+			if (phase === "recording" || phase === "connecting") stop();
+		});
+	}, [phase, stop]);
+
+	// Publish finish() for the sibling subtrees (the pending question's
+	// dock) — registered for as long as this page owns the hook.
+	useEffect(() => {
+		dictationFinisher = finish;
+		return () => {
+			if (dictationFinisher === finish) dictationFinisher = null;
+		};
+	}, [finish]);
+
 	const toggle = useCallback(() => {
 		if (phase === "idle") void start();
 		else if (phase === "recording" || phase === "connecting") stop();
@@ -547,7 +596,17 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		return () => window.removeEventListener("lh:kbd-cancel-dictation", cancel);
 	}, [cancel]);
 
-	return { phase, error, levelRef, active: phase !== "idle", toggle, stop, cancel, clearError: () => setError(null) };
+	return {
+		phase,
+		error,
+		levelRef,
+		active: phase !== "idle",
+		toggle,
+		stop,
+		finish,
+		cancel,
+		clearError: () => setError(null),
+	};
 }
 
 /**

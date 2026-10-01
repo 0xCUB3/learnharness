@@ -31,6 +31,7 @@ export function Composer({
 	onStop,
 	canSend,
 	autoFocus,
+	inputRef,
 	onEscape,
 	placeholder = "Ask, answer, or steer the lesson…",
 }: {
@@ -41,6 +42,9 @@ export function Composer({
 	onStop: () => void;
 	canSend: boolean;
 	autoFocus?: boolean;
+	/** The page's handle to the textarea — the dictation-end focus (owner,
+	 *  2026-10-01): a run ending hands the cursor to the bare composer. */
+	inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 	/** Escape while a dictation runs stops it (STT wave, 2026-09-17). No-op
 	 *  when absent — Esc otherwise means nothing in the composer. */
 	onEscape?: () => void;
@@ -61,6 +65,7 @@ export function Composer({
 			}}
 		>
 			<textarea
+				ref={inputRef}
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
 				onKeyDown={(e) => {
