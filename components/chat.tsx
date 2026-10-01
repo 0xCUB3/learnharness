@@ -15,6 +15,7 @@ import {
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { BrailleSpinner } from "@/components/braille-spinner";
 import { LiveToolCard } from "@/components/artifacts/live-tool-card";
 import { Separator } from "@/components/ui/separator";
 import { AnsweredCard } from "@/components/answered-card";
@@ -185,7 +186,7 @@ export function Chat({
 	// (core/view.ts projectView); sends are ONE explicit input event each
 	// ({chatId, input} — the stash indirection died with the SDK), and the
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
-	const { messages, nativeMessages, send, submitAnswer, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
+	const { messages, nativeMessages, send, submitAnswer, setMessages, adoptRecord, status, error, reattaching, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initiallyInFlight });
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
@@ -199,19 +200,6 @@ export function Chat({
 			void send({ type: "text", text: initialPrompt });
 		}
 	}, [initialPrompt, initialMessages.length, send]);
-
-	// Reattach on mount (stream-reattach wave): a turn that outlived its
-	// client (navigate away mid-turn, back while in flight) is re-entered
-	// through the SAME rendering path as a live one — resumeStream() feeds
-	// the replay burst (instant catch-up) then the live deltas into the
-	// SDK's own chunk pipeline. Raced settle is the transport's turn-settled
-	// terminal: onSettled refetches the record. No once-ref guard: every
-	// mount resumes (the deps are stable — this fires once per mount), and
-	// React StrictMode's dev double-mount ABORTS the first attempt at
-	// dispose — the retry must be allowed to run.
-	useEffect(() => {
-		if (initiallyInFlight) void resumeStream();
-	}, [resumeStream, initiallyInFlight]);
 
 	// A turn running server-side, attached to no live view of ours (navigate
 	// away mid-turn, or a wake turn discovered mid-session): the reattach
@@ -1193,12 +1181,24 @@ export function Chat({
 							    2026-10-01): once a tool call starts writing, its LIVE card
 							    carries the activity inline — the old bottom tool-activity
 							    line retired rather than double-render. Same glimmer recipe
-							    as the thinking row: duration 1. */}
-							{(status === "submitted" || turnInFlight) && (
-								<Shimmer duration={1} className="text-sm">
-									Thinking…
-								</Shimmer>
-							)}
+							    as the thinking row: duration 1. The REATTACH variant
+							    (reattach round 2026-10-02): while a fresh mount reattaches
+							    to a server-side turn, the placeholder says what is actually
+							    happening — Reattaching… + the working-state spinner —
+							    instead of a bare Thinking shimmer. */}
+							{(status === "submitted" || turnInFlight) &&
+								(reattaching ? (
+									<span className="flex items-center gap-2">
+										<BrailleSpinner label="Reattaching to the running turn" />
+										<Shimmer duration={1} className="text-sm">
+											Reattaching…
+										</Shimmer>
+									</span>
+								) : (
+									<Shimmer duration={1} className="text-sm">
+										Thinking…
+									</Shimmer>
+								))}
 							{error && (
 								<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
 									Something went wrong: {error.message}

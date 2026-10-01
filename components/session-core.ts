@@ -140,6 +140,10 @@ export interface SessionState {
 	nativeMessages: LhMessage[];
 	status: SessionStatus;
 	error: { message: string } | null;
+	/** A reattach handshake is in flight (resumeStream, no events yet):
+	 *  the view shows the honest “Reattaching…” placeholder instead of a
+	 *  bare Thinking shimmer (owner, reattach round 2026-10-02). */
+	reattaching: boolean;
 }
 
 export interface SessionModelOptions extends SessionModelDeps {
@@ -174,6 +178,9 @@ export class SessionModel {
 	private streamingMessageId: string | null = null;
 	private statusValue: SessionStatus = "ready";
 	private errorValue: { message: string } | null = null;
+	/** True from resumeStream() entry until its first event / settle /
+	 *  error — the handshake window (see SessionState.reattaching). */
+	private reattachingValue = false;
 	// The single live consume (POST response or reattach stream): a newer
 	// consume cancels the older — one reader at a time.
 	private consumeAbort: AbortController | null = null;
@@ -209,6 +216,7 @@ export class SessionModel {
 			nativeMessages: [...this.base, ...this.tail],
 			status: this.statusValue,
 			error: this.errorValue,
+			reattaching: this.reattachingValue,
 		};
 	}
 
@@ -385,6 +393,7 @@ export class SessionModel {
 				}
 				if (!sawEvent) {
 					sawEvent = true;
+					this.reattachingValue = false; // first event: content, not a handshake
 					if (this.statusValue !== "error") this.setStatus("streaming");
 				}
 				this.applyWireEvent(event);
@@ -392,33 +401,43 @@ export class SessionModel {
 		} finally {
 			this.streamingIds = new Set();
 			this.executions = new Map();
+			this.reattachingValue = false; // settled/aborted: no handshake anymore
 			if (this.statusValue !== "error") this.setStatus("ready");
 		}
 	}
 
 	/**
 	 * Reattach (the wake/handoff/mount path): a server-side turn with no
-	 * live view of ours. The record is refetched FIRST (write-ahead
-	 * adoption — the tail's optimistic entries are absorbed, its partial
-	 * stream content is about to be fully replayed), then the stream
-	 * replays the turn from its first event through the SAME consume path.
+	 * live view of ours. ATTACH-FIRST (owner, reattach round 2026-10-02):
+	 * a fresh-mount reattach passes refetchRecordFirst=false — the page
+	 * render just read the record, so the blocking record round-trip only
+	 * added handshake latency before the instant replay; the running
+	 * turn's partial lives solely in the server event log, and the replay
+	 * rebuilds it regardless of the refetch. Mid-session callers (the
+	 * handoff watch) keep the default: their base may trail the record,
+	 * and the refetch absorbs it (write-ahead adoption) before the replay
+	 * lands on top. The stream then replays the turn from its first event
+	 * through the SAME consume path.
 	 */
-	async resumeStream(): Promise<void> {
+	async resumeStream(refetchRecordFirst = true): Promise<void> {
 		this.consumeAbort?.abort();
 		const controller = new AbortController();
 		this.consumeAbort = controller;
+		this.reattachingValue = true;
 		this.setStatus("submitted");
 		try {
-			const recordRes = await this.fetch(`/api/chats/${encodeURIComponent(this.chatId)}`, {
-				signal: controller.signal,
-			});
-			if (recordRes.ok) {
-				const record = (await recordRes.json()) as { messages?: LhMessage[] };
-				if (Array.isArray(record.messages)) {
-					this.mutate(() => {
-						this.base = record.messages!;
-						this.tail = [];
-					});
+			if (refetchRecordFirst) {
+				const recordRes = await this.fetch(`/api/chats/${encodeURIComponent(this.chatId)}`, {
+					signal: controller.signal,
+				});
+				if (recordRes.ok) {
+					const record = (await recordRes.json()) as { messages?: LhMessage[] };
+					if (Array.isArray(record.messages)) {
+						this.mutate(() => {
+							this.base = record.messages!;
+							this.tail = [];
+						});
+					}
 				}
 			}
 			const res = await this.fetch(`/api/chats/${encodeURIComponent(this.chatId)}/stream`, {
@@ -428,6 +447,7 @@ export class SessionModel {
 			await this.consumeStream(res);
 		} catch (err) {
 			if ((err as Error).name === "AbortError") return; // a newer consume won
+			this.reattachingValue = false;
 			this.setError((err as Error).message);
 			this.setStatus("error");
 		}
@@ -445,6 +465,7 @@ export class SessionModel {
 		const controller = new AbortController();
 		this.consumeAbort = controller;
 		this.setError(null);
+		this.reattachingValue = false; // an aborted handshake is not a placeholder
 		this.setStatus("submitted");
 		// The optimistic appends — exactly the messages the server's
 		// write-ahead will persist (inputAppends), with LOCAL ids so
@@ -492,6 +513,7 @@ export class SessionModel {
 	stop(): void {
 		this.consumeAbort?.abort();
 		this.consumeAbort = null;
+		this.reattachingValue = false;
 		this.streamingIds = new Set();
 		this.streamingMessageId = null;
 		this.executions = new Map();

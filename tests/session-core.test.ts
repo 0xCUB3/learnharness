@@ -468,6 +468,54 @@ describe("resumeStream (the reattach path)", () => {
 		assert.equal(m.getState().status, "ready");
 	});
 
+	it("ATTACH-FIRST (owner, reattach round 2026-10-02): a fresh-mount reattach skips the blocking record refetch", async () => {
+		const urls: string[] = [];
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = String(input);
+			urls.push(url);
+			if (url === "/api/chats/chat_x/stream")
+				return sseResponse(
+					{ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } },
+					{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hi" }], stopReason: "stop" } },
+					{ type: "agent_end", messages: [] },
+					"[DONE]",
+				);
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof globalThis.fetch;
+		const m = model();
+		await m.resumeStream(false);
+		// one round-trip: straight to the stream — the page render already
+		// read the record; the replay rebuilds the partial regardless.
+		assert.deepEqual(urls, ["/api/chats/chat_x/stream"]);
+		assert.equal(m.getState().status, "ready");
+		// the mid-session caller (handoff watch) keeps the default refetch
+		// (the earlier test in this block pins that order).
+	});
+
+	it("reattaching is honest: true during the handshake, false once events flow", async () => {
+		let release!: (r: Response) => void;
+		const gate = new Promise<Response>((res) => (release = res));
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === "/api/chats/chat_x") return gate; // the record fetch hangs
+			if (url === "/api/chats/chat_x/stream")
+				return sseResponse(
+					{ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } },
+					{ type: "agent_end", messages: [] },
+					"[DONE]",
+				);
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof globalThis.fetch;
+		const m = model();
+		const p = m.resumeStream(); // runs sync to the first await (the gated fetch)
+		assert.equal(m.getState().reattaching, true, "mid-handshake: the placeholder is Reattaching…");
+		assert.equal(m.getState().status, "submitted");
+		release(Response.json({ messages: [] }));
+		await p;
+		assert.equal(m.getState().reattaching, false, "first event landed: content, not a handshake");
+		assert.equal(m.getState().status, "ready");
+	});
+
 	it("turn-settled fires the settle hook and ends cleanly", async () => {
 		let settled = 0;
 		globalThis.fetch = (async (input: RequestInfo | URL) => {

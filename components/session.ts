@@ -49,8 +49,13 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight }: U
 	}, [model, bump]);
 
 	// Reattach on mount (StrictMode-safe: a newer resume cancels the older).
+	// ATTACH-FIRST (owner, reattach round 2026-10-02): the page render just
+	// read the record — the blocking record refetch only added handshake
+	// latency before the instant replay, so a fresh mount attaches
+	// directly. This hook's effect is the SINGLE mount-reattach owner
+	// (chat.tsx's duplicate was deleted with the same round).
 	useEffect(() => {
-		if (initiallyInFlight) void model.resumeStream();
+		if (initiallyInFlight) void model.resumeStream(false);
 	}, [initiallyInFlight, model]);
 
 	// The view + state, derived per model change from the model.
@@ -81,6 +86,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight }: U
 		nativeMessages: state.nativeMessages,
 		status: state.status,
 		error: state.error,
+		reattaching: state.reattaching,
 		send,
 		submitAnswer,
 		setMessages,
