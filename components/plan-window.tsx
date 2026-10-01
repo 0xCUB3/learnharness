@@ -30,6 +30,17 @@ import {
 
 const MARGIN_PAD = GRAPH_PAD + 16;
 
+/** True when the transcript holds a plan tree. Gates the marginalia's
+ *  clickable flank (chat.tsx): PlanMarginalia renders null without a
+ *  tree, but the WRAPPER button must unmount too — a JSX element is
+ *  always truthy, so gating on it alone left a phantom click target in
+ *  the bottom-right whenever a question was pending with no plan
+ *  (owner report, UI round 2026-10-01). */
+export function planExists(messages: readonly PopupMessage[]): boolean {
+	const tree = latestTree(messages);
+	return !!tree && tree.nodes.length > 0;
+}
+
 export function PlanMarginalia({ messages }: { messages: readonly PopupMessage[] }) {
 	const markerId = useId().replace(/[^a-zA-Z0-9-]/g, "");
 	const tree = useMemo(() => latestTree(messages), [messages]);

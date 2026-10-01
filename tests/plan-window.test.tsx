@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { PlanMarginalia } from "../components/plan-window.tsx";
+import { PlanMarginalia, planExists } from "../components/plan-window.tsx";
 import { blockLayout, type PopupMessage } from "../components/plan-block.tsx";
 import type { PlanTree } from "../src/core/contracts.ts";
 
@@ -43,6 +43,19 @@ function transcript(tree: PlanTree, taggedNodeId?: string): PopupMessage[] {
 			: []),
 	];
 }
+
+describe("planExists", () => {
+	it("false without a tree — the phantom-click gate (owner report, 2026-10-01)", () => {
+		// A JSX element is always truthy; the WRAPPER must gate on real
+		// presence or an invisible clickable button sits in the flank.
+		assert.equal(planExists([]), false);
+		assert.equal(planExists(transcript({ nodes: [], edges: [], version: 0 })), false);
+	});
+
+	it("true once the transcript holds a plan tree", () => {
+		assert.equal(planExists(transcript(CHAIN)), true);
+	});
+});
 
 describe("PlanMarginalia render", () => {
 	it("renders nothing until a tree exists", () => {

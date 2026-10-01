@@ -26,7 +26,7 @@ import { StatsBar } from "@/components/stats-bar";
 import { useActivity } from "@/components/activity-dock";
 import { isProviderKeyRefusal, needsContinuation, type ChatInput, type ChatSettings, type LhMessage, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
-import { PlanMarginalia } from "@/components/plan-window";
+import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
 import { WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
@@ -563,6 +563,11 @@ export function Chat({
 	// The live plan popup (wave 4): opened by any transcript plan block, the
 	// top-bar plan chip, and the dock band's marginalia.
 	const [planOpen, setPlanOpen] = useState(false);
+	// Real plan presence — gates the marginalia's clickable flank. A JSX
+	// element is always truthy; gating on the node alone mounted a phantom
+	// (invisible, clickable) button in the bottom-right whenever a question
+	// was pending with no plan yet (owner report, UI round 2026-10-01).
+	const hasPlan = useMemo(() => planExists(messages), [messages]);
 	// The coverage ring's refresh chain (extraction-UX redesign): bumped at
 	// turn settle — the moment this session's uncovered mass changes.
 	const [coverageTick, setCoverageTick] = useState(0);
@@ -1163,7 +1168,7 @@ export function Chat({
 				<DockOverlay
 					pending={pending}
 					chatId={chatId}
-					plan={<PlanMarginalia messages={messages} />}
+					plan={hasPlan ? <PlanMarginalia messages={messages} /> : undefined}
 					onOpenPlan={() => setPlanOpen(true)}
 					requiresReveal={requiresReveal}
 					phase={phases.at(-1) ?? "probe"}

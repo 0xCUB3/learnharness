@@ -79,6 +79,19 @@ export interface QuestionDockProps {
 	phase?: Phase3;
 }
 
+/** The six-step confidence ramp (owner, UI round 2026-10-01): color
+ *  follows the number — each stop reads as its own belief level, red
+ *  (believes the pick wrong) through emerald (certain), yellow the coin
+ *  flip. Pairs with CONFIDENCE_STOPS index-for-index. */
+const CONFIDENCE_COLORS: readonly string[] = [
+	"#ef4444", // 0   — red
+	"#f97316", // 30  — orange
+	"#eab308", // 50  — yellow: a coin flip
+	"#84cc16", // 70  — lime
+	"#22c55e", // 90  — green
+	"#10b981", // 100 — emerald
+];
+
 export function QuestionDock({
 	toolName,
 	toolCallId,
@@ -271,7 +284,6 @@ function QuestionDockForm({
 	// deliberate (the same number, the same meaning). The dock unmounts
 	// between questions, so each question starts fresh at 50.
 	const [confIdx, setConfIdx] = useState<number>(DEFAULT_CONFIDENCE_INDEX);
-	const confidenceRef = useRef<HTMLInputElement>(null);
 	const selectMode: SelectMode = qd.mode === "multi-select" ? "multi-select" : "single-select";
 
 	// The PRIMARY dictation input (owner, STT round 1): while a question
@@ -379,19 +391,16 @@ function QuestionDockForm({
 			// Alt/Cmd/Ctrl combos are never ours (Alt+arrows cycle sessions
 			// globally — they must not ALSO walk the question rows).
 			const modded = e.altKey || e.metaKey || e.ctrlKey;
-			// Plain Tab walks the dock's focus chain forward: rows →
-			// confidence slider (quiz, when enabled) → thinking. Shift+Tab
-			// falls through (the global thinking-level cycle owns it), so the
-			// shift check matters.
+			// Plain Tab toggles focus: rows → thinking. The confidence
+			// slider takes NO focus at all (owner, UI round 2026-10-01) —
+			// global ←/→ own its keyboard, so it never joins the chain.
+			// Shift+Tab falls through (the global thinking-level cycle owns
+			// it), so the shift check matters.
 			if (e.key === "Tab" && !e.shiftKey && !modded) {
 				e.preventDefault();
 				e.stopPropagation();
-				if (t?.closest?.("[data-confidence]")) thinkingRef.current?.focus();
-				else if (t?.closest?.("[data-kbdrow]")) {
-					const slider = confidenceRef.current;
-					if (slider && !slider.disabled) slider.focus();
-					else thinkingRef.current?.focus();
-				} else {
+				if (t?.closest?.("[data-kbdrow]")) thinkingRef.current?.focus();
+				else {
 					const idx = kbdIdx ?? 0;
 					setKbdIdx(idx);
 					focusRow(idx);
@@ -413,6 +422,19 @@ function QuestionDockForm({
 				const next = Math.max((kbdIdx ?? rowCount) - 1, 0);
 				setKbdIdx(next);
 				if (t?.closest?.("[data-kbdrow]")) focusRow(next);
+			} else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+				// Global confidence cycling (owner, UI round 2026-10-01): the
+				// SAME pattern as ↑/↓ over the rows — works wherever focus
+				// sits, no click-in, no focus ring. Dead on "I don't know"
+				// (the slider grays out and nothing is sent).
+				if (kind !== "quiz" || sel.dontKnow) return;
+				e.preventDefault();
+				setConfIdx((i) =>
+					Math.min(
+						CONFIDENCE_STOPS.length - 1,
+						Math.max(0, i + (e.key === "ArrowRight" ? 1 : -1)),
+					),
+				);
 			} else if (e.key === " ") {
 				if (kbdIdx === null) return; // plain Space keeps scrolling the page
 				e.preventDefault();
@@ -589,12 +611,16 @@ function QuestionDockForm({
 				)}
 			</div>
 
-			{/* Confidence (owner, 2026-10-01): a snapped slider below the options
-			    and above "Your thinking" — the learner's stated probability
-			    that his selected answer is correct. ←/→ move it (native range
-			    semantics over the stop INDEX, so the uneven grid steps
-			    cleanly). "I don't know" GRAYS it out — the layout holds, no
-			    value is sent, the IDK signal stands alone. */}
+			{/* Confidence (owner, 2026-10-01; UI round same day): a snapped
+			    slider below the options and above "Your thinking" — the
+			    learner's stated probability that his selected answer is
+			    correct. The thumb's POSITION is the raw fraction (50 sits
+			    halfway), the fill + handle wear the stop's ramp color, and
+			    the bar is a taller pill. Keyboard: GLOBAL ←/→ (the ↑/↓
+			    pattern — works wherever focus sits); the element itself
+			    takes no focus and never rings (tabIndex -1, mousedown
+			    prevented). "I don't know" GRAYS it out — the layout holds,
+			    no value is sent, the IDK signal stands alone. */}
 			{kind === "quiz" && (
 				<div className="border-t border-border/60 px-4 py-2.5">
 					<div className="flex items-center gap-3">
@@ -607,27 +633,42 @@ function QuestionDockForm({
 							Confidence
 						</span>
 						<input
-							ref={confidenceRef}
 							type="range"
 							min={0}
-							max={CONFIDENCE_STOPS.length - 1}
+							max={100}
 							step={1}
-							value={confIdx}
+							value={CONFIDENCE_STOPS[confIdx]}
 							disabled={sel.dontKnow}
+							tabIndex={-1}
 							aria-label="Confidence — the probability your selected answer is correct"
-							title="The probability your selected answer is correct — 50% is a coin flip"
+							aria-valuetext={`${CONFIDENCE_STOPS[confIdx]} percent`}
+							title="The probability your selected answer is correct — 50% is a coin flip. Adjust with ←/→."
 							data-testid="confidence-slider"
-							data-confidence=""
-							onChange={(e) => setConfIdx(Number(e.target.value))}
-							onKeyDown={(e) => {
-								// Enter submits from here too (dock-wide intuition);
-								// arrows stay native — ←/→ step the stop index.
-								if (e.key === "Enter" && canSubmit) {
-									e.preventDefault();
-									submit();
+							// No focus, ever: the owner's global-←/→ pattern owns
+							// the keyboard; clicking adjusts without ringing.
+							onMouseDown={(e) => e.preventDefault()}
+							onChange={(e) => {
+								// Snap to the nearest stop; the rendered VALUE is
+								// the stop's own percent, so the thumb always rests
+								// at its true fraction (50 = halfway).
+								const v = Number(e.target.value);
+								let best = 0;
+								for (let i = 1; i < CONFIDENCE_STOPS.length; i++) {
+									if (Math.abs(CONFIDENCE_STOPS[i]! - v) < Math.abs(CONFIDENCE_STOPS[best]! - v)) best = i;
 								}
+								setConfIdx(best);
 							}}
-							className="h-1.5 min-w-0 flex-1 accent-primary disabled:opacity-40"
+							style={{
+								color: CONFIDENCE_COLORS[confIdx],
+								background: `linear-gradient(90deg, ${CONFIDENCE_COLORS[confIdx]} 0%, ${CONFIDENCE_COLORS[confIdx]} ${CONFIDENCE_STOPS[confIdx]}%, var(--muted) ${CONFIDENCE_STOPS[confIdx]}%, var(--muted) 100%)`,
+							}}
+							className={cn(
+								"h-2.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full outline-none disabled:opacity-40",
+								"[&::-webkit-slider-runnable-track]:h-2.5 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent",
+								"[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-current [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:-mt-[3px]",
+								"[&::-moz-range-track]:h-2.5 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-transparent",
+								"[&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-current",
+							)}
 						/>
 						<span
 							data-testid="confidence-value"
