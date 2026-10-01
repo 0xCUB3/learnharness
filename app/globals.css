@@ -15,6 +15,18 @@
  *     future settings UI reassigns them (configurable per the owner).
  */
 
+/* The no-ring law (owner, UI round 2026-10-01): the browser's default
+   focus/focus-visible outline appears NOWHERE in the app. Pointer focus
+   never showed it; any keypress while a clicked element still held focus
+   DID (:focus-visible re-evaluates on key input — a clicked sidebar
+   session lit up when the quiz's ←/→ were pressed). Surfaces carry their
+   own hover/active/selected affordances; the dock's keyboard walk uses
+   its own ring utilities, unaffected by an outline reset. */
+*:focus,
+*:focus-visible {
+	outline: none;
+}
+
 /* Palette (owner's hexes): main #141414, raised #1C1C1C, edges #434343.
    Mono chrome = JetBrains Mono; prose = Source Sans 3; titles = CMU Serif. */
 :root {

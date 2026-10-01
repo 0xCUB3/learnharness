@@ -611,16 +611,18 @@ function QuestionDockForm({
 				)}
 			</div>
 
-			{/* Confidence (owner, 2026-10-01; UI round same day): a snapped
+			{/* Confidence (owner, 2026-10-01; UI rounds same day): a snapped
 			    slider below the options and above "Your thinking" — the
 			    learner's stated probability that his selected answer is
 			    correct. The thumb's POSITION is the raw fraction (50 sits
-			    halfway), the fill + handle wear the stop's ramp color, and
-			    the bar is a taller pill. Keyboard: GLOBAL ←/→ (the ↑/↓
-			    pattern — works wherever focus sits); the element itself
-			    takes no focus and never rings (tabIndex -1, mousedown
-			    prevented). "I don't know" GRAYS it out — the layout holds,
-			    no value is sent, the IDK signal stands alone. */}
+			    halfway), the fill + handle wear the stop's ramp color, the
+			    bar is a taller pill with an outline and a #141414 empty
+			    side, and dashed ticks mark each stop. Keyboard: GLOBAL ←/→
+			    (the ↑/↓ pattern — works wherever focus sits; the ring is
+			    gone app-wide, so focus anywhere is invisible). Clicking and
+			    dragging work natively. "I don't know" GRAYS it out — the
+			    layout holds, no value is sent, the IDK signal stands
+			    alone. */}
 			{kind === "quiz" && (
 				<div className="border-t border-border/60 px-4 py-2.5">
 					<div className="flex items-center gap-3">
@@ -632,44 +634,78 @@ function QuestionDockForm({
 						>
 							Confidence
 						</span>
-						<input
-							type="range"
-							min={0}
-							max={100}
-							step={1}
-							value={CONFIDENCE_STOPS[confIdx]}
-							disabled={sel.dontKnow}
-							tabIndex={-1}
-							aria-label="Confidence — the probability your selected answer is correct"
-							aria-valuetext={`${CONFIDENCE_STOPS[confIdx]} percent`}
-							title="The probability your selected answer is correct — 50% is a coin flip. Adjust with ←/→."
-							data-testid="confidence-slider"
-							// No focus, ever: the owner's global-←/→ pattern owns
-							// the keyboard; clicking adjusts without ringing.
-							onMouseDown={(e) => e.preventDefault()}
-							onChange={(e) => {
-								// Snap to the nearest stop; the rendered VALUE is
-								// the stop's own percent, so the thumb always rests
-								// at its true fraction (50 = halfway).
-								const v = Number(e.target.value);
-								let best = 0;
-								for (let i = 1; i < CONFIDENCE_STOPS.length; i++) {
-									if (Math.abs(CONFIDENCE_STOPS[i]! - v) < Math.abs(CONFIDENCE_STOPS[best]! - v)) best = i;
-								}
-								setConfIdx(best);
-							}}
-							style={{
-								color: CONFIDENCE_COLORS[confIdx],
-								background: `linear-gradient(90deg, ${CONFIDENCE_COLORS[confIdx]} 0%, ${CONFIDENCE_COLORS[confIdx]} ${CONFIDENCE_STOPS[confIdx]}%, var(--muted) ${CONFIDENCE_STOPS[confIdx]}%, var(--muted) 100%)`,
-							}}
-							className={cn(
-								"h-2.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full outline-none disabled:opacity-40",
-								"[&::-webkit-slider-runnable-track]:h-2.5 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent",
-								"[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-current [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:-mt-[3px]",
-								"[&::-moz-range-track]:h-2.5 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-transparent",
-								"[&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-current",
-							)}
-						/>
+						<div className="relative min-w-0 flex-1" data-testid="confidence-track">
+							<input
+								type="range"
+								min={0}
+								max={100}
+								step={1}
+								value={CONFIDENCE_STOPS[confIdx]}
+								disabled={sel.dontKnow}
+								aria-label="Confidence — the probability your selected answer is correct"
+								aria-valuetext={`${CONFIDENCE_STOPS[confIdx]} percent`}
+								title="The probability your selected answer is correct — 50% is a coin flip. Adjust with ←/→."
+								data-testid="confidence-slider"
+								onKeyDown={(e) => {
+									// Focused-here arrows step the STOP index (native
+									// would step 1% and snap straight back — dead keys);
+									// Enter submits, dock-wide intuition. The global
+									// handler skips INPUT targets, so no double-step.
+									if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+										e.preventDefault();
+										setConfIdx((i) =>
+											Math.min(
+												CONFIDENCE_STOPS.length - 1,
+												Math.max(0, i + (e.key === "ArrowRight" ? 1 : -1)),
+											),
+										);
+									} else if (e.key === "Enter" && canSubmit) {
+										e.preventDefault();
+										submit();
+									}
+								}}
+								onChange={(e) => {
+									// Snap to the nearest stop; the rendered VALUE is
+									// the stop's own percent, so the thumb always rests
+									// at its true fraction (50 = halfway).
+									const v = Number(e.target.value);
+									let best = 0;
+									for (let i = 1; i < CONFIDENCE_STOPS.length; i++) {
+										if (Math.abs(CONFIDENCE_STOPS[i]! - v) < Math.abs(CONFIDENCE_STOPS[best]! - v)) best = i;
+									}
+									setConfIdx(best);
+								}}
+								style={{
+									color: CONFIDENCE_COLORS[confIdx],
+									// The empty side is the darker main background
+									// (#141414, owner pick 2026-10-01) — --muted matched
+									// the card and vanished.
+									background: `linear-gradient(90deg, ${CONFIDENCE_COLORS[confIdx]} 0%, ${CONFIDENCE_COLORS[confIdx]} ${CONFIDENCE_STOPS[confIdx]}%, #141414 ${CONFIDENCE_STOPS[confIdx]}%, #141414 100%)`,
+								}}
+								className={cn(
+									"h-2.5 w-full cursor-pointer appearance-none rounded-full border border-border outline-none disabled:opacity-40",
+									"[&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent",
+									"[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-current [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:-mt-[3px]",
+									"[&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-transparent",
+									"[&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-current",
+								)}
+							/>
+							{/* Dashed stop ticks (owner, clarity): one vertical dash
+							    per snap stop, inset by the thumb's half-width so each
+							    tick sits under the thumb's CENTER at that stop. */}
+							{CONFIDENCE_STOPS.map((stop) => (
+								<span
+									key={stop}
+									data-testid={`confidence-tick-${stop}`}
+									aria-hidden
+									style={{ left: `calc(8px + (100% - 16px) * ${stop / 100})` }}
+									className={cn(
+										"absolute top-[14px] h-1.5 w-0 border-l border-dashed",
+										sel.dontKnow ? "border-muted-foreground/25" : "border-muted-foreground/45",
+									)}
+								/>
+							))}
+						</div>
 						<span
 							data-testid="confidence-value"
 							className={cn(
