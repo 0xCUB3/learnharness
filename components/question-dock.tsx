@@ -615,14 +615,15 @@ function QuestionDockForm({
 			    slider below the options and above "Your thinking" — the
 			    learner's stated probability that his selected answer is
 			    correct. The thumb's POSITION is the raw fraction (50 sits
-			    halfway), the fill + handle wear the stop's ramp color, the
-			    bar is a taller pill with an outline and a #141414 empty
-			    side, and dashed ticks mark each stop. Keyboard: GLOBAL ←/→
-			    (the ↑/↓ pattern — works wherever focus sits; the ring is
-			    gone app-wide, so focus anywhere is invisible). Clicking and
-			    dragging work natively. "I don't know" GRAYS it out — the
-			    layout holds, no value is sent, the IDK signal stands
-			    alone. */}
+			    halfway); fill + handle wear the stop's ramp color (the disc
+			    carries a dark rim so it never bleeds into its own fill);
+			    the bar is the original thin rail over #141414, with dashed
+			    stop ticks INSIDE — background layers behind the fill, so
+			    they show only on the empty side, never over the color.
+			    Keyboard: GLOBAL ←/→ (the ↑/↓ pattern; the ring is gone
+			    app-wide). Clicking and dragging are native. "I don't know"
+			    GRAYS it out — the layout holds, no value is sent, the IDK
+			    signal stands alone. */}
 			{kind === "quiz" && (
 				<div className="border-t border-border/60 px-4 py-2.5">
 					<div className="flex items-center gap-3">
@@ -677,34 +678,32 @@ function QuestionDockForm({
 								}}
 								style={{
 									color: CONFIDENCE_COLORS[confIdx],
-									// The empty side is the darker main background
-									// (#141414, owner pick 2026-10-01) — --muted matched
-									// the card and vanished.
-									background: `linear-gradient(90deg, ${CONFIDENCE_COLORS[confIdx]} 0%, ${CONFIDENCE_COLORS[confIdx]} ${CONFIDENCE_STOPS[confIdx]}%, #141414 ${CONFIDENCE_STOPS[confIdx]}%, #141414 100%)`,
+									// The stack (owner, round 3): #141414 base (the darker
+									// main background), dashed stop ticks as background
+									// LAYERS, fill on top — TRANSPARENT past the thumb, so
+									// the ticks read as background and never paint over the
+									// filled portion. Ticks skip 0 and 100 (the rail's ends
+									// already say those) and sit at the thumb-center inset:
+									// calc(8px + (100% - 16px) * p).
+									backgroundColor: "#141414",
+									backgroundImage: [
+										`linear-gradient(90deg, ${CONFIDENCE_COLORS[confIdx]} 0%, ${CONFIDENCE_COLORS[confIdx]} ${CONFIDENCE_STOPS[confIdx]}%, transparent ${CONFIDENCE_STOPS[confIdx]}%, transparent 100%)`,
+										...[30, 50, 70, 90].map(
+											() => "repeating-linear-gradient(180deg, rgba(230,230,230,0.35) 0 1.5px, transparent 1.5px 3.5px)",
+										),
+									].join(", "),
+									backgroundSize: ["100% 100%", "1px 100%", "1px 100%", "1px 100%", "1px 100%"].join(", "),
+									backgroundPosition: ["0 0", ...[30, 50, 70, 90].map((p) => `calc(8px + (100% - 16px) * ${p / 100}) 0`)].join(", "),
+									backgroundRepeat: "no-repeat",
 								}}
 								className={cn(
-									"h-2.5 w-full cursor-pointer appearance-none rounded-full border border-border outline-none disabled:opacity-40",
-									"[&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent",
-									"[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-current [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:-mt-[3px]",
-									"[&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-transparent",
-									"[&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-current",
+									"h-1.5 w-full cursor-pointer appearance-none rounded-full border border-border outline-none disabled:opacity-40",
+									"[&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent",
+									"[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#141414] [&::-webkit-slider-thumb]:bg-current [&::-webkit-slider-thumb]:-mt-1.5",
+									"[&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-transparent",
+									"[&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-[#141414] [&::-moz-range-thumb]:bg-current",
 								)}
 							/>
-							{/* Dashed stop ticks (owner, clarity): one vertical dash
-							    per snap stop, inset by the thumb's half-width so each
-							    tick sits under the thumb's CENTER at that stop. */}
-							{CONFIDENCE_STOPS.map((stop) => (
-								<span
-									key={stop}
-									data-testid={`confidence-tick-${stop}`}
-									aria-hidden
-									style={{ left: `calc(8px + (100% - 16px) * ${stop / 100})` }}
-									className={cn(
-										"absolute top-[14px] h-1.5 w-0 border-l border-dashed",
-										sel.dontKnow ? "border-muted-foreground/25" : "border-muted-foreground/45",
-									)}
-								/>
-							))}
 						</div>
 						<span
 							data-testid="confidence-value"
