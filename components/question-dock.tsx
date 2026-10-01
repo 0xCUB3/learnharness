@@ -644,15 +644,19 @@ function QuestionDockForm({
 							Confidence
 						</span>
 						<div
-							className={cn("relative min-w-0 flex-1", sel.dontKnow && "opacity-40")}
+							className={cn("relative h-4 min-w-0 flex-1", sel.dontKnow && "opacity-40")}
 							data-testid="confidence-track"
 						>
 							{/* The RAIL is painted here, not on the input: this overlay spans
-							    exactly the thumb-CENTER range (inset 8px = half the 16px disc,
-							    left and right), so at 0 and 100 the disc sits flush against the
-							    rail's very ends — no bare stub poking past it (owner round 4).
-							    The input on top is pure interaction: full width, transparent,
-							    native drag and click. */}
+								exactly the thumb-CENTER range (inset 8px = half the 16px disc,
+								left and right), so at 0 and 100 the disc sits flush against the
+								rail's very ends — no bare stub poking past it (owner round 4).
+								STACKING LAW (owner round 5): the input is absolute too — a
+								positioned overlay paints above an in-flow input no matter the
+								DOM order, which put the rail OVER the disc. Both positioned,
+								input later in DOM → the disc rides on top. The wrapper's height
+								is pinned (h-4) so the rail's top-1/2 and the disc's track share
+								one box — centered by construction, not by hope. */}
 							<div
 								aria-hidden
 								data-testid="confidence-rail"
@@ -701,7 +705,7 @@ function QuestionDockForm({
 								}}
 								style={{ color: CONFIDENCE_COLORS[confIdx] }}
 								className={cn(
-									"h-4 w-full cursor-pointer appearance-none bg-transparent outline-none",
+									"absolute inset-0 h-4 w-full cursor-pointer appearance-none bg-transparent outline-none",
 									"[&::-webkit-slider-runnable-track]:h-4 [&::-webkit-slider-runnable-track]:bg-transparent",
 									"[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-current",
 									"[&::-moz-range-track]:h-4 [&::-moz-range-track]:bg-transparent",
