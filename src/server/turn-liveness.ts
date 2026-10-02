@@ -20,6 +20,8 @@
  * chat turns are minutes at most, so 30 minutes is far on the safe side.
  */
 
+import { emit } from "../core/events.ts";
+
 interface LhGlobal {
 	__lhTurnRegistry?: Map<string, number>;
 }
@@ -35,19 +37,32 @@ const MAX_TURN_MS = 30 * 60_000;
 /**
  * Mark a turn as starting. Returns false if one is already running for the
  * chat — the caller rejects the request (only one turn may own a chat).
+ * Announces "turn-started" AFTER the registry write: a listener that reads
+ * isTurnRunning or fetches the record sees consistent truth. The rejected
+ * double-begin (the 409 path) stays silent — no turn began.
  */
 export function beginTurn(chatId: string): boolean {
 	if (isTurnRunning(chatId)) return false;
 	inFlight.set(chatId, Date.now());
+	emit("turn-started", { chatId });
 	return true;
 }
 
-/** Mark the chat's turn as finished (runs in onFinish, aborted or not). */
+/**
+ * Mark the chat's turn as finished (runs in onFinish, aborted or not —
+ * AFTER persistTurn, so "turn-settled" guarantees a subsequent fetch reads
+ * durable truth). Emits only when an entry was actually present: a
+ * defensive no-op endTurn must not fire a spurious settle.
+ */
 export function endTurn(chatId: string): void {
-	inFlight.delete(chatId);
+	if (inFlight.delete(chatId)) emit("turn-settled", { chatId });
 }
 
-/** True while the chat's turn is in flight; lazily evicts stale entries. */
+/** True while the chat's turn is in flight; lazily evicts stale entries.
+ * The eviction path is DELIBERATELY event-free: it is a leak guard for a
+ * turn whose onFinish never fired (itself pathological), it runs lazily
+ * from a read, and emitting from a read is a side-effect smell. Silence
+ * here is a choice, not an oversight. */
 export function isTurnRunning(chatId: string): boolean {
 	const since = inFlight.get(chatId);
 	if (since === undefined) return false;
