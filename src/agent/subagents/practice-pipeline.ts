@@ -43,6 +43,7 @@
  */
 
 import type { GraphStore, PracticeStore } from "../../core/ports.ts";
+import { emit } from "../../core/events.ts";
 import type { Problem, ProblemSet, ReasoningChain } from "../../core/contracts.ts";
 import { chainsForSelection } from "../../core/practice.ts";
 import { getGraph } from "../../core/graph.ts";
@@ -197,7 +198,18 @@ function registerRow(
 		controller: new AbortController(),
 	};
 	practiceRuns().set(key, row);
+	// The dock learns the row at the moment of cause (push S5, 2026-10-02):
+	// notify-after-write — the registry is the feed's truth.
+	emit("activity-changed", {});
 	return row;
+}
+
+/** Row over (settled, failed, aborted — every exit): the row leaves the
+ *  feed. ONE seam for all delete sites so no exit path can miss the
+ *  announce (push S5, 2026-10-02). */
+function finishPractice(key: string): void {
+	practiceRuns().delete(key);
+	emit("activity-changed", {});
 }
 
 /** DEDUP INPUT (computed ONCE at creation, passed to partitioner and
@@ -318,7 +330,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 			partitions = submitted.partitions;
 		} catch (err) {
 			await markSetError(set.id, isAbortLike(err) || controller.signal.aborted ? "Aborted" : messageOf(err));
-			practiceRuns().delete(partitionRow.key);
+			finishPractice(partitionRow.key);
 			return;
 		}
 
@@ -340,7 +352,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 			deps.practiceStore.saveSet(cur);
 			return cur;
 		});
-		practiceRuns().delete(partitionRow.key);
+		finishPractice(partitionRow.key);
 		if (!saved) return; // deleted mid-run — stop quietly
 
 		const genRows = stubs.map((stub, i) =>
@@ -367,6 +379,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 							throw err;
 						}
 						row.phase = "generating";
+						emit("activity-changed", {}); // in-place phase write — announce it
 						const generated = await agents.runProblemGenerator({
 							target: stub.chains,
 							fullChains: set.chains,
@@ -404,7 +417,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 						deps.practiceStore.saveSet(cur);
 					});
 				} finally {
-					practiceRuns().delete(row.key);
+					finishPractice(row.key);
 				}
 			}),
 		);
@@ -535,6 +548,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 			await withBgLlmSlot(controller.signal, async () => {
 				if (controller.signal.aborted) return; // dropped — no grade, no error state
 				row.phase = "grading";
+				emit("activity-changed", {}); // in-place phase write — announce it
 				const set = deps.practiceStore.getSet(setId);
 				if (!set) return;
 				const problem = set.problems.find((p) => p.id === problemId);
@@ -571,7 +585,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 			// stands — one attempt; the UI shows "grade interrupted").
 			console.error(`[practice] grading failed for ${problemId}:`, isAbortLike(err) ? "aborted" : messageOf(err));
 		} finally {
-			practiceRuns().delete(row.key);
+			finishPractice(row.key);
 		}
 	}
 
@@ -588,7 +602,7 @@ export function createPracticePipeline(deps: PracticePipelineDeps) {
 		const row = practiceRuns().get(key);
 		if (!row) return;
 		row.controller.abort();
-		practiceRuns().delete(key);
+		finishPractice(key);
 	}
 
 	/** SET-level abort — composes from row aborts (every live row of the

@@ -25,6 +25,7 @@ import type {
 } from "../../core/contracts.ts";
 import { getGraph, mergeFindings, type DerivedGraph, type EmissionStats, type GraphDeps } from "../../core/graph.ts";
 import type { GraphStore } from "../../core/ports.ts";
+import { emit } from "../../core/events.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts";
 import { teacherProseBlocks } from "../../core/coverage.ts";
@@ -722,6 +723,17 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			usage: prev?.usage ?? {}, // phase changes never lose usage
 			controller: prev?.controller ?? new AbortController(),
 		});
+		// Every phase transition announces the dock (push S5, 2026-10-02):
+		// notify-after-write — the registry is the feed's truth.
+		emit("activity-changed", {});
+	}
+
+	/** Run over (done, failed, aborted — every exit is a finally): the row
+	 *  leaves the feed. ONE seam for all delete sites so no exit path can
+	 *  miss the announce (push S5, 2026-10-02). */
+	function finishExtraction(jobKey: string): void {
+		runningExtractions.delete(jobKey);
+		emit("activity-changed", {});
 	}
 
 	/** Accumulate one billed step into the run's registry entry (live). */
@@ -899,7 +911,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			persistRunUsage(jobKey, Math.round(performance.now() - t0), undefined);
 			throw err;
 		} finally {
-			runningExtractions.delete(jobKey);
+			finishExtraction(jobKey);
 		}
 	}
 
@@ -1062,7 +1074,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			throw err;
 		} finally {
 			inFlight.delete(chatId);
-			runningExtractions.delete(chatId); // done or failed — no longer running
+			finishExtraction(chatId); // done or failed — no longer running
 		}
 	}
 
@@ -1217,7 +1229,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			throw err;
 		} finally {
 			inFlight.delete(id);
-			runningExtractions.delete(id); // done or failed — no longer running
+			finishExtraction(id); // done or failed — no longer running
 		}
 	}
 

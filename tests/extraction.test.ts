@@ -57,6 +57,7 @@ import { simplifyChains } from "../src/core/graph.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError, providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts";
 import { coverageOf, messageViewLines } from "../src/core/coverage.ts";
 import { chatStore } from "../src/store/chats.ts";
+import { subscribe } from "../src/core/events.ts";
 import { PATHS } from "../config.ts";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
@@ -372,6 +373,36 @@ describe("transcriptView (pure — teacher prose only, owner 2026-09-28)", () =>
 // ─── the pipeline ───────────────────────────────────────────────────────────
 
 describe("the extraction pipeline (extractor → auditor → merger)", () => {
+	it("push S5: every registry mutation announces activity-changed; reads stay silent", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const verdict: AuditVerdicts = { links: [] };
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", FINDINGS),
+			auditor: submitModel("submit_review", verdict),
+		});
+
+		let announces = 0;
+		const off = subscribe((e) => {
+			if (e.type === "activity-changed") announces++;
+		});
+		// A read announces nothing (reads are silent — the bus hygiene law).
+		extractionStatuses();
+		assert.equal(announces, 0);
+
+		await pipeline.runExtraction(chatId);
+		// The run announced its lifecycle: setPhase at registration and every
+		// phase transition, finishExtraction at the exit — several events,
+		// and NONE after settle (the registry is empty; nothing left to say).
+		assert.ok(announces >= 2, `phases + finish announced (got ${announces})`);
+		const afterSettle = announces;
+		extractionStatuses();
+		assert.equal(announces, afterSettle, "reads stay silent");
+		off();
+	});
+
 	it("stringified-payload heal (owner, 2026-09-28): propositions arriving as ONE JSON string still validate and merge", async () => {
 		const { chatId } = fixtureChat();
 		const ledgers = memoryLedgers();

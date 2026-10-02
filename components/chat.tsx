@@ -25,7 +25,6 @@ import { Composer } from "@/components/composer";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
-import { useActivity } from "@/components/activity-dock";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { isProviderKeyRefusal, needsContinuation, type ChatInput, type ChatSettings, type LhMessage, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
@@ -529,10 +528,9 @@ export function Chat({
 	// outgoing message, BEFORE the stream produces anything — so a bounded,
 	// self-terminating window of three record fetches (400ms/1s/2s) catches
 	// the insert and shows the marker during the turn, then stops. No
-	// standing poll — the window exists only for these seconds. The same
-	// instant nudges the activity feed: extraction and sub-agent jobs
-	// start at send (server-side), and the dock must say so immediately.
-	const { refresh: refreshActivity } = useActivity();
+	// standing poll — the window exists only for these seconds. (The dock
+	// nudges that lived here died at S5: dispatch writes announce jobs-changed
+	// from the store, extraction announces activity-changed at setPhase.)
 	const turnStartStatusRef = useRef(status);
 	// The window must survive the submitted→streaming flip (the stream starts
 	// in well under 400ms), so the timers are guarded by this ref — dropped at
@@ -544,18 +542,12 @@ export function Chat({
 		turnStartStatusRef.current = status;
 		if (was === "submitted" || status !== "submitted") return;
 		// A turn just started (status flipped ready → submitted): open the
-		// bounded adoption window and nudge the dock's feed.
-		refreshActivity();
+		// bounded adoption window.
 		adoptionWindowOpenRef.current = true;
 		const timers = [400, 1000, 2000].map((ms) =>
 			setTimeout(() => {
 				if (adoptionWindowOpenRef.current) {
 					void adoptAppendOnly();
-					// Turn-start nudge re-fire (accuracy wave): extraction and
-					// sub-agent jobs start at send — the initial refresh above can
-					// race the server's job-record write; the window's ticks retry
-					// it so the dock always catches the job within the window (≤2s).
-					refreshActivity();
 				}
 			}, ms),
 		);
@@ -564,7 +556,7 @@ export function Chat({
 		timers.forEach((t) => {
 			turnStartTimerRefs.current.push(t);
 		});
-	}, [status, adoptAppendOnly, refreshActivity]);
+	}, [status, adoptAppendOnly]);
 	useEffect(() => {
 		const timers = turnStartTimerRefs;
 		return () => {
@@ -647,17 +639,9 @@ export function Chat({
 		// The coverage ring re-reads at turn settle too (extraction-UX
 		// redesign, 2026-09-24); the ring's own running-poll handles runs.
 		setCoverageTick((t) => t + 1);
-		// Turn-end nudge (accuracy wave, 2026-09-19): the extraction
-		// pipeline fires at this turn's onFinish — the dock's poll would
-		// discover a started run up to 10s late. Refetch the activity feed
-		// now (stream settle) and again at +600/+1500ms (bounded window —
-		// covers onFinish→triggerExtraction→setPhase lag); the feed's own
-		// fast interval takes over once it sees the run. (Dies at S5 when
-		// the dock goes event-driven.)
-		refreshActivity();
-		const nudgeTimers = [600, 1500].map((ms) => setTimeout(() => refreshActivity(), ms));
-		return () => nudgeTimers.forEach(clearTimeout);
-	}, [status, syncTurns, refreshActivity]);
+		// (The extraction-discovery nudges that lived here died at S5: the
+		// pipeline announces every phase on the events channel.)
+	}, [status, syncTurns]);
 
 	// A stream that died MID-FLIGHT (network): the runner decoupled the turn
 	// from its view, so the server turn runs ON behind the error banner —
@@ -710,37 +694,9 @@ export function Chat({
 	const jobStatusRef = useRef<Map<string, string>>(new Map());
 	// A settle seen during a busy turn — the sync is owed, not dropped.
 	const pendingSyncRef = useRef(false);
-	// Dispatch nudge (accuracy wave, 2026-09-19): a research/demo/visual/pdf
-	// part that cleared input streaming proves the server-side execute ran
-	// (the bridge emits input-available only at tool_execution_end — AFTER
-	// dispatch() created the job record on disk), so nudging the activity
-	// feed here is race-free. The dock learns a dispatched job at the moment
-	// of cause (dies at S5 when the dock goes event-driven). Keyed by
-	// toolCallId; the persistent set makes each dispatch nudge exactly once
-	// (transcript parts stay forever — the diff only fires on new ids).
-	const dispatchedRef = useRef<Set<string>>(new Set());
-	useEffect(() => {
-		const live = new Set<string>();
-		for (const m of messages) {
-			for (const p of m.parts) {
-				if (
-					(p.type === "tool-research" ||
-						p.type === "tool-demo" ||
-						p.type === "tool-visual" ||
-						p.type === "tool-pdf") &&
-					p.toolCallId &&
-					p.state !== "input-streaming" &&
-					p.state !== "output-error"
-				) {
-					live.add(p.toolCallId);
-				}
-			}
-		}
-		for (const id of live) {
-			if (!dispatchedRef.current.has(id)) refreshActivity();
-		}
-		dispatchedRef.current = live;
-	}, [messages, refreshActivity]);
+	// (The dispatch nudge effect that lived here — refreshActivity per new
+	// dispatch tool part — died at S5: the store announces jobs-changed at
+	// the dispatch write; the dock subscribes.)
 	// First-fetch guard (the old first-tick guard): the initial read adopts
 	// existing history (jobs recorded before mount) without nudging — a
 	// nudge is only owed for a running job the feed hasn't seen THIS session.
@@ -756,11 +712,11 @@ export function Chat({
 			if (!res.ok) return;
 			const data = (await res.json()) as { jobs?: JobRecord[]; turnInFlight?: boolean };
 			const list = data.jobs ?? [];
-			let nudgeActivity = false; // settle or new running job this fetch
 			for (const j of list) {
 				const prev = jobStatusRef.current.get(j.id);
 				if (prev === "running" && j.status !== "running") {
-					nudgeActivity = true; // a settle — the blob should leave the feed NOW
+					// A settle — the blob leaves the dock via the store's jobs-changed
+					// announce at this very write (S5); this handler owns the RECORD.
 					// The record is only guaranteed complete when no turn is in
 					// flight — locally or server-side (a coalesced settle fires
 					// mid-turn by design), so the FULL sync waits for idle.
@@ -774,10 +730,6 @@ export function Chat({
 						void syncFromServer();
 					}
 				}
-				// A running job this feed has never seen (wake/respawn started
-				// server-side, or a dispatch in ANOTHER tab) — nudge so the
-					// dock adopts it at once.
-				if (prev === undefined && j.status === "running" && !firstFetchRef.current) nudgeActivity = true;
 				jobStatusRef.current.set(j.id, j.status);
 			}
 			firstFetchRef.current = false;
@@ -790,7 +742,6 @@ export function Chat({
 				void syncFromServer();
 			}
 			setJobs(list);
-			if (nudgeActivity) refreshActivity();
 			// (Wake-turn adoption that lived here — the turnInFlight attach
 			// line — died at S3: turn-started on the events channel owns
 			// discovery now. turnInFlight is STILL READ above: the settle
@@ -798,7 +749,7 @@ export function Chat({
 		} catch {
 			/* transient fetch failure — the next jobs-changed announcement re-fetches */
 		}
-	}, [chatId, syncFromServer, adoptAppendOnly, refreshActivity]);
+	}, [chatId, syncFromServer, adoptAppendOnly]);
 	fetchJobsRef.current = () => void fetchJobs();
 	// Mount + chat switch: the IMMEDIATE (non-debounced) initial read. The
 	// firstFetch guard resets with the old rule — true only when this

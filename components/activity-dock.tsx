@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
 import { isModelsRefusal, isProviderKeyRefusal, jobCost } from "@/src/core";
 import { formatTokens, formatUsd } from "@/components/usage-format";
+import { useServerEvent, useServerResync } from "@/components/server-events";
 
 /**
  * THE BACKGROUND-AGENTS SECTION (owner, sidebar round — the successor of
@@ -85,7 +86,7 @@ export interface ActivityFeed {
 
 const EMPTY_FEED: ActivityFeed = { jobs: [], extractions: [] };
 
-// ─── The one poll (composition root: the root layout) ────────────────────────
+// ─── The activity feed (composition root: the root layout) ───────────────────
 
 const ActivityContext = createContext<{ feed: ActivityFeed; refresh: () => void }>({
 	feed: EMPTY_FEED,
@@ -93,52 +94,59 @@ const ActivityContext = createContext<{ feed: ActivityFeed; refresh: () => void 
 });
 
 /**
- * Polls /api/activity for the whole app shell. Adaptive interval: fast while
- * anything runs, slow when idle, ~4× slower on hidden tabs. A failed fetch
- * keeps the last feed (the dock never flickers to empty on a blip).
- *
- * ACCURACY (2026-09-19): polling alone can only be as fresh as its interval,
- * so the start sites that the client can know about nudge refresh()
- * directly (chat.tsx at turn start/end and dispatch; the extract/import
- * buttons), and THIS provider adds the last client-known event: visibility —
- * a tab becoming visible refetches at once, so hidden-tab staleness (×4)
- * ends the moment the learner looks. The poll stays the safety net for
- * everything with no client-visible cause (other tabs, wake turns,
- * recovery).
+ * THE ACTIVITY FEED, PUSH-DRIVEN (architecture S5, 2026-10-02): the
+ * adaptive poll is RETIRED — the dock refetches exactly when truth moves.
+ * Every cause is announced on the events channel: extraction phase
+ * transitions and practice rows (activity-changed), job writes
+ * (jobs-changed — the running-jobs blobs), and channel resync (reconnect /
+ * dev-restart catch-up) — plus the one client-local cause that predates
+ * the channel: visibility, a tab becoming visible refetches at once.
+ * Announced fetches ride a 250ms trailing debounce (extraction phases and
+ * practice progress burst); resync and visibility are immediate. A failed
+ * fetch keeps the last feed (the dock never flickers to empty on a blip).
  */
 export function ActivityProvider({ children }: { children: React.ReactNode }) {
 	const [feed, setFeed] = useState<ActivityFeed>(EMPTY_FEED);
 	const [nonce, setNonce] = useState(0);
 	const refresh = useCallback(() => setNonce((n) => n + 1), []);
-	const hasRunning = feed.jobs.length > 0 || feed.extractions.length > 0 || (feed.practice?.length ?? 0) > 0;
+	const refreshRef = useRef(refresh);
+	refreshRef.current = refresh;
+	const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
 	useEffect(() => {
 		let alive = true;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const poll = async () => {
+		void (async () => {
 			try {
 				const res = await fetch("/api/activity");
 				if (res.ok) {
 					const data = (await res.json()) as Partial<ActivityFeed>;
 					if (alive)
-					setFeed({ jobs: data.jobs ?? [], extractions: data.extractions ?? [], practice: data.practice ?? [] });
+						setFeed({ jobs: data.jobs ?? [], extractions: data.extractions ?? [], practice: data.practice ?? [] });
 				}
 			} catch {
-				// transport blip: keep the last feed, try again
+				// transport blip: keep the last feed, announce again next event
 			}
-			if (!alive) return;
-			const base = hasRunning ? 2500 : 10000;
-			timer = setTimeout(poll, document.hidden ? base * 4 : base);
-		};
-		void poll();
+		})();
 		return () => {
 			alive = false;
-			if (timer) clearTimeout(timer);
 		};
-	}, [hasRunning, nonce]);
+	}, [nonce]);
 
-	// The visibility nudge: returning to the tab refetches immediately (and
-	// the re-run effect below resets the poll timer — no double polling).
+	// Announcements → one trailing fetch per burst (the S4 debounce law).
+	const scheduleAnnouncedFetch = () => {
+		if (debounceRef.current) clearTimeout(debounceRef.current);
+		debounceRef.current = setTimeout(() => {
+			debounceRef.current = undefined;
+			refreshRef.current();
+		}, 250);
+	};
+	useServerEvent("activity-changed", scheduleAnnouncedFetch);
+	useServerEvent("jobs-changed", scheduleAnnouncedFetch);
+	// Reconnect catch-up: events missed while the channel was down.
+	useServerResync(() => refreshRef.current());
+
+	// The visibility nudge: returning to the tab refetches immediately —
+	// anything missed while hidden lands at once.
 	useEffect(() => {
 		const onVisibility = () => {
 			if (document.visibilityState === "visible") setNonce((n) => n + 1);
@@ -147,14 +155,21 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 		return () => document.removeEventListener("visibilitychange", onVisibility);
 	}, []);
 
+	// The debounce timer never outlives the provider.
+	useEffect(
+		() => () => {
+			if (debounceRef.current) clearTimeout(debounceRef.current);
+		},
+		[],
+	);
+
 	return <ActivityContext.Provider value={{ feed, refresh }}>{children}</ActivityContext.Provider>;
 }
 
 /** The activity feed seam for the rest of the shell: the dock's data +
- *  its refresh nudge. The chat page nudges on turn start (owner ground
- *  rules, 2026-09-15): background processes that start at send —
- *  extraction and sub-agent jobs — must be visible in the dock the
- *  moment they begin, without the dock polling faster while idle. */
+ *  its refresh nudge. The remaining nudgers are client-visible causes
+ *  (the extract/import buttons — extraction-coverage, graph-view); every
+ *  server-side cause announces itself on the events channel now. */
 export function useActivity(): { feed: ActivityFeed; refresh: () => void } {
 	return useContext(ActivityContext);
 }

@@ -26,6 +26,7 @@ import {
 	BadAnswersError,
 	type RunningPractice,
 } from "../src/agent/subagents/practice-pipeline.ts";
+import { subscribe } from "../src/core/events.ts";
 import { chainCoverage } from "../src/core/practice.ts";
 import type { GraphChain, GraphNode, ProblemSet } from "../src/core/contracts.ts";
 import type { ChatStore, GraphStore, PracticeStore } from "../src/core/ports.ts";
@@ -401,6 +402,44 @@ describe("createProblemSet (generation)", () => {
 		);
 		// Registry cleared.
 		assert.equal(practiceStatuses().length, 0);
+	});
+
+	it("push S5: registerRow/phase-writes/finishPractice all announce activity-changed; reads stay silent", async () => {
+		const factory: FauxResponseStep = () =>
+			fauxAssistantMessage(
+				[
+					fauxToolCall(
+						"submit_problem",
+						{ chains: ["b"], statement: "s", solution: "v", rubric: "r" } as ToolCall["arguments"],
+						{ id: "gen-b" },
+					),
+				],
+				{ stopReason: "toolUse" },
+			);
+		const f = fixture({
+			partitioner: partitionModel([{ chains: ["b"] }]),
+			problemGenerator: fauxEngine([factory]),
+			grader: echoGrader(1),
+		});
+		const pipeline = f.make();
+
+		let announces = 0;
+		const off = subscribe((e) => {
+			if (e.type === "activity-changed") announces++;
+		});
+		// Reads announce nothing.
+		practiceStatuses();
+		assert.equal(announces, 0);
+
+		const { done } = await pipeline.createProblemSet(["a", "b"], PARAMS);
+		await done;
+		// The lifecycle announced: partition row register + its finish,
+		// gen row register + the generating write + its finish.
+		assert.ok(announces >= 5, `register/phase/finish all announced (got ${announces})`);
+		const afterDone = announces;
+		practiceStatuses();
+		assert.equal(announces, afterDone, "reads stay silent");
+		off();
 	});
 
 	it("the learner's note threads to the partitioner + every generator and persists on the set (owner, 2026-09-29)", async () => {
