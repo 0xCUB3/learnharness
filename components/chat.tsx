@@ -26,6 +26,7 @@ import { DictationBar, joinDictation, useDictation } from "@/components/dictatio
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useActivity } from "@/components/activity-dock";
+import { useServerEvent } from "@/components/server-events";
 import { isProviderKeyRefusal, needsContinuation, type ChatInput, type ChatSettings, type LhMessage, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
@@ -623,75 +624,40 @@ export function Chat({
 		void syncTurns();
 	}, [syncTurns]);
 	// After the learner's own turn ends the log has a fresh entry — and the
-	// Post-turn adoption + the HANDOFF WATCH. Two things can trail our own
-	// stream's end: (1) the server's persist/endTurn — milliseconds, and the
-	// record is only complete once not-in-flight (plan blocks attach at
-	// persist); (2) a WAKE TURN — the probe→teacher handoff fires
-	// ~0.75–1.2s later (the pump's grace), and NO jobs poll is running to
-	// notice it: probe-phase sessions have zero job traffic, so the jobs
-	// poll is switched off and the open client never learns the teacher's
-	// turn exists (the freeze the user hit 2026-09-11 — the sidebar saw
-	// busy→idle while the session sat frozen). So: adopt at the first idle
-	// read as before, then keep watching briefly — if turnInFlight flips
-	// true, hand off to the wake-adoption poll below (busy shimmer, adopt
-	// at finish).
+	// Post-turn settle (the SLIMMED watch — push-architecture S3,
+	// 2026-10-02): our own stream just ended. Two instant LOCAL actions
+	// only — the turns-only refetch lands the log entry while the server's
+	// persist/endTurn lags by milliseconds, and the coverage ring re-reads
+	// (this turn's messages just joined the uncovered mass). The ADOPTION
+	// LOOP and the HANDOFF WATCH that lived here are RETIRED: a
+	// server-initiated turn (the probe→teach handoff, a job wake, another
+	// tab) is now ANNOUNCED on the events channel — the turn-started
+	// subscription (below the jobs poll) attaches to it live. No polling
+	// window can expire; the freeze class is gone.
 	const prevStatusRef = useRef(status);
 	useEffect(() => {
-		if (prevStatusRef.current !== "ready" && status === "ready") {
-			// immediate: turns-only refetch — the stats bar updates even while
-			// the server's persist/endTurn lags the client by milliseconds
-			void syncTurns();
-			// The coverage ring re-reads at turn settle too (extraction-UX
-			// redesign, 2026-09-24): this turn's messages just joined the
-			// uncovered mass; the ring's own running-poll handles runs.
-			setCoverageTick((t) => t + 1);
-			// Turn-end nudge (accuracy wave, 2026-09-19): the extraction
-			// pipeline fires at this turn's onFinish — the dock's poll would
-			// discover a started run up to 10s late. Refetch the activity feed
-			// now (stream settle) and again at +600/+1500ms (bounded window —
-			// covers onFinish→triggerExtraction→setPhase lag); the feed's own
-			// fast interval takes over once it sees the run.
-			refreshActivity();
-			const nudgeTimers = [600, 1500].map((ms) => setTimeout(() => refreshActivity(), ms));
-			let cancelled = false;
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			let adopted = false;
-			const WATCH_ATTEMPTS = 8; // 8 × 500ms: persist lag + the ~1.2s handoff
-			const adopt = async (attempt: number) => {
-				if (cancelled) return;
-				try {
-					const res = await fetch(`/api/chats/${chatId}`);
-					if (res.ok) {
-						const record = (await res.json()) as { turnInFlight?: boolean };
-						if (!adopted) {
-							// phase 1: wait out our own turn's persist lag, then adopt once
-							if (record.turnInFlight !== true) {
-								adopted = true;
-								void syncFromServer();
-							}
-						} else if (record.turnInFlight === true) {
-							// phase 2 (the watch): a wake turn started — the handoff.
-							// Attach to it live (stream-reattach wave): the same
-							// resume path as mount reattach; the record poll is
-							// the fallback while it connects.
-							attachToRunningTurn();
-							return;
-						}
-					}
-				} catch {
-					/* transient — keep polling */
-				}
-				if (attempt < WATCH_ATTEMPTS && !cancelled) timer = setTimeout(() => void adopt(attempt + 1), 500);
-			};
-			void adopt(0);
-			return () => {
-				cancelled = true;
-				if (timer) clearTimeout(timer);
-				nudgeTimers.forEach(clearTimeout);
-			};
-		}
+		const transitioned = prevStatusRef.current !== "ready" && status === "ready";
+		// Every path (the old early-return skipped this on the transition
+		// branch — the re-fire-on-dep-churn wart, fixed S3).
 		prevStatusRef.current = status;
-	}, [status, chatId, syncFromServer, syncTurns, refreshActivity, attachToRunningTurn]);
+		if (!transitioned) return;
+		// immediate: turns-only refetch — the stats bar updates even while
+		// the server's persist/endTurn lags the client by milliseconds
+		void syncTurns();
+		// The coverage ring re-reads at turn settle too (extraction-UX
+		// redesign, 2026-09-24); the ring's own running-poll handles runs.
+		setCoverageTick((t) => t + 1);
+		// Turn-end nudge (accuracy wave, 2026-09-19): the extraction
+		// pipeline fires at this turn's onFinish — the dock's poll would
+		// discover a started run up to 10s late. Refetch the activity feed
+		// now (stream settle) and again at +600/+1500ms (bounded window —
+		// covers onFinish→triggerExtraction→setPhase lag); the feed's own
+		// fast interval takes over once it sees the run. (Dies at S5 when
+		// the dock goes event-driven.)
+		refreshActivity();
+		const nudgeTimers = [600, 1500].map((ms) => setTimeout(() => refreshActivity(), ms));
+		return () => nudgeTimers.forEach(clearTimeout);
+	}, [status, syncTurns, refreshActivity]);
 
 	// A stream that died MID-FLIGHT (network): the runner decoupled the turn
 	// from its view, so the server turn runs ON behind the error banner —
@@ -858,52 +824,44 @@ export function Chat({
 		};
 	}, [pollMs, jobPartCount, chatId, syncFromServer, adoptAppendOnly, refreshActivity, attachToRunningTurn]);
 
-	// The FALLBACK liveness poll (stream-reattach wave): runs only while the
-	// reattach stream couldn't take over — the pre-attach window, a failed
-	// resume, or a resumed stream that died mid-flight. Polls the record
-	// until the orphaned turn finishes (turnInFlight flips false server-side
-	// in onFinish, AFTER persist), then adopts the completed transcript —
-	// the syncFromServer above already runs the job-continuation check.
-	// Until then the session reads as busy: pre-first-chunk shimmer,
-	// composer gated. Steer content shows NOW via append-only adoption.
-	useEffect(() => {
-		if (!turnInFlight) return;
-		let cancelled = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const poll = async () => {
-			if (cancelled) return;
-			try {
-				const res = await fetch(`/api/chats/${chatId}`);
-				if (res.ok) {
-					const record = (await res.json()) as {
-						turnInFlight?: boolean;
-						messages?: LhMessage[];
-					};
-					// Ground rule (2026-09-15): steer content persisted by the
-					// wake shows NOW, at the wake turn's start — not at its
-					// finish. Append-only is safe here: no local stream runs
-					// under a server-side wake turn.
-					if (Array.isArray(record.messages)) adoptRecord(record.messages);
-					if (!record.turnInFlight) {
-						setTurnInFlight(false);
-						// Heal a stream-death banner (the failed-attach fallback): the
-						// record is the truth and the truth just landed.
-						if (status === "error") clearError();
-						void syncFromServer();
-						return;
-					}
-				}
-			} catch {
-				/* transient network hiccup — keep polling */
+	// ── Server-initiated turn discovery (push-architecture S3, 2026-10-02) ──
+	// Every turn THIS chat runs is announced on the events channel — the
+	// probe→teach handoff, a job wake, another tab's send, the
+	// missed-on-mount case. This replaces the retired watch loop and the
+	// 1500ms fallback record poll: discovery is no longer a polling window
+	// that can expire. Handlers read REFS, not closure state — events fire
+	// between renders, and a ref holds the live value at event time.
+	const statusRef = useRef(status);
+	statusRef.current = status;
+	useServerEvent("turn-started", (p) => {
+		// Known non-issue: beginTurn emits before registerTurn in the same
+		// synchronous request flow; a GET /stream inside that sub-ms window
+		// gets a settled response — unwinnable by a network round-trip,
+		// self-healing via the eventual turn-settled. Do not engineer around.
+		if (p.chatId !== chatId) return;
+		if (localStreamRef.current) return; // our OWN turn — the 409-race guard
+		if (turnInFlightRef.current) return; // already attached
+		attachToRunningTurn();
+	});
+	useServerEvent("turn-settled", (p) => {
+		if (p.chatId !== chatId) return;
+		if (localStreamRef.current) return; // our own [DONE] path owns the settle
+		if (turnInFlightRef.current) {
+			// The attached stream's terminal frame owns the normal settle —
+			// syncing HERE would swap a stale snapshot mid-stream (the
+			// continuation-coalescing law, see the jobs poll above). Only
+			// the error case heals: the attached stream died, and the settle
+			// says persistTurn has made the record durable truth.
+			if (statusRef.current === "error") {
+				setTurnInFlight(false);
+				clearError();
+				void syncFromServer();
 			}
-			if (!cancelled) timer = setTimeout(poll, 1500);
-		};
-		timer = setTimeout(poll, 1000);
-		return () => {
-			cancelled = true;
-			if (timer) clearTimeout(timer);
-		};
-	}, [turnInFlight, chatId, syncFromServer, status, clearError]);
+			return;
+		}
+		// Fully idle — a turn we never saw (every window missed): adopt now.
+		void syncFromServer();
+	});
 
 	const onSend = () => {
 		if (busy || pending) return;

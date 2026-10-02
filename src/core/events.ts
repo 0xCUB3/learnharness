@@ -42,6 +42,17 @@ export interface ServerEvents {
 
 export type ServerEventType = keyof ServerEvents;
 
+/** The vocabulary's runtime names — the client wires one listener per
+ *  name (types are erased; this list is the single source of truth for
+ *  what the SSE channel can carry). */
+export const SERVER_EVENT_TYPES = [
+	"turn-started",
+	"turn-settled",
+	"jobs-changed",
+	"activity-changed",
+	"chats-changed",
+] as const satisfies readonly ServerEventType[];
+
 /** One notification: the type discriminates the payload. */
 export type ServerEvent<K extends ServerEventType = ServerEventType> = {
 	type: K;

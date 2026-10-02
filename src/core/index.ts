@@ -20,6 +20,10 @@ export * from "./ports.ts";
 export * from "./render-settings.ts";
 
 export * from "./question-core.ts";
+// The event bus (push architecture, 2026-10-02): vocabulary + emit/subscribe
+// for every layer; the browser shell consumes the types + the runtime names
+// through this barrel (shell law: pure core via @/src/core only).
+export * from "./events.ts";
 // clusters.ts (Louvain) is deliberately NOT re-exported: nothing in the
 // shell runs community detection — the snapshot carries the partition
 // from the server. Keeping it out keeps the heavy clustering deps out of the

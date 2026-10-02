@@ -4,6 +4,7 @@ import "katex/dist/katex.min.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
 import { ActivityProvider } from "@/components/activity-dock";
+import { ServerEventsProvider } from "@/components/server-events";
 import { AppearanceProvider } from "@/components/settings/appearance";
 
 // Chrome = JetBrains Mono, teaching prose = Source Sans 3, titles = CMU
@@ -20,13 +21,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 	return (
 		<html lang="en" className={`dark ${ui.variable} ${prose.variable}`}>
 			<body className="min-h-dvh antialiased">
-			<AppearanceProvider>
-				<SidebarProvider>
-					<ActivityProvider>
-						<AppShell>{children}</AppShell>
-					</ActivityProvider>
-				</SidebarProvider>
-			</AppearanceProvider>
+			{/* The notification channel rides OUTSIDE everything: sidebar, dock,
+				 and pages all subscribe as the polls retire (push S3, 2026-10-02). */}
+			<ServerEventsProvider>
+				<AppearanceProvider>
+					<SidebarProvider>
+						<ActivityProvider>
+							<AppShell>{children}</AppShell>
+						</ActivityProvider>
+					</SidebarProvider>
+				</AppearanceProvider>
+			</ServerEventsProvider>
 		</body>
 		</html>
 	);
