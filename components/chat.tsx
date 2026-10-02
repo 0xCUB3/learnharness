@@ -639,9 +639,26 @@ export function Chat({
 		// The coverage ring re-reads at turn settle too (extraction-UX
 		// redesign, 2026-09-24); the ring's own running-poll handles runs.
 		setCoverageTick((t) => t + 1);
+		// CANONIZATION (fix B, the duplicate-previous-message bug, 2026-10-02):
+		// turn-settled for OUR OWN turn arrives while the stream is still open
+		// (endTurn emits from onFinish before the response terminates, so the
+		// SSE frame reliably beats [DONE]) — the handler below cannot sync
+		// there, it flags instead, and THIS flip consumes the flag: the record
+		// is guaranteed durable (endTurn fires only after persistTurn, the S2
+		// ordering law), so replacing the view onto it absorbs the tail's
+		// streamed c_-id copies into base under their server ids. Without
+		// this the tail kept those copies forever and the next send's
+		// steer-adoption window rendered them a second time. The wake handoff
+		// cannot be missed by this sync: the wake fires only after the idle
+		// gates + grace (≥750ms past this flip), so its turn-started event
+		// lands at an idle, already-canonical view and attaches normally.
+		if (settleAnnouncedRef.current) {
+			settleAnnouncedRef.current = false;
+			void syncFromServer();
+		}
 		// (The extraction-discovery nudges that lived here died at S5: the
 		// pipeline announces every phase on the events channel.)
-	}, [status, syncTurns]);
+	}, [status, syncTurns, syncFromServer]);
 
 	// A stream that died MID-FLIGHT (network): the runner decoupled the turn
 	// from its view, so the server turn runs ON behind the error banner —
@@ -785,6 +802,11 @@ export function Chat({
 	// between renders, and a ref holds the live value at event time.
 	const statusRef = useRef(status);
 	statusRef.current = status;
+	/** Fix B (2026-10-02): turn-settled arrived for OUR OWN turn — the
+	 * record is durable (endTurn fires only after persistTurn); the ready
+	 * flip consumes this flag to canonize the view onto the record. See the
+	 * settle effect and the turn-settled handler below. */
+	const settleAnnouncedRef = useRef(false);
 	useServerEvent("turn-started", (p) => {
 		// Known non-issue: beginTurn emits before registerTurn in the same
 		// synchronous request flow; a GET /stream inside that sub-ms window
@@ -797,7 +819,17 @@ export function Chat({
 	});
 	useServerEvent("turn-settled", (p) => {
 		if (p.chatId !== chatId) return;
-		if (localStreamRef.current) return; // our own [DONE] path owns the settle
+		if (localStreamRef.current) {
+			// Our own [DONE] path owns the BUSY settle — but not a no-op (fix B,
+			// 2026-10-02): the event is the record-durable guarantee (endTurn
+			// fires only after persistTurn), and it reliably beats [DONE] here
+			// (endTurn emits from onFinish before the response terminates). Flag
+			// it; the ready flip consumes the flag and canonizes the view onto
+			// the record. (If [DONE] somehow won this race instead, this branch
+			// didn't run and the fully-idle branch below already synced.)
+			settleAnnouncedRef.current = true;
+			return;
+		}
 		if (turnInFlightRef.current) {
 			// The attached stream's terminal frame owns the normal settle —
 			// syncing HERE would swap a stale snapshot mid-stream (the
