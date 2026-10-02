@@ -41,6 +41,12 @@ export interface PendingToolCall {
 /** Tools that render in the question dock and gate the composer. */
 export const QUESTION_TOOLS = ["quiz", "ask_user_question", "explain"] as const;
 
+/** The tool→kind map (the dock's own fold, named once — the dismissal
+ *  path and the dock must never disagree on what a tool is). */
+export function toolQuestionKind(tool: string): "quiz" | "ask" | "explain" {
+	return tool === "quiz" ? "quiz" : tool === "explain" ? "explain" : "ask";
+}
+
 /** Tools fulfilled by background sub-agent jobs (W2/W6). */
 export const JOB_TOOLS = ["research", "demo", "visual"] as const;
 

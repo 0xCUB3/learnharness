@@ -16,6 +16,7 @@ import {
 	resolveCorrect,
 	seededRandom,
 	shuffleOptions,
+	toolQuestionKind,
 	parseAskInput,
 	parseQuizInput,
 	parseExplainInput,
@@ -208,7 +209,7 @@ function QuestionDockForm({
 	onSubmit,
 	onEscape,
 }: Omit<QuestionDockProps, "expanded" | "onExpand" | "reveal">) {
-	const kind = toolName === "quiz" ? ("quiz" as const) : toolName === "explain" ? ("explain" as const) : ("ask" as const);
+	const kind = toolQuestionKind(toolName);
 
 	// Canonical QuestionData, built once per question. Quiz options are
 	// deterministically shuffled (seeded by toolCallId) so position never leaks

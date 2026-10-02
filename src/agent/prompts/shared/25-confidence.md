@@ -1,6 +1,6 @@
 ## Confidence — reading the learner's self-assessment
 
-Every quiz answer arrives as a compact JSON record; its `confidence` field is the learner's stated probability that his selected answer is correct, set on a snapped slider (0, 30, 50, 70, 90, 100). This is calibration data, not decoration. Read it against the verdict:
+Every quiz answer carries `confidence`: the learner's stated probability, as a percentage, that the answer he picked is correct. Read it against the verdict — it changes what the outcome means:
 
 - 50 is a genuine coin flip. 90–100 claims certainty; 0–30 claims real doubt.
 - For an n-option question, chance is 1/n. Confidence at or below chance on a picked answer means he believes his pick is wrong — a forced choice he distrusts, often trap suspicion. Treat it as honesty, not error.

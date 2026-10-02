@@ -30,6 +30,7 @@ import { isProviderKeyRefusal, needsContinuation, type ChatInput, type ChatSetti
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
+import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
 import { WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
@@ -38,7 +39,7 @@ import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsag
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import { CoverageRing } from "@/components/extraction-coverage";
-import { findPendingToolCall, phaseAt3, phaseTimeline } from "@/src/core";
+import { dismissedAnswer, findPendingToolCall, phaseAt3, phaseTimeline, toolQuestionKind } from "@/src/core";
 import { slotsConfigured, type ModelsSettings } from "@/src/core";
 import { useSettingsSaved } from "@/components/settings-signal";
 
@@ -298,13 +299,39 @@ export function Chat({
 		// 409 not_running is the benign raced-settle: the stream's finish
 			// already settled the view (or the poll fallback adopts) — nothing owed.
 	}, [chatId, stop]);
+	// ESC-abort guard (owner, 2026-10-02): the abort chain opens a confirm
+	// popup EVERYWHERE (streams and pending questions alike). Both window
+	// listeners fire per Esc, so the state gate here — not stopPropagation
+	// ordering — is what keeps the popup's own Esc from chaining.
+	const [abortAsk, setAbortAsk] = useState<AbortMode | null>(null);
+	const abortAskRef = useRef<AbortMode | null>(null);
+	abortAskRef.current = abortAsk;
 	useEffect(() => {
 		const onAbort = () => {
-			if (busyRef.current) abortInFlightTurn();
+			if (abortAskRef.current !== null) return; // the popup's Esc — claimed
+			if (pendingRef.current) setAbortAsk("question");
+			else if (busyRef.current) setAbortAsk("turn");
 		};
 		window.addEventListener("lh:kbd-abort-turn", onAbort);
 		return () => window.removeEventListener("lh:kbd-abort-turn", onAbort);
-	}, [abortInFlightTurn]);
+	}, []);
+	const confirmAbort = useCallback(
+		(mode: AbortMode) => {
+			setAbortAsk(null);
+			if (mode === "turn") {
+				abortInFlightTurn();
+				return;
+			}
+			// From a pending question there is no turn to kill — abort IS
+			// dismissal, riding the same answer path as any answer (the
+			// teacher acknowledges the skip in its next turn).
+			const p = pendingRef.current;
+			if (!p) return;
+			const question = (p.input as { question?: string } | null)?.question ?? "";
+			void submitAnswer(p.tool, p.toolCallId, dismissedAnswer(toolQuestionKind(p.tool), question));
+		},
+		[abortInFlightTurn, submitAnswer],
+	);
 	// Mount continuation: if the stored transcript ends with a fulfilled tool
 	// (a job result landed while no client was open), resume the lesson — the
 	// SDK's sendAutomaticallyWhen only fires inside addToolOutput, so reloads
@@ -323,6 +350,10 @@ export function Chat({
 	}, []);
 
 	const pending = findPendingToolCall(messages);
+	// The abort handler reads the pending question from a ref (the window
+	// listener is mount-scoped; the value it needs is render-scoped).
+	const pendingRef = useRef(pending);
+	pendingRef.current = pending;
 	const localStream = status === "submitted" || status === "streaming";
 	const busy = localStream || turnInFlight;
 	const busyRef = useRef(busy);
@@ -351,13 +382,15 @@ export function Chat({
 		void resumeStream();
 	}, [resumeStream]);
 
-	// Teach-phase check (W5, vision §2): a pending question that lands once a
+	// Teach-phase check (W5, vision §2): a pending QUIZ that lands once a
 	// plan node is OCCUPIED (phaseAt3 "teach") starts collapsed behind a
 	// "Check your understanding" reveal button; probe- and plan-phase
-	// questions auto-open as today. A pending question can never precede its
-	// phase's seam in the transcript (the teacher's turn ends at the question
-	// call), so the session's current phase IS the question's phase.
-	const requiresReveal = pending !== null && phaseAt3(messages) === "teach";
+	// questions auto-open as today. Graded quizzes only (owner, 2026-10-02)
+	// — ask/explain questions always arrive open. A pending question can
+	// never precede its phase's seam in the transcript (the teacher's turn
+	// ends at the question call), so the session's current phase IS the
+	// question's phase.
+	const requiresReveal = pending !== null && pending.tool === "quiz" && phaseAt3(messages) === "teach";
 
 	// The phase at every message (one linear fold): the transcript draws a
 	// color-coded dotted divider at each boundary; the header chip reads the
@@ -1228,6 +1261,7 @@ export function Chat({
 					<MermaidOverlay chart={mermaidFocus} onClose={() => setMermaidFocus(null)} />
 				)}
 				{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
+				<AbortTurnDialog mode={abortAsk} onClose={() => setAbortAsk(null)} onConfirm={confirmAbort} />
 				</div>
 			</div>
 		</div>

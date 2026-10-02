@@ -12,6 +12,7 @@ import {
 	askOptionProblems,
 	buildAnswer,
 	compactAnswerForModel,
+	dismissedAnswer,
 	coerceCorrectAnswer,
 	CONFIDENCE_STOPS,
 	DEFAULT_CONFIDENCE_INDEX,
@@ -31,6 +32,7 @@ import {
 	type QuestionData,
 	toClientQuestion,
 } from "../src/core/question-core.ts";
+import { toolQuestionKind } from "../src/core/pending.ts";
 
 // ─── the authoring contract (TypeBox schemas + execute-time refinements) ──
 // Schema-valid ⇔ gradeable: a quiz whose correctAnswer can't be resolved
@@ -455,6 +457,36 @@ describe("compactAnswerForModel", () => {
 		const ad = { ...buildAnswer(quizData(), { dontKnow: true }), dismissed: true };
 		const compact = compactAnswerForModel(ad);
 		assert.deepEqual(compact, { kind: "quiz", dismissed: true });
+	});
+});
+
+// ─── dismissedAnswer / toolQuestionKind (ESC-abort dismissal, 2026-10-02) ──
+
+describe("dismissedAnswer (the ESC-abort record)", () => {
+	it("the minimum honest answer: kind, questionText, dismissed — nothing else claimed", () => {
+		const ad = dismissedAnswer("ask", "What drives you?");
+		assert.equal(ad.kind, "ask");
+		assert.equal(ad.questionText, "What drives you?");
+		assert.equal(ad.dismissed, true);
+		assert.equal(ad.dontKnow, false); // a skip is not a gap claim
+		assert.deepEqual(ad.answers, []);
+		assert.ok(ad.answeredAt);
+	});
+
+	it("compacts to the one-field model diet", () => {
+		assert.deepEqual(compactAnswerForModel(dismissedAnswer("quiz", "Pick one")), {
+			kind: "quiz",
+			dismissed: true,
+		});
+	});
+});
+
+describe("toolQuestionKind (tool→kind parity with the dock)", () => {
+	it("the three question tools map; unknown tools fall to ask", () => {
+		assert.equal(toolQuestionKind("quiz"), "quiz");
+		assert.equal(toolQuestionKind("explain"), "explain");
+		assert.equal(toolQuestionKind("ask_user_question"), "ask");
+		assert.equal(toolQuestionKind("anything-else"), "ask");
 	});
 });
 
