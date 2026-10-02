@@ -166,12 +166,15 @@ describe("AgentSection (thin SSR)", () => {
 	});
 });
 
-describe("GraphSection — the collapsed master switch (wave 7)", () => {
-	// Wave 7 (owner ruling 2026-09-23): the section is the master switch
-	// ONLY — the embedding/clustering/labeling rungs and the BYOK model
-	// picker are gone (clustering is the free birth-session partition,
-	// labels ARE session names). One row, one toggle.
-	it("renders the single master-switch row", () => {
+describe("GraphSection — master switch + chunk budget (wave 7 + 2026-10-02)", () => {
+	// Wave 7 (owner ruling 2026-09-23): the section is the master switch —
+	// the embedding/clustering/labeling rungs and the BYOK model picker are
+	// gone (clustering is the free birth-session partition, labels ARE
+	// session names). The chunk budget (2026-10-02) joined as the second and
+	// only other control — it denominates the coverage ring and gates the
+	// auto-extraction trigger, resolved through the same core resolver the
+	// server uses (the 4096-fallback fix).
+	it("renders the master-switch row", () => {
 		const html = renderToStaticMarkup(<GraphSection graph={undefined} onSectionChange={() => {}} />);
 		assert.ok(html.includes('data-testid="graph-row-enabled"'));
 		assert.ok(!html.includes("graph-row-embedding"), "the dead rungs render nothing");
@@ -184,6 +187,22 @@ describe("GraphSection — the collapsed master switch (wave 7)", () => {
 	it("a stored off record shows the switch off", () => {
 		const html = renderToStaticMarkup(<GraphSection graph={{ enabled: false }} onSectionChange={() => {}} />);
 		assert.ok(tagOf(html, "toggle-graph-enabled").includes('aria-checked="false"'));
+	});
+
+	it("the chunk-budget row: unset shows EMPTY with the factory placeholder + hint — one truth with the trigger", () => {
+		const html = renderToStaticMarkup(<GraphSection graph={undefined} onSectionChange={() => {}} />);
+		const input = tagOf(html, "input-chunk-tokens");
+		assert.ok(input.includes('placeholder="8192"'), "the placeholder IS the resolved factory default");
+		assert.ok(!/value="\d/.test(input), "unset renders EMPTY, not a materialized 8192");
+		assert.ok(html.includes(">8192 tok</"), "the hint reports the resolved truth");
+	});
+
+	it("a stored budget shows its value and denominates the hint", () => {
+		const html = renderToStaticMarkup(
+			<GraphSection graph={{ enabled: true, extractionChunkTokens: 6000 }} onSectionChange={() => {}} />,
+		);
+		assert.ok(tagOf(html, "input-chunk-tokens").includes('value="6000"'));
+		assert.ok(html.includes(">6000 tok</"));
 	});
 });
 

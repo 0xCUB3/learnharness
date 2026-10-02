@@ -7,6 +7,7 @@ import { useSettingsSaved } from "@/components/settings-signal";
 import { formatTokens } from "@/components/usage-format";
 import { Hint } from "@/components/ui/hint";
 import { timeAgo } from "@/components/sidebar";
+import { resolveSettings } from "@/src/core";
 
 /**
  * The extraction-coverage surfaces (extraction-UX redesign, owner-locked
@@ -53,25 +54,26 @@ async function fetchCoverage(chatId: string): Promise<SessionCoverage | null> {
 	}
 }
 
-/** The ring's denominator + visibility: the graph section of the settings
- *  record (both fields optional — absent means enabled/4096, the factory
- *  resolution; see GraphSettings). Null on fetch failure → no ring. */
+/** The ring's denominator + visibility, resolved through the SAME core
+ *  resolver the server's effective settings use (fix, 2026-10-02): the
+ *  meter denominates at exactly the number the extraction trigger waits
+ *  for — the old hand-rolled `?? 4096` fallback drifted from the factory
+ *  default (8192) and the ring filled at half the truth. Null on fetch
+ *  failure → no ring. */
 export interface GraphRead {
 	enabled: boolean;
 	chunkTokens: number;
 }
 
-async function fetchGraphRead(): Promise<GraphRead | null> {
+/** Exported for the render pin (the ringFill precedent): resolves the
+ *  raw settings delta to the factory-true graph section. */
+export async function fetchGraphRead(): Promise<GraphRead | null> {
 	try {
 		const res = await fetch("/api/settings");
 		if (!res.ok) return null;
-		const body = (await res.json()) as { settings?: { graph?: { enabled?: boolean; extractionChunkTokens?: number } } };
-		const graph = body.settings?.graph;
-		if (!graph) return null;
-		return {
-			enabled: graph.enabled !== false,
-			chunkTokens: graph.extractionChunkTokens ?? 4096,
-		};
+		const body = (await res.json()) as { settings?: Parameters<typeof resolveSettings>[0] };
+		const graph = resolveSettings(body.settings ?? null).graph;
+		return { enabled: graph.enabled, chunkTokens: graph.extractionChunkTokens };
 	} catch {
 		return null;
 	}

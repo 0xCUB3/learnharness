@@ -31,7 +31,12 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import type { AppearanceSettings, GraphSettings } from "@/src/core";
+import {
+	EXTRACTION_CHUNK_TOKENS_FLOOR,
+	resolveSettings,
+	type AppearanceSettings,
+	type GraphSettings,
+} from "@/src/core";
 import { MenuShell } from "@/components/menu-shell";
 import { Hint } from "@/components/ui/hint";
 import { useAppearance } from "./appearance.tsx";
@@ -346,18 +351,61 @@ export function GraphSection({
 	onSectionChange: (next: GraphSettings) => void;
 }) {
 	// Wave 7 collapse (owner ruling 2026-09-23): the section is the MASTER
-	// SWITCH ONLY. The embedding/clustering/labeling rungs and the BYOK
-	// embedding-model picker are gone — clustering is the free birth-session
-	// partition derived on read, labels ARE session names, and the prober's
-	// graph tools read the ledgers directly. There is nothing left to
-	// configure but on/off.
+	// SWITCH — the embedding/clustering/labeling rungs are gone; clustering
+	// is the free birth-session partition derived on read, labels ARE session
+	// names. The chunk budget (2026-10-02) joined it as the section's second
+	// and only other control: it denominates the coverage ring AND gates the
+	// auto-extraction trigger (turn settle ≥ budget fires the run).
+	//
+	// Resolved through the SAME core resolver the server's effective
+	// settings use (one source of truth, the 4096-fallback fix 2026-10-02):
+	// the hint and placeholder report exactly the number the trigger waits
+	// for — never a second hand-rolled default.
+	const resolved = resolveSettings(graph === undefined ? null : { version: 1, graph }).graph;
 	return (
-		<SettingsRow label="Graph" testid="graph-row-enabled">
-			<Toggle
-				checked={graph?.enabled ?? true}
-				label="graph enabled"
-				onChange={(on) => onSectionChange({ enabled: on })}
-			/>
-		</SettingsRow>
+		<>
+			<SettingsRow label="Graph" testid="graph-row-enabled">
+				<Toggle
+					checked={graph?.enabled ?? true}
+					label="graph enabled"
+					onChange={(on) =>
+						// Compose, never replace-whole (the section PUT is, but the
+					// row must not drop its sibling field — fixed with the budget
+					// row's arrival: the old { enabled: on } wiped a stored budget).
+						onSectionChange({ ...graph, enabled: on })
+					}
+				/>
+			</SettingsRow>
+			<SettingsRow
+				label="Extraction chunk budget"
+				hint={`${resolved.extractionChunkTokens} tok`}
+				testid="graph-row-chunk-tokens"
+			>
+				<CommitInput
+					type="number"
+					value={String(graph?.extractionChunkTokens ?? "")}
+					placeholder={String(resolved.extractionChunkTokens)}
+					ariaLabel="extraction chunk budget"
+					testid="input-chunk-tokens"
+					onCommit={(v) => {
+						// Empty = factory default (the fix-wave discipline): absence is
+						// the unset for numbers — Number("") is 0, so clamping would
+						// write the floor instead of unsetting.
+						if (v === "") {
+							onSectionChange({ ...graph, extractionChunkTokens: undefined });
+							return;
+						}
+						const n = Number(v);
+						if (!Number.isFinite(n) || n <= 0) return; // bad input: no write
+						// Mirror the server sanitize exactly: floor only (cost
+						// protection), no ceiling — a big budget is the user's call.
+						onSectionChange({
+							...graph,
+							extractionChunkTokens: Math.max(EXTRACTION_CHUNK_TOKENS_FLOOR, Math.round(n)),
+						});
+					}}
+				/>
+			</SettingsRow>
+		</>
 	);
 }
