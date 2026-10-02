@@ -1163,8 +1163,7 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 
 // ─── the silent dismissal (owner design 2026-10-03, "A2") ──────────────────
 
-describe("the silent dismissal (A2)", () => {
-	function dismissPost(chatId: string, toolCallId: string): Promise<Response> {
+describe("the silent dismissal (A2)", () => {	function dismissPost(chatId: string, toolCallId: string): Promise<Response> {
 		return dismissRoute.POST(
 			new Request(`http://test/api/chats/${chatId}/dismiss`, {
 				method: "POST",
@@ -1248,5 +1247,81 @@ describe("the silent dismissal (A2)", () => {
 		assert.equal((await dismissPost(chat.id, "call-b")).status, 200);
 		assert.equal(danglingQuestionOf(chatStore.getChat(chat.id)!.messages), null, "the composer may return");
 		assert.equal(endsInDismissal(chatStore.getChat(chat.id)!.messages), true, "paused until the user speaks");
+	});
+});
+
+// ─── parallel question calls (the deepseek batch incident, 2026-10-03) ─────
+
+describe("parallel question calls: the answer defers its wake while a sibling dangles", () => {
+	const ASK_INPUT = {
+		question: "Which topic should this test session cover next?",
+		options: [{ label: "Chemistry" }, { label: "History" }],
+	};
+
+	/** Turn 1: BOTH calls in one assistant message (the parallel batch
+	 *  shape deepseek emitted live). Turn 2: the reaction. */
+	function parallelLesson(calls: string[][]): FauxResponseStep[] {
+		return [
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage(
+					[
+						fauxThinking("Batch a graded and a non-graded check."),
+						fauxToolCall("quiz", QUIZ_INPUT, { id: "call-1" }),
+						fauxToolCall("ask_user_question", ASK_INPUT, { id: "call-2" }),
+					],
+					{ stopReason: "toolUse" },
+				);
+			},
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage([fauxText("Both answered — good.")]);
+			},
+		];
+	}
+
+	it("the sibling answer wakes NOTHING; the last answer fires the one turn with both results adjacent", async () => {
+		const { engine, calls } = scriptedTeacher(parallelLesson);
+		const chat = createConfiguredChat("Test: parallel questions");
+		createdChats.push(chat.id);
+
+		// Turn 1: the batch lands; both calls dangle (the dock shows the quiz —
+		// the first in call order).
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "ask me two questions in parallel" }), agentFactory(engine)));
+		let saved = chatStore.getChat(chat.id)!;
+		let pending = danglingQuestionOf(saved.messages);
+		assert.equal(pending?.toolCallId, "call-1", "the dock holds the quiz first");
+
+		// The graded answer: the result appends ADJACENT to the calling
+		// assistant message — and NO wake fires while the ask still dangles.
+		const quizAns = gradedAnswer(QUIZ_INPUT, ["Mercury"]);
+		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer: quizAns }), agentFactory(engine)));
+		assert.equal(calls.length, 1, "the sibling answer woke NOTHING (the gate deferred)");
+		saved = chatStore.getChat(chat.id)!;
+		assert.equal((saved.messages[2] as { toolCallId?: string }).toolCallId, "call-1", "quiz result adjacent to the batch");
+		pending = danglingQuestionOf(saved.messages);
+		assert.equal(pending?.toolCallId, "call-2", "the dock advances to the ask immediately — no turn ran");
+
+		// The last answer: ONE wake; the model sees both results, adjacent to
+		// their calling message (the provider shape law).
+		const askAns = {
+			kind: "ask",
+			questionText: ASK_INPUT.question,
+			dontKnow: false,
+			answers: [],
+			text: "History",
+			answeredAt: new Date().toISOString(),
+		};
+		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-2", answer: askAns }), agentFactory(engine)));
+		assert.equal(calls.length, 2, "exactly one wake: the last answer's turn");
+		saved = chatStore.getChat(chat.id)!;
+		assert.equal(danglingQuestionOf(saved.messages), null, "nothing dangles anymore");
+		const prompt2 = calls[1]!.join("\n");
+		assert.match(prompt2, /Mercury/, "the quiz result rode the wake's context");
+		assert.match(prompt2, /History/, "the ask answer rode the wake's context");
+		// The shape law: both results sit directly after the batch's assistant
+		// message, before the reaction — nothing intervenes.
+		const roles = saved.messages.map((m) => (m as { role?: string }).role);
+		assert.deepEqual(roles.slice(1, 5), ["assistant", "toolResult", "toolResult", "assistant"], "batch → both results → reaction");
 	});
 });

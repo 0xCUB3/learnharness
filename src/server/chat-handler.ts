@@ -28,7 +28,9 @@ import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope, 
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { registerTurn, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn, triggerExtraction } from "./turn-service.ts";
-import { hasProbeDone } from "../core/native-messages.ts";
+import { hasProbeDone, danglingQuestionOf } from "../core/native-messages.ts";
+import { emit } from "../core/events.ts";
+import { settledTurnResponse } from "./turn-runs.ts";
 import { asAgentMessages } from "../core/native-messages.ts";
 import {
 	ChatInputError,
@@ -226,6 +228,23 @@ export async function handleChatInput(
 			return Response.json({ error: err.message }, { status: 400 });
 		}
 		throw err;
+	}
+
+	// THE PARALLEL-QUESTION GATE (owner, 2026-10-03 — the deepseek parallel
+	// batch incident): an answer that leaves a SIBLING question dangling
+	// defers its wake. The dock advances to the next question (the client's
+	// optimistic result + record-changed carry the view); the LAST answer
+	// fires the one reaction turn with every result ADJACENT to its calling
+	// assistant message — the provider shape law (a tool result appended
+	// after an intervening assistant message is rejected, which stranded
+	// the sibling question permanently pre-fix). Nothing else can generate
+	// while a question dangles (job wakes wait, continuation folds refuse,
+	// the composer gates), so adjacency holds by construction.
+	if (input.type === "answer" && danglingQuestionOf([...record.messages, ...appends]) !== null) {
+		const merged = [...record.messages, ...appends];
+		stores.chatStore.saveMessages(chatId, merged);
+		emit("record-changed", { chatId });
+		return settledTurnResponse(); // the cheap terminal — no beginTurn, no turn
 	}
 
 	// One turn per chat, ever. A second request while a turn runs means a
