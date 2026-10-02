@@ -69,6 +69,7 @@ import type { PiEngine } from "../src/agent/models.ts";
 import type { SearchProvider } from "../src/core/search.ts";
 import { PATHS } from "../config.ts";
 import { projectView as projectNative } from "../src/core/view.ts";
+import { subscribe } from "../src/core/events.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import type { SteerInput, TurnInput } from "../src/core/input-events.ts";
 
@@ -223,6 +224,37 @@ describe("job store", () => {
 		const byTool = jobStore.findJobByToolCallId("chat_storetest", "call-store");
 		assert.equal(byTool?.id, job.id);
 		assert.equal(jobStore.findJobByToolCallId("chat_storetest", "call-missing"), null);
+	});
+
+	// ── push-architecture S4 (2026-10-02): every WRITE announces on the
+	// events channel (notify-after-write); reads stay silent ──
+	it("every mutation emits jobs-changed {chatId}; reads emit nothing", () => {
+		const got: { chatId?: string }[] = [];
+		const off = subscribe((e) => {
+			if (e.type === "jobs-changed") got.push({ chatId: e.chatId });
+		});
+		const job = jobStore.createJob({ kind: "research", chatId: "chat_storeemit", toolCallId: "call-emit" });
+		trackJob(job.id);
+		assert.deepEqual(got, [{ chatId: "chat_storeemit" }], "createJob announces after the write");
+		got.length = 0;
+
+		jobStore.updateJob(job.id, { activity: "still working" });
+		assert.deepEqual(got, [{ chatId: "chat_storeemit" }], "updateJob announces on EVERY write — progress lines included");
+		got.length = 0;
+
+		jobStore.updateJob("job_missing", { activity: "noop" });
+		assert.deepEqual(got, [], "a missing id wrote nothing — silent");
+
+		jobStore.listJobs("chat_storeemit");
+		jobStore.getJob(job.id);
+		assert.deepEqual(got, [], "reads are silent");
+
+		jobStore.deleteJobsForChat("chat_storeemit");
+		assert.deepEqual(got, [{ chatId: "chat_storeemit" }], "a real delete announces");
+		got.length = 0;
+		jobStore.deleteJobsForChat("chat_storeemit");
+		assert.deepEqual(got, [], "a zero-file delete wrote nothing — silent");
+		off();
 	});
 });
 

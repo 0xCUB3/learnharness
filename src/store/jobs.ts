@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
+import { emit } from "../core/events.ts";
 import type { JobStore } from "../core/ports.ts";
 import type { CreateJobInit, JobPatch } from "../core/ports.ts";
 import type { JobRecord } from "../core/contracts.ts";
@@ -23,6 +24,10 @@ function jobFile(id: string): string {
 	return path.join(JOBS_DIR, `${id}.json`);
 }
 
+/** Writes announce on the events channel AFTER the write lands (the
+ *  notify-after-write law, beginTurn precedent) — jobs-changed is what
+ *  retires the view's interval poll (push S4, 2026-10-02): dispatch cards,
+ *  progress lines, settles, and aborts all surface as one fetch. */
 function createJob(init: CreateJobInit): JobRecord {
 	const now = new Date().toISOString();
 	const record: JobRecord = {
@@ -37,6 +42,7 @@ function createJob(init: CreateJobInit): JobRecord {
 	};
 	fs.mkdirSync(JOBS_DIR, { recursive: true });
 	fs.writeFileSync(jobFile(record.id), JSON.stringify(record, null, "\t"), "utf-8");
+	emit("jobs-changed", { chatId: init.chatId });
 	return record;
 }
 
@@ -56,6 +62,10 @@ function updateJob(id: string, patch: JobPatch): JobRecord | null {
 	if (!record) return null;
 	const next: JobRecord = { ...record, ...patch, updatedAt: patch.updatedAt ?? new Date().toISOString() };
 	fs.writeFileSync(jobFile(id), JSON.stringify(next, null, "\t"), "utf-8");
+	// EVERY write, not just status flips: progress-line updates must reach
+	// the dispatch cards (the view debounces the fetch bursts). A missing id
+	// wrote nothing and stays silent.
+	emit("jobs-changed", { chatId: next.chatId });
 	return next;
 }
 
@@ -93,6 +103,9 @@ function deleteJobsForChat(chatId: string): number {
 			/* already gone — the count is best-effort truth */
 		}
 	}
+	// Only when something actually died — a zero-file delete wrote nothing
+	// (the endTurn present-entry law).
+	if (removed > 0) emit("jobs-changed", { chatId });
 	return removed;
 }
 

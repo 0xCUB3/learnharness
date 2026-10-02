@@ -26,7 +26,7 @@ import { DictationBar, joinDictation, useDictation } from "@/components/dictatio
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useActivity } from "@/components/activity-dock";
-import { useServerEvent } from "@/components/server-events";
+import { useServerEvent, useServerResync } from "@/components/server-events";
 import { isProviderKeyRefusal, needsContinuation, type ChatInput, type ChatSettings, type LhMessage, type ModelSlotName } from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
@@ -688,50 +688,34 @@ export function Chat({
 	}, [status, chatId, syncFromServer]);
 
 	// ── Central job observability (contracts.ts "THE ASYNC PROTOCOL" §4) ──
-	// ONE poll of /api/jobs drives every job surface (transcript dispatch
+	// ONE fetch of /api/jobs drives every job surface (transcript dispatch
 	// cards, the sub-agents panel) and re-syncs the transcript exactly once
-	// when a job settles. A settle no longer implies the record is complete:
-	// CONTINUATION COALESCING flips the job done at claim time — while the
-	// learner's own answer turn is still streaming (and a settle can race a
-	// second job's wake turn). Syncing mid-turn would swap in a stale snapshot
-	// mid-stream, which breaks the SDK's in-place continuation merge (duplicate
-	// message ids). So: a settle during a busy turn defers the sync; the next
-	// idle poll tick adopts the finished record. Poll fast while jobs run,
-	// slow otherwise (new-dispatch discovery), and not at all when this
-	// session has never dispatched a job.
+	// when a job settles. PUSH (architecture S4, 2026-10-02): the store
+	// announces every job write on the events channel; the interval poll and
+	// its pollMs/jobPartCount gating are RETIRED. The view fetches once on
+	// mount, once per jobs-changed announcement (trailing-debounced — a
+	// sub-agent run writes activity-line bursts; 250ms coalesces them at or
+	// below the old 1s poll cadence), and once on channel resync.
+	//
+	// A settle no longer implies the record is complete: CONTINUATION
+	// COALESCING flips the job done at claim time — while the learner's own
+	// answer turn is still streaming (and a settle can race a second job's
+	// wake turn). Syncing mid-turn would swap in a stale snapshot
+	// mid-stream, which breaks the SDK's in-place continuation merge
+	// (duplicate message ids). So: a settle during a busy turn defers the
+	// sync; the next idle fetch adopts the finished record.
 	const [jobs, setJobs] = useState<JobRecord[]>([]);
-	const jobPartCount = useMemo(
-		() =>
-			messages.reduce(
-				(n, m) =>
-					n +
-					m.parts.filter(
-						// sources v0 — "tool-pdf" added to the job-part enumerations
-						// (mechanical, UI-stream review at merge): poll cadence +
-						// dispatch nudge + settle-sync all key on these parts.
-						(p) =>
-							p.type === "tool-research" ||
-							p.type === "tool-demo" ||
-							p.type === "tool-visual" ||
-							p.type === "tool-pdf",
-					).length,
-				0,
-			),
-		[messages],
-	);
-	const anyRunning = jobs.some((j) => j.status === "running");
-	const pollMs = jobPartCount === 0 && jobs.length === 0 ? 0 : anyRunning ? 1000 : 4000;
 	const localStreamRef = useRef(false);
 	localStreamRef.current = localStream;
 	const jobStatusRef = useRef<Map<string, string>>(new Map());
 	// A settle seen during a busy turn — the sync is owed, not dropped.
 	const pendingSyncRef = useRef(false);
-	// Dispatch nudge (accuracy wave, 2026-09-19): a research/demo/visual part
-	// that cleared input streaming proves the server-side execute ran (the
-	// bridge emits input-available only at tool_execution_end — AFTER
+	// Dispatch nudge (accuracy wave, 2026-09-19): a research/demo/visual/pdf
+	// part that cleared input streaming proves the server-side execute ran
+	// (the bridge emits input-available only at tool_execution_end — AFTER
 	// dispatch() created the job record on disk), so nudging the activity
 	// feed here is race-free. The dock learns a dispatched job at the moment
-	// of cause, not at the next idle poll tick (up to 10s). Keyed by
+	// of cause (dies at S5 when the dock goes event-driven). Keyed by
 	// toolCallId; the persistent set makes each dispatch nudge exactly once
 	// (transcript parts stay forever — the diff only fires on new ids).
 	const dispatchedRef = useRef<Set<string>>(new Set());
@@ -743,7 +727,7 @@ export function Chat({
 					(p.type === "tool-research" ||
 						p.type === "tool-demo" ||
 						p.type === "tool-visual" ||
-						p.type === "tool-pdf") && // sources v0 — see the poll-cadence enumeration above
+						p.type === "tool-pdf") &&
 					p.toolCallId &&
 					p.state !== "input-streaming" &&
 					p.state !== "output-error"
@@ -757,72 +741,89 @@ export function Chat({
 		}
 		dispatchedRef.current = live;
 	}, [messages, refreshActivity]);
-	useEffect(() => {
-		if (pollMs === 0) return;
-		let cancelled = false;
-		// First-tick guard: the poll's first read adopts existing history
-		// (jobs recorded before mount) without nudging — a nudge is only owed
-		// for a running job the feed hasn't seen THIS session.
-		let firstPoll = jobStatusRef.current.size === 0;
-		const poll = async () => {
-			if (cancelled) return;
-			try {
-				const res = await fetch(`/api/jobs?chatId=${encodeURIComponent(chatId)}`);
-				if (!res.ok) return;
-				const data = (await res.json()) as { jobs?: JobRecord[]; turnInFlight?: boolean };
-				if (cancelled) return;
-				const list = data.jobs ?? [];
-				let nudgeActivity = false; // settle or new running job this tick
-				for (const j of list) {
-					const prev = jobStatusRef.current.get(j.id);
-					if (prev === "running" && j.status !== "running") {
-						nudgeActivity = true; // a settle — the blob should leave the feed NOW
-						// The record is only guaranteed complete when no turn is in
-						// flight — locally or server-side (a coalesced settle fires
-						// mid-turn by design), so the FULL sync waits for idle.
-						// Ground rule (2026-09-15): delivered content shows
-						// immediately anyway — adopt append-only NOW; the idle
-						// sync still settles the record properly.
-						if (localStreamRef.current || data.turnInFlight === true) {
-							pendingSyncRef.current = true;
-							void adoptAppendOnly();
-						} else {
-							void syncFromServer();
-						}
+	// First-fetch guard (the old first-tick guard): the initial read adopts
+	// existing history (jobs recorded before mount) without nudging — a
+	// nudge is only owed for a running job the feed hasn't seen THIS session.
+	const firstFetchRef = useRef(true);
+	// The trailing debounce for jobs-changed announcements (one timer), and
+	// the ref the timer fires through (a stale closure must never fetch an
+	// old chatId).
+	const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const fetchJobsRef = useRef<() => void>(() => {});
+	const fetchJobs = useCallback(async () => {
+		try {
+			const res = await fetch(`/api/jobs?chatId=${encodeURIComponent(chatId)}`);
+			if (!res.ok) return;
+			const data = (await res.json()) as { jobs?: JobRecord[]; turnInFlight?: boolean };
+			const list = data.jobs ?? [];
+			let nudgeActivity = false; // settle or new running job this fetch
+			for (const j of list) {
+				const prev = jobStatusRef.current.get(j.id);
+				if (prev === "running" && j.status !== "running") {
+					nudgeActivity = true; // a settle — the blob should leave the feed NOW
+					// The record is only guaranteed complete when no turn is in
+					// flight — locally or server-side (a coalesced settle fires
+					// mid-turn by design), so the FULL sync waits for idle.
+					// Ground rule (2026-09-15): delivered content shows
+					// immediately anyway — adopt append-only NOW; the idle
+					// sync still settles the record properly.
+					if (localStreamRef.current || data.turnInFlight === true) {
+						pendingSyncRef.current = true;
+						void adoptAppendOnly();
+					} else {
+						void syncFromServer();
 					}
-					// A running job this feed has never seen (wake/respawn started
-					// server-side, or a dispatch in ANOTHER tab) — nudge so the
+				}
+				// A running job this feed has never seen (wake/respawn started
+				// server-side, or a dispatch in ANOTHER tab) — nudge so the
 					// dock adopts it at once.
-					if (prev === undefined && j.status === "running" && !firstPoll) nudgeActivity = true;
-					jobStatusRef.current.set(j.id, j.status);
-				}
-				firstPoll = false;
-				if (
-					pendingSyncRef.current &&
-					!localStreamRef.current &&
-					data.turnInFlight !== true
-				) {
-					pendingSyncRef.current = false;
-					void syncFromServer();
-				}
-				setJobs(list);
-				if (nudgeActivity) refreshActivity();
-				// Wake-turn adoption: a server-side teacher turn with no client request
-				// of ours (sub-agent delivery) — attach to it LIVE through the same
-					// reattach path (instant catch-up + deltas); while we hold a local
-					// stream the turn is already ours — nothing to attach to.
-				if (data.turnInFlight === true && !localStreamRef.current) attachToRunningTurn();
-			} catch {
-				/* transient fetch failure — keep polling */
+				if (prev === undefined && j.status === "running" && !firstFetchRef.current) nudgeActivity = true;
+				jobStatusRef.current.set(j.id, j.status);
 			}
-		};
-		void poll();
-		const timer = setInterval(poll, pollMs);
-		return () => {
-			cancelled = true;
-			clearInterval(timer);
-		};
-	}, [pollMs, jobPartCount, chatId, syncFromServer, adoptAppendOnly, refreshActivity, attachToRunningTurn]);
+			firstFetchRef.current = false;
+			if (
+				pendingSyncRef.current &&
+				!localStreamRef.current &&
+				data.turnInFlight !== true
+			) {
+				pendingSyncRef.current = false;
+				void syncFromServer();
+			}
+			setJobs(list);
+			if (nudgeActivity) refreshActivity();
+			// (Wake-turn adoption that lived here — the turnInFlight attach
+			// line — died at S3: turn-started on the events channel owns
+			// discovery now. turnInFlight is STILL READ above: the settle
+			// logic's idle check needs it.)
+		} catch {
+			/* transient fetch failure — the next jobs-changed announcement re-fetches */
+		}
+	}, [chatId, syncFromServer, adoptAppendOnly, refreshActivity]);
+	fetchJobsRef.current = () => void fetchJobs();
+	// Mount + chat switch: the IMMEDIATE (non-debounced) initial read. The
+	// firstFetch guard resets with the old rule — true only when this
+	// session has never seen a job (a chat switch keeps the map: job ids
+	// are unique per chat, and a newly-seen running job may still nudge).
+	useEffect(() => {
+		firstFetchRef.current = jobStatusRef.current.size === 0;
+		void fetchJobs();
+	}, [fetchJobs]); // identity changes exactly on chatId
+	useServerEvent("jobs-changed", (p) => {
+		if (p.chatId != null && p.chatId !== chatId) return; // ours or unattributed
+		if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current);
+		fetchDebounceRef.current = setTimeout(() => {
+			fetchDebounceRef.current = undefined;
+			fetchJobsRef.current();
+		}, 250);
+	});
+	// Reconnect catch-up: events missed while the channel was down.
+	useServerResync(() => fetchJobsRef.current());
+	useEffect(
+		() => () => {
+			if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current);
+		},
+		[],
+	);
 
 	// ── Server-initiated turn discovery (push-architecture S3, 2026-10-02) ──
 	// Every turn THIS chat runs is announced on the events channel — the
