@@ -17,6 +17,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { ChatListItem } from "@/src/core";
 import { kbdEventForAction } from "@/src/core";
 
@@ -350,14 +351,22 @@ function SessionsSidebar() {
 		return chats.filter((c) => c.title.toLowerCase().includes(q));
 	}, [chats, query]);
 
+	const refreshInFlightRef = useRef(false);
 	const refresh = useCallback(async () => {
+		// In-flight coalesce (S6): event bursts may land several refresh
+		// calls at once — one fetch serves them all; anything newer arrives
+		// with the next event's fetch.
+		if (refreshInFlightRef.current) return;
+		refreshInFlightRef.current = true;
 		try {
 			const res = await fetch("/api/chats", { cache: "no-store" });
 			const d = (await res.json()) as { chats: ChatListItem[] };
 			setChats(d.chats);
 		} catch {
-			// a transient failure on the periodic poll keeps the last snapshot
+			// a transient failure keeps the last snapshot
 			setChats((prev) => prev ?? []);
+		} finally {
+			refreshInFlightRef.current = false;
 		}
 	}, []);
 
@@ -379,7 +388,7 @@ function SessionsSidebar() {
 	   busy mirrors the server's own definition (isTurnRunning), so the
 	   patch is exact: spinner up the moment the action happens, cleared
 	   and refetched once at settle (title/order move with turns). The
-	   2.5s poll stays as the BACKSTOP for everything only the server
+	   events channel is the backstop for everything only the server
 	   knows: other windows, wake turns in unopened sessions. A start on
 	   a chat not yet in the snapshot (a brand-new session) = one
 	   immediate refresh instead of a patch. */
@@ -402,6 +411,36 @@ function SessionsSidebar() {
 		window.addEventListener("lh:turn-state", onTurnState);
 		return () => window.removeEventListener("lh:turn-state", onTurnState);
 	}, [refresh]);
+
+	/* PUSH (architecture S6, 2026-10-02): the 2.5s poll is RETIRED — the
+	   last standing network poll in the app. List truth arrives as
+	   events: chats-changed (create/rename/delete — the list-SHAPE
+	   writes), and turn-started/turn-settled for EVERY chat (unfiltered:
+	   any chat's turn flips busy/order/phase in this list). Announced
+	   fetches ride the 250ms trailing debounce (the S4/S5 law); resync
+	   (reconnect / dev-restart) is immediate. lh:turn-state +
+	   lh:chat-renamed stay for same-tab INSTANTS — local beats any
+	   round-trip. */
+	const refreshRef = useRef(refresh);
+	refreshRef.current = refresh;
+	const eventDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const scheduleEventRefresh = () => {
+		if (eventDebounceRef.current) clearTimeout(eventDebounceRef.current);
+		eventDebounceRef.current = setTimeout(() => {
+			eventDebounceRef.current = undefined;
+			void refreshRef.current();
+		}, 250);
+	};
+	useServerEvent("chats-changed", scheduleEventRefresh);
+	useServerEvent("turn-started", scheduleEventRefresh);
+	useServerEvent("turn-settled", scheduleEventRefresh);
+	useServerResync(() => void refreshRef.current());
+	useEffect(
+		() => () => {
+			if (eventDebounceRef.current) clearTimeout(eventDebounceRef.current);
+		},
+		[],
+	);
 
 	/* ── Keyboard seams (shortcut wave A, 2026-09-17) ── The sidebar owns
 	   every session-list interaction, so the shortcuts land here: ⌘⇧F
@@ -554,13 +593,8 @@ function SessionsSidebar() {
 	useEffect(() => {
 		if (!open) return;
 		void refresh();
-		// Poll while open: the statuses are live (a question lands in another
-		// session, a turn finishes in the background) and the payload is tiny.
-		// Pause while the tab is hidden; navigation refetches via pathname.
-		const id = setInterval(() => {
-			if (!document.hidden) void refresh();
-		}, 2500);
-		return () => clearInterval(id);
+		// Opening + navigation refetch; while open, the events channel owns
+		// freshness (S6) — no interval, nothing standing.
 	}, [open, pathname, refresh]);
 
 	return (

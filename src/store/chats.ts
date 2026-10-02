@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
+import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
 import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
 import type { LhMessage } from "../core/native-messages.ts";
@@ -21,6 +22,15 @@ function chatFile(id: string): string {
 	return path.join(PATHS.chats, `${id}.json`);
 }
 
+/** THE SILENCE LAW (push S6, 2026-10-02): chats-changed announces ONLY
+ *  list-SHAPE mutations — createChat, renameChat, deleteChat (below,
+ *  each emits post-write). The content writers (saveMessages,
+ *  appendTurnUsage, appendExtractionUsage, saveSettings, saveTree) are
+ *  DELIBERATELY SILENT: saveMessages fires per turn-persist and would
+ *  spam the bus, and every list-visible change it causes (title, order,
+ *  phase, busy, pendingQuestion) is already announced by turn-started /
+ *  turn-settled, which the sidebar refetches on. Silence here is law,
+ *  not oversight. */
 function createChat(title: string): ChatRecord {
 	const now = new Date().toISOString();
 	const record: ChatRecord = {
@@ -32,6 +42,7 @@ function createChat(title: string): ChatRecord {
 	};
 	fs.mkdirSync(PATHS.chats, { recursive: true });
 	fs.writeFileSync(chatFile(record.id), JSON.stringify(record, null, "\t"), "utf-8");
+	emit("chats-changed", {});
 	return record;
 }
 
@@ -86,7 +97,8 @@ function listChats(): ChatSummary[] {
 }
 
 /** Persist the full native message list (the record IS the agent state —
- *  Wave B: replay is state.messages = record.messages). */
+ *  Wave B: replay is state.messages = record.messages). SILENT by the
+ *  events law — see the SILENCE LAW comment at createChat. */
 function saveMessages(id: string, messages: LhMessage[]): void {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
@@ -141,6 +153,7 @@ function renameChat(id: string, title: string): ChatRecord {
 	if (!record) throw new Error(`Chat not found: ${id}`);
 	record.title = title.trim() || "Untitled session";
 	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+	emit("chats-changed", {});
 	return record;
 }
 
@@ -151,6 +164,7 @@ function renameChat(id: string, title: string): ChatRecord {
 function deleteChat(id: string): boolean {
 	try {
 		fs.unlinkSync(chatFile(id));
+		emit("chats-changed", {}); // only a real removal — the present-entry law
 		return true;
 	} catch {
 		return false; // never existed, already deleted, or unreadable — same answer
