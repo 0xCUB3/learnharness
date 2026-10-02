@@ -36,7 +36,7 @@ import { abortTurn, runningTurn, settledTurnResponse } from "../src/server/turn-
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { buildAnswer, coerceCorrectAnswer, dismissedAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
-import { danglingQuestionOf, endsInDismissal, newAnswerResult } from "../src/core/native-messages.ts";
+import { danglingQuestionOf, endsInDismissal, needsContinuation, newAnswerResult } from "../src/core/native-messages.ts";
 import { projectView } from "../src/core/view.ts";
 import type { PiEngine } from "../src/agent/models.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
@@ -185,6 +185,21 @@ function post(chatId: string, input: unknown): Request {
 		// never a client transcript.
 		body: JSON.stringify({ chatId, input }),
 	});
+}
+
+/** The silent-dismissal route POST (module scope — the parallel-rounds
+ *  pins drive it too). */
+function dismissPost(chatId: string, toolCallId: string, kind: "quiz" | "ask" | "explain" = "quiz"): Promise<Response> {
+	return dismissRoute.POST(
+		new Request(`http://test/api/chats/${chatId}/dismiss`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				input: { type: "dismiss", toolCallId, answer: dismissedAnswer(kind, kind === "ask" ? "Next topic?" : QUIZ_INPUT.question) },
+			}),
+		}),
+		{ params: Promise.resolve({ id: chatId }) },
+	);
 }
 
 /** BYOK turn gate (owner, 2026-09-22): no factory floor — a chat needs a
@@ -1163,19 +1178,7 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 
 // ─── the silent dismissal (owner design 2026-10-03, "A2") ──────────────────
 
-describe("the silent dismissal (A2)", () => {	function dismissPost(chatId: string, toolCallId: string): Promise<Response> {
-		return dismissRoute.POST(
-			new Request(`http://test/api/chats/${chatId}/dismiss`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					input: { type: "dismiss", toolCallId, answer: dismissedAnswer("quiz", QUIZ_INPUT.question) },
-				}),
-			}),
-			{ params: Promise.resolve({ id: chatId }) },
-		);
-	}
-
+describe("the silent dismissal (A2)", () => {
 	it("writes the toolResult with NO wake — the next plain message carries it to the model", async () => {
 		const { engine, calls } = scriptedTeacher(defaultLesson);
 		const chat = createConfiguredChat("Test: silent dismissal");
@@ -1323,5 +1326,64 @@ describe("parallel question calls: the answer defers its wake while a sibling da
 		// message, before the reaction — nothing intervenes.
 		const roles = saved.messages.map((m) => (m as { role?: string }).role);
 		assert.deepEqual(roles.slice(1, 5), ["assistant", "toolResult", "toolResult", "assistant"], "batch → both results → reaction");
+	});
+});
+
+describe("parallel rounds: the LAST resolution decides the wake (owner ruling 2026-10-03)", () => {
+	/** The batch lesson, shared: turn 1 poses quiz + ask; turn 2 reacts. */
+	function batchLesson(calls: string[][]): FauxResponseStep[] {
+		return [
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage(
+					[
+						fauxThinking("Batch again."),
+						fauxToolCall("quiz", QUIZ_INPUT, { id: "call-1" }),
+						fauxToolCall("ask_user_question", { question: "Next topic?", options: [{ label: "Chemistry" }, { label: "History" }] }, { id: "call-2" }),
+					],
+					{ stopReason: "toolUse" },
+				);
+			},
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage([fauxText("Round done.")]);
+			},
+		];
+	}
+
+	it("round 1 — answer then dismiss: NO wake at all (ending on a dismissal pauses)", async () => {
+		const { engine, calls } = scriptedTeacher(batchLesson);
+		const chat = createConfiguredChat("Test: round 1");
+		createdChats.push(chat.id);
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "two questions please" }), agentFactory(engine)));
+
+		// Answer the quiz — deferred by the parallel gate.
+		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer: gradedAnswer(QUIZ_INPUT, ["Mercury"]) }), agentFactory(engine)));
+		assert.equal(calls.length, 1, "the sibling answer deferred");
+
+		// Dismiss the ask — the LAST resolution is a dismissal: no continuation
+		// seam may fire either (the round-1 incident's leak, now closed).
+		assert.equal((await dismissPost(chat.id, "call-2", "ask")).status, 200);
+		const saved = chatStore.getChat(chat.id)!;
+		assert.equal(danglingQuestionOf(saved.messages), null);
+		assert.equal(needsContinuation(saved.messages), false, "ending on a dismissal owes nothing");
+		assert.equal(endsInDismissal(saved.messages), true, "the session sits paused");
+		assert.equal(calls.length, 1, "NO wake — the agent never ran a second turn");
+	});
+
+	it("round 2 — dismiss then answer: exactly one wake carrying both results", async () => {
+		const { engine, calls } = scriptedTeacher(batchLesson);
+		const chat = createConfiguredChat("Test: round 2");
+		createdChats.push(chat.id);
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "two questions please" }), agentFactory(engine)));
+
+		assert.equal((await dismissPost(chat.id, "call-1")).status, 200);
+		assert.equal(calls.length, 1, "the dismissal woke nothing");
+
+		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-2", answer: { kind: "ask", questionText: "Next topic?", dontKnow: false, answers: [], text: "Chemistry", answeredAt: new Date().toISOString() } }), agentFactory(engine)));
+		assert.equal(calls.length, 2, "the trailing answer fired the one wake");
+		const prompt2 = calls[1]!.join("\n");
+		assert.match(prompt2, /Chemistry/, "the answer rode the wake");
+		assert.match(prompt2, /dismissed/, "the dismissal rode the wake too");
 	});
 });

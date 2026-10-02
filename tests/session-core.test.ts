@@ -854,7 +854,20 @@ describe("the dismissal pause (needsContinuation + endsInDismissal)", () => {
 		assert.equal(needsContinuation(messages), false, "dismissed by id, not by position — the batch rule holds");
 	});
 
-	it("mixed tail (answered + dismissed) keeps the normal rule — the answer is owed its reaction", () => {
+	it("mixed tail answered-then-dismissed: the LAST resolution decides — no wake (round-1 incident)", () => {
+		const assistant = {
+			...assistantWithCall("a1", "call-a"),
+			content: [
+				{ type: "toolCall", id: "call-a", name: "quiz", arguments: {} },
+			{ type: "toolCall", id: "call-b", name: "quiz", arguments: {} },
+			],
+		} as unknown as LhMessage;
+		const messages = [userText("u1", "topic"), assistant, resultMsg("call-a", "quiz"), dismissedMsg("call-b")];
+		assert.equal(endsInDismissal(messages), true, "tail ends in the dismissal");
+		assert.equal(needsContinuation(messages), false, "ending on a dismissal = the user signaled stop — the reaction rides the next message");
+	});
+
+	it("mixed tail dismissed-then-answered: the answer IS owed its reaction (round-2 wake)", () => {
 		const assistant = {
 			...assistantWithCall("a1", "call-a"),
 			content: [
@@ -862,9 +875,9 @@ describe("the dismissal pause (needsContinuation + endsInDismissal)", () => {
 				{ type: "toolCall", id: "call-b", name: "quiz", arguments: {} },
 			],
 		} as unknown as LhMessage;
-		const messages = [userText("u1", "topic"), assistant, resultMsg("call-a", "quiz"), dismissedMsg("call-b")];
-		assert.equal(endsInDismissal(messages), true, "tail ends in the dismissal");
-		assert.equal(needsContinuation(messages), true, "a real answer in the batch still demands the reaction");
+		const messages = [userText("u1", "topic"), assistant, dismissedMsg("call-a"), resultMsg("call-b", "quiz")];
+		assert.equal(endsInDismissal(messages), false);
+		assert.equal(needsContinuation(messages), true, "ending on a real answer = the reaction is owed");
 	});
 
 	it("any user message un-pauses (the derived tail flips)", () => {

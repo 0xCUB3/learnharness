@@ -325,11 +325,16 @@ export function needsContinuation(messages: readonly LhMessage[]): boolean {
 	) {
 		start--;
 	}
-	// The dismissal rule (A2): a trailing batch that is ALL user dismissals
-	// owes the agent nothing — the session sits paused at the user's
-	// choice. Mixed batches (impossible while paused — held deliveries
-	// never append — but honest anyway) fall through to the normal rule.
-	if (messages.slice(start).every(isDismissedResult)) return false;
+	// The dismissal rule (A2 + owner ruling 2026-10-03, round-1 incident):
+	// the batch's LAST resolution decides. Ending on a dismissal = the
+	// user signaled STOP — no wake, no reaction owed now; the answers'
+	// reactions ride the user's next plain message. Ending on a real
+	// answer = the reaction is owed. One law with the pump's pause
+	// (endsInDismissal reads the same last result), so continuation,
+	// delivery-holding, and the pause can never disagree.
+	if (isDismissedResult(messages[messages.length - 1]!)) {
+		return false;
+	}
 	const owner = messages[start - 1];
 	if (!owner || (owner as { role?: string }).role !== "assistant") return false;
 	const content = (owner as { content?: unknown }).content;
