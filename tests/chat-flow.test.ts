@@ -282,8 +282,8 @@ describe("teacher chat flow (scripted model)", () => {
 		// The graded answer rode the record as the call's tool result and
 		// round-trips through JSON (undefined keys drop) — compare its
 		// SUBSTANCE, not key-for-key against the in-memory build.
-		const out = (answeredQuiz as { output?: { questionId?: string; correct?: boolean } }).output!;
-		assert.equal(out.questionId, "call-1");
+		const out = (answeredQuiz as { output?: { kind?: string; correct?: boolean } }).output!;
+		assert.equal(out.kind, "quiz");
 		assert.equal(out.correct, true);
 
 		// The model actually received the graded answer as a tool result.

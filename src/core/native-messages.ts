@@ -37,6 +37,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { QUESTION_TOOLS } from "./pending.ts";
 import { HANDOFF_TEXT } from "./contracts/chat.ts";
+import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
 
 /** The hard-invariant wording for an aborted turn's unanswered calls —
  *  carried over verbatim from the pre-native era so the model's view
@@ -103,9 +104,11 @@ export function newUserMessage(text: string): LhMessage & UserMessage {
 }
 
 /** The learner's answer — the question call's tool result (fork 1).
- *  `answer` is the structured QuestionAnswerData the client graded; the
- *  MODEL sees its JSON encoding (the pre-native wire shape),
- *  the UI sees the structured payload via `details`. */
+ *  TWO AUDIENCES (owner, tool-result diet 2026-10-02): the MODEL sees the
+ *  compact learner-only record (compactAnswerForModel — the call's own
+ *  arguments already carry the question/options/explanation/commitment;
+ *  restating them doubled every answer's tokens), while `details` keeps
+ *  the FULL graded QuestionAnswerData for the record and the UI. */
 export function newAnswerResult(
 	toolCallId: string,
 	toolName: string,
@@ -116,7 +119,7 @@ export function newAnswerResult(
 		role: "toolResult",
 		toolCallId,
 		toolName,
-		content: [{ type: "text", text: JSON.stringify(answer) }],
+		content: [{ type: "text", text: JSON.stringify(compactAnswerForModel(answer as QuestionAnswerData)) }],
 		// 0.87.1 narrowed ToolResultMessage.details to JsonRepresentation —
 		// our payloads are JSON-safe answer structures, so the cast is honest.
 		details: answer as ToolResultMessage["details"],

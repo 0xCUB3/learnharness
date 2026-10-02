@@ -339,9 +339,10 @@ export interface QuestionData {
 	createdAt: string;
 }
 
-/** The learner's answer — full structured record, stored in `lh_question_answered`. */
+/** The learner's answer — full structured record, stored in `lh_question_answered`.
+ *  NO questionId (owner, tool-result diet 2026-10-02): it was the
+ *  toolCallId restated — the toolResult message already carries it. */
 export interface QuestionAnswerData {
-	questionId: string;
 	kind: QuestionKind;
 	questionText: string;
 	options?: { index: number; label: string }[]; // snapshot for rendering
@@ -424,9 +425,6 @@ export function toggleOther(mode: SelectMode, sel: DockSelection): DockSelection
 	if (mode === "multi-select") return { ...sel, otherSelected: !sel.otherSelected, dontKnow: false };
 	return { selected: new Set(), otherSelected: true, dontKnow: false };
 }
-
-export const QUESTION_ENTRY = "lh_question";
-export const QUESTION_ANSWERED_ENTRY = "lh_question_answered";
 
 // ─── options ────────────────────────────────────────────────────────────────
 
@@ -546,10 +544,6 @@ export function isCorrect(selectedIndices: number[], correctIndices: number[]): 
 
 // ─── arming + answering ─────────────────────────────────────────────────────
 
-export function makeId(): string {
-	return `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
 export function toClientQuestion(qd: QuestionData): ClientQuestion {
 	return {
 		id: qd.id,
@@ -572,7 +566,6 @@ function formatOptionRef(options: QuizOption[], index: number): string {
  */
 export function buildAnswer(qd: QuestionData, req: AnswerRequest): QuestionAnswerData {
 	const base: QuestionAnswerData = {
-		questionId: qd.id,
 		kind: qd.kind,
 		questionText: qd.question,
 		options: qd.options.map((o, i) => ({ index: i + 1, label: o.label })),
@@ -613,82 +606,30 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest): QuestionAnswe
 	return base;
 }
 
-/** The user message that carries the answer into the agent's context. */
-export function formatAnswerMessage(ad: QuestionAnswerData): string {
-	const label = ad.kind === "quiz" ? "Quiz answer" : ad.kind === "explain" ? "Explain answer" : "Answer to your question";
-	const head = `[${label}]`;
-	const lines: string[] = [head];
-
-	if (ad.dismissed) {
-		lines.push("The learner dismissed this question without answering.");
-		return lines.join("\n");
-	}
-
-	if (ad.kind === "quiz") {
-		const correctStr = (ad.correctIndices ?? []).map((i) => formatOptionRefSnapshot(ad, i)).join(", ");
-		if (ad.dontKnow) {
-			lines.push(
-				`The learner selected "I don't know" — they did NOT attempt an answer (a genuine knowledge gap, not a wrong guess).`,
-			);
-		} else {
-			const verdict = ad.correct ? "CORRECT" : "INCORRECT";
-			const selectedStr = ad.answers.map((a) => `${a.index}. ${a.label}`).join(", ");
-			lines.push(`Selected: ${selectedStr || "(none)"}`);
-			lines.push(`Result: ${verdict}`);
-			if (ad.confidence !== undefined) {
-				lines.push(`Confidence: ${ad.confidence}% — the learner's stated probability that his selected answer is correct.`);
-			}
-		}
-		lines.push(`Correct: ${correctStr}`);
-	} else if (ad.kind === "explain") {
-		// No opt-out row on explain (owner ruling 2026-09-27): if he doesn't
-		// know, he says so in his own words — his text is all there is.
-		lines.push(`The learner answered: ${ad.text ?? "(no answer)"}`);
-		if (ad.committed) {
-			lines.push(`Your committed correct answer (immutable — grade against it, never revise it): ${ad.committed}`);
-		}
-		lines.push("Grade his answer strictly against your committed answer in your reply: name what he got and what he missed.");
-	} else {
-		if (ad.text) {
-			lines.push(`The learner answered: ${ad.text}`);
-		} else if (ad.other) {
-			lines.push(`The learner answered (Other): ${ad.other}`);
-		} else if (ad.answers.length > 0) {
-			const selectedStr = ad.answers.map((a) => `${a.index}. ${a.label}`).join(", ");
-			lines.push(`Selected: ${selectedStr}`);
-		} else {
-			lines.push("(no answer)");
-		}
-	}
-
-	if (ad.note) lines.push(`Note: ${ad.note}`);
-	return lines.join("\n");
-}
-
-function formatOptionRefSnapshot(ad: QuestionAnswerData, index: number): string {
-	const opt = (ad.options ?? []).find((o) => o.index === index);
-	return `${index}. ${opt ? opt.label : "(unknown)"}`;
-}
-
 /**
- * Derive the pending (oldest unanswered) question from a session's entries.
- * Used on resume/backfill — pending state lives in the session file itself.
+ * The MODEL-VISIBLE answer record (owner, tool-result diet 2026-10-02):
+ * the tool call already carries everything the model itself authored —
+ * the question, every option, the correct answer, the explanation, the
+ * explain commitment — so the result returns ONLY what the learner added:
+ * his selection or words, the graded verdict, his stated confidence, his
+ * note. The full graded QuestionAnswerData rides `details` for the record
+ * and the UI; this is the JSON the agent actually reads.
  */
-export function findPendingQuestion(
-	entries: Array<{ type: string; customType?: string; data?: unknown }>,
-): ClientQuestion | null {
-	const answered = new Set<string>();
-	for (const e of entries) {
-		if (e.type === "custom" && e.customType === QUESTION_ANSWERED_ENTRY) {
-			const d = e.data as QuestionAnswerData | undefined;
-			if (d?.questionId) answered.add(d.questionId);
-		}
-	}
-	for (const e of entries) {
-		if (e.type === "custom" && e.customType === QUESTION_ENTRY) {
-			const d = e.data as QuestionData | undefined;
-			if (d && !answered.has(d.id)) return toClientQuestion(d);
-		}
-	}
-	return null;
+export function compactAnswerForModel(ad: QuestionAnswerData): Record<string, unknown> {
+	if (ad.dismissed) return { kind: ad.kind, dismissed: true };
+	const out: Record<string, unknown> = { kind: ad.kind };
+	if (ad.dontKnow) out.dontKnow = true;
+	// Array.isArray: the seam is called with `unknown` answers (test
+	// fixtures, foreign records) — degrade to omission, never crash.
+	if (Array.isArray(ad.answers) && ad.answers.length > 0)
+		out.answers = ad.answers.map((a) => ({ index: a.index, label: a.label }));
+	if (ad.text) out.text = ad.text;
+	if (ad.other) out.other = ad.other;
+	// The verdict + stated confidence are the learner's PERFORMANCE — new
+	// information the model needs for its next move. (dontKnow implies
+	// incorrect and carries no confidence: both stay implicit.)
+	if (ad.correct !== undefined && !ad.dontKnow) out.correct = ad.correct;
+	if (ad.confidence !== undefined) out.confidence = ad.confidence;
+	if (ad.note) out.note = ad.note;
+	return out;
 }

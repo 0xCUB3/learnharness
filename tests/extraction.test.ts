@@ -196,7 +196,7 @@ function fixtureChat() {
 		...assistant("a1", [
 			{ type: "text", text: "The chain rule composes rates of change along a path." },
 			quizPart("probe-1", { question: "What is a derivative, roughly?" }, {
-				questionId: "probe-1", kind: "quiz", questionText: "What is a derivative, roughly?",
+				kind: "quiz", questionText: "What is a derivative, roughly?",
 				correct: false, dontKnow: false, answeredAt: "2026-08-22T01:00:00.000Z",
 			}),
 		]),
@@ -211,7 +211,7 @@ function fixtureChat() {
 		user("u3", "check me"),
 		...assistant("a3", [
 			quizPart("check-1", { question: "Check" }, {
-				questionId: "check-1", kind: "quiz", questionText: "Check", correct: true, dontKnow: false,
+				kind: "quiz", questionText: "Check", correct: true, dontKnow: false,
 				answeredAt: "2026-08-22T02:00:00.000Z",
 			}),
 		]),

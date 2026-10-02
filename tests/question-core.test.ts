@@ -11,16 +11,12 @@ import {
 	quizInputBase,
 	askOptionProblems,
 	buildAnswer,
+	compactAnswerForModel,
 	coerceCorrectAnswer,
 	CONFIDENCE_STOPS,
 	DEFAULT_CONFIDENCE_INDEX,
-	findPendingQuestion,
-	formatAnswerMessage,
 	isCorrect,
-	makeId,
 	normalizeOptions,
-	QUESTION_ANSWERED_ENTRY,
-	QUESTION_ENTRY,
 	quizInputProblems,
 	explainInputBase,
 	explainInputObject,
@@ -415,47 +411,50 @@ describe("buildAnswer", () => {
 	});
 });
 
-describe("formatAnswerMessage", () => {
-	it("formats a correct quiz answer for the agent", () => {
-		const ad = buildAnswer(quizData(), { values: ["mercury"] });
-		const text = formatAnswerMessage(ad);
-		assert.ok(text.startsWith("[Quiz answer]"));
-		assert.match(text, /Selected: 1\. Mercury/);
-		assert.match(text, /Result: CORRECT/);
+
+// ─── compactAnswerForModel (the model-visible diet, owner 2026-10-02) ──────
+
+describe("compactAnswerForModel", () => {
+	it("quiz: the learner's selection, verdict, confidence, note — NOTHING the model authored", () => {
+		const ad = buildAnswer(quizData(), { values: ["mercury"], confidence: 70, note: "guessed" });
+		const compact = compactAnswerForModel(ad);
+		assert.deepEqual(compact, {
+			kind: "quiz",
+			answers: [{ index: 1, label: "Mercury" }],
+			correct: true,
+			confidence: 70,
+			note: "guessed",
+		});
+		const raw = JSON.stringify(compact);
+		// every one of these lives in the tool CALL's arguments already
+		assert.ok(!raw.includes("Which planet"), "no questionText");
+		assert.ok(!raw.includes("Venus"), "no option-list restatement");
+		assert.ok(!raw.includes("Mercury orbits closest"), "no explanation");
+		assert.ok(!("correctIndices" in compact), "correct is the verdict; indices are the call's");
+		assert.ok(!("questionId" in compact), "questionId was the toolCallId restated");
 	});
 
-	it("formats dontKnow as a gap, not a guess", () => {
-		const ad = buildAnswer(quizData(), { dontKnow: true });
-		const text = formatAnswerMessage(ad);
-		assert.match(text, /did NOT attempt/);
-		assert.match(text, /knowledge gap/);
-		assert.ok(!text.includes("Result:"));
+	it("dontKnow: the gap flag stands alone — no verdict, no confidence", () => {
+		const compact = compactAnswerForModel(buildAnswer(quizData(), { dontKnow: true }));
+		assert.deepEqual(compact, { kind: "quiz", dontKnow: true });
 	});
 
-	it("includes the note when present", () => {
-		const ad = buildAnswer(quizData(), { values: ["venus"], note: "guessed" });
-		assert.match(formatAnswerMessage(ad), /Note: guessed/);
+	it("ask: selection or text; never graded", () => {
+		const askQD: QuestionData = {
+			...quizData(),
+			kind: "ask",
+			mode: "text",
+			correctIndices: undefined,
+			explanation: undefined,
+		};
+		const compact = compactAnswerForModel(buildAnswer(askQD, { text: "lateral thinking" }));
+		assert.deepEqual(compact, { kind: "ask", text: "lateral thinking" });
 	});
 
-	it("states the confidence line on answered quizzes, absent on dontKnow", () => {
-		const ad = buildAnswer(quizData(), { values: ["mercury"], confidence: 70 });
-		assert.match(formatAnswerMessage(ad), /Confidence: 70% — the learner's stated probability that his selected answer is correct\./);
-		const idk = buildAnswer(quizData(), { dontKnow: true, confidence: 70 });
-		assert.ok(!formatAnswerMessage(idk).includes("Confidence:"));
-	});
-
-	it("formats ask answers", () => {
-		const ask = quizData({ kind: "ask", correctIndices: undefined, explanation: undefined });
-		const ad = buildAnswer(ask, { other: "whatever" });
-		const text = formatAnswerMessage(ad);
-		assert.ok(text.startsWith("[Answer to your question]"));
-		assert.match(text, /\(Other\): whatever/);
-	});
-
-	it("formats a dismissed question", () => {
-		const ad = buildAnswer(quizData(), {});
-		ad.dismissed = true;
-		assert.match(formatAnswerMessage(ad), /dismissed/);
+	it("dismissed: a one-field record", () => {
+		const ad = { ...buildAnswer(quizData(), { dontKnow: true }), dismissed: true };
+		const compact = compactAnswerForModel(ad);
+		assert.deepEqual(compact, { kind: "quiz", dismissed: true });
 	});
 });
 
@@ -473,64 +472,6 @@ describe("toClientQuestion", () => {
 	});
 });
 
-// ─── findPendingQuestion (resume re-arm) ────────────────────────────────────
-
-describe("findPendingQuestion", () => {
-	it("finds an unanswered question", () => {
-		const entries = [
-			{ type: "custom", customType: QUESTION_ENTRY, data: quizData() },
-		];
-		const pq = findPendingQuestion(entries);
-		assert.ok(pq);
-		assert.equal(pq.id, "q_test");
-	});
-
-	it("returns null once answered", () => {
-		const entries = [
-			{ type: "custom", customType: QUESTION_ENTRY, data: quizData() },
-			{
-				type: "custom",
-				customType: QUESTION_ANSWERED_ENTRY,
-				data: { questionId: "q_test", dontKnow: true, answers: [] },
-			},
-		];
-		assert.equal(findPendingQuestion(entries), null);
-	});
-
-	it("returns the OLDEST unanswered question", () => {
-		const entries = [
-			{ type: "custom", customType: QUESTION_ENTRY, data: quizData({ id: "q1" }) },
-			{ type: "custom", customType: QUESTION_ENTRY, data: quizData({ id: "q2" }) },
-		];
-		assert.equal(findPendingQuestion(entries)?.id, "q1");
-	});
-
-	it("skips a dismissed question", () => {
-		const entries = [
-			{ type: "custom", customType: QUESTION_ENTRY, data: quizData() },
-			{
-				type: "custom",
-				customType: QUESTION_ANSWERED_ENTRY,
-				data: { questionId: "q_test", dismissed: true, answers: [] },
-			},
-		];
-		assert.equal(findPendingQuestion(entries), null);
-	});
-
-	it("ignores other custom entries", () => {
-		const entries = [{ type: "custom", customType: "md-log", data: { file: null } }];
-		assert.equal(findPendingQuestion(entries), null);
-	});
-});
-
-// ─── makeId ─────────────────────────────────────────────────────────────────
-
-describe("makeId", () => {
-	it("generates unique ids", () => {
-		const ids = new Set(Array.from({ length: 200 }, () => makeId()));
-		assert.equal(ids.size, 200);
-	});
-});
 
 // ─── the dock selection state machine (multi-select Other coexistence) ──
 // The live bug: in a multi-select ask, picking the custom "Other…" row
@@ -630,13 +571,15 @@ describe("buildAnswer / formatAnswerMessage: explain", () => {
 		assert.equal(ad.text, undefined);
 	});
 
-	it("formats the model's view: his answer, the immutable commitment, and the grading instruction", () => {
-		const text = formatAnswerMessage(buildAnswer(explainQD(), { text: "No idea about aether." }));
-		assert.ok(text.startsWith("[Explain answer]"));
-		assert.match(text, /The learner answered: No idea about aether\./);
-		assert.match(text, /Your committed correct answer \(immutable/);
-		assert.match(text, /luminiferous aether/);
-		assert.match(text, /Grade his answer strictly/);
+	it("compactAnswerForModel (explain): his words ONLY — never the model's own commitment", () => {
+		const compact = compactAnswerForModel(buildAnswer(explainQD(), { text: "No idea about aether." }));
+		const raw = JSON.stringify(compact);
+		assert.equal(compact.text, "No idea about aether.");
+		assert.equal(compact.kind, "explain");
+		// the commitment is the model's own call argument — NEVER restated
+		assert.ok(!raw.includes("luminiferous"), "the commitment must not ride the result");
+		assert.ok(!("committed" in compact));
+		assert.ok(!("questionText" in compact));
 	});
 
 });

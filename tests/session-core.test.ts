@@ -25,6 +25,7 @@ import { absorbed, pendingCallTool, SessionModel } from "../components/session-c
 import type { ChatInput } from "../src/core/input-events.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { newUserMessage, newAnswerResult, needsContinuation } from "../src/core/native-messages.ts";
+import { buildAnswer, type QuestionData } from "../src/core/question-core.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -823,5 +824,37 @@ describe("pendingCallTool", () => {
 		const messages = [assistantWithCall("a1", "call-q1", "ask_user_question")];
 		assert.equal(pendingCallTool(messages, "call-q1"), "ask_user_question");
 		assert.equal(pendingCallTool(messages, "call-zz"), null);
+	});
+});
+
+// ─── newAnswerResult: the two-audience split (owner, 2026-10-02) ────────────
+
+describe("newAnswerResult two audiences", () => {
+	it("MODEL sees the compact learner-only record; details keeps the FULL graded answer", () => {
+		const qd: QuestionData = {
+			id: "call-1",
+			kind: "quiz",
+			question: "Which planet is closest to the Sun?",
+			mode: "single-select",
+			options: [
+				{ label: "Mercury", value: "mercury" },
+				{ label: "Venus", value: "venus" },
+			],
+			correctIndices: [1],
+			explanation: "Mercury orbits closest.",
+			createdAt: "2026-01-01T00:00:00Z",
+		};
+		const full = buildAnswer(qd, { values: ["mercury"], confidence: 70, note: "guessed" });
+		const msg = newAnswerResult("call-1", "quiz", full);
+		const modelSees = JSON.parse((msg.content as { type: "text"; text: string }[])[0]!.text);
+		assert.deepEqual(modelSees, {
+			kind: "quiz",
+			answers: [{ index: 1, label: "Mercury" }],
+			correct: true,
+			confidence: 70,
+			note: "guessed",
+		});
+		assert.equal(msg.details, full, "details is the full QuestionAnswerData verbatim");
+		assert.equal((msg.details as { questionText?: string }).questionText, "Which planet is closest to the Sun?");
 	});
 });

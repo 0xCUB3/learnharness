@@ -143,7 +143,6 @@ function askPart(
 
 function answer(over: Partial<QuestionAnswerData>): QuestionAnswerData {
 	return {
-		questionId: "q",
 		kind: "quiz",
 		questionText: "question text",
 		dontKnow: false,
@@ -170,14 +169,14 @@ function fixtureMessages(): LhMessage[] {
 			quizPart(
 				"call-1",
 				{ question: "Q1", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-				answer({ questionId: "call-1", questionText: "Q1 text", correct: false, answeredAt: "2026-08-22T01:00:00.000Z" }),
+				answer({ questionText: "Q1 text", correct: false, answeredAt: "2026-08-22T01:00:00.000Z" }),
 			),
 		]),
 		assistant("a2", [
 			quizPart(
 				"call-2",
 				{ question: "Q2", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-				answer({ questionId: "call-2", questionText: "Q2 text", dontKnow: true, correct: false, answeredAt: "2026-08-22T01:01:00.000Z" }),
+				answer({ questionText: "Q2 text", dontKnow: true, correct: false, answeredAt: "2026-08-22T01:01:00.000Z" }),
 			),
 		]),
 		assistant("a3", [
@@ -186,21 +185,21 @@ function fixtureMessages(): LhMessage[] {
 			quizPart(
 				"call-3",
 				{ question: "Q3", nodeId: "alpha", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-				answer({ questionId: "call-3", questionText: "Q3 text", correct: true, note: "recalled the diagram", answeredAt: "2026-08-22T02:00:00.000Z" }),
+				answer({ questionText: "Q3 text", correct: true, note: "recalled the diagram", answeredAt: "2026-08-22T02:00:00.000Z" }),
 			),
 		]),
 		assistant("a4", [
 			quizPart(
 				"call-4",
 				{ question: "Q4", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-				answer({ questionId: "call-4", questionText: "Q4 text", correct: false, answeredAt: "2026-08-22T02:01:00.000Z" }),
+				answer({ questionText: "Q4 text", correct: false, answeredAt: "2026-08-22T02:01:00.000Z" }),
 			),
 		]),
 		assistant("a5", [
 			quizPart(
 				"call-5",
 				{ question: "Q5", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-				answer({ questionId: "call-5", questionText: "Q5 text", dontKnow: true, correct: false, answeredAt: "2026-08-22T02:02:00.000Z" }),
+				answer({ questionText: "Q5 text", dontKnow: true, correct: false, answeredAt: "2026-08-22T02:02:00.000Z" }),
 			),
 		]),
 		assistant("a6", [
@@ -208,12 +207,12 @@ function fixtureMessages(): LhMessage[] {
 			quizPart(
 				"call-6",
 				{ question: "Q6", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-				answer({ questionId: "call-6", questionText: "Q6 text", dismissed: true }),
+				answer({ questionText: "Q6 text", dismissed: true }),
 			),
 			askPart(
 				"call-7",
 				{ question: "free text?" },
-				answer({ questionId: "call-7", kind: "ask", questionText: "free text?", text: "because" }),
+				answer({ kind: "ask", questionText: "free text?", text: "because" }),
 			),
 		]),
 	].flat();
@@ -354,7 +353,7 @@ describe("the merger (mergeFindings)", () => {
 				quizPart(
 					"call-9",
 					{ question: "Q9", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-					answer({ questionId: "call-9", questionText: "Q9 text", correct: true, answeredAt: "2026-08-22T03:00:00.000Z" }),
+					answer({ questionText: "Q9 text", correct: true, answeredAt: "2026-08-22T03:00:00.000Z" }),
 				),
 			]),
 		].flat());
@@ -624,7 +623,7 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 				quizPart(
 					"d-call-1",
 					{ question: "DQ1", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-					answer({ questionId: "d-call-1", questionText: "DQ1 text", correct: true, answeredAt: "2026-09-23T00:00:00.000Z" }),
+					answer({ questionText: "DQ1 text", correct: true, answeredAt: "2026-09-23T00:00:00.000Z" }),
 				),
 			]),
 		].flat());
@@ -649,7 +648,7 @@ describe("session deletion (deleteChatTraces + deleteChatSession, wave 6)", () =
 				quizPart(
 					"e-call-1",
 					{ question: "EQ1", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-					answer({ questionId: "e-call-1", questionText: "EQ1 text", correct: false, answeredAt: "2026-09-23T00:01:00.000Z" }),
+					answer({ questionText: "EQ1 text", correct: false, answeredAt: "2026-09-23T00:01:00.000Z" }),
 				),
 			]),
 		].flat());
