@@ -17,8 +17,10 @@ import { createPortal } from "react-dom";
  *
  * What "abort" means is mode-dependent: from a running turn it kills
  * the turn (partial stays); from a pending question there is no turn to
- * kill — abort IS dismissal (QuestionAnswerData.dismissed), and the
- * teacher acknowledges the skip in its next turn like any answer.
+ * kill — abort IS dismissal (A2, 2026-10-03): the silent route writes
+ * the skipped toolResult and wakes NOTHING; the session pauses until
+ * the user's next plain message, which carries the dismissal to the
+ * model in its context.
  */
 
 /** What Esc is aborting — drives copy and the confirm action. */

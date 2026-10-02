@@ -35,11 +35,16 @@ import { buildSubagentSteer } from "../src/core/contracts.ts";
 import { abortTurn, runningTurn, settledTurnResponse } from "../src/server/turn-runs.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
-import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
-import { danglingQuestionOf, newAnswerResult } from "../src/core/native-messages.ts";
+import { buildAnswer, coerceCorrectAnswer, dismissedAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
+import { danglingQuestionOf, endsInDismissal, newAnswerResult } from "../src/core/native-messages.ts";
 import { projectView } from "../src/core/view.ts";
 import type { PiEngine } from "../src/agent/models.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
+
+// Route-level pin (the chat-birth-stamp pattern): the dismiss route's
+// handler, driven directly. Env is the runner's (the same the static
+// store imports already resolved under).
+const dismissRoute = await import("../app/api/chats/[id]/dismiss/route.ts");
 import { PATHS } from "../config.ts";
 
 // The key-presence turn gate (provider-key interlude, 2026-09-25): scripted
@@ -1154,4 +1159,94 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 	assert.match(seen, /small angular separation/);
 	assert.ok(!/"explanation"/.test(seen), "the answer record carries no explanation field");
 	assert.equal(danglingQuestionOf(saved2.messages), null, "no pending question remains");
+});
+
+// ─── the silent dismissal (owner design 2026-10-03, "A2") ──────────────────
+
+describe("the silent dismissal (A2)", () => {
+	function dismissPost(chatId: string, toolCallId: string): Promise<Response> {
+		return dismissRoute.POST(
+			new Request(`http://test/api/chats/${chatId}/dismiss`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					input: { type: "dismiss", toolCallId, answer: dismissedAnswer("quiz", QUIZ_INPUT.question) },
+				}),
+			}),
+			{ params: Promise.resolve({ id: chatId }) },
+		);
+	}
+
+	it("writes the toolResult with NO wake — the next plain message carries it to the model", async () => {
+		const { engine, calls } = scriptedTeacher(defaultLesson);
+		const chat = createConfiguredChat("Test: silent dismissal");
+		createdChats.push(chat.id);
+
+		// Turn 1: the quiz dangles.
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)));
+		assert.ok(danglingQuestionOf(chatStore.getChat(chat.id)!.messages), "the quiz is pending");
+
+		// The dismissal: SILENT — record completes the call, nothing wakes.
+		const res = await dismissPost(chat.id, "call-1");
+		assert.equal(res.status, 200);
+		const saved = chatStore.getChat(chat.id)!;
+		assert.equal(danglingQuestionOf(saved.messages), null, "the call is answered by the dismissal");
+		const tail = saved.messages[saved.messages.length - 1]! as { role?: string; details?: { dismissed?: boolean } };
+		assert.equal(tail.role, "toolResult");
+		assert.equal(tail.details?.dismissed, true, "the record's dismissal is the details payload");
+		assert.equal(calls.length, 1, "NO second engine call — the dismissal woke nothing");
+		assert.equal(isTurnRunning(chat.id), false);
+		assert.equal(endsInDismissal(saved.messages), true, "the session sits dismissal-paused");
+
+		// The next plain message is THE wake — the model sees the skipped
+		// question and the user's text in one context (the steer-batch
+		// outcome, delivered by record truth).
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "skip that — tell me about Mars" }), agentFactory(engine)));
+		assert.equal(calls.length, 2, "exactly one wake: the user's message");
+		assert.match(calls[1]!.join("\n"), /dismissed/, "the dismissed result rode the wake's context");
+		assert.equal(endsInDismissal(chatStore.getChat(chat.id)!.messages), false, "the pause lifted with the send");
+	});
+
+	it("rejects honestly: unknown chat 404, no dangling question 400", async () => {
+		assert.equal((await dismissPost("chat_nonexistent", "call-x")).status, 404);
+		const chat = createConfiguredChat("Test: dismiss no question");
+		createdChats.push(chat.id);
+		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", content: "hi", timestamp: 1 } as never]);
+		assert.equal((await dismissPost(chat.id, "call-x")).status, 400);
+	});
+
+	it("parallel quizzes dismiss call-by-call — the composer returns only when nothing dangles", async () => {
+		const chat = createConfiguredChat("Test: parallel dismiss");
+		createdChats.push(chat.id);
+		// Two quiz calls in one assistant message (the sequential-execution
+		// shape the tools opt into).
+		chatStore.saveMessages(chat.id, [
+			{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never,
+			{
+				id: "a1",
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "call-a", name: "quiz", arguments: { question: "A?" } as never },
+					{ type: "toolCall", id: "call-b", name: "quiz", arguments: { question: "B?" } as never },
+				],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+				timestamp: 1,
+			} as never,
+		]);
+
+		// First dismissal completes call-a; call-b still dangles.
+		assert.equal((await dismissPost(chat.id, "call-a")).status, 200);
+		const pending = danglingQuestionOf(chatStore.getChat(chat.id)!.messages);
+		assert.equal(pending?.toolCallId, "call-b", "the dock advances to the next question");
+		assert.equal(endsInDismissal(chatStore.getChat(chat.id)!.messages), true);
+
+		// Second dismissal: nothing dangles, still paused.
+		assert.equal((await dismissPost(chat.id, "call-b")).status, 200);
+		assert.equal(danglingQuestionOf(chatStore.getChat(chat.id)!.messages), null, "the composer may return");
+		assert.equal(endsInDismissal(chatStore.getChat(chat.id)!.messages), true, "paused until the user speaks");
+	});
 });

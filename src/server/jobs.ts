@@ -64,7 +64,7 @@ import {
 	type SteerMessage,
 } from "../core/contracts.ts";
 import type { TurnInput } from "../core/input-events.ts";
-import { danglingQuestionOf } from "../core/native-messages.ts";
+import { danglingQuestionOf, endsInDismissal } from "../core/native-messages.ts";
 import { fireJobAbort, isJobLive } from "../agent/subagents/aborts.ts";
 import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
@@ -454,6 +454,17 @@ async function pump(chatId: string): Promise<void> {
 			}
 			if (fire.length === 0) {
 				s.queues.delete(chatId);
+				return;
+			}
+
+			// THE DISMISSAL PAUSE (owner design 2026-10-03, "A2"): the record
+			// ends in a user dismissal — the session waits for the USER. Hold
+			// every marker in the queue (no wake fires) and return; the user's
+			// next send is the wake that carries them (the in-run vehicle below
+			// hands them to that turn once the text-claim lands — until then,
+			// settlement re-pumps and lands them right after it). The pause is
+			// derived from the tail, so any user message un-holds by construction.
+			if (endsInDismissal(fresh.messages)) {
 				return;
 			}
 

@@ -513,6 +513,30 @@ export class SessionModel {
 		return this.send({ type: "answer", toolCallId, answer: output });
 	}
 
+	/** The dismissal path (owner design 2026-10-03, "A2"): the skipped
+	 * toolResult lands optimistically, then the SILENT route persists it
+	 * — no turn, no stream, nothing wakes. The session pauses at the
+	 * user's choice; the next plain send is the wake. On failure the
+	 * durable record wins: the error surfaces, the record-changed sync
+	 * (or any later refetch) replaces the optimistic append with truth. */
+	async dismissQuestion(toolCallId: string, answer: QuestionAnswerData): Promise<void> {
+		if (!this.readyRef) return;
+		const tool = pendingCallTool([...this.base, ...this.tail], toolCallId) ?? "quiz";
+		this.mutate(() => {
+			this.tail = [...this.tail, { ...newAnswerResult(toolCallId, tool, answer), id: localId() }];
+		});
+		try {
+			const res = await this.fetch(`/api/chats/${this.chatId}/dismiss`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ input: { type: "dismiss", toolCallId, answer } }),
+			});
+			if (!res.ok) throw new Error(`The dismissal failed (${res.status}).`);
+		} catch (err) {
+			this.setError((err as Error).message);
+		}
+	}
+
 	/** Local detach: cancel the consume, keep the partial tail. The page's
 	 *  settle watch adopts the record when the server turn finishes. */
 	stop(): void {

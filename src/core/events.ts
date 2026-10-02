@@ -38,6 +38,10 @@ export interface ServerEvents {
 	"activity-changed": Record<string, never>;
 	/** The session list changed (create, delete, title). */
 	"chats-changed": Record<string, never>;
+	/** A chat's record changed WITHOUT a turn (the silent dismissal write).
+	 *  Same notify-then-fetch contract as the turn events: open views of
+	 *  the chat refetch and adopt the durable record. */
+	"record-changed": { chatId: string };
 }
 
 export type ServerEventType = keyof ServerEvents;
@@ -51,6 +55,7 @@ export const SERVER_EVENT_TYPES = [
 	"jobs-changed",
 	"activity-changed",
 	"chats-changed",
+	"record-changed",
 ] as const satisfies readonly ServerEventType[];
 
 /** One notification: the type discriminates the payload. */

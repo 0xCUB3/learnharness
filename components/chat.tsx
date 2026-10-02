@@ -187,7 +187,7 @@ export function Chat({
 	// (core/view.ts projectView); sends are ONE explicit input event each
 	// ({chatId, input} — the stash indirection died with the SDK), and the
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
-	const { messages, nativeMessages, send, submitAnswer, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
+	const { messages, nativeMessages, send, submitAnswer, dismissQuestion, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initiallyInFlight });
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
@@ -323,14 +323,15 @@ export function Chat({
 				return;
 			}
 			// From a pending question there is no turn to kill — abort IS
-			// dismissal, riding the same answer path as any answer (the
-			// teacher acknowledges the skip in its next turn).
+			// dismissal (A2, 2026-10-03): the skipped toolResult lands via the
+			// SILENT route — no turn, no wake, nothing generates. The session
+			// pauses at the user's choice; the next plain send is the wake.
 			const p = pendingRef.current;
 			if (!p) return;
 			const question = (p.input as { question?: string } | null)?.question ?? "";
-			void submitAnswer(p.tool, p.toolCallId, dismissedAnswer(toolQuestionKind(p.tool), question));
+			void dismissQuestion(p.toolCallId, dismissedAnswer(toolQuestionKind(p.tool), question));
 		},
-		[abortInFlightTurn, submitAnswer],
+		[abortInFlightTurn, dismissQuestion],
 	);
 	// Mount continuation: if the stored transcript ends with a fulfilled tool
 	// (a job result landed while no client was open), resume the lesson — the
@@ -877,6 +878,17 @@ export function Chat({
 			return;
 		}
 		// Fully idle — a turn we never saw (every window missed): adopt now.
+		void syncFromServer();
+	});
+	useServerEvent("record-changed", (p) => {
+		// The silent dismissal write (A2, 2026-10-03): no turn ever ran, so
+		// only the record moved. Other tabs and post-error windows adopt;
+		// our OWN dismissal already rendered its optimistic append — syncing
+		// here too is harmless (the adoption law swaps local ids for the
+		// server's). Busy states ignore it: a running turn owns the view,
+		// and the write is 409-guarded against exactly that anyway.
+		if (p.chatId !== chatId) return;
+		if (localStreamRef.current || turnInFlightRef.current) return;
 		void syncFromServer();
 	});
 

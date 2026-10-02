@@ -292,6 +292,26 @@ export function answeredCallIds(messages: readonly LhMessage[]): Set<string> {
  * dock's domain — fails the all-answered rule and never fires a turn,
  * exactly as the SDK's every(output-available) did).
  */
+/** Is this record message a user-dismissed question result? The full
+ *  answer rides the toolResult's `details` (newAnswerResult) — the
+ *  dismissal pause and the continuation fold both read it. */
+function isDismissedResult(m: LhMessage): boolean {
+	if ((m as { role?: string }).role !== "toolResult") return false;
+	const details = (m as { details?: unknown }).details as { dismissed?: unknown } | undefined;
+	return details?.dismissed === true;
+}
+
+/** The dismissal pause (owner design 2026-10-03, "A2"): the record ends
+ *  in user dismissal — the session waits for the USER. While paused,
+ *  nothing auto-wakes: the continuation fold demands nothing (below) and
+ *  the wake pipeline holds job deliveries in the steer queue until the
+ *  next send. Derived from the tail — no latch to persist or clear; any
+ *  user message flips it off by changing the record. */
+export function endsInDismissal(messages: readonly LhMessage[]): boolean {
+	const last = messages[messages.length - 1];
+	return last !== undefined && isDismissedResult(last);
+}
+
 export function needsContinuation(messages: readonly LhMessage[]): boolean {
 	const last = messages[messages.length - 1];
 	if (!last || (last as { role?: string }).role !== "toolResult") return false;
@@ -305,6 +325,11 @@ export function needsContinuation(messages: readonly LhMessage[]): boolean {
 	) {
 		start--;
 	}
+	// The dismissal rule (A2): a trailing batch that is ALL user dismissals
+	// owes the agent nothing — the session sits paused at the user's
+	// choice. Mixed batches (impossible while paused — held deliveries
+	// never append — but honest anyway) fall through to the normal rule.
+	if (messages.slice(start).every(isDismissedResult)) return false;
 	const owner = messages[start - 1];
 	if (!owner || (owner as { role?: string }).role !== "assistant") return false;
 	const content = (owner as { content?: unknown }).content;

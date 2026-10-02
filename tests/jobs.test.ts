@@ -854,6 +854,61 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
 	});
 
+	it("the dismissal pause holds deliveries — no wake until the user's next turn settles (A2)", async () => {
+		const { chatId, jobId, steer } = setup();
+		let fired = 0;
+		setTurnRunner(async () => {
+			fired++;
+			return 200;
+		});
+
+		// The record ends in a DISMISSAL (owner design 2026-10-03): the
+		// question was skipped via the silent route — no dangling call (the
+		// quiz gate would pass), so ONLY the dismissal pause holds the wake.
+		chatStore.saveMessages(chatId, [
+			{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never,
+			{
+				id: "a1",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q" } as never }],
+				api: "openai-completions",
+				provider: "openrouter",
+				model: "test",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "toolUse",
+				timestamp: 1,
+			} as never,
+			{
+				id: "r1",
+				role: "toolResult",
+				toolCallId: "quiz-call",
+				toolName: "quiz",
+				content: [{ type: "text", text: "skipped" }],
+				details: { kind: "quiz", questionText: "q", dontKnow: false, answers: [], dismissed: true, answeredAt: "t" },
+				isError: false,
+				timestamp: 1,
+			} as never,
+		]);
+
+		const delivery = deliverJobResult(steer);
+
+		await delay(1200);
+		assert.equal(fired, 0, "no wake while the session sits dismissal-paused");
+		assert.equal(jobStore.getJob(jobId)!.status, "running", "the delivery holds (queued, not lost)");
+
+		// The user's next message is the wake — its turn settles, and the
+		// settlement re-pump lands the held delivery right after it.
+		const record = chatStore.getChat(chatId)!;
+		const afterUser = [...record.messages, { id: "u2", role: "user", content: "moving on", timestamp: 2 } as never];
+		chatStore.saveMessages(chatId, afterUser);
+		settleSteers(chatId, afterUser);
+
+		await waitFor(() => fired > 0, 8000, "wake after the pause lifts");
+		await delivery;
+		await waitFor(() => jobStore.getJob(jobId)!.status !== "running", 8000, "job flip after the held wake");
+		assert.equal(jobStore.getJob(jobId)!.status, "done");
+	});
+
 	it("retries with backoff on a 409 (a client turn raced in) and delivers on the retry", async () => {
 		const { jobId, steer } = setup();
 		let calls = 0;

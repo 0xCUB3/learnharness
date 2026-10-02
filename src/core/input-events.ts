@@ -32,7 +32,7 @@ import {
 	newAnswerResult,
 	newUserMessage,
 } from "./native-messages.ts";
-import { QUESTION_TOOLS } from "./pending.ts";
+import { QUESTION_TOOLS, toolQuestionKind } from "./pending.ts";
 
 /** One client-originated input event (the POST body's `input`). */
 export type ChatInput =
@@ -49,6 +49,45 @@ export type SteerInput = { type: "steers"; steers: LhMessage[] };
 
 /** Every input the turn composition accepts. */
 export type TurnInput = ChatInput | SteerInput;
+
+/** The dismissal event (owner design 2026-10-03, "A2"): NEVER composes a
+ *  turn — the silent route appends + persists and wakes nothing. The
+ *  answer rides the event (mirroring the answer event) but must actually
+ *  BE a dismissal: the silent path must never inject a live answer
+ *  wake-free. Parallel question calls each get their own dismiss event;
+ *  results reference their calls by id, so the appends stay independent. */
+export type DismissInput = { type: "dismiss"; toolCallId: string; answer: QuestionAnswerData };
+
+/** Parse and validate a dismissal event off a request body. */
+export function parseDismissInput(input: unknown): DismissInput {
+	if (typeof input !== "object" || input === null) throw new ChatInputError("input must be an object");
+	const i = input as Record<string, unknown>;
+	if (i.type !== "dismiss") throw new ChatInputError(`unknown input type: ${String(i.type)}`);
+	if (typeof i.toolCallId !== "string" || i.toolCallId.length === 0) {
+		throw new ChatInputError("dismiss input requires toolCallId");
+	}
+	const answer = i.answer as QuestionAnswerData | undefined;
+	if (typeof answer !== "object" || answer === null) {
+		throw new ChatInputError("dismiss input requires the dismissal answer object");
+	}
+	if (answer.dismissed !== true) {
+		throw new ChatInputError("dismiss input's answer must be a dismissal (dismissed: true)");
+	}
+	return { type: "dismiss", toolCallId: i.toolCallId, answer };
+}
+
+/** The native appends a dismissal makes (pure — same orphan discipline
+ *  as answers: the call must be a DANGLING question call). */
+export function dismissAppends(record: { messages: LhMessage[] }, input: DismissInput): LhMessage[] {
+	const pending = danglingQuestionOf(record.messages);
+	if (!pending || pending.toolCallId !== input.toolCallId) {
+		throw new ChatInputError("dismiss input targets no pending question call");
+	}
+	if (input.answer.kind !== toolQuestionKind(pending.tool)) {
+		throw new ChatInputError("dismiss input's answer kind does not match the question");
+	}
+	return [newAnswerResult(input.toolCallId, pending.tool, input.answer)];
+}
 
 /** A malformed input event (the honest 400 — the orphan-trap discipline). */
 export class ChatInputError extends Error {}

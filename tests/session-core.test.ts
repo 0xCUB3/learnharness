@@ -24,7 +24,8 @@ import { afterEach, describe, it } from "node:test";
 import { absorbed, pendingCallTool, SessionModel } from "../components/session-core.ts";
 import type { ChatInput } from "../src/core/input-events.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
-import { newUserMessage, newAnswerResult, needsContinuation } from "../src/core/native-messages.ts";
+import { newUserMessage, newAnswerResult, needsContinuation, endsInDismissal } from "../src/core/native-messages.ts";
+import { dismissedAnswer } from "../src/core/question-core.ts";
 import { buildAnswer, type QuestionData } from "../src/core/question-core.ts";
 
 const realFetch = globalThis.fetch;
@@ -814,6 +815,71 @@ describe("needsContinuation (the native lastAssistantMessageIsCompleteWithToolCa
 
 	it("an orphan result (no asking assistant) never continues", () => {
 		assert.equal(needsContinuation([userText("u1", "topic"), resultMsg("call-x")]), false);
+	});
+});
+
+// ─── the dismissal pause (owner design 2026-10-03, "A2") ────────────────────
+
+describe("the dismissal pause (needsContinuation + endsInDismissal)", () => {
+	/** The record's silent dismiss write: the toolResult the dismiss route
+	 *  appends (full answer in details — the folds read it there). */
+	function dismissedMsg(callId: string): LhMessage {
+		return {
+			...newAnswerResult(callId, "quiz", dismissedAnswer("quiz", "Pick a planet")),
+			id: `d_${callId}`,
+		} as unknown as LhMessage;
+	}
+
+	it("an all-dismissed tail demands NO continuation — the session waits for the user", () => {
+		const messages = [userText("u1", "topic"), assistantWithCall("a1", "call-q1", "quiz"), dismissedMsg("call-q1")];
+		assert.equal(needsContinuation(messages), false);
+		assert.equal(endsInDismissal(messages), true, "the pause predicate reads the same tail");
+	});
+
+	it("parallel dismissals: each silent write its own call — still paused", () => {
+		const assistant = {
+			...assistantWithCall("a1", "call-a"),
+			content: [
+				{ type: "toolCall", id: "call-a", name: "quiz", arguments: {} },
+				{ type: "toolCall", id: "call-b", name: "ask_user_question", arguments: {} },
+			],
+		} as unknown as LhMessage;
+		const messages = [
+			userText("u1", "topic"),
+			assistant,
+			dismissedMsg("call-a"),
+			{ ...newAnswerResult("call-b", "ask_user_question", dismissedAnswer("ask", "Why?")), id: "d_call-b" } as unknown as LhMessage,
+		];
+		assert.equal(endsInDismissal(messages), true);
+		assert.equal(needsContinuation(messages), false, "dismissed by id, not by position — the batch rule holds");
+	});
+
+	it("mixed tail (answered + dismissed) keeps the normal rule — the answer is owed its reaction", () => {
+		const assistant = {
+			...assistantWithCall("a1", "call-a"),
+			content: [
+				{ type: "toolCall", id: "call-a", name: "quiz", arguments: {} },
+				{ type: "toolCall", id: "call-b", name: "quiz", arguments: {} },
+			],
+		} as unknown as LhMessage;
+		const messages = [userText("u1", "topic"), assistant, resultMsg("call-a", "quiz"), dismissedMsg("call-b")];
+		assert.equal(endsInDismissal(messages), true, "tail ends in the dismissal");
+		assert.equal(needsContinuation(messages), true, "a real answer in the batch still demands the reaction");
+	});
+
+	it("any user message un-pauses (the derived tail flips)", () => {
+		const messages = [
+			userText("u1", "topic"),
+			assistantWithCall("a1", "call-q1", "quiz"),
+			dismissedMsg("call-q1"),
+			userText("u2", "moving on"),
+		];
+		assert.equal(endsInDismissal(messages), false);
+	});
+
+	it("a normal answer is not a dismissal (the predicate stays honest)", () => {
+		const messages = [userText("u1", "topic"), assistantWithCall("a1", "call-q1", "quiz"), resultMsg("call-q1", "quiz")];
+		assert.equal(endsInDismissal(messages), false);
 	});
 });
 
