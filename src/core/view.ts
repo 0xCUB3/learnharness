@@ -83,6 +83,11 @@ export interface LiveTurnState {
 	 *  input-streaming (the shimmer); settled dangling calls render
 	 *  input-available (the dock mounts from the record). */
 	inFlight: boolean;
+	/** Ids of the messages THIS consume is streaming (optimistic round 3,
+	 *  2026-10-02): an arrived-but-empty streaming message projects one
+	 *  empty reasoning part — the thinking row — so the placeholder's
+	 *  handoff is seamless; settled empty messages stay hidden. */
+	streamingIds: ReadonlySet<string>;
 }
 
 function textPart(text: string): LhViewPart {
@@ -178,7 +183,21 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 				}
 			}
 			const parts: LhViewPart[] = [...reasoning, ...rest];
-			if (parts.length === 0) continue; // presentation-only (nothing renderable)
+			if (parts.length === 0) {
+				// An arrived-but-silent STREAMING message (owner, optimistic
+				// round 3, 2026-10-02): the turn's first applied event can
+				// carry empty content — project ONE empty reasoning part so
+				// the message's ARRIVAL renders the thinking row (chat.tsx's
+				// Reasoning isStreamings the last part: the same spinner +
+				// shimmer as the placeholder it replaces — the handoff is
+				// seamless and the two can never double). Settled empty
+				// messages stay hidden (presentation-only).
+				if (live?.streamingIds.has(m.id)) {
+					parts.push({ type: "reasoning", id: `${m.id}-r0`, text: "", state: "done" });
+				} else {
+					continue;
+				}
+			}
 			const group = lastAssistant();
 			if (group) {
 				// Same group: the step separator renders between the steps.

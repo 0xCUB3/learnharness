@@ -513,20 +513,28 @@ describe("resumeStream (the reattach path)", () => {
 		// submitted at entry, before its fetches).
 	});
 
-	it("CONTENT-GATED, not status-gated (owner, optimistic round 2): agent_start does NOT release the placeholder — the first visible content does", async () => {
-		// The old bug: the server emits agent_start instantly (pre-provider),
-		// the first wire event flipped status to streaming, and the line
-		// VANISHED into an empty wait until the provider's first token.
-		let release!: () => void;
-		const gate = new Promise<void>((res) => (release = res));
+	it("PROTOCOL EVENTS RELEASE NOTHING (owner, optimistic round 3): agent_start keeps the placeholder; the first APPLIED event flips streaming", async () => {
+		// The round-2 bug chain, fixed at the machine: status used to flip
+		// streaming at the first wire BYTE (agent_start, emitted before the
+		// provider has produced anything), vanishing the placeholder into an
+		// empty wait. Now the flip waits for an event applyWireEvent ACTS
+		// on — the placeholder (gated on submitted) covers the whole
+		// provider-connect gap, and the applied event's message renders the
+		// thinking row even when its content is empty (view.ts projection).
+		let releaseProtocol!: () => void;
+		let releaseRest!: () => void;
+		const protocolGate = new Promise<void>((res) => (releaseProtocol = res));
+		const restGate = new Promise<void>((res) => (releaseRest = res));
 		const body = new ReadableStream<Uint8Array>({
 			async start(c) {
 				const enc = new TextEncoder();
 				c.enqueue(enc.encode(sse({ type: "agent_start" }, { type: "turn_start" })));
-				await gate; // the provider is slow — nothing but protocol so far
+				await protocolGate; // the provider is slow — nothing but protocol so far
+				c.enqueue(enc.encode(sse({ type: "message_start", message: { role: "assistant", content: [] } })));
+				await restGate; // the message arrived; its first token is still pending
 				c.enqueue(
 					enc.encode(
-						sse({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }),
+						sse({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "pondering" }] } }),
 					),
 				);
 				c.enqueue(enc.encode(sse({ type: "agent_end", messages: [] }, "[DONE]")));
@@ -537,61 +545,82 @@ describe("resumeStream (the reattach path)", () => {
 			new Response(body, { headers: { "Content-Type": "text/event-stream" } })) as typeof globalThis.fetch;
 		const m = model();
 		const p = m.send({ type: "text", text: "q" });
-		assert.equal(m.getState().awaitingFirstChunk, true, "submitted: placeholder up");
-		await new Promise((r) => setTimeout(r, 25)); // let agent_start arrive + consume
-		assert.equal(m.getState().status, "streaming", "agent_start arrived — status flipped");
-		assert.equal(m.getState().awaitingFirstChunk, true, "protocol events release NOTHING: no vanish into the empty wait");
-		release();
+		assert.equal(m.getState().status, "submitted", "the action is optimistic: placeholder up pre-everything");
+		await new Promise((r) => setTimeout(r, 25)); // agent_start + turn_start consumed
+		assert.equal(
+			m.getState().status,
+			"submitted",
+			"protocol events apply NOTHING — the placeholder holds through the connect gap",
+		);
+		releaseProtocol();
+		await new Promise((r) => setTimeout(r, 25)); // message_start consumed
+		assert.equal(m.getState().status, "streaming", "the first APPLIED event flips streaming — the thinking row renders");
+		releaseRest();
 		await p;
 		assert.equal(m.getState().status, "ready");
-		assert.equal(m.getState().awaitingFirstChunk, false, "the turn ended with content — nothing awaited");
 	});
 
-	it("EMPTY leading parts do not release; the release is STICKY for the rest of the turn", async () => {
-		let release!: () => void;
-		const gate = new Promise<void>((res) => (release = res));
-		const body = new ReadableStream<Uint8Array>({
-			async start(c) {
-				const enc = new TextEncoder();
-				// message_start with EMPTY content: an empty thinking header,
-				// nothing renderable — the placeholder must stay.
-				c.enqueue(enc.encode(sse({ type: "message_start", message: { role: "assistant", content: [] } })));
-				await gate;
-				c.enqueue(
-					enc.encode(
-						sse({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", text: "pondering" }] } }),
-					),
+	it("REATTACH REPLAYS ONTO A CLEAN SLATE (owner, optimistic round 3): an aborted attempt's partials never double", async () => {
+		// StrictMode's simulated remount aborts the first resume mid-replay;
+		// its partial tail survived into the retry and the replay DOUBLED
+		// every message (the record refetch's accidental tail reset died
+		// with attach-first). resumeStream now wipes the tail itself.
+		let hold!: () => void;
+		const holdGate = new Promise<void>((res) => (hold = res));
+		let calls = 0;
+		const enc = new TextEncoder();
+		const replay = () => {
+			calls++;
+			if (calls === 1)
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						async start(c) {
+							c.enqueue(
+								enc.encode(
+									sse({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "part one" }] } }),
+								),
+							);
+							await holdGate; // aborted here (the partial stays in the tail)
+							c.enqueue(enc.encode(sse({ type: "agent_end", messages: [] }, "[DONE]")));
+							c.close();
+						},
+					}),
+					{ headers: { "Content-Type": "text/event-stream" } },
 				);
-				c.enqueue(
-					enc.encode(
-						sse({ type: "message_end", message: { role: "assistant", content: [{ type: "thinking", text: "pondering" }], stopReason: "stop" } }),
-					),
-				);
-				// a SECOND assistant message opens with empty content — the
-				// release must NOT flash the placeholder back mid-turn.
-				c.enqueue(enc.encode(sse({ type: "message_start", message: { role: "assistant", content: [] } })));
-				await new Promise((r) => setTimeout(r, 10));
-				c.enqueue(
-					enc.encode(
-						sse({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" } }),
-					),
-				);
-				c.enqueue(enc.encode(sse({ type: "agent_end", messages: [] }, "[DONE]")));
-				c.close();
-			},
-		});
-		globalThis.fetch = (async () =>
-			new Response(body, { headers: { "Content-Type": "text/event-stream" } })) as typeof globalThis.fetch;
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					async start(c) {
+						c.enqueue(
+							enc.encode(
+								sse(
+									{ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "part one" }] } },
+									{ type: "agent_end", messages: [] },
+									"[DONE]",
+								),
+							),
+						);
+						c.close();
+					},
+				}),
+				{ headers: { "Content-Type": "text/event-stream" } },
+			);
+		};
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === "/api/chats/chat_x/stream") return replay();
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof globalThis.fetch;
 		const m = model();
-		const p = m.send({ type: "text", text: "q" });
-		await new Promise((r) => setTimeout(r, 25)); // message_start (empty) consumed
-		assert.equal(m.getState().status, "streaming");
-		assert.equal(m.getState().awaitingFirstChunk, true, "empty leading parts render nothing — placeholder stays");
-		release();
-		await new Promise((r) => setTimeout(r, 25)); // first thinking delta + second empty message_start
-		assert.equal(m.getState().awaitingFirstChunk, false, "first content released — sticky through the empty second start");
-		await p;
-		assert.equal(m.getState().awaitingFirstChunk, false);
+		const attempt1 = m.resumeStream(false);
+		await new Promise((r) => setTimeout(r, 25)); // attempt 1 consumed its partial
+		// the simulated remount: attempt 2 aborts attempt 1 mid-replay
+		const attempt2 = m.resumeStream(false);
+		hold(); // attempt 1's gate resolves after it was already aborted
+		await Promise.allSettled([attempt1, attempt2]);
+		const texts = m
+			.getState()
+			.messages.flatMap((msg) => msg.parts.filter((p) => p.type === "text").map((p) => (p as { text?: string }).text));
+		assert.deepEqual(texts, ["part one"], "the replayed turn appears exactly ONCE — no doubles");
 	});
 
 	it("turn-settled fires the settle hook and ends cleanly", async () => {

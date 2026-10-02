@@ -186,7 +186,7 @@ export function Chat({
 	// (core/view.ts projectView); sends are ONE explicit input event each
 	// ({chatId, input} — the stash indirection died with the SDK), and the
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
-	const { messages, nativeMessages, send, submitAnswer, setMessages, adoptRecord, status, error, awaitingFirstChunk, stop, clearError, resumeStream, setReattachSettled } =
+	const { messages, nativeMessages, send, submitAnswer, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initiallyInFlight });
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
@@ -1177,19 +1177,22 @@ export function Chat({
 								</Fragment>
 							))}
 
-							{/* THE pre-first-CONTENT placeholder, ONE grammar everywhere
-							    (owner, optimistic round 2, 2026-10-02): spinner +
-							    shimmered Thinking… from the instant of any action that
-							    produces tokens (send, answer, session start, reattach,
-							    wake) — status flips synchronously — and it stays past
-							    agent_start (protocol events release nothing; the old
-							    status gate vanished the line into an empty wait) until
-							    the turn's first VISIBLE content: a reasoning/text delta
-							    or a tool call being written, where the stream takes over
-							    with the SAME look (the collapsible reasoning row / live
-							    tool card). The release is sticky — no flash between
-							    assistant steps. Never collapsible itself. */}
-							{(awaitingFirstChunk || turnInFlight) && (
+							{/* THE placeholder, ACTION-gated (owner, optimistic round
+							    3, 2026-10-02): spinner + shimmered Thinking… from the
+							    instant of any action that produces tokens — send,
+							    answer, session start, reattach (status flips to
+							    submitted SYNCHRONOUSLY with the action) — until the
+							    turn's first APPLIED event, where the stream takes over
+							    with the same look: an arrived-but-empty message renders
+							    the thinking ROW (view.ts projects one empty reasoning
+							    part), so submitted ⟺ placeholder and streaming ⟺ a
+							    rendered row, mutually exclusive by construction.
+							    Protocol events (agent_start) apply nothing and release
+							    nothing — the placeholder covers the whole
+							    provider-connect gap. turnInFlight: the same state
+							    entered by external discovery (wake) / the poll
+							    fallback. Never collapsible itself. */}
+							{(status === "submitted" || turnInFlight) && (
 								<span className="flex items-center gap-2">
 									<BrailleSpinner label="Thinking" />
 									<Shimmer duration={1} className="text-sm">

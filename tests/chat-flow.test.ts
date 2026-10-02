@@ -540,6 +540,30 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.deepEqual(view2[1]!.parts.filter((p) => p.type !== "step-start").map((p) => p.type), ["reasoning", "text"], "think-first messages project identically");
 	});
 
+	it("an arrived-but-empty STREAMING message projects the thinking row; a settled empty one stays hidden (optimistic round 3)", () => {
+		const emptyArrived: LhMessage = {
+			id: "a_empty",
+			role: "assistant",
+			content: [],
+			stopReason: "stop",
+		} as never;
+		const live = {
+			executions: new Map(),
+			inFlight: true,
+			streamingIds: new Set(["a_empty"]),
+		} as never;
+		// streaming: the message's ARRIVAL renders — one empty reasoning part
+		// (chat.tsx Reasoning isStreamings the last part: same spinner +
+		// shimmer as the placeholder it replaces — seamless handoff).
+		const view = projectView([{ id: "u0", role: "user", content: "hi", timestamp: 1 } as never, emptyArrived], live);
+		const parts = view[1]!.parts.filter((p) => p.type !== "step-start");
+		assert.deepEqual(parts.map((p) => p.type), ["reasoning"], "empty streaming message = the thinking row");
+		assert.equal(parts[0]!.text, "", "empty until the first token lands");
+		// settled (no live window): presentation-only, hidden as always.
+		const settled = projectView([{ id: "u0", role: "user", content: "hi", timestamp: 1 } as never, emptyArrived]);
+		assert.equal(settled.length, 1, "a settled empty message renders nothing");
+	});
+
 	it("a cancelled view NEVER aborts the turn — it runs to completion (owner ruling 2026-09-25)", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));

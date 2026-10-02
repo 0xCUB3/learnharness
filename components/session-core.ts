@@ -135,30 +135,11 @@ export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
 	return false;
 }
 
-/** Does this content array carry anything VISIBLE (owner, optimistic
- *  round 2, 2026-10-02)? A text/thinking block with text, or a tool call
- *  being written (the live tool card renders from its first streamed
- *  block). Empty leading parts (headers, empty message starts) do NOT
- *  count — the placeholder lives until real content, past agent_start. */
-function contentHasVisible(content: unknown): boolean {
-	if (!Array.isArray(content)) return false;
-	return content.some((b) => {
-		const block = b as { type?: string; text?: string };
-		return block?.type === "toolCall" || (typeof block?.text === "string" && block.text.length > 0);
-	});
-}
-
 export interface SessionState {
 	messages: LhViewMessage[];
 	nativeMessages: LhMessage[];
 	status: SessionStatus;
 	error: { message: string } | null;
-	/** A turn is running (this client submitted or reattached) and has
-	 *  produced NO visible content yet — the Thinking… placeholder's
-	 *  honest gate: protocol events (agent_start) do not release it, the
-	 *  turn's first content does, and the release is sticky for the rest
-	 *  of the turn (owner, optimistic round 2, 2026-10-02). */
-	awaitingFirstChunk: boolean;
 }
 
 export interface SessionModelOptions extends SessionModelDeps {
@@ -193,9 +174,6 @@ export class SessionModel {
 	private streamingMessageId: string | null = null;
 	private statusValue: SessionStatus = "ready";
 	private errorValue: { message: string } | null = null;
-	/** Sticky per-consume: this turn has shown visible content (see
-	 *  SessionState.awaitingFirstChunk). Reset at every consume start. */
-	private sawContentValue = false;
 	// The single live consume (POST response or reattach stream): a newer
 	// consume cancels the older — one reader at a time.
 	private consumeAbort: AbortController | null = null;
@@ -231,8 +209,6 @@ export class SessionModel {
 			nativeMessages: [...this.base, ...this.tail],
 			status: this.statusValue,
 			error: this.errorValue,
-			awaitingFirstChunk:
-				(this.statusValue === "submitted" || this.statusValue === "streaming") && !this.sawContentValue,
 		};
 	}
 
@@ -285,14 +261,18 @@ export class SessionModel {
 	/**
 	 * ONE event application for both the POST stream and the reattach
 	 * replay (pi's events carry the FULL partial message — a view REPLACES,
-	 * never assembles deltas).
+	 * never assembles deltas). Returns whether the event did VIEW WORK:
+	 * the consume flips submitted→streaming on the first ACTED event, not
+	 * the first wire byte — agent_start/turn_start release nothing, so
+	 * the Thinking… placeholder (gated on submitted) covers the whole
+	 * provider-connect gap (owner, optimistic round 3, 2026-10-02).
 	 */
-	applyWireEvent(event: Record<string, unknown>): void {
+	applyWireEvent(event: Record<string, unknown>): boolean {
 		if (event.type === "error") {
 			// Loop-level failure (agent.continue threw outside the stream) —
 			// raw text (owner ruling, Wave D): the banner shows exactly this.
 			this.setError(String(event.errorText ?? "An error occurred."));
-			return;
+			return false;
 		}
 		const agent = event as unknown as AgentEvent;
 		switch (agent.type) {
@@ -311,14 +291,13 @@ export class SessionModel {
 					// start+end only, no streaming partials). Without this the
 					// live stream dropped the marker until the settle sync.
 					const mid = message.id;
-					if (mid === undefined) return;
+					if (mid === undefined) return false;
 					this.mutate(() => {
-						this.sawContentValue = true; // a rendered marker is content
 						const idx = this.tail.findIndex((m) => m.id === mid);
 						this.tail =
 							idx === -1 ? [...this.tail, message as LhMessage] : this.tail.with(idx, message as LhMessage);
 					});
-					return;
+					return true;
 				}
 				// pi streams AssistantMessages with NO id — the id exists only
 				// once the server's persistTurn stamps the record (the live
@@ -334,23 +313,21 @@ export class SessionModel {
 				// the wire) still wins.
 				const id = message.id ?? this.streamingMessageId ?? localId();
 				const withId = { ...message, id } as LhMessage;
-				const hasContent = contentHasVisible((message as { content?: unknown }).content);
 				if (agent.type === "message_start") {
 					this.streamingMessageId = id;
 					this.streamingIds.add(id);
 					this.mutate(() => {
-						this.sawContentValue ||= hasContent;
 						this.tail = [...this.tail, withId];
 					});
 				} else {
 					this.mutate(() => {
-						this.sawContentValue ||= hasContent;
 						const idx = this.tail.findIndex((m) => m.id === id);
 						this.tail = idx === -1 ? [...this.tail, withId] : this.tail.with(idx, withId);
 					});
 				}
 				if (agent.type === "message_end") {
 					this.streamingMessageId = null; // slot done — next start mints fresh
+					// (fallthrough: returns true below — the message landed)
 					const stop = (message as { stopReason?: string }).stopReason;
 					if (stop === "error") {
 						// Provider error, verbatim (owner ruling) — the record
@@ -360,7 +337,7 @@ export class SessionModel {
 						);
 					}
 				}
-				return;
+				return true; // a message event is view work, even empty content
 			}
 			case "tool_execution_end": {
 				// The execution layer: clean question placeholders are IGNORED
@@ -376,13 +353,12 @@ export class SessionModel {
 						errorText: text,
 					});
 				});
-				return;
+				return true; // the execution layer updated the tool part's card
 			}
 			case "turn_end": {
 				// The results batch: append as native messages (client-stamped
 				// ids — the settle sync lands the server canon).
 				this.mutate(() => {
-					this.sawContentValue = true; // rendered results are content
 					this.tail = [
 						...this.tail,
 						...(agent.toolResults as ToolResultMessage[]).map(
@@ -390,10 +366,10 @@ export class SessionModel {
 						),
 					];
 				});
-				return;
+				return true;
 			}
 			default:
-				return; // agent_start/turn_start/tool_execution_start|update: no view work
+				return false; // agent_start/turn_start/tool_execution_start|update: no view work
 		}
 	}
 
@@ -403,7 +379,6 @@ export class SessionModel {
 		if (!res.body) throw new Error("The turn stream body is empty.");
 		const reader = res.body.getReader();
 		let sawEvent = false;
-		this.sawContentValue = false; // fresh consume: nothing visible yet
 		try {
 			for await (const event of sseEvents(reader)) {
 				if (event.type === "turn-settled") {
@@ -413,11 +388,11 @@ export class SessionModel {
 					this.onReattachSettled?.();
 					return;
 				}
-				if (!sawEvent) {
+				const acted = this.applyWireEvent(event);
+				if (!sawEvent && acted) {
 					sawEvent = true;
 					if (this.statusValue !== "error") this.setStatus("streaming");
 				}
-				this.applyWireEvent(event);
 			}
 		} finally {
 			this.streamingIds = new Set();
@@ -443,6 +418,19 @@ export class SessionModel {
 		this.consumeAbort?.abort();
 		const controller = new AbortController();
 		this.consumeAbort = controller;
+		// REPLAY ONTO A CLEAN SLATE (owner, optimistic round 3, 2026-10-02):
+		// the reattach stream replays the turn from its FIRST event — an
+		// aborted earlier attempt (React StrictMode's simulated remount)
+		// must not leave partials the replay would DOUBLE onto. The old
+		// record refetch provided this reset accidentally; attach-first
+		// made it explicit. Safe on both paths: a fresh mount's tail is
+		// empty or aborted-replay leftovers; the mid-session handoff path
+		// still refetches first (its reset is redundant, not harmful —
+		// the settle sync has already canonized the view).
+		this.mutate(() => {
+			this.tail = [];
+			this.streamingMessageId = null;
+		});
 		this.setStatus("submitted");
 		try {
 			if (refetchRecordFirst) {
