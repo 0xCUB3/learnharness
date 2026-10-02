@@ -373,6 +373,36 @@ function SessionsSidebar() {
 		return () => window.removeEventListener("lh:chat-renamed", onRenamed);
 	}, []);
 
+	/* INSTANT TURN-STATE (owner, sidebar round 2026-10-02): the open
+	   session broadcasts lh:turn-state the instant its turn starts
+	   (submitted — the optimistic machine's own flip) and at settle —
+	   busy mirrors the server's own definition (isTurnRunning), so the
+	   patch is exact: spinner up the moment the action happens, cleared
+	   and refetched once at settle (title/order move with turns). The
+	   2.5s poll stays as the BACKSTOP for everything only the server
+	   knows: other windows, wake turns in unopened sessions. A start on
+	   a chat not yet in the snapshot (a brand-new session) = one
+	   immediate refresh instead of a patch. */
+	const chatsRef = useRef(chats);
+	chatsRef.current = chats;
+	useEffect(() => {
+		const onTurnState = (e: Event) => {
+			const { id, running } = (e as CustomEvent<{ id: string; running: boolean }>).detail;
+			if (running) {
+				if (chatsRef.current?.some((c) => c.id === id)) {
+					setChats((prev) => (prev ? prev.map((c) => (c.id === id ? { ...c, busy: true } : c)) : prev));
+				} else {
+					void refresh(); // the brand-new session: it isn't in the snapshot yet
+				}
+				return;
+			}
+			setChats((prev) => (prev ? prev.map((c) => (c.id === id ? { ...c, busy: false } : c)) : prev));
+			void refresh(); // settle: the server snapshot is now truthful — land it now
+		};
+		window.addEventListener("lh:turn-state", onTurnState);
+		return () => window.removeEventListener("lh:turn-state", onTurnState);
+	}, [refresh]);
+
 	/* ── Keyboard seams (shortcut wave A, 2026-09-17) ── The sidebar owns
 	   every session-list interaction, so the shortcuts land here: ⌘⇧F
 	   focuses the search field; Alt+↑/↓ cycle the list (opening the sidebar
