@@ -14,7 +14,7 @@ import { ToolCallCard } from "@/components/artifacts/tool-call-card";
  * edit chat.tsx (see docs/plan.md file-ownership rules).
  *
  * Typical shape: while the part is input-available render an activity card
- * (poll GET /api/jobs?chatId=…; on completion call
+ * (the chat view's jobs feed reads GET /api/jobs?chatId=…; on completion call
  * ChatActionsContext.syncFromServer()); when output-available render the
  * artifact itself from part.output.
  */

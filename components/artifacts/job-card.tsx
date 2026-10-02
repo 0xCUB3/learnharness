@@ -8,7 +8,7 @@ import type { ArtifactPartProps, PdfResult, ResearchResult } from "@/src/core";
  * The research tool-call box (contracts.ts "THE ASYNC PROTOCOL" §4).
  *
  * The part's output is the fire-and-forget dispatch ACK — the box itself is
- * the DispatchCard (live status via the central jobs poll; quiet one-liner
+ * the DispatchCard (live status via the chat view's jobs feed; quiet one-liner
  * once delivered). The research brief itself no longer renders from the
  * tool part at all: it rides the steer message (the user-role delivery
  * injected after the wake turn) and renders there via ResearchBriefCard.
@@ -21,7 +21,7 @@ export function JobCard({ part }: ArtifactPartProps) {
 /**
  * The pdf dispatch box (sources v0) — the same async-protocol idiom as
  * JobCard: the ack output drives a DispatchCard (live "PDF reader" status
- * via the central jobs poll); the brief itself rides the steer message
+ * via the chat view's jobs feed); the brief itself rides the steer message
  * and renders under the PDF-complete badge in the transcript.
  */
 export function PdfJobCard({ part }: ArtifactPartProps) {

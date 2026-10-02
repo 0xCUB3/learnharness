@@ -70,6 +70,7 @@ import { incrementalLayout, type GraphCostSummary, type GraphNode, type GraphSna
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useActivity } from "@/components/activity-dock";
+import { useServerEvent, useServerResync } from "@/components/server-events";
 import { MenuShell } from "@/components/menu-shell.tsx";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
@@ -1069,7 +1070,8 @@ export function GraphView() {
 	// The dock's start-site nudge (accuracy wave, 2026-09-19): the import
 	// POST awaits the WHOLE pipeline server-side, so the run registers long
 	// before the response — nudge at click and again at +600ms to catch the
-	// start; the dock's fast active interval carries the run from there.
+	// start; from its first setPhase the run announces itself on the events
+	// channel (S5), and the dock rides those announcements thereafter.
 	const refreshActivity = useActivity().refresh;
 	const onImportFiles = (files: FileList | null) => {
 		if (!files || files.length === 0) return;
@@ -1088,7 +1090,7 @@ export function GraphView() {
 			.finally(() => setImporting(false));
 	};
 
-	// Background pipeline status: poll /api/graph/status; whenever a run
+	// Background pipeline status: read /api/graph/status; whenever a run
 	// LEAVES the feed (finished / aborted / failed), refetch the graph.
 	// A run only leaves the registry after its merge + settle + usage
 	// persist complete, so disappearance ⇒ the graph change is already on
@@ -1102,27 +1104,40 @@ export function GraphView() {
 	// into one end-of-import reveal (the exact bug this rule exists to
 	// prevent — a chunk's row leaving IS its merge landing).
 	const [pipelineRuns, setPipelineRuns] = useState<{ id: string; chatId: string; title: string; phase: string; startedAt: number }[]>([]);
-	useEffect(() => {
-		let cancelled = false;
-		let prevIds = new Set<string>();
-		const poll = () =>
-			fetch("/api/graph/status")
-				.then((res) => res.json() as Promise<{ runs: typeof pipelineRuns }>)
-				.then(({ runs }) => {
-					if (cancelled) return;
-					setPipelineRuns(runs);
-					const ids = new Set(runs.map((r) => r.id));
-					if ([...prevIds].some((id) => !ids.has(id))) setRefreshTick((t) => t + 1);
-					prevIds = ids;
-				})
-				.catch(() => {}); // status is cosmetic — never surface poll errors
-		poll();
-		const timer = setInterval(poll, 2000);
-		return () => {
-			cancelled = true;
-			clearInterval(timer);
-		};
+	const rowIdsRef = useRef<Set<string>>(new Set());
+	const readPipelineStatus = useCallback(() => {
+		fetch("/api/graph/status")
+			.then((res) => res.json() as Promise<{ runs: typeof pipelineRuns }>)
+			.then(({ runs }) => {
+				setPipelineRuns(runs);
+				const ids = new Set(runs.map((r) => r.id));
+				if ([...rowIdsRef.current].some((id) => !ids.has(id))) setRefreshTick((t) => t + 1);
+				rowIdsRef.current = ids;
+			})
+			.catch(() => {}); // status is cosmetic — never surface read errors
 	}, []);
+	// PUSH (S7, 2026-10-02): the standing 2s poll is RETIRED — the
+	// extraction registry announces every phase transition and every
+	// finish (activity-changed), so each read lands exactly when truth
+	// moved. The per-chunk reveal semantics are PRESERVED event-for-event:
+	// setPhase + finishExtraction fire per part, so a chunk's row leaving
+	// is still its own, immediately-visible merge landing. Debounced (the
+	// S4 law); resync heals a reconnect that ate events.
+	const statusDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useServerEvent("activity-changed", () => {
+		if (statusDebounceRef.current) clearTimeout(statusDebounceRef.current);
+		statusDebounceRef.current = setTimeout(() => {
+			statusDebounceRef.current = undefined;
+			readPipelineStatus();
+		}, 250);
+	});
+	useServerResync(() => readPipelineStatus());
+	useEffect(() => {
+		readPipelineStatus();
+		return () => {
+			if (statusDebounceRef.current) clearTimeout(statusDebounceRef.current);
+		};
+	}, [readPipelineStatus]);
 
 	// Graph pipeline costs (2026-09 cost metrics wave): the cumulative fold
 	// of the usage channels (chat + notes extraction runs; the dead namer's

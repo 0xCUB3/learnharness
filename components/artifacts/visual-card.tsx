@@ -6,7 +6,7 @@ import type { ArtifactPartProps, VisualResult } from "@/src/core";
 /**
  * Visual artifact card (W6 → ack protocol): the tool part's output is the
  * dispatch ack, so the tool-call box is the DispatchCard (live status via
- * the central jobs poll). The SVG itself renders from the steer message
+ * the chat view's jobs feed). The SVG itself renders from the steer message
  * (sub-agent result delivery) via VisualOutputCard.
  *
  * The SVG is model-authored for the learner's own machine (their own teacher

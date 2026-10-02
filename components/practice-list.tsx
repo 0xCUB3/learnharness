@@ -4,12 +4,13 @@
  * The problem-set list (practice slice 5): rows of sets — title, date,
  * status, problem/graded counts — click through to the exam page; a
  * delete affordance in the delete-session dialog's shape; "New problem
- * set" opens the creation dialog. Polls /api/practice/sets (2s, the
- * graph-view reveal-poll idiom) while ANY set is still generating, so
- * statuses live-update; a settled list stops polling.
+ * set" opens the creation dialog. Refetches /api/practice/sets when a
+ * practice phase moves (events channel, S7), so statuses live-update;
+ * a settled list goes quiet.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useServerEvent, useServerResync } from "@/components/server-events";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { PlusIcon, TrashIcon } from "lucide-react";
@@ -220,20 +221,33 @@ export function PracticeListPage({
 			const d = (await res.json()) as { sets: ProblemSet[] };
 			setSets(d.sets);
 		} catch {
-			// a transient failure on the poll keeps the last snapshot
+			// a transient failure keeps the last snapshot
 		}
 	}, []);
 
-	// The reveal poll: while any set is partitioning/generating, statuses
-	// live-update; a settled list goes quiet.
-	const anyRunning = sets.some(
-		(s) => s.status === "partitioning" || s.status === "generating",
-	);
+	// PUSH (S7, 2026-10-02): the bounded 2s reveal poll is RETIRED — the
+	// practice registry announces every phase transition (register,
+	// generating, grading, finish) as activity-changed, so the list
+	// refetches exactly when a set's status moved. Debounced (the S4
+	// law); resync heals a reconnect; the mount read catches drift since
+	// the server-rendered snapshot.
+	const refreshRef = useRef(refresh);
+	refreshRef.current = refresh;
+	const listDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	useEffect(() => {
-		if (!anyRunning) return;
-		const t = setInterval(() => void refresh(), 2000);
-		return () => clearInterval(t);
-	}, [anyRunning, refresh]);
+		void refreshRef.current();
+		return () => {
+			if (listDebounceRef.current) clearTimeout(listDebounceRef.current);
+		};
+	}, []);
+	useServerEvent("activity-changed", () => {
+		if (listDebounceRef.current) clearTimeout(listDebounceRef.current);
+		listDebounceRef.current = setTimeout(() => {
+			listDebounceRef.current = undefined;
+			void refreshRef.current();
+		}, 250);
+	});
+	useServerResync(() => void refreshRef.current());
 
 	const runDelete = useCallback(async () => {
 		if (!deleting || deleteBusy) return;

@@ -11,9 +11,9 @@ import { BrailleSpinner } from "@/components/braille-spinner";
  * The dispatch card (contracts.ts "THE ASYNC PROTOCOL" §4): the tool-call
  * box for a background sub-agent. The tool part's output is the FIRE-AND-
  * FORGET ACK (a string) — never the result. Live status comes from the
- * central jobs poll via JobsContext, matched by toolCallId:
+ * chat-view jobs feed via JobsContext, matched by toolCallId:
  *
- *   job unknown → "dispatched" pulse (the poll hasn't seen it yet)
+ *   job unknown → "dispatched" pulse (the jobs feed hasn't seen it yet)
  *   running     → live activity card (activity line + elapsed)
  *   done/error  → quiet one-liner ("delivered" / "failed") — the artifact
  *                 itself arrives in the steer message right below, so the
@@ -85,7 +85,7 @@ function DispatchRefusedCard({ label, line, button }: { label: string; line: str
 }
 
 function DispatchActivityCard({ job, label }: { job: JobRecord | null; label: string }) {
-	// Elapsed from createdAt — jobs appear here only via the poll (post-mount),
+	// Elapsed from createdAt — jobs appear here only via the jobs feed (post-mount),
 	// so no SSR/hydration mismatch.
 	const elapsed =
 		job && job.createdAt ? Math.max(0, Math.round((Date.now() - Date.parse(job.createdAt)) / 1000)) : null;

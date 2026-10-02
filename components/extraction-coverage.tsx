@@ -138,6 +138,9 @@ export function CoverageMenuBlock({ chatId }: { chatId: string }) {
 	// While a run is in flight the block polls at 2s (the old panel's
 	// open-only cadence, bounded to the running state) — the numbers
 	// settle live and the block ends in "fully extracted".
+	// ACCEPTED BY DESIGN (owner, 2026-10-02): the ring drains per fold,
+	// and the events channel is per phase — that granularity gap is why
+	// this bounded, run-scoped poll stays.
 	useEffect(() => {
 		if (coverage?.running !== true && !extracting) return;
 		const timer = setInterval(() => void load(), 2000);
@@ -274,6 +277,9 @@ export function CoverageRing({ chatId, refreshKey = 0 }: { chatId: string; refre
 	// While a run is in flight: poll at 2s so the ring DRAINS as folds land
 	// and settles at zero when the run completes (the "resets on
 	// completion" requirement — coverage re-derives per request).
+	// ACCEPTED BY DESIGN (owner, 2026-10-02): the ring drains per fold,
+	// and the events channel is per phase — that granularity gap is why
+	// this bounded, run-scoped poll stays.
 	useEffect(() => {
 		if (coverage?.running !== true) return;
 		const timer = setInterval(() => {

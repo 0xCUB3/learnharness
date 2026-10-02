@@ -384,7 +384,7 @@ Practice turns the graph into problem sets the learner reasons through out loud.
 
 **Two-stage generation.** One **partitioner** agent reads the chains plus the three NAMED-LEVEL parameters and submits the true partition; each partition becomes one problem's target. Then **one generator agent per problem**: its prompt carries the problem-engineering framework verbatim (the owner's doctrine — the three distances, the search-to-solution axis, the rung ladder, reverse/discriminate/probe-the-premises, the standing prohibitions, the formatting doctrine — full Markdown, LaTeX math, fenced code, tables/lists; prose-only renderings of structured content are a defect), **YOUR TARGET** (the assigned chains echoed verbatim — the echo law: the submit's chain set must equal the assignment exactly), and **THE FULL SET** (the whole selection: outside propositions are supporting material the generator may draw on with minimal use and maximal focus; the never-announce law covers ALL propositions). The submit is commit-before-pose — statement, solution, and rubric arrive together (the same sycophancy mitigation the quiz/explain mechanic uses); a problem never exists without its pre-written answer. Generators run in parallel (a process-wide 3-permit semaphore shared with grading) with per-problem failure isolation: one bad problem errors alone; the set still reaches `ready`. **Dedup across sets**: each generator also sees the problems of the ≤5 most recent sets sharing a node, so situations don't repeat between sets; within a set, parallel generators can't see each other — accepted for V1 (owner ruling).
 
-**Grading is score-only (owner redesign, 2026-09-29).** ONE ATTEMPT: each problem has its own submit button; once submitted the answer persists and the problem is done — the route refuses re-submission forever after. The submit reveals INSTANTLY (no waiting on the grader): the answer locks read-only, the model solution shows, the rubric sits collapsed. Grading fires one **grader** job per answered problem — the grader sees the problem, the propositions its chains touch, the pre-written solution and rubric, and the learner's answer, never the full set (minimal, by ruling) — and returns an integer **score 0–10 plus one or two sentences of reasoning** (which rubric points were met or missed, which proposition failed to come to mind). The score lands on the problem via the page's 2s poll and updates live; grades never serialize set-wide (submitting B while A grades is fine — the shared pool bounds parallelism). Nothing reaches the graph, no level, no count, anywhere. A dropped grade leaves the answer standing with an honest “grade interrupted” line — one attempt, no re-submission.
+**Grading is score-only (owner redesign, 2026-09-29).** ONE ATTEMPT: each problem has its own submit button; once submitted the answer persists and the problem is done — the route refuses re-submission forever after. The submit reveals INSTANTLY (no waiting on the grader): the answer locks read-only, the model solution shows, the rubric sits collapsed. Grading fires one **grader** job per answered problem — the grader sees the problem, the propositions its chains touch, the pre-written solution and rubric, and the learner's answer, never the full set (minimal, by ruling) — and returns an integer **score 0–10 plus one or two sentences of reasoning** (which rubric points were met or missed, which proposition failed to come to mind). The score lands on the problem via the page's events-channel tick (activity-changed → debounced liveness read, S7) and updates live; grades never serialize set-wide (submitting B while A grades is fine — the shared pool bounds parallelism). Nothing reaches the graph, no level, no count, anywhere. A dropped grade leaves the answer standing with an honest “grade interrupted” line — one attempt, no re-submission.
 
 **The jobs pattern — registry, not JobRecords.** Practice runs are NOT Workbench jobs: no `JobStore` records, no steer messages, nothing ever wakes the teacher — a practice run isn't chat-scoped (a set outlives its birth session and has no lesson to re-enter; its result is itself, persisted in its own store and read by its own page). What it shares with the Workbench is the observability surface: a `globalThis` run registry (the module-instance idiom — `__lhPracticeRuns`) with PER-PROBLEM ROWS (owner ruling, 2026-09-29 — matching the extraction per-chunk pattern): `setId:partition` while the partitioner runs ("Partitioning — title"), then one `setId:gen:problemId` per problem ("queued"→"generating", label "Problem i/N — title"), and one `setId:grade:problemId` per graded answer ("queued"→"grading", "Grading i/N — title") — each row its OWN abort controller and its OWN usage accumulation; the row key IS the feed id (the dock dup-key law) and the abort target. ABORT ROUTES BY ROW SHAPE: a gen-row abort kills THAT problem only (siblings continue; the set still settles `ready` with one errored problem), a partition-row abort ends the whole run, a grade-row abort drops that grade (answer kept — one attempt, the problem stays done); set-level abort (delete) composes from row aborts plus the synchronous persisted marks. Model calls — partitioner included — run under the SHARED background-LLM semaphore (`bg-llm-semaphore.ts`): one process-wide pool of 3 permits for ALL background LLM jobs, extraction chunks included (total background LLM concurrency bounded at 3, whoever calls). A boot sweep marks orphaned `partitioning`/`generating` sets as `error "Interrupted (server restarted)"` — once per process, and only when the set's `updatedAt` heartbeat is >120s stale (a live run's 30s FILE watchdog keeps the heartbeat fresh even across dev's per-worker processes — the registry is not shared between them; the guard trio closed a live-stamping bug from the first live test) — the job runner's crash-honesty at set grain. Store writes serialize behind a per-set mutex; the pipeline is the sole writer of `data/practice`.
 
@@ -462,9 +462,47 @@ The Electron main is a launcher + security guard, never a host for app logic: si
 
 ---
 
-## 10. Observability (minimal, by decision)
+## 10. Observability and change delivery (the push model, owner ruling 2026-10-02)
 
 Structured-logging frameworks are still deferred; the baseline is one correlation-tagged log line per event at the seams (`[chat <id>]` on turn services, `[extraction <id>]` on the pipeline, `[job <id>]` on runners, `[graph]` on reads). What has grown past log lines is the **activity feed** (`server/observability.ts` → `GET /api/activity` → the activity dock): running jobs, extraction runs, and practice runs (per-set rows: generation/grading phases), per-run usage (money channel), and true abort (`POST /api/activity/abort` — kind `job`/`extraction`/`practice`). When structured logging lands, it goes behind these seams — no call sites change.
+
+### 10.1 The events channel — how the client learns truth moved
+
+Before 2026-10-02 the client discovered server-side change by polling: a lattice of interval polls (sidebar 2.5s, dock adaptive 2.5/10s, jobs 1/4s, graph status 2s, practice 2s, post-turn watches) whose blind spots were measured in the probe→teach handoff freeze (a server-initiated turn in a jobless session was invisible to an open view). The ruling: **push** — exactly one app-scoped SSE channel, `GET /api/events` (`core/events.ts` bus → `server/events-stream.ts` seam), held open by **one EventSource per open window** (`components/server-events.tsx`, mounted outermost in the root layout — the only file where `EventSource` exists). The client owns the connection's lifetime; the server frames `: ping` heartbeats every 25s and never closes first. **Notify→fetch**: payloads never carry data — an event says only *that* truth moved (plus a key like `chatId`); every consumer then fetches fresh from the normal endpoints. Reconnects (EventSource auto-retry) fire a **resync** hook per consumer for one immediate refetch, healing any events the gap ate.
+
+### 10.2 Event vocabulary
+
+| Event | Payload | Emitted at |
+|---|---|---|
+| `turn-started` | `{chatId}` | `beginTurn` success (after the registry write; the double-begin 409 path is silent) — every turn, client-initiated included |
+| `turn-settled` | `{chatId}` | `endTurn` on a live entry — fires after `persistTurn`, so fetches read durable truth |
+| `jobs-changed` | `{chatId}` | every job-store write (create/update/delete-that-removed) |
+| `activity-changed` | `{}` | extraction `setPhase`/`finishExtraction`; practice `registerRow`/phase-writes/`finishPractice` |
+| `chats-changed` | `{}` | list-shape writes only: chat create/rename/delete-that-removed |
+
+### 10.3 Emitter laws
+
+- **Notify-after-write** — the emit always follows the successful write, so a fetch triggered by the event reads committed truth.
+- **Present-entry gating** — mutations that changed nothing (missing-id update, delete of an absent row) emit nothing.
+- **THE SILENCE LAW** — content writers (`saveMessages`, `appendTurnUsage`, `appendExtractionUsage`, `saveSettings`, `saveTree`) are deliberately silent: `saveMessages` would spam per turn-persist, and list-visible effects already arrive via `turn-started`/`turn-settled` (pinned in tests).
+- **Reads never emit** — pure reads are side-effect-free (pinned).
+
+The bus itself is a `globalThis`-backed listener set (the Next per-entry-module discipline, same as the turn registry), snapshot-iterated so unsubscribing mid-emit is safe, with per-listener error isolation.
+
+### 10.4 Consumer laws
+
+- **Refs, not closures** — handlers read `localStreamRef`/`turnInFlightRef`/`statusRef`, never stale render state.
+- **The 409-race guard** — on `turn-started`, ignore when `localStreamRef.current` is held (the client's own turn just began; it owns that stream) or already attached; otherwise attach to the running turn (`GET /stream` live response).
+- **No mid-attached-stream sync** — while attached, the terminal frame owns settle; a `turn-settled`-triggered `syncFromServer` would swap a stale snapshot and break in-place continuation (the one exception: error status heals by detaching).
+- **~250ms trailing debounce** — bursty emitters coalesce into one fetch per window (sidebar/dock/jobs/graph/practice all share the shape).
+- **Resync on reconnect** — every consumer refetches once when the channel (re)opens.
+
+### 10.5 What remains bounded or local, and why
+
+- **Extraction-coverage ×2** (session menu block + ring) — bounded, run-scoped 2s reads: the ring drains **per fold**, and the events channel is per **phase**; that granularity gap is accepted by design (owner, 2026-10-02).
+- **The 409-retry poll** (`session-core.ts`, 500ms→5s ramp) — a racing client's bounded backoff while a turn it tried to start is already running; not standing.
+- **Dock clock ticker** (1s `setNow`) and **dictation audio meter** — local rendering, no network.
+- **Mount fast-paths kept** — `initiallyInFlight` (attach on render-time snapshot), the mount-time `needsContinuation` check, and the `lh:chat-renamed`/`lh:turn-state` **local window broadcasts** (instant same-tab patching; the channel is for cross-window and server-initiated truth).
 
 ---
 
@@ -494,6 +532,7 @@ Every place the architecture is designed to be cut — the "one file" a future c
 | Practice orchestration | `src/agent/subagents/practice-pipeline.ts` | generation/grading flow without touching contracts |
 | Graph access for teacher | `src/agent/tools/graph.ts` (`list_sessions` / `list_propositions`) | what the teacher can probe, one gate |
 | Steer delivery (wake) | `src/server/jobs.ts` + injected `deliver` | how background results re-enter lessons |
+| Push events | `src/core/events.ts` (bus) + `src/server/events-stream.ts` (SSE seam) + `components/server-events.tsx` (the window's EventSource) | change notification, end to end |
 | Agent construction (tests) | `handleChatRequest(req, buildAgent?)` | scripted engines, no refactor |
 | Sub-agent verification | `sub-agents/headless.ts` (`headlessOverride`) | demo/SVG verification, no Chrome |
 | Data location (Electron) | `LH_DATA_DIR` env (`config.ts` PATHS) | where data/ lives, nothing else |

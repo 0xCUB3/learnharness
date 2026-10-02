@@ -7,7 +7,7 @@
  * thinking out loud is the primary answering mode). ONE ATTEMPT: each
  * problem has its OWN submit button; once submitted the box locks and
  * the MODEL SOLUTION reveals instantly (rubric collapsed by default).
- * The grade (score 0–10 + brief reasoning) lands via the poll and
+ * The grade (score 0–10 + brief reasoning) lands via the events channel and
  * updates live — no reload.
  *
  * TOP BAR (owner, UI round 2026-09-29): the chat pattern — an h-15
@@ -27,6 +27,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { Problem, ProblemSet } from "@/src/core";
 import { CUE_LEVELS, LADDER_RUNGS, PRESENTATIONS } from "@/src/core";
 import { restoreMathEscapes } from "@/src/core";
@@ -89,7 +90,7 @@ export function PracticeExamBody({
 	submittingId: string | null;
 	/** Per-problem submit failures, keyed by problem id. */
 	submitErrors: Record<string, string>;
-	/** Problems whose grade rows are LIVE (the poll's activity feed). */
+	/** Problems whose grade rows are LIVE (the activity feed read). */
 	liveGradeIds: ReadonlySet<string>;
 }) {
 	return (
@@ -310,8 +311,7 @@ export function PracticeExam({ initial }: { initial: ProblemSet }) {
 	// per-problem "Grading…" spinners and the status line.
 	const [liveGradeIds, setLiveGradeIds] = useState<Set<string>>(new Set());
 	// True from a successful submit until the feed shows no live grade
-	// rows for this set — keeps the poll alive across refetches.
-	const [gradingLive, setGradingLive] = useState(false);
+	// rows for this set — kept fresh across refetches (S7: the tick).
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;
@@ -329,54 +329,61 @@ export function PracticeExam({ initial }: { initial: ProblemSet }) {
 			const d = (await res.json()) as { set: ProblemSet };
 			if (mounted.current) setSet(d.set);
 		} catch {
-			// transient poll failures keep the last snapshot
+			// transient fetch failures keep the last snapshot
 		}
 	}, [initial.id]);
 
-	// The poll: while not ready (generation), or while a grading run is
-	// live for this set with outstanding ungraded answers. The activity
-	// feed's practice rows are ROW-KEYED (setId:grade:problemId) — the
-	// live rows name exactly which grades are pending; a dropped grade
-	// (no live row) settles the page instead of polling forever.
-	const pendingGrade = set.problems.some(
-		(p) => p.answer !== undefined && !p.grade,
-	);
-	const needsPoll = set.status !== "ready" || (gradingLive && pendingGrade);
-	useEffect(() => {
-		if (!needsPoll) return;
-		let stopped = false;
-		const tick = async () => {
-			await refetch();
-			try {
-				const res = await fetch("/api/activity", { cache: "no-store" });
-				if (!res.ok) return;
-				const feed = (await res.json()) as {
-					practice?: Array<{ id: string; kind: string }>;
-				};
-				if (!stopped && mounted.current) {
-					const prefix = `${initial.id}:grade:`;
-					const pids = (feed.practice ?? [])
-						.filter((row) => row.id.startsWith(prefix))
-						.map((row) => row.id.slice(prefix.length));
-					setLiveGradeIds(new Set(pids));
-					setGradingLive(pids.length > 0);
-				}
-			} catch {
-				// keep the last liveness read
+	// PUSH (S7, 2026-10-02): the 2s grading-liveness interval is RETIRED —
+	// the practice registry announces every grade-row transition
+	// (activity-changed), and tick() reads exactly that liveness, so it
+	// fires when truth moved: debounced (the S4 law) + on mount + on
+	// resync. Ungated by design: a fresh grade registration must be seen
+	// even from a fully-settled page (the old needsPoll gate would have
+	// missed it — gradingLive fed the gate, and registration is what
+	// flips it). The activity feed's practice rows are ROW-KEYED
+	// (setId:grade:problemId) — the live rows name exactly which grades
+	// are pending; a dropped grade (no live row) settles the page.
+	const tick = useCallback(async () => {
+		await refetch();
+		try {
+			const res = await fetch("/api/activity", { cache: "no-store" });
+			if (!res.ok) return;
+			const feed = (await res.json()) as {
+				practice?: Array<{ id: string; kind: string }>;
+			};
+			if (mounted.current) {
+				const prefix = `${initial.id}:grade:`;
+				const pids = (feed.practice ?? [])
+					.filter((row) => row.id.startsWith(prefix))
+					.map((row) => row.id.slice(prefix.length));
+				setLiveGradeIds(new Set(pids));
 			}
-		};
-		void tick();
-		const t = setInterval(() => void tick(), 2000);
+		} catch {
+			// keep the last liveness read
+		}
+	}, [refetch, initial.id]);
+	const tickRef = useRef(tick);
+	tickRef.current = tick;
+	const tickDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => {
+		void tickRef.current();
 		return () => {
-			stopped = true;
-			clearInterval(t);
+			if (tickDebounceRef.current) clearTimeout(tickDebounceRef.current);
 		};
-	}, [needsPoll, refetch, initial.id]);
+	}, []);
+	useServerEvent("activity-changed", () => {
+		if (tickDebounceRef.current) clearTimeout(tickDebounceRef.current);
+		tickDebounceRef.current = setTimeout(() => {
+			tickDebounceRef.current = undefined;
+			void tickRef.current();
+		}, 250);
+	});
+	useServerResync(() => void tickRef.current());
 
 	// ONE attempt per problem (owner 2026-09-29): the submit posts THAT
 	// problem's answer alone; the server refuses a second submission
 	// forever after. On success the box locks (answer persisted) and the
-	// reveal shows instantly; the grade arrives via the poll.
+	// reveal shows instantly; the grade arrives via the events channel.
 	const submit = useCallback(
 		async (problemId: string) => {
 			if (submittingId !== null) return;
@@ -408,7 +415,8 @@ export function PracticeExam({ initial }: { initial: ProblemSet }) {
 					return;
 				}
 				setSubmittingId(null);
-				setGradingLive(true); // the grade lands via the poll
+				// The grade lands via the events channel: the grade row's register
+				// announces activity-changed (S7), which triggers tick() above.
 				await refetch();
 			} catch {
 				setSubmitErrors((prev) => ({

@@ -17,15 +17,16 @@ import { useServerEvent, useServerResync } from "@/components/server-events";
  * the observability the learner can't otherwise see; an in-flight teaching
  * turn is fully visible where it happens (user decision, 2026-09).
  *
- * Data: ONE poll of GET /api/activity (jobs across ALL chats, title-joined,
- * oldest-first + extraction runs), folded client-side with core/prices.ts.
+ * Data: ONE feed of GET /api/activity (jobs across ALL chats, title-joined,
+ * oldest-first + extraction runs), fetched when truth moves (events
+ * channel, S5) and folded client-side with core/prices.ts.
  * Cost is INFERRED (jobCost); the context line is the LAST model call's
  * input+output against the model's limit (JobUsage.lastStep — pending
  * contract) — never a cumulative sum, which would be the wrong number.
  * Absent data renders "—", never zero (the doctrine).
  *
  * Quiet/ambient by design: no entry animations, stable keys, updates land
- * in place — polling never flickers. ALWAYS present (owner, sidebar round):
+ * in place — refreshes never flicker. ALWAYS present (owner, sidebar round):
  * empty means EMPTY — the header sits alone, nothing hides; it populates and
  * GROWS when processes run (max-h + internal scroll so a pile never crowds
  * the session list). The sidebar's closed state means the learner opted

@@ -7,7 +7,7 @@ import type { ArtifactPartProps, DemoResult } from "@/src/core";
 
 /**
  * Demo artifact card (W6): while the part is input-available, a job activity
- * card (poll /api/jobs — the job-card idiom); when output-available, the demo
+ * card (the chat view's jobs feed — the job-card idiom); when output-available, the demo
  * runs in a SANDBOXED iframe (sandbox="allow-scripts", no allow-same-origin →
  * no access to app storage/cookies/DOM).
  *
@@ -70,7 +70,7 @@ export function reduceDemoBridgeState(state: DemoBridgeState, data: unknown): De
 // ─── the demo card ──────────────────────────────────────────────────────────
 
 /** The demo tool-call box: the part's output is the dispatch ack — the box
- * is the DispatchCard (live status via the central jobs poll). The demo
+ * is the DispatchCard (live status via the chat view's jobs feed). The demo
  * itself renders from the steer message via DemoOutputCard. */
 export function DemoCard({ part }: ArtifactPartProps) {
 	if (part.state !== "output-available") return null;
