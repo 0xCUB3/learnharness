@@ -183,8 +183,11 @@ export const ReasoningTrigger = memo(
             {/* The working-state grammar (owner, streaming round
                 2026-10-01): the Braille spinner replaces the brain icon
                 WHILE STREAMING ONLY — motion is the signal, so a finished
-                row carries no icon at all, just text + chevron. */}
-            {isStreaming && <BrailleSpinner label="Thinking" className="size-4" />}
+                row carries no icon at all, just text + chevron. Size:
+                the component default (h-3) — IDENTICAL to the placeholder
+                spinner (owner, 2026-10-02): the handoff between the two
+                states must be visually seamless, one size everywhere. */}
+            {isStreaming && <BrailleSpinner label="Thinking" />}
             {getThinkingMessage(isStreaming, duration)}
             <ChevronDownIcon
               className={cn(
