@@ -98,21 +98,25 @@ export function Composer({
 				rows={1}
 				className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 			/>
-			{/* No tooltip on the send square — the ↵ glyph is the
-				 affordance and Enter is obvious (owner, subtlety
-				 round 2026-09-25). */}
+			{/* The button follows the text (owner report 2026-10-03): while
+				 a turn runs WITH text typed it stays the SEND affordance
+				 (click = steer — steering must be clickable, not Enter-only);
+				 only an empty composer morphs it to Stop. ESC keeps its
+				 confirm-popup abort in every state, so stop is never
+				 unreachable. No tooltip — the ↵ glyph is the affordance
+				 (owner, subtlety round 2026-09-25). */}
 				<button
 					type="submit"
-					aria-label={busy ? "Stop" : "Send"}
+					aria-label={busy && !canSend ? "Stop" : "Send"}
 					disabled={!busy && !canSend}
 					className={cn(
 						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
-						busy
+						busy && !canSend
 							? "bg-secondary text-foreground hover:bg-accent"
 							: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
 					)}
 				>
-					{busy ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
+					{busy && !canSend ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
 				</button>
 		</form>
 	);

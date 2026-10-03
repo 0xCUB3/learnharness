@@ -40,9 +40,12 @@ describe("Composer", () => {
 		assert.ok(!html.includes("Ask, answer"), "the session placeholder must not ride along");
 	});
 
-	it("busy: send button becomes stop", () => {
-		const html = render({ busy: true });
-		assert.ok(html.includes('aria-label="Stop"'), "stop replaces send while streaming");
+	it("busy with text: the button STAYS Send (click = steer); busy and empty: it becomes Stop", () => {
+		const steering = render({ busy: true, canSend: true });
+		assert.ok(steering.includes('aria-label="Send"'), "the steer affordance is clickable mid-turn");
+		assert.ok(!steering.includes('aria-label="Stop"'), "no morph while there is text to steer with");
+		const idleStop = render({ busy: true, canSend: false });
+		assert.ok(idleStop.includes('aria-label="Stop"'), "empty composer: stop replaces send while streaming");
 	});
 
 	it("send button radius is 10px = 25% of the 40px button (concentric with the shell)", () => {
