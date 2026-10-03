@@ -17,6 +17,7 @@ import {
 	unregisterLiveAgent,
 } from "./jobs.ts";
 import { piTurnResponse, runPiTurn } from "./pi/ui-stream.ts";
+import { collectToolCallIds } from "./pi/call-ids.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { providerKeyPresent } from "./keys.ts";
@@ -379,6 +380,12 @@ export async function handleChatInput(
 		registerLiveAgent(chatId, constructed);
 		const handle = runPiTurn({
 			agent: constructed,
+			// THE LACAN FIX (2026-10-04): seed the uniquifier with every
+			// tool-call id the record already holds — a provider that resets
+			// ids per response (DeepSeek) then gets fresh unique ids for this
+			// turn's calls at the wire boundary, on the wire, in the record,
+			// and in the next turn's context alike.
+			usedToolCallIds: new Set(collectToolCallIds(merged)),
 			// Stream-level failures are provider/transport internals — masked,
 			// like the SDK defaults. Tool-input validation messages never
 			// route through here: they ride the error-result path and reach the

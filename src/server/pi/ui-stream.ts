@@ -1,11 +1,15 @@
 import type { Agent, AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SteerMessage } from "../../core/contracts.ts";
 import { noteSteerVisible } from "../jobs.ts";
+import { ToolCallIdUniquifier } from "./call-ids.ts";
 
 /**
  * THE NATIVE WIRE (Wave D, owner-approved 2026-09-26): one agent turn, streamed
- * to every view as VERBATIM pi AgentEvents — no translation, no remapping, no
- * part assembly. The SSE body is the agent's own event stream:
+ * to every view as pi AgentEvents — no translation, no part assembly. The one
+ * sanctioned rewrite (the Lacan fix, 2026-10-04): tool-call IDs uniquify at
+ * this boundary when the provider resets them per response (DeepSeek's
+ * `call_0` every turn) — see call-ids.ts and PiTurnSpec.usedToolCallIds.
+ * The SSE body is the agent's own event stream:
  *
  *   data: {"type":"agent_start"}\n\n
  *   data: {"type":"message_update","message":{…},"assistantMessageEvent":{…}}\n\n
@@ -57,6 +61,14 @@ export interface PiTurnSpec {
 	 *  Receives the agent's FULL final state (native messages) — the caller
 	 *  persists the slice past its own base count. */
 	onFinish: (messages: AgentMessage[], isAborted: boolean) => void;
+	/** Tool-call ids already used in this chat's record (THE LACAN FIX,
+	 *  owner-approved 2026-10-04): when present, a ToolCallIdUniquifier
+	 *  sits at this boundary — providers that reset ids every response
+	 *  (DeepSeek's `call_0` × every turn) get colliding ids reminted ONCE
+	 *  here, so wire views, the persisted record, the dock, answer
+	 *  routing, and the next turn's provider context all agree. Absent →
+	 *  verbatim passthrough (the protocol law below still holds). */
+	usedToolCallIds?: ReadonlySet<string>;
 }
 
 /** One view onto a running turn: push() replays/streams an event, done()
@@ -82,7 +94,8 @@ export interface PiTurnHandle {
 }
 
 export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
-	const { agent, onError, onFinish } = spec;
+	const { agent, onError, onFinish, usedToolCallIds } = spec;
+	const uniquifier = usedToolCallIds ? new ToolCallIdUniquifier(usedToolCallIds) : undefined;
 
 	let settled = false;
 	let sawAbort = false;
@@ -123,15 +136,14 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 	// messages of its own (the prompt is composed per turn), so dropping
 	// the role wholesale is exact; revisit if prompt-updates ever land.
 	const settleWith = () => {
-		onFinish(
-			[...agent.state.messages].filter((m) => (m as { role?: string }).role !== "system"),
-			sawAbort,
-		);
+		const settled_ = [...agent.state.messages].filter((m) => (m as { role?: string }).role !== "system");
+		onFinish((uniquifier?.remapSettled(settled_) as AgentMessage[]) ?? settled_, sawAbort);
 	};
 
 	const handle = (event: AgentEvent) => {
-		// VERBATIM: every pi AgentEvent forwards as-is — no remapping.
-		send(event);
+		// THE LACAN FIX: ids uniquify HERE, before any view — the one seam
+		// every consumer downstream shares. No uniquifier → verbatim.
+		send(uniquifier ? uniquifier.event(event) : event);
 		if (event.type === "message_end") {
 			const m = event.message as { role?: string; stopReason?: string } | undefined;
 			if (m?.role === "assistant" && m.stopReason === "aborted") sawAbort = true;

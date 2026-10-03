@@ -1468,3 +1468,89 @@ describe("composer steering: POST /api/chats/[id]/steer", () => {
 		assert.equal(steerMsg.content, "also cover Venus");
 	});
 });
+
+// ─── THE LACAN INCIDENT: per-response tool-call ids (owner fix 2026-10-04) ──
+// DeepSeek (via OpenRouter) returns tool-call ids that reset every response —
+// `call_0` for every turn's single call. Before the uniquifier, the duplicate
+// ids corrupted the fold (the quiz answer overwrote the ask card, the ask
+// question vanished), answer routing, and the shuffle seeds. Now the wire
+// boundary remints colliding ids ONCE — the client, the record, the pending
+// gate, and the next turn's provider context all see unique ids.
+describe("duplicate provider tool-call ids (the Lacan fix)", () => {
+	it("every `call_0` turn keeps its identity: ask answered as ask, quiz as quiz, ids unique in the record", async () => {
+		// the live shape (the real Lacan session): an ask with NO options
+		const ASK = { question: "What do you want from Lacan?" };
+		const QUIZ2 = { ...QUIZ_INPUT, type: "check" };
+		// BOTH turns name their single call `call_0` — the provider's shape.
+		const { engine } = scriptedTeacher(() => [
+			(context) => {
+				void context;
+				return fauxAssistantMessage(
+					[fauxText("First — a question about your goal."), fauxToolCall("ask_user_question", ASK, { id: "call_0" })],
+					{ stopReason: "toolUse" },
+				);
+			},
+			(context) => {
+				void context;
+				return fauxAssistantMessage(
+					[fauxText("The unconscious, then."), fauxToolCall("quiz", QUIZ2, { id: "call_0" })],
+					{ stopReason: "toolUse" },
+				);
+			},
+			() => fauxAssistantMessage([fauxText("Right — and that is where Lacan begins.")]),
+		]);
+
+		const chat = chatStore.createChat("Lacan: duplicate call_0 turns");
+		// Turn 1: the ask question.
+		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me Lacan" }), agentFactory(engine)));
+		let saved = chatStore.getChat(chat.id)!;
+		let pending = danglingQuestionOf(saved.messages)!;
+		assert.equal(pending.tool, "ask_user_question");
+		// The client answers with the id IT SAW — the persisted one.
+		const askId = pending.toolCallId;
+		await drain(
+			await handleChatRequest(
+				post(chat.id, {
+					type: "answer",
+					toolCallId: askId,
+					answer: { kind: "ask", questionText: ASK.question, dontKnow: false, answers: [], text: "The theory core", answeredAt: new Date().toISOString() },
+				}),
+				agentFactory(engine),
+			),
+		);
+
+		// Turn 2: the quiz — ALSO `call_0` from the provider.
+		saved = chatStore.getChat(chat.id)!;
+		pending = danglingQuestionOf(saved.messages)!;
+		assert.equal(pending.tool, "quiz");
+		const quizId = pending.toolCallId;
+		assert.notEqual(quizId, askId, "the uniquifier reminted the colliding id at the wire boundary");
+		assert.match(quizId, /^call_0~\d+$/, "mint scheme: orig~n");
+		await drain(
+			await handleChatRequest(post(chat.id, { type: "answer", toolCallId: quizId, answer: gradedAnswer(QUIZ2, ["Mercury"]) }), agentFactory(engine)),
+		);
+
+		saved = chatStore.getChat(chat.id)!;
+		// The invariant: CALL ids are unique among themselves (a call and its
+		// own result share one id by design — that pair is the point).
+		const callIds = saved.messages.flatMap(
+			(m) =>
+				m.role === "assistant"
+					? (m.content ?? []).filter((c) => c.type === "toolCall").map((c) => c.id)
+					: [],
+		);
+		assert.equal(new Set(callIds).size, callIds.length, "no duplicate tool-call ids persist");
+		assert.deepEqual(callIds, ["call_0", "call_0~2"], "the provider's two call_0s became distinct ids");
+
+		// The fold is the Lacan heal: the ask card carries the ASK answer,
+		// the quiz card the QUIZ answer — no overwrite, order preserved.
+		const view = projectView(saved.messages);
+		const parts = view.flatMap((v) => v.parts).filter((p) => p.type.startsWith("tool-"));
+		const askPart = parts.find((p) => (p as { toolCallId?: string }).toolCallId === askId) as { state?: string; output?: { kind?: string } };
+		const quizPart = parts.find((p) => (p as { toolCallId?: string }).toolCallId === quizId) as { state?: string; output?: { kind?: string } };
+		assert.equal(askPart?.state, "output-available");
+		assert.equal(askPart?.output?.kind, "ask", "the ask card keeps its own answer");
+		assert.equal(quizPart?.state, "output-available");
+		assert.equal(quizPart?.output?.kind, "quiz", "the quiz card got ITS answer (the pre-fix bug: it landed on the ask card)");
+	});
+});

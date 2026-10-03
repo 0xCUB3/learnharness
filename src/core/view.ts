@@ -129,7 +129,15 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 	};
 	const findToolPart = (toolCallId: string): LhViewPart | undefined => {
 		for (let i = out.length - 1; i >= 0; i--) {
-			for (const part of out[i]!.parts) {
+			// NEWEST-FIRST part scan within a group (the Lacan heal, 2026-10-04):
+			// a result pairs with the most RECENT call carrying its id. Unique
+			// ids (the uniquifier guarantees them for new turns) make scan order
+		// irrelevant; for legacy duplicate-id records (DeepSeek's per-response
+		// `call_0`) this routes each answer to its own call instead of letting
+		// a later result overwrite an earlier question's card.
+			const parts = out[i]!.parts;
+			for (let p = parts.length - 1; p >= 0; p--) {
+				const part = parts[p]!;
 				if (part.type.startsWith("tool-") && part.toolCallId === toolCallId) return part;
 			}
 		}
