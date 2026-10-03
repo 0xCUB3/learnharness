@@ -41,7 +41,8 @@ import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsag
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import { CoverageRing } from "@/components/extraction-coverage";
-import { dismissedAnswer, findPendingToolCall, phaseAt3, phaseTimeline, toolQuestionKind } from "@/src/core";
+import { dismissedAnswer, findPendingToolCall, phaseAt3, phaseTimeline, toolQuestionKind, quizNeedsReveal } from "@/src/core";
+import { ReadingThinkingField } from "@/components/reading-thinking";
 import { slotsConfigured, type ModelsSettings } from "@/src/core";
 import { useSettingsSaved } from "@/components/settings-signal";
 
@@ -331,7 +332,10 @@ export function Chat({
 			const p = pendingRef.current;
 			if (!p) return;
 			const question = (p.input as { question?: string } | null)?.question ?? "";
-			void dismissQuestion(p.toolCallId, dismissedAnswer(toolQuestionKind(p.tool), question));
+			const reading = readingThinkingRef.current.trim() || undefined;
+			clearReadingThinking();
+			const answer = dismissedAnswer(toolQuestionKind(p.tool), question);
+			void dismissQuestion(p.toolCallId, reading ? { ...answer, readingThinking: reading } : answer);
 		},
 		[abortInFlightTurn, dismissQuestion],
 	);
@@ -393,7 +397,28 @@ export function Chat({
 	// never precede its phase's seam in the transcript (the teacher's turn
 	// ends at the question call), so the session's current phase IS the
 	// question's phase.
-	const requiresReveal = pending !== null && pending.tool === "quiz" && phaseAt3(messages) === "teach";
+	const requiresReveal = pending !== null && quizNeedsReveal(pending.tool, pending.input, phaseAt3(messages));
+
+	/* The READING-THINKING channel (owner 2026-10-03): a draft field for
+	 * thinking while reading the teaching prose, mounted while a check waits
+	 * behind its reveal, riding the check answer (or its dismissal) as the
+	 * separate `readingThinking` field. Reset per pending question. */
+	const [readingThinking, setReadingThinking] = useState("");
+	const readingThinkingRef = useRef("");
+	const applyReadingThinking = useCallback((v: string) => {
+		readingThinkingRef.current = v;
+		setReadingThinking(v);
+	}, []);
+	const clearReadingThinking = useCallback(() => {
+		readingThinkingRef.current = "";
+		setReadingThinking("");
+	}, []);
+	const pendingQuestionId = pending?.toolCallId ?? null;
+	useEffect(() => {
+		// A new pending question never inherits the previous one's draft.
+		readingThinkingRef.current = "";
+		setReadingThinking("");
+	}, [pendingQuestionId]);
 
 	// The phase at every message (one linear fold): the transcript draws a
 	// color-coded dotted divider at each boundary; the header chip reads the
@@ -1241,6 +1266,8 @@ export function Chat({
 					plan={hasPlan ? <PlanMarginalia messages={messages} /> : undefined}
 					onOpenPlan={() => setPlanOpen(true)}
 					requiresReveal={requiresReveal}
+					readingThinking={readingThinking}
+					onReadingThinking={applyReadingThinking}
 					phase={phases.at(-1) ?? "probe"}
 					turns={turns}
 					onReserve={setDockReserve}
@@ -1288,8 +1315,12 @@ export function Chat({
 						// the optimistic graded result (the AnsweredCard shows at
 						// once) and the server's write-ahead persists it before the
 						// turn; the teacher's reaction streams below it. Dismissals
-						// ride the same callback (QuestionAnswerData.dismissed).
-						submitAnswer(pending.tool, pending.toolCallId, output);
+						// ride the same callback (QuestionAnswerData.dismissed). The
+						// reading-thinking draft rides along (owner 2026-10-03) — the
+						// check answer is its only carrier.
+						const reading = readingThinkingRef.current.trim() || undefined;
+						clearReadingThinking();
+						submitAnswer(pending.tool, pending.toolCallId, reading ? { ...output, readingThinking: reading } : output);
 					}}
 				/>
 				</Conversation>
@@ -1398,6 +1429,8 @@ export function shouldStampGeometryMute(nextH: number, prevH: number, pending: b
 function DockOverlay({
 	pending,
 	requiresReveal,
+	readingThinking,
+	onReadingThinking,
 	phase,
 	turns,
 	composer,
@@ -1414,6 +1447,10 @@ function DockOverlay({
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
 	requiresReveal: boolean;
+	/** The reading-thinking draft (owner 2026-10-03) — owned by ChatView so
+	 *  the submit + dismissal seams (outside this overlay) can merge it. */
+	readingThinking: string;
+	onReadingThinking: (v: string) => void;
 	/** Session phase at the pending question — scales the thinking field. */
 	phase: Phase3;
 	/** The session's usage log — the stats bar beneath the composer folds it. */
@@ -1730,6 +1767,18 @@ function DockOverlay({
 					    rounding starts, truncated, no background, no container. A
 					    line dies when its card lands (visibleQueuedSteers). */}
 					<QueuedSteersBody steers={queuedSteers} />
+					{/* The reading-thinking field (owner 2026-10-03): mounted while a
+					    teach-phase check waits — the same cue that collapses it. It
+					    claims dictated speech until the learner reveals the check
+					    (the dock reclaims then). Rides the check answer on submit. */}
+					{pending && requiresReveal && (
+						<ReadingThinkingField
+							value={readingThinking}
+							onChange={onReadingThinking}
+							onEscape={dictationCancel}
+							claim={revealPending}
+						/>
+					)}
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
 							{pending ? (
@@ -1743,6 +1792,7 @@ function DockOverlay({
 									onExpand={expandAndReveal}
 									onSubmit={onSubmitAnswer}
 									onEscape={dictationCancel}
+									dictationClaim={!revealPending}
 								/>
 							) : (
 								composer

@@ -923,7 +923,7 @@ describe("newAnswerResult two audiences", () => {
 			explanation: "Mercury orbits closest.",
 			createdAt: "2026-01-01T00:00:00Z",
 		};
-		const full = buildAnswer(qd, { values: ["mercury"], confidence: 70, note: "guessed" });
+		const full = buildAnswer(qd, { values: ["mercury"], confidence: 70, thinking: "guessed" });
 		const msg = newAnswerResult("call-1", "quiz", full);
 		const modelSees = JSON.parse((msg.content as { type: "text"; text: string }[])[0]!.text);
 		assert.deepEqual(modelSees, {
@@ -931,7 +931,7 @@ describe("newAnswerResult two audiences", () => {
 			answers: [{ index: 1, label: "Mercury" }],
 			correct: true,
 			confidence: 70,
-			note: "guessed",
+			thinking: "guessed",
 		});
 		assert.equal(msg.details, full, "details is the full QuestionAnswerData verbatim");
 		assert.equal((msg.details as { questionText?: string }).questionText, "Which planet is closest to the Sun?");

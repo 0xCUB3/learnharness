@@ -1,5 +1,7 @@
 # Question principles — what a teach-phase check must be
 
+These govern `type: "check"` questions (and explain). Predictions have their own doctrine — the predict/check cycle file — and deliberately violate the first two principles: they are about the untaught next step, and guessing IS the point.
+
 Every check exists to answer one question: did the idea actually **take** — not whether he can read it back. The principles:
 
 - **Answerable by reasoning from the session.** Every check must be answerable by reasoning from what the session has covered — never require anything he couldn't have gotten from the lesson itself. A check he has no route to is not a check, it's a coin flip.

@@ -23,7 +23,14 @@ import { JobsContext } from "../components/jobs-context.ts";
 import { ChatActionsContext } from "../components/chat.tsx";
 import type { JobRecord } from "../src/core/contracts.ts";
 import { AnsweredCard } from "../components/answered-card.tsx";
-import { buildAnswer, coerceCorrectAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
+import {
+	buildAnswer,
+	coerceCorrectAnswer,
+	normalizeOptions,
+	resolveCorrect,
+	quizNeedsReveal,
+	type QuestionData,
+} from "../src/core/question-core.ts";
 
 const quizInput = {
 	question: "Which planet is closest to the sun?",
@@ -276,7 +283,7 @@ describe("render smoke tests", () => {
 	it("AnsweredCard promotes the learner's thinking to a first-class block", () => {
 		const answer = buildAnswer(quizQD(), {
 			values: ["Venus"],
-			note: "I picked Venus because it looks brightest — but now I realize brightness isn't distance.",
+			thinking: "I picked Venus because it looks brightest — but now I realize brightness isn't distance.",
 		});
 		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
 		assert.ok(html.includes('data-testid="your-thinking"'), "the thinking block exists");
@@ -508,4 +515,75 @@ describe("AnsweredCard: the explain variant", () => {
 		assert.match(html, /Something about relativity\?/);
 	});
 
+});
+
+// ─── the two roles in the UI (predict vs check, owner 2026-10-03) ─────────
+// Predictions arrive OPEN before the teaching; checks arrive collapsed after
+// it. The answered card tells them apart (eyebrow) and tucks a prediction's
+// explanation (the teaching that follows IS the explanation) while a check's
+// stays inline.
+describe("predict vs check rendering", () => {
+	it("a predict quiz renders the 'Prediction' eyebrow in the dock", () => {
+		const html = renderToStaticMarkup(
+			<QuestionDock
+				{...{
+					toolName: "quiz" as const,
+					toolCallId: "call-p1",
+					input: { ...quizInput, type: "predict", nodeId: "planet-order" },
+				}}
+				expanded={true}
+				onExpand={() => {}}
+				onSubmit={() => {}}
+			/>,
+		);
+		assert.ok(html.includes("Prediction"), `eyebrow missing: ${html.slice(0, 200)}`);
+	});
+
+	it("a check quiz keeps the 'Quiz' eyebrow (old records unchanged)", () => {
+		const html = renderToStaticMarkup(
+			<QuestionDock
+				{...{
+					toolName: "quiz" as const,
+					toolCallId: "call-c1",
+					input: { ...quizInput, type: "check", nodeId: "planet-order" },
+				}}
+				expanded={true}
+				onExpand={() => {}}
+				onSubmit={() => {}}
+			/>,
+		);
+		assert.ok(html.includes("Quiz"));
+	});
+
+	it("a prediction answer SHOWS the verdict but TUCKS the explanation behind a toggle", () => {
+		const qd: QuestionData = { ...quizQD(), questionType: "predict" };
+		const answer = buildAnswer(qd, { values: ["Venus"] }); // wrong on purpose
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
+		assert.ok(html.includes("Prediction"), "the eyebrow distinguishes the card");
+		assert.ok(/incorrect|wrong|&times;|✗/i.test(html), "the verdict still shows (owner: predictions are graded)");
+		assert.ok(!html.includes("Why:"), "the explanation is not center stage");
+		assert.ok(html.includes("tucked-explanation"), "it sits behind the toggle");
+	});
+
+	it("a check answer keeps the inline explanation", () => {
+		const answer = buildAnswer(quizQD(), { values: ["Venus"] });
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
+		assert.ok(html.includes("Why:"), "checks explain inline (current behavior)");
+		assert.ok(!html.includes("tucked-explanation"));
+	});
+
+	it("the reading-thinking channel renders as its own block; legacy `note` still renders", () => {
+		const withReading = buildAnswer(quizQD(), {
+			values: ["Mercury"],
+			thinking: "answering thought",
+			readingThinking: "was unsure mid-paragraph",
+		});
+		const html = renderToStaticMarkup(<AnsweredCard answer={withReading} />);
+		assert.ok(html.includes("Your thinking while reading"), "the reading channel is labeled distinctly");
+		assert.ok(html.includes("answering thought"));
+		assert.ok(html.includes("was unsure mid-paragraph"));
+		const legacy = { ...buildAnswer(quizQD(), { values: ["Mercury"] }), note: "a 2026-09 answer" };
+		const legacyHtml = renderToStaticMarkup(<AnsweredCard answer={legacy} />);
+		assert.ok(legacyHtml.includes("a 2026-09 answer"), "records from before the rename still render");
+	});
 });

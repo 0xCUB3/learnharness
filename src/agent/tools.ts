@@ -93,47 +93,61 @@ export const askUserQuestionTool: AgentTool<typeof askInputSchema> = {
 	},
 };
 
-// ─── the prober's question tools (no nodeId — no map exists yet) ─────────────
+// ─── the question tools ───────────────────────────────────────────────────────
+//
+// MECHANICAL DESCRIPTIONS ONLY (owner 2026-10-03): a tool's description
+// carries what the tool DOES and how its fields work — nothing about what
+// the questions should BE. The craft (option-building, free-recall
+// grading, question roles) lives in the system prompt — a single-sourced
+// chunk both agents compose (prompts/shared/20-question-tools.md and the
+// teacher's question fragments), reversing the 2026-09-27 placement now
+// that the question family has grown (predict/check roles, future
+// practice variants): duplicates stay honest by sharing SCHEMA ATOMS
+// (question-core) + PROMPT CHUNKS, and each tool declares only its
+// mechanical delta.
 
-/** The option-building craft (owner 2026-09-27: moved OUT of the system
- *  prompt into the tool description — pi-native doctrine travels with
- *  the armed tool). Shared verbatim by both quiz variants. */
-const QUIZ_OPTION_CRAFT =
-	"Building options — the giveaway is never the distractors' wrongness, it's asymmetry: the correct option " +
-	"carrying its reasoning while the others are bare, or key-term bolding that flags it. Build evenness in: " +
-	"(1) every option is a bare claim — zero 'why' in any of them; all reasoning goes in explanation, shown only " +
-	"after he answers; (2) write the correct claim first, then mutate it into each distractor — what would someone " +
-	"holding a specific misconception claim? Same skeleton, same grain, same register; (3) each distractor is a real " +
-	"error he might actually make (his pick is diagnostic) yet unambiguously wrong; (4) no asymmetric bolding. If " +
-	"you can tell the right one cold without knowing the material, regenerate — don't patch.";
+/** The quiz mechanics every variant shares; `delta` appends the variant's
+ *  own fields. All mechanics, zero doctrine. */
+function quizDescription(delta: { nodeId: boolean; types: boolean }): string {
+	return (
+		"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
+		"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
+		"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
+		"can show an explanation. Options-only: single-select or multi-select, plus an automatic 'I don't know' " +
+		"choice so the learner can signal a genuine gap instead of guessing. An always-present optional thinking " +
+		"field lets the learner attach his reasoning to ANY answer; it reaches you only when non-empty. " +
+		"No free-text answers — for non-graded questions use ask_user_question instead. " +
+		(delta.types
+			? "Every call declares `type` — the question's role in the teaching cycle; the field's own description says when each kind fires. "
+			: "") +
+		(delta.nodeId
+			? "Set `nodeId` (required) to the plan node this question is about — validated at call time against the session's plan map. For off-map checks use ask_user_question. "
+			: "") +
+		"ONE question per turn: call a single quiz, then end your turn — his answer determines the next."
+	);
+}
 
-/** The explain doctrine (owner 2026-09-27): free-recall quizzing — the
- *  sycophancy mitigation is the commitment. Carried by the DESCRIPTION
- *  (pi-native ruling), not the system prompt. Shared by both variants;
- *  the teach variant appends the nodeId tagging paragraph. */
-const EXPLAIN_DOCTRINE =
-	"Ask the learner to EXPLAIN something in his own words — a graded check with NO options: he types a free-text " +
-	"answer. Unlike ask_user_question (no right answer), explain always has one. THE COMMITMENT RULE: write correctAnswer — the FULL " +
-	"correct answer in your own words, reasoning included — committed before he ever sees the question. When his answer returns, grade it strictly against your committed answer in your reply: never " +
-	"revise the commitment after seeing his words, and never mark a wrong answer right to be kind — a near-miss is " +
-	"partial understanding; name exactly what he got and what he missed. He sees the committed answer on submit. If he genuinely doesn't know, he says so in his own words — that is a genuine " +
-	"gap, not a wrong answer. " +
-	"ONE question per turn: call a single explain, then end your turn — his answer determines the next.";
+/** The explain mechanics (free-recall quizzing): the commitment rule is
+ *  the GRADING CONTRACT — mechanics, not doctrine. The softer doctrine
+ *  (near-miss reading, genuine gaps) lives in the shared prompt chunk. */
+function explainDescription(nodeId: boolean): string {
+	return (
+		"Ask the learner to EXPLAIN something in his own words — a graded check with NO options: he types a free-text " +
+		"answer. Unlike ask_user_question (no right answer), explain always has one. THE COMMITMENT RULE: " +
+		"correctAnswer is the FULL correct answer in your own words, reasoning included, COMMITTED before he ever " +
+		"sees the question. When his answer returns, grade it strictly against the commitment — never revise it " +
+		"after seeing his words. He sees the committed answer on submit. " +
+		(nodeId
+			? "Set `nodeId` (required) to the plan node this question is about — validated at call time against the session's plan map. "
+			: "") +
+		"ONE question per turn: call a single explain, then end your turn — his answer determines the next."
+	);
+}
 
 export const probeQuizTool: AgentTool<typeof probeQuizInputSchema> = {
 	name: "quiz",
 	label: "quiz",
-	description:
-		"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
-		"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
-		"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
-		"can show an explanation. Use it to locate the edge of his understanding: bracket each strand the lesson will " +
-		"depend on — something he gets right (a floor), something he gets wrong or doesn't know (a ceiling). " +
-		"Options-only: single-select or multi-select, plus an automatic 'I don't know' choice so the learner can " +
-		"signal a genuine gap instead of guessing. An always-present optional note field lets the learner attach a " +
-		"free-text note to ANY answer; it reaches you only when non-empty. No free-text answers — for non-graded " +
-		"questions use ask_user_question instead. ONE question per turn: call a single quiz, then end your turn — " +
-		"his answer determines the next question to ask. " + QUIZ_OPTION_CRAFT,
+	description: quizDescription({ nodeId: false, types: false }),
 	parameters: probeQuizInputSchema,
 	prepareArguments: prepareQuestionArguments,
 	executionMode: "sequential",
@@ -152,11 +166,7 @@ export function teachExplainToolFor(
 	return {
 		name: "explain",
 		label: "explain",
-		description:
-			EXPLAIN_DOCTRINE +
-			" Set `nodeId` (required) to the plan node this question is about — the lesson's position on the map derives " +
-			"from those tags; a node takes as many questions as it deserves, so don't rush forward. Off-map checks use " +
-			"ask_user_question.",
+		description: explainDescription(true),
 		parameters: explainInputObject,
 		prepareArguments: prepareQuestionArguments,
 		executionMode: "sequential",
@@ -175,7 +185,7 @@ export function teachExplainToolFor(
 export const probeExplainTool: AgentTool<typeof explainInputBase> = {
 	name: "explain",
 	label: "explain",
-	description: EXPLAIN_DOCTRINE,
+	description: explainDescription(false),
 	parameters: explainInputBase,
 	prepareArguments: prepareQuestionArguments,
 	executionMode: "sequential",
@@ -299,19 +309,7 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 	return {
 		name: "quiz",
 		label: "quiz",
-		description:
-			"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
-			"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
-			"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
-			"can show an explanation. Use it to (1) confirm a taught node actually landed, or (2) probe understanding " +
-			"whenever you're unsure. Set `nodeId` (required) to the plan node this question is about — the lesson's " +
-			"position on the map derives from those tags; a node takes as many questions as it deserves, so don't rush " +
-			"forward. Off-map checks use ask_user_question. Options-only: single-select or multi-select, " +
-			"plus an automatic 'I don't know' choice so the learner can signal a genuine gap instead of guessing. " +
-			"An always-present optional note field lets the learner attach a free-text note to ANY answer; it reaches you " +
-			"only when non-empty. No free-text answers — for non-graded questions use ask_user_question instead. " +
-			"ONE question per turn: call a single quiz, then end your turn — his answer determines the next. " +
-		QUIZ_OPTION_CRAFT,
+		description: quizDescription({ nodeId: true, types: true }),
 		parameters: quizInputObject,
 		prepareArguments: prepareQuestionArguments,
 		executionMode: "sequential",

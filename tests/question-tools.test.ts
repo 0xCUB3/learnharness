@@ -59,6 +59,7 @@ const validQuiz = {
 	],
 	correctAnswer: "4",
 	explanation: "Arithmetic.",
+	type: "check",
 	nodeId: "arith",
 };
 
@@ -381,5 +382,51 @@ describe("the prober's explain: no nodeId field at all", () => {
 			correctAnswer: " ",
 		});
 		assert.equal(empty.success, false);
+	});
+});
+
+// ─── descriptions are MECHANICS (owner 2026-10-03) ────────────────────────
+// Question-design doctrine lives in the system prompt (shared craft chunk +
+// teacher fragments), NOT in tool descriptions. A description that teaches
+// the model how to write questions drifts the moment a new variant (prober,
+// future adaptive practice) reuses the tool with a different doctrine.
+describe("tool descriptions carry mechanics only, no question-craft", () => {
+	const teachQuiz = teachQuizToolFor({ chatId: "chat_x", chatStore: undefined as never });
+	for (const [name, tool] of [
+		["teach quiz", teachQuiz],
+		["probe quiz", probeQuizTool],
+	] as const) {
+		it(`${name}: no craft doctrine, mechanics intact`, () => {
+			const d = tool.description;
+			for (const banned of ["asymmetry", "distractor", "believable", "misconception"]) {
+				assert.ok(!d.toLowerCase().includes(banned), `${name} description leaks craft: "${banned}"`);
+			}
+			for (const mechanical of ["GRADED", "ONE question per turn", "ask_user_question"]) {
+				assert.ok(d.includes(mechanical), `${name} description lost mechanics: "${mechanical}"`);
+			}
+		});
+	}
+	it("the teach quiz declares the `type` field and `nodeId`; the probe quiz declares neither", () => {
+		assert.ok(teachQuiz.description.includes("`type`"), "teach quiz points at the role field");
+		assert.ok(teachQuiz.description.includes("`nodeId`"), "teach quiz points at the plan-map validation");
+		assert.ok(!probeQuizTool.description.includes("`type`"), "the probe quiz has no roles");
+		assert.ok(!probeQuizTool.description.includes("`nodeId`"), "the probe quiz has no plan map");
+	});
+	it("the explain tools keep the COMMITMENT rule (the grading contract) and drop the softer doctrine", () => {
+		for (const [name, tool] of [
+			["teach explain", teachExplainToolFor({ chatId: "chat_x", chatStore: undefined as never })],
+			["probe explain", probeExplainTool],
+		] as const) {
+			assert.ok(tool.description.includes("COMMITTED"), `${name} keeps the commitment rule`);
+			assert.ok(!tool.description.includes("near-miss"), `${name} drops the doctrine (now in the shared prompt)`);
+		}
+	});
+	it("the craft now lives in the shared prompt chunk (both agents compose it)", async () => {
+		const shared = await fs.promises.readFile(
+			path.join(PATHS.root, "src/agent/prompts/shared/20-question-tools.md"),
+			"utf-8",
+		);
+		assert.ok(shared.includes("asymmetry"), "the option craft moved here, not deleted");
+		assert.ok(shared.includes("TRANSCRIBED SPEECH"), "the dictation-leniency note lives here");
 	});
 });

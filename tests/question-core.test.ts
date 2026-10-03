@@ -24,6 +24,9 @@ import {
 	explainInputProblems,
 	quizInputSchema,
 	probeQuizInputSchema,
+	quizDisplayInputSchema,
+	normalizeQuizType,
+	quizNeedsReveal,
 	resolveCorrect,
 	toggleOption,
 	toggleOther,
@@ -64,6 +67,7 @@ describe("the schema's argument order (reasoning before the pick)", () => {
 				"explanation",
 				"correctAnswer",
 				"details",
+				...(keys.includes("type") ? ["type"] : []),
 				...(keys.includes("nodeId") ? ["nodeId"] : []),
 			]);
 		}
@@ -76,6 +80,7 @@ describe("quizInputSchema / quizInputProblems (the authoring contract)", () => {
 		options: [{ label: "Venus" }, { label: "Mercury" }, { label: "Mars" }],
 		correctAnswer: "Mercury",
 		explanation: "Mercury is the innermost planet.",
+		type: "check",
 		nodeId: "planet-order",
 	};
 
@@ -366,8 +371,8 @@ describe("buildAnswer", () => {
 	});
 
 	it("keeps the note only when non-empty", () => {
-		assert.equal(buildAnswer(quizData(), { values: ["mercury"], note: "  " }).note, undefined);
-		assert.equal(buildAnswer(quizData(), { values: ["mercury"], note: " x " }).note, "x");
+		assert.equal(buildAnswer(quizData(), { values: ["mercury"], thinking: "  " }).thinking, undefined);
+		assert.equal(buildAnswer(quizData(), { values: ["mercury"], thinking: " x " }).thinking, "x");
 	});
 
 	it("ignores unknown option values", () => {
@@ -418,14 +423,14 @@ describe("buildAnswer", () => {
 
 describe("compactAnswerForModel", () => {
 	it("quiz: the learner's selection, verdict, confidence, note — NOTHING the model authored", () => {
-		const ad = buildAnswer(quizData(), { values: ["mercury"], confidence: 70, note: "guessed" });
+		const ad = buildAnswer(quizData(), { values: ["mercury"], confidence: 70, thinking: "guessed" });
 		const compact = compactAnswerForModel(ad);
 		assert.deepEqual(compact, {
 			kind: "quiz",
 			answers: [{ index: 1, label: "Mercury" }],
 			correct: true,
 			confidence: 70,
-			note: "guessed",
+			thinking: "guessed",
 		});
 		const raw = JSON.stringify(compact);
 		// every one of these lives in the tool CALL's arguments already
@@ -614,4 +619,100 @@ describe("buildAnswer / formatAnswerMessage: explain", () => {
 		assert.ok(!("questionText" in compact));
 	});
 
+});
+
+// ─── the question's role: predict vs check (owner 2026-10-03) ─────────────
+// Teaching units are a predict → teach → check cycle. The teach quiz schema
+// carries a REQUIRED `type` declaring the role; the prober's quiz never does
+// (probing questions are role-less). The reveal law keys off it: only CHECKS
+// collapse behind "Check your understanding" — predictions arrive open.
+describe("the quiz role field (predict | check)", () => {
+	const valid = {
+		question: "Which planet is closest to the Sun?",
+		options: [{ label: "Venus" }, { label: "Mercury" }, { label: "Mars" }],
+		correctAnswer: "Mercury",
+		explanation: "Mercury is the innermost planet.",
+		type: "check",
+		nodeId: "planet-order",
+	};
+	it("the teach schema REQUIRES type; the probe schema has no such field", () => {
+		assert.equal(Value.Check(quizInputSchema, valid), true, "fixture (type: check) is boundary-valid");
+		assert.equal(
+			Value.Check(quizInputSchema, { ...valid, type: undefined }),
+			false,
+			"a teach quiz without a role is rejected at the boundary",
+		);
+		assert.equal(
+			"nodeId" in (probeQuizInputSchema as { properties: Record<string, unknown> }).properties === false,
+			true,
+		);
+		assert.equal(
+			"type" in (probeQuizInputSchema as { properties: Record<string, unknown> }).properties,
+			false,
+			"the probe quiz stays role-less",
+		);
+	});
+
+	it("normalizeQuizType: exact literals only — old records and wobble degrade to check-style", () => {
+		assert.equal(normalizeQuizType("predict"), "predict");
+		assert.equal(normalizeQuizType("check"), "check");
+		assert.equal(normalizeQuizType(undefined), undefined);
+		assert.equal(normalizeQuizType("prediction"), undefined);
+		assert.equal(normalizeQuizType(42), undefined);
+	});
+
+	it("quizNeedsReveal: checks collapse, predictions never do", () => {
+		assert.equal(quizNeedsReveal("quiz", { type: "check" }, "teach"), true);
+		assert.equal(quizNeedsReveal("quiz", { type: "predict" }, "teach"), false, "predictions arrive OPEN");
+		assert.equal(
+			quizNeedsReveal("quiz", undefined, "teach"),
+			true,
+			"old records (no type) render check-style",
+		);
+		assert.equal(quizNeedsReveal("quiz", { type: "predict" }, "probe"), false);
+		assert.equal(quizNeedsReveal("quiz", { type: "check" }, "probe"), false);
+		assert.equal(quizNeedsReveal("ask_user_question", {}, "teach"), false);
+		assert.equal(quizNeedsReveal("explain", {}, "teach"), false);
+	});
+
+	function quizQd(): QuestionData {
+		const options = normalizeOptions(valid.options);
+		return {
+			id: "q1",
+			kind: "quiz",
+			question: valid.question,
+			mode: "single-select",
+			options,
+			correctIndices: resolveCorrect(coerceCorrectAnswer(valid.correctAnswer), options).indices,
+			explanation: valid.explanation,
+			createdAt: new Date().toISOString(),
+		};
+	}
+
+	it("buildAnswer snapshots the question's role and carries both thinking channels", () => {
+		const predictQd: QuestionData = { ...quizQd(), questionType: "predict" };
+		const a = buildAnswer(predictQd, { values: ["Mercury"], thinking: "  guessed  ", readingThinking: "  reading note  " });
+		assert.equal(a.questionType, "predict");
+		assert.equal(a.thinking, "guessed", "thinking is trimmed");
+		assert.equal(a.readingThinking, "reading note");
+		const b = buildAnswer(quizQd(), { values: ["Mercury"] });
+		assert.equal(b.thinking, undefined, "empty channels stay absent, never empty strings");
+		assert.equal(b.readingThinking, undefined);
+		assert.equal(b.questionType, undefined, "a role-less QuestionData (probe / old record) answers role-less");
+	});
+
+	it("compactAnswerForModel: distinct keys for the two channels; legacy `note` folds into thinking", () => {
+		const a = buildAnswer(quizQd(), { values: ["Mercury"], thinking: "h", readingThinking: "r" });
+		const compact = compactAnswerForModel(a) as Record<string, unknown>;
+		assert.equal(compact.thinking, "h");
+		assert.equal(compact.thinkingWhileReading, "r");
+		const legacy = compactAnswerForModel({ ...a, thinking: undefined, note: "old note" }) as Record<string, unknown>;
+		assert.equal(legacy.thinking, "old note", "records written before the rename still reach the model");
+		assert.equal("note" in legacy, false, "the legacy key never re-crosses the wire");
+	});
+
+	it("the display parse KEEPS the role: quizDisplayInputSchema retains type where the base strips it", () => {
+		const cleaned = Value.Clean(quizDisplayInputSchema, { ...valid }) as Record<string, unknown>;
+		assert.equal(cleaned.type, "check", "role survives the display parse (the dock gates collapse + labels on it)");
+	});
 });

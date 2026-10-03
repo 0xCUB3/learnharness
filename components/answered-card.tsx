@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ConfidenceRail } from "@/components/confidence-rail";
 import { GlyphMark } from "@/components/ui/glyph-mark";
 import { cn } from "@/lib/utils";
@@ -17,6 +18,7 @@ import type { QuestionAnswerData } from "@/src/core";
  * the explanation, with NO verdict chips (owner ruling 2026-09-27).
  */
 export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
+	const [whyOpen, setWhyOpen] = useState(false); // the tucked explanation (predictions, owner 2026-10-03)
 	if (answer.dismissed) {
 		return (
 			<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
@@ -33,7 +35,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 	return (
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="answered-card">
 			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{isQuiz ? "Quiz" : isExplain ? "Explain" : "Question"}
+				{isQuiz ? (answer.questionType === "predict" ? "Prediction" : "Quiz") : isExplain ? "Explain" : "Question"}
 				{isQuiz &&
 					(answer.dontKnow ? (
 						<span className="rounded bg-muted px-1.5 py-0.5">didn't know</span>
@@ -122,26 +124,62 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				<div className="mt-2 text-sm text-muted-foreground">Answered “I don't know”.</div>
 			)}
 
-			{answer.note && (
+			{(answer.thinking ?? answer.note) && (
 				<div data-testid="your-thinking" className="mt-3 border-l-2 border-primary/40 pl-3">
 					<span className="mb-0.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
 						Your thinking
 					</span>
-					<span className="lh-prose block whitespace-pre-wrap text-foreground/90">{answer.note}</span>
+					<span className="lh-prose block whitespace-pre-wrap text-foreground/90">{answer.thinking ?? answer.note}</span>
+				</div>
+			)}
+
+			{/* The reading channel (owner 2026-10-03): thoughts captured while
+			    reading the teaching prose — a separate block from the question
+			    thinking, same quiet voice. */}
+			{answer.readingThinking && (
+				<div data-testid="your-reading-thinking" className="mt-3 border-l-2 border-muted-foreground/30 pl-3">
+					<span className="mb-0.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+						Your thinking while reading
+					</span>
+					<span className="lh-prose block whitespace-pre-wrap text-foreground/90">{answer.readingThinking}</span>
 				</div>
 			)}
 
 			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper
 			    than the option box edges (owner, round 3). Sides flush with everything
 			    else; py-2 stays for vertical air. */}
-			{isQuiz && answer.explanation && (
-				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
-					<span className="font-medium text-foreground">Why: </span>
-					{/* The markdown wrapper must go truly inline — a block <p> after the
-								   "Why:" label created the oversized leading gap (owner's fix list). */}
-								<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
+			{isQuiz && answer.explanation && answer.questionType === "predict" ? (
+				/* The TUCKED explanation (owner 2026-10-03): a prediction's
+				   verdict shows, but the explanation sits collapsed — viewable,
+				   never center stage. The teaching that follows resolves the
+				   prediction; THAT is the real explanation. */
+				<div className="mt-3" data-testid="tucked-explanation">
+					<button
+						type="button"
+						onClick={() => setWhyOpen((v) => !v)}
+						className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						{whyOpen ? "Hide why" : "Why"}
+					</button>
+					{whyOpen && (
+						<div className="mt-1.5 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
+							<span className="font-medium text-foreground">Why: </span>
+							<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
+						</div>
+					)}
 				</div>
+			) : (
+				isQuiz &&
+				answer.explanation && (
+					<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
+						<span className="font-medium text-foreground">Why: </span>
+						{/* The markdown wrapper must go truly inline — a block <p> after the
+						   "Why:" label created the oversized leading gap (owner's fix list). */}
+						<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
+					</div>
+				)
 			)}
+
 			{/* The explain reveal (owner ruling 2026-09-27): the committed answer
 			    — one field, reasoning included — shown on submit; no verdict,
 			    the model's next reply IS the grading. */}

@@ -29,6 +29,7 @@ const TEACHER_QUIZ = {
 	],
 	correctAnswer: "truth",
 	explanation: "Convention-T schematizes truth for the object language.",
+	type: "check", // teach-only role field — the display parse KEEPS it (the dock gates by it)
 	nodeId: "convention-t", // teacher-only field — the display parse must accept and strip it
 };
 
@@ -55,6 +56,7 @@ describe("parseQuizInput", () => {
 		assert.ok(parsed);
 		assert.equal(parsed.question, TEACHER_QUIZ.question);
 		assert.equal((parsed as Record<string, unknown>).nodeId, undefined, "unknown keys are stripped, not trusted");
+		assert.equal((parsed as { type?: unknown }).type, "check", "the role field survives the display parse (owner 2026-10-03)");
 	});
 
 	it("parses a boundary-valid PROBER quiz (no nodeId at all)", () => {

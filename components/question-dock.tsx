@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import {
 	buildAnswer,
 	coerceCorrectAnswer,
+	normalizeQuizType,
 	CONFIDENCE_STOPS,
 	DEFAULT_CONFIDENCE_INDEX,
 	emptyDockSelection,
@@ -79,6 +80,11 @@ export interface QuestionDockProps {
 	/** Session phase at the question — scales the thinking field: probing
 	 *  stays quick (one row), teaching invites dumping (three rows). */
 	phase?: Phase3;
+	/** Dictation claim (owner 2026-10-03): false while a teach-phase check
+	 *  sits UNREVEALED — the reading-thinking field owns dictated speech
+	 *  during the reading; the dock reclaims on reveal. Default true (probe
+	 *  questions, predictions, old callers). */
+	dictationClaim?: boolean;
 }
 
 export function QuestionDock({
@@ -91,6 +97,7 @@ export function QuestionDock({
 	onSubmit,
 	onEscape,
 	phase = "probe",
+	dictationClaim = true,
 }: QuestionDockProps) {
 	// Parse, don't cast (src/core/tool-parts.ts): the model authored this
 	// input, and only the schema the tool declared vouches for its shape.
@@ -115,6 +122,11 @@ export function QuestionDock({
 					question={parsed.question}
 					onExpand={onExpand}
 					variant={reveal ? "reveal" : "collapsed"}
+					label={
+						toolName === "quiz" && normalizeQuizType((parsed as { type?: unknown }).type) === "predict"
+							? "Prediction"
+							: undefined
+					}
 				/>
 			)}
 			<div className={expanded ? "dock-variant" : "invisible h-0 overflow-hidden"}>
@@ -126,6 +138,7 @@ export function QuestionDock({
 					active={expanded}
 					onSubmit={onSubmit}
 					onEscape={onEscape}
+					dictationClaim={dictationClaim}
 				/>
 			</div>
 		</>
@@ -154,11 +167,16 @@ export function QuestionDockBar({
 	question,
 	onExpand,
 	variant = "collapsed",
+	label,
 }: {
 	toolName: "quiz" | "ask_user_question" | "explain";
 	question: string;
 	onExpand: () => void;
 	variant?: "collapsed" | "reveal";
+	/** The kind chip's text (owner 2026-10-03): "Prediction" when a
+	 *  predict-type quiz minimizes by scroll — predictions never use the
+	 *  reveal variant, but the scroll-collapse strip can still hide them. */
+	label?: string;
 }) {
 	if (variant === "reveal") {
 		return (
@@ -189,7 +207,7 @@ export function QuestionDockBar({
 			className="dock-variant flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/40"
 		>
 			<span className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{toolName === "quiz" ? "Quiz" : toolName === "explain" ? "Explain" : "Question"}
+				{label ?? (toolName === "quiz" ? "Quiz" : toolName === "explain" ? "Explain" : "Question")}
 			</span>
 			<span className="min-w-0 flex-1 truncate text-muted-foreground">{teaserText(question)}</span>
 			<span className="flex shrink-0 items-center gap-1 text-xs font-medium">
@@ -208,6 +226,7 @@ function QuestionDockForm({
 	active,
 	onSubmit,
 	onEscape,
+	dictationClaim = true,
 }: Omit<QuestionDockProps, "expanded" | "onExpand" | "reveal">) {
 	const kind = toolQuestionKind(toolName);
 
@@ -237,6 +256,9 @@ function QuestionDockForm({
 		const q: QuestionData = {
 			id: toolCallId,
 			kind,
+			// The role (owner 2026-10-03): predict questions gate by it in the
+			// view (never collapsed) and the answered card tucks the explanation.
+			questionType: kind === "quiz" ? normalizeQuizType((input as { type?: unknown }).type) : undefined,
 			question: input.question,
 			context: input.details,
 			mode,
@@ -304,7 +326,9 @@ function QuestionDockForm({
 			},
 			[qd.mode],
 		),
-		true,
+		// Released while a teach check sits unrevealed (owner 2026-10-03):
+		// the reading-thinking field owns dictated speech during the reading.
+		dictationClaim,
 	);
 
 	const toggle = (idx: number) => setSel(toggleOption(selectMode, sel, idx));
@@ -335,7 +359,7 @@ function QuestionDockForm({
 			values: [...sel.selected].map((i) => qd.options[i]!.value),
 			other: sel.otherSelected ? other : undefined,
 			text: qd.mode === "text" ? answerTextRef.current : undefined,
-			note: qd.mode !== "text" ? thinkingTextRef.current.trim() || undefined : undefined,
+			thinking: qd.mode !== "text" ? thinkingTextRef.current.trim() || undefined : undefined,
 			// Always sent on quiz answers (owner: 50 must mean 50, never
 			// "untouched"); buildAnswer drops it on "I don't know".
 			confidence: kind === "quiz" ? CONFIDENCE_STOPS[confIdx] : undefined,
@@ -489,7 +513,7 @@ function QuestionDockForm({
 			{/* Question area — scrolls internally if very tall; the bottom row stays put. */}
 			<div className="max-h-[55dvh] overflow-y-auto px-4 pt-3">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-					{kind === "quiz" ? "Quiz" : kind === "explain" ? "Explain" : "Question"}
+					{kind === "quiz" ? (qd.questionType === "predict" ? "Prediction" : "Quiz") : kind === "explain" ? "Explain" : "Question"}
 					{qd.mode === "multi-select" && " · select all that apply"}
 				</div>
 				<div className="mb-3 font-medium">

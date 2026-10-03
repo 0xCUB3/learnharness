@@ -62,6 +62,7 @@ const QUIZ_INPUT = {
 	],
 	correctAnswer: "Mercury",
 	explanation: "Mercury is the innermost planet.",
+	type: "check",
 	nodeId: "planet-order",
 };
 
@@ -619,6 +620,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// same turn. This pins that whole mechanism (the live Nietzsche bug).
 		const BAD_QUIZ_INPUT = {
 			question: "What is Nietzsche's genealogical claim about religion?",
+			type: "check",
 			nodeId: "genealogy",
 			options: [{ label: "A cultural diagnosis" }, { label: "Atheism as a conclusion" }],
 			correctAnswer: "cultural-diagnosis", // the exact live failure shape: a slug, no match
@@ -695,6 +697,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// question, and the model's retry must become the pending quiz.
 		const STRINGY_QUIZ_INPUT = {
 			question: "Lewis's indexical analysis of 'actual' — which is it?",
+			type: "check",
 			nodeId: "indexicals",
 			options: JSON.stringify([
 				{ label: "Like 'I'", value: "indexical" },

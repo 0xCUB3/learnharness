@@ -185,7 +185,7 @@ function fixtureMessages(): LhMessage[] {
 			quizPart(
 				"call-3",
 				{ question: "Q3", nodeId: "alpha", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "e" },
-				answer({ questionText: "Q3 text", correct: true, note: "recalled the diagram", answeredAt: "2026-08-22T02:00:00.000Z" }),
+				answer({ questionText: "Q3 text", correct: true, thinking: "recalled the diagram", answeredAt: "2026-08-22T02:00:00.000Z" }),
 			),
 		]),
 		assistant("a4", [

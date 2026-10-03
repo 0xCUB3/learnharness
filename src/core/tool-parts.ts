@@ -29,7 +29,7 @@
 
 import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
-import { quizInputBase, askInputSchema, askOptionProblems, quizInputProblems, explainInputBase, explainInputProblems, type AskToolInput, type QuizToolInput, type ExplainToolInput } from "./question-core.ts";
+import { quizInputBase, quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputBase, explainInputProblems, type AskToolInput, type QuizToolInput, type ExplainToolInput } from "./question-core.ts";
 import { restoreMathEscapes } from "./math-delims.ts";
 import { probeDoneInputSchema, type ProbeDoneInput } from "./contracts/probe.ts";
 
@@ -84,7 +84,12 @@ function restoreMathEscapesDeep(value: unknown): unknown {
 }
 
 export function parseQuizInput(input: unknown): QuizToolInput | undefined {
-	const cleaned = boundaryParse<QuizToolInput>(quizInputBase, restoreMathEscapesDeep(input));
+	// quizDisplayInputSchema (question-core, owner 2026-10-03): base + the
+	// OPTIONAL `type` — new teach-phase records carry predict|check and the
+	// dock renders/gates by it (normalizeQuizType at the read seam); old and
+	// probe records carry none. nodeId stays an unknown key Value.Clean
+	// strips, exactly as before.
+	const cleaned = boundaryParse<QuizToolInput>(quizDisplayInputSchema, restoreMathEscapesDeep(input));
 	if (!cleaned) return undefined;
 	if (quizInputProblems(cleaned).length > 0) return undefined;
 	return cleaned;

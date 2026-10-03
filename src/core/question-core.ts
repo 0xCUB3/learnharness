@@ -189,17 +189,50 @@ export const quizInputBase = Type.Object({
 	),
 });
 
-// The TEACH-side quiz object: the shared base + the plan-position field.
-// `nodeId` means "this question is ABOUT this node" — a position signal,
-// never a completion signal (docs/probe-teach-split.md §3). The cross-field
-// authoring contract (the Gate-3 hardening: a quiz whose correctAnswer
-// can't be graded NEVER reaches the learner — schema-valid ⇔ gradeable, the
-// rules exactly what the grading path accepts) runs at the CALL BOUNDARY in
-// the tool's execute: quizInputProblems here, the per-session plan-nodeId
-// validation in tools.ts (it reads the live chat record, which this core
-// never touches).
+// The TEACH-side quiz object: the shared base + the plan-position field
+// + the ROLE field (owner design 2026-10-03, "two questions per teaching
+// unit"): `type` declares the question's role in the cycle. The ROLE
+// DOCTRINE lives in the system prompt (owner: tool descriptions stay
+// purely MECHANICAL — no instructions on what the questions should be);
+// the enum's one-liners below say only WHEN each kind fires.
+// nodeId means "this question is ABOUT this node" — a position signal,
+// never a completion signal (docs/probe-teach-split.md §3). BOTH teaching
+// types carry it. The cross-field authoring contract (the Gate-3
+// hardening: a quiz whose correctAnswer can't be graded NEVER reaches the
+// learner — schema-valid ⇔ gradeable, the rules exactly what the grading
+// path accepts) runs at the CALL BOUNDARY in the tool's execute:
+// quizInputProblems here, the per-session plan-nodeId validation in
+// tools.ts (it reads the live chat record, which this core never touches).
+export const QUIZ_QUESTION_TYPES = ["predict", "check"] as const;
+export type QuizQuestionType = (typeof QUIZ_QUESTION_TYPES)[number];
+
+/** Normalize a persisted quiz `type` (display seam): old records carry
+ *  none, and model wobble degrades to undefined — callers render "Quiz"
+ *  and the check-style card. Only exact literals count. */
+export function normalizeQuizType(raw: unknown): QuizQuestionType | undefined {
+	return raw === "predict" ? "predict" : raw === "check" ? "check" : undefined;
+}
+
+/** The reveal law as a pure predicate (owner 2026-10-03): a teach-phase
+ *  CHECK collapses behind the "Check your understanding" reveal — a
+ *  prediction NEVER does (it precedes the teaching and gates it;
+ *  collapsing it would invert the cycle), and neither do probe/plan
+ *  questions, ask, or explain. chat.tsx calls this for its pending
+ *  question; the reading-thinking field mounts on the same truth. */
+export function quizNeedsReveal(tool: string, rawInput: unknown, phase: string): boolean {
+	if (tool !== "quiz" || phase !== "teach") return false;
+	return normalizeQuizType((rawInput as { type?: unknown } | null)?.type) !== "predict";
+}
+
 export const quizInputObject = Type.Object({
 	...quizInputBase.properties,
+	type: Type.Union([Type.Literal("predict"), Type.Literal("check")], {
+		description:
+			"REQUIRED — the question's role in the teaching cycle. \"predict\": posed BEFORE you teach the step " +
+			"(its own turn; the learner answers, then your teaching resolves it — arrives open, never collapsed). " +
+			"\"check\": posed AFTER the step's teaching is complete (arrives collapsed behind the \"Check your " +
+			"understanding\" reveal). ONE question per turn either way.",
+	}),
 	nodeId: Type.String({
 		description:
 			"REQUIRED plan-tree node id this question is about — must EXACTLY match one of this session's " +
@@ -212,10 +245,25 @@ export const quizInputObject = Type.Object({
 });
 
 /** The PROBE-side quiz declaration: the shared authoring contract, no
- *  nodeId field at all — the session's map doesn't exist yet. Structurally
- *  identical to quizInputBase (the old superRefine never reached the wire —
- *  it ran at the call boundary, where quizInputProblems runs now). */
+ *  nodeId and no `type` field at all — the session's map doesn't exist
+ *  yet, and probing has exactly ONE question role (owner 2026-10-03: the
+ *  prober keeps its own tool; the teaching cycle's types stay with the
+ *  teacher, so nothing invites misuse). Structurally identical to
+ *  quizInputBase (the old superRefine never reached the wire — it ran at
+ *  the call boundary, where quizInputProblems runs now). */
 export const probeQuizInputSchema = quizInputBase;
+
+/** The DISPLAY parse for persisted quiz calls (tool-parts.ts): the base
+ *  + `type` as an OPTIONAL plain string (old records carry none, and
+ *  Value.Clean keeps a key only when the schema knows it — the dock would
+ *  otherwise lose the role it renders and gates by). Normalization is
+ *  normalizeQuizType at the read seam; nodeId stays stripped (unknown
+ *  key). The PROBE quiz parses against the bare base — probe calls carry
+ *  no type. */
+export const quizDisplayInputSchema = Type.Object({
+	...quizInputBase.properties,
+	type: Type.Optional(Type.String()),
+});
 
 // ─── the explain tool (free-recall quizzing, owner 2026-09-27) ─────────────
 //
@@ -326,6 +374,11 @@ export type QuestionMode = SelectMode | "text";
 export interface QuestionData {
 	id: string;
 	kind: QuestionKind;
+	/** quiz only (teach phase, owner 2026-10-03): the question's role in
+	 *  the cycle — predict (before the teaching, never collapsed) or check
+	 *  (after it, behind the reveal). Absent on probe quizzes and old
+	 *  records — everything check-shaped. */
+	questionType?: QuizQuestionType;
 	question: string;
 	context?: string;
 	mode: QuestionMode;
@@ -344,13 +397,27 @@ export interface QuestionData {
  *  toolCallId restated — the toolResult message already carries it. */
 export interface QuestionAnswerData {
 	kind: QuestionKind;
+	/** quiz only (teach phase): the role snapshot for rendering (a
+	 *  prediction tucks its explanation) and later calibration splits.
+	 *  Absent on old records and probe answers. */
+	questionType?: QuizQuestionType;
 	questionText: string;
 	options?: { index: number; label: string }[]; // snapshot for rendering
 	dontKnow: boolean;
 	answers: OptionAnswer[];
 	other?: string; // ask: "Other" free text
 	text?: string; // ask/explain: text-mode answer
+	/** The learner's reasoning on the QUESTION (renamed from `note`, owner
+	 *  2026-10-03 — "that's what it is"). */
+	thinking?: string;
+	/** @deprecated the pre-rename key — never written again; old records
+	 *  replay through the same types, so it stays declared. Read via
+	 *  `thinking ?? note`. */
 	note?: string;
+	/** The learner's thinking WHILE READING the teaching prose (owner
+	 *  2026-10-03) — a separate channel from `thinking`, captured by the
+	 *  reading field and riding the check answer. Absent when empty. */
+	readingThinking?: string;
 	confidence?: number; // quiz only: the learner's stated probability (0-100, raw) that his selected answer is correct — never sent on "I don't know" (owner, 2026-10-01)
 	correct?: boolean; // quiz only
 	correctIndices?: number[]; // quiz only (rendering)
@@ -376,7 +443,8 @@ export interface AnswerRequest {
 	values?: string[]; // option values
 	other?: string; // ask "Other"
 	text?: string; // ask text-mode
-	note?: string;
+	thinking?: string; // the reasoning-on-the-question channel (was `note`)
+	readingThinking?: string; // the thinking-while-reading channel (check answers)
 	confidence?: number; // quiz only: 0-100 raw probability — 50 is a real coin flip, always sent (owner, 2026-10-01)
 }
 
@@ -567,11 +635,13 @@ function formatOptionRef(options: QuizOption[], index: number): string {
 export function buildAnswer(qd: QuestionData, req: AnswerRequest): QuestionAnswerData {
 	const base: QuestionAnswerData = {
 		kind: qd.kind,
+		questionType: qd.questionType,
 		questionText: qd.question,
 		options: qd.options.map((o, i) => ({ index: i + 1, label: o.label })),
 		dontKnow: req.dontKnow === true,
 		answers: [],
-		note: req.note?.trim() || undefined,
+		thinking: req.thinking?.trim() || undefined,
+		readingThinking: req.readingThinking?.trim() || undefined,
 		answeredAt: new Date().toISOString(),
 	};
 	// resolve selected option values → OptionAnswer (in display order)
@@ -647,6 +717,12 @@ export function compactAnswerForModel(ad: QuestionAnswerData): Record<string, un
 	// incorrect and carries no confidence: both stay implicit.)
 	if (ad.correct !== undefined && !ad.dontKnow) out.correct = ad.correct;
 	if (ad.confidence !== undefined) out.confidence = ad.confidence;
-	if (ad.note) out.note = ad.note;
+	// Two DISTINCT thinking channels, clearly keyed so the model never
+	// conflates them (owner 2026-10-03): reasoning on the question vs
+	// thinking while reading the teaching. `note` is the pre-rename key —
+	// old records replay through here too, so both feed `thinking`.
+	const thinking = ad.thinking ?? ad.note;
+	if (thinking) out.thinking = thinking;
+	if (ad.readingThinking) out.thinkingWhileReading = ad.readingThinking;
 	return out;
 }
