@@ -76,6 +76,29 @@ export function parseDismissInput(input: unknown): DismissInput {
 	return { type: "dismiss", toolCallId: i.toolCallId, answer };
 }
 
+/** A mid-turn steer (owner arc 2026-10-03): the learner's composer message
+ *  for a RUNNING turn — queued on pi's steering rail (agent.steer, drained
+ *  at the next response boundary INSIDE the same run). NOT a follow-up:
+ *  it never extends an ended run, and it never composes a turn of its own
+ *  (a send with no live turn is a plain text send, which already exists).
+ *  The id is client-minted (steer_<localid>): the queued indicator keys on
+ *  it, and the drain's message events upsert the real card by the same id. */
+export type UserSteerInput = { type: "steer"; id: string; text: string };
+
+/** Parse and validate a steer event off a request body. */
+export function parseUserSteerInput(input: unknown): UserSteerInput {
+	if (typeof input !== "object" || input === null) throw new ChatInputError("input must be an object");
+	const i = input as Record<string, unknown>;
+	if (i.type !== "steer") throw new ChatInputError(`unknown input type: ${String(i.type)}`);
+	if (typeof i.id !== "string" || i.id.length === 0) {
+		throw new ChatInputError("steer input requires a client-minted id");
+	}
+	if (typeof i.text !== "string" || i.text.trim().length === 0) {
+		throw new ChatInputError("steer input requires non-empty text");
+	}
+	return { type: "steer", id: i.id, text: i.text };
+}
+
 /** The native appends a dismissal makes (pure — same orphan discipline
  *  as answers: the call must be a DANGLING question call). */
 export function dismissAppends(record: { messages: LhMessage[] }, input: DismissInput): LhMessage[] {

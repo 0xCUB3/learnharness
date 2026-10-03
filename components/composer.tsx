@@ -18,7 +18,11 @@ import { Hint } from "@/components/ui/hint";
  *  can pin the decision (key events can't be simulated in
  *  renderToStaticMarkup). */
 export function enterAction(state: { busy: boolean; canSend: boolean }): "stop" | "send" | "none" {
-	if (state.busy) return "stop";
+	// Composer steering (owner arc 2026-10-03): while a turn runs, typed
+	// text makes Enter a STEER (the queue-and-redirect send); Enter with
+	// an empty composer stays the stop shortcut. The button itself keeps
+	// the square — Stop stays one click away at all times.
+	if (state.busy) return state.canSend ? "send" : "stop";
 	if (state.canSend) return "send";
 	return "none";
 }

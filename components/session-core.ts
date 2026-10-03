@@ -140,6 +140,29 @@ export interface SessionState {
 	nativeMessages: LhMessage[];
 	status: SessionStatus;
 	error: { message: string } | null;
+	/** Steers sent but not yet drained (composer steering, 2026-10-03):
+	 *  the queued indicator's truth. An entry dies when its id lands in
+	 *  the messages (the drain's verbatim events upsert the real card) —
+	 *  visibleQueuedSteers is the pure fold. */
+	steerQueue: SteerQueueItem[];
+}
+
+/** One queued composer steer: the client-minted id (the upsert key) + text. */
+export interface SteerQueueItem {
+	id: string;
+	text: string;
+}
+
+/** The indicator's fold (pure): a queued steer stays visible until its id
+ *  lands in the message list — from the live stream's upsert, the settle
+ *  sync, or a reload. A steer parked server-side (stranded behind a
+ *  question) keeps its line: honest "waiting" until the next run drains it. */
+export function visibleQueuedSteers(
+	queue: readonly SteerQueueItem[],
+	messages: readonly LhMessage[],
+): SteerQueueItem[] {
+	const ids = new Set(messages.map((m) => (m as { id?: string }).id));
+	return queue.filter((s) => !ids.has(s.id));
 }
 
 export interface SessionModelOptions extends SessionModelDeps {
@@ -156,6 +179,8 @@ export class SessionModel {
 	readonly chatId: string;
 	/** Injectable fetch (tests); defaults to the global. */
 	fetch: typeof globalThis.fetch;
+	/** Steers sent but not yet drained (the queued indicator's truth). */
+	private steerQueueValue: SteerQueueItem[] = [];
 	private readonly pollMs: number;
 	private readonly waitMaxMs: number;
 	private onReattachSettled?: () => void;
@@ -209,6 +234,7 @@ export class SessionModel {
 			nativeMessages: [...this.base, ...this.tail],
 			status: this.statusValue,
 			error: this.errorValue,
+			steerQueue: this.steerQueueValue,
 		};
 	}
 
@@ -503,6 +529,48 @@ export class SessionModel {
 			if ((err as Error).name === "AbortError") return; // stop() or a newer consume won
 			this.setError((err as Error).message);
 			this.setStatus("error");
+		}
+	}
+
+	/**
+	 *  STEER (composer steering, owner arc 2026-10-03): the learner's
+	 *  mid-turn message for the RUNNING turn. NOT a turn — no optimistic
+	 *  transcript card, no status flip: the message joins the queued
+	 *  indicator (the quiet line above the composer) and POSTs to the
+	 *  steer route, which hands it to the live agent's steering queue.
+	 *  When pi drains it at the next response boundary, the verbatim
+	 *  message events upsert the real card (the client-minted id is the
+	 *  key) and the indicator's fold drops the line. A 409 means the turn
+	 *  settled mid-send (the race): fall back to the plain text send —
+	 *  the entry is dropped and send() pushes its own optimistic card.
+	 */
+	async steer(text: string): Promise<void> {
+		const t = text.trim();
+		if (!t) return;
+		const id = `steer_${localId()}`;
+		this.steerQueueValue = [...this.steerQueueValue, { id, text: t }];
+		this.onChange?.();
+		const dropSteer = () => {
+			this.steerQueueValue = this.steerQueueValue.filter((s) => s.id !== id);
+			this.onChange?.();
+		};
+		try {
+			const res = await this.fetch(`/api/chats/${this.chatId}/steer`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ input: { type: "steer", id, text: t } }),
+			});
+			if (res.ok) return; // parked or delivered — the stream lands the card
+			if (res.status === 409) {
+				dropSteer();
+				await this.send({ type: "text", text: t }); // the settle race: plain send
+				return;
+			}
+			dropSteer();
+			this.setError((await res.text()) || `The steer failed (${res.status}).`);
+		} catch (err) {
+			dropSteer();
+			this.setError((err as Error).message);
 		}
 	}
 

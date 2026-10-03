@@ -8,10 +8,12 @@ import type { ModelRole } from "../../config.ts";
 import {
 	deliverJobResult,
 	noteSteerVisible,
+	reconcileUserSteers,
 	registerLiveAgent,
 	setJobRespawn,
 	setTurnRunner,
 	settleSteers,
+	steerLiveChat,
 	unregisterLiveAgent,
 } from "./jobs.ts";
 import { piTurnResponse, runPiTurn } from "./pi/ui-stream.ts";
@@ -425,6 +427,10 @@ export async function handleChatInput(
 				// the pump take any stragglers down the idle wake.
 				unregisterLiveAgent(chatId);
 				settleSteers(chatId, stamped);
+				// Composer steers (2026-10-03): delivered ids dropped, stranded
+				// ones stay parked for the chat's next run (the registry is the
+				// stranding safety net — the agent's undrained copy died above).
+				reconcileUserSteers(chatId, stamped);
 			},
 		});
 		// The turn is now a live background object: register it so any view

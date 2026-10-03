@@ -103,6 +103,15 @@ export function newUserMessage(text: string): LhMessage & UserMessage {
 	};
 }
 
+/** A steered user message (mid-turn composer steering, owner 2026-10-03):
+ *  a plain user message with the CLIENT-minted steer id — the same object
+ *  rides agent.steer(), the live stream's message events, and the settled
+ *  record, so the optimistic queued indicator and the transcript card
+ *  upsert by one identity. */
+export function newUserSteer(text: string, id: string): LhMessage & UserMessage {
+	return { id, role: "user", content: text, timestamp: Date.now() };
+}
+
 /** The learner's answer — the question call's tool result (fork 1).
  *  TWO AUDIENCES (owner, tool-result diet 2026-10-02): the MODEL sees the
  *  compact learner-only record (compactAnswerForModel — the call's own

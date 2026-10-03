@@ -2,6 +2,7 @@
 
 import { createContext, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChatSession } from "@/components/session";
+import { visibleQueuedSteers } from "@/components/session-core";
 import { SetupDialog } from "@/components/setup-dialog";
 import { Hint } from "@/components/ui/hint";
 import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
@@ -22,6 +23,7 @@ import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
+import { QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
@@ -187,7 +189,7 @@ export function Chat({
 	// (core/view.ts projectView); sends are ONE explicit input event each
 	// ({chatId, input} — the stash indirection died with the SDK), and the
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
-	const { messages, nativeMessages, send, submitAnswer, dismissQuestion, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
+	const { messages, nativeMessages, send, steer, steerQueue, submitAnswer, dismissQuestion, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initiallyInFlight });
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
@@ -507,7 +509,12 @@ export function Chat({
 	// the spoken text is deferred in the run's buffer — Enter must be able
 	// to trigger the finish-first send (see onSend), not be gated out by an
 	// empty textarea. If nothing was said, the send is a harmless no-op.
-	const canSend = (text.trim().length > 0 || dictation.active) && !pending && !turnInFlight;
+	// Steering (2026-10-03): a turn in flight no longer gates the composer —
+	// Enter while a turn runs STEERS it (the quiet queue above the composer);
+	// a pending question still owns the interaction (the dock replaces the
+	// composer, and there is no live turn to steer anyway — questions end
+	// turns).
+	const canSend = (text.trim().length > 0 || dictation.active) && !pending;
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
@@ -893,16 +900,16 @@ export function Chat({
 	});
 
 	const onSend = () => {
-		if (busy || pending) return;
+		if (pending) return;
 		/* FINISH DICTATION FIRST (owner, 2026-10-01): a learner who keeps
 		 * talking right through Enter must not lose the tail — stop the run,
 		 * let the last finals land in the composer, then send the REF value
 		 * (the flush lands via setState, invisible to this closure). */
 		if (!dictation.active) {
-			doSend();
+			doSteerOrSend();
 			return;
 		}
-		void dictation.finish().then(doSend);
+		void dictation.finish().then(doSteerOrSend);
 	};
 	const doSend = () => {
 		if (busy || pending) return;
@@ -911,6 +918,24 @@ export function Chat({
 		draftRef.current = t; // the refusal flow's preserve-and-replay seam
 		applyText("");
 		void send({ type: "text", text: t });
+	};
+
+	/* STEER VS SEND (owner arc 2026-10-03): Enter while a turn runs steers
+	 * it — the quiet queue + the live agent's steering rail; the turn's own
+	 * stream lands the card when pi drains it. Any other state (idle,
+	 * submitted microtask window, a wake turn between our renders) takes the
+	 * plain send — a steer POST with no live turn would 409 and fall back
+	 * to exactly that anyway, so we only branch on the state we trust. */
+	const doSteerOrSend = () => {
+		if (pending) return;
+		const t = textRef.current.trim();
+		if (!t) return;
+		if (turnInFlight) {
+			applyText("");
+			void steer(t);
+			return;
+		}
+		doSend();
 	};
 
 	return (
@@ -1218,6 +1243,7 @@ export function Chat({
 					onReserve={setDockReserve}
 					dictationSlot={<DictationBar dictation={dictation} />}
 					dictationCancel={dictation.cancel}
+					queuedSteers={visibleQueuedSteers(steerQueue, nativeMessages)}
 					setupCta={
 						zeroKeys ? (
 							<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
@@ -1380,6 +1406,7 @@ function DockOverlay({
 	dictationSlot,
 	dictationCancel,
 	setupCta,
+	queuedSteers,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
@@ -1406,6 +1433,9 @@ function DockOverlay({
 	/** Esc in a pending question's field stops dictation (the strip is the
 	 *  stats bar's; the stop belongs to the page-owned hook, threaded down). */
 	dictationCancel?: () => void;
+	/** The queued-steer indicator's lines (composer steering, 2026-10-03):
+	 *  already filtered by visibleQueuedSteers — only undrained steers. */
+	queuedSteers: QueuedSteerLine[];
 	/** The persistent setup CTA (BYOK, owner 2026-09-22): the same pill
 	 *  home and /chat/new carry, above the composer while slots are unset. */
 	setupCta?: React.ReactNode;
@@ -1692,6 +1722,11 @@ function DockOverlay({
 			<div ref={blockRef} className="relative bg-background pb-5">
 				<div className={DOCK}>
 					{setupCta}
+					{/* The queued-steer indicator (owner spec 2026-10-03): quiet
+					    one-liners above the shell - right-aligned to where its corner
+					    rounding starts, truncated, no background, no container. A
+					    line dies when its card lands (visibleQueuedSteers). */}
+					<QueuedSteersBody steers={queuedSteers} />
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
 							{pending ? (

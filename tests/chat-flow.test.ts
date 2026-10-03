@@ -45,6 +45,7 @@ import type { LhMessage } from "../src/core/native-messages.ts";
 // handler, driven directly. Env is the runner's (the same the static
 // store imports already resolved under).
 const dismissRoute = await import("../app/api/chats/[id]/dismiss/route.ts");
+const steerRoute = await import("../app/api/chats/[id]/steer/route.ts");
 import { PATHS } from "../config.ts";
 
 // The key-presence turn gate (provider-key interlude, 2026-09-25): scripted
@@ -1385,5 +1386,82 @@ describe("parallel rounds: the LAST resolution decides the wake (owner ruling 20
 		const prompt2 = calls[1]!.join("\n");
 		assert.match(prompt2, /Chemistry/, "the answer rode the wake");
 		assert.match(prompt2, /dismissed/, "the dismissal rode the wake too");
+	});
+});
+
+// ─── composer steering (owner arc 2026-10-03): the route + the live rail ────
+
+describe("composer steering: POST /api/chats/[id]/steer", () => {
+	const steerPost = (chatId: string, body: unknown): Promise<Response> =>
+		steerRoute.POST(
+			new Request(`http://test/api/chats/${chatId}/steer`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			}),
+			{ params: Promise.resolve({ id: chatId }) },
+		);
+
+	it("honest rejections: 404 unknown chat, 400 bad input, 409 when no turn is live", async () => {
+		const chat = createConfiguredChat("Test: steer rejections");
+		createdChats.push(chat.id);
+		assert.equal((await steerPost("chat_nope", { input: { type: "steer", id: "steer_1", text: "hi" } })).status, 404);
+		assert.equal((await steerPost(chat.id, { input: { type: "steer", id: "", text: "hi" } })).status, 400);
+		assert.equal((await steerPost(chat.id, { input: { type: "text", text: "hi" } })).status, 400);
+		assert.equal((await steerPost(chat.id, { input: { type: "steer", id: "steer_1", text: "  " } })).status, 400);
+		assert.equal((await steerPost(chat.id, { input: { type: "steer", id: "steer_1", text: "hi" } })).status, 409);
+	});
+
+	it("200 + the live steering queue when a turn runs; the drain lands the card and the model sees it", async () => {
+		// A GATED engine (the scriptedTeacher seam): the first factory
+		// awaits our release, holding the turn open mid-generation so the
+		// steer POST lands while the run is genuinely live.
+		const calls: string[][] = [];
+		let release!: () => void;
+		const gate = new Promise<void>((res) => {
+			release = res;
+		});
+		const faux = createFauxCore({});
+		faux.setResponses([
+			async (context: { messages: unknown[] }) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				await gate;
+				return fauxAssistantMessage([fauxText("Teaching the solar system…")]);
+			},
+			(context: { messages: unknown[] }) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage([fauxText("Steered — covering Venus too.")]);
+			},
+		]);
+		const engine = { model: faux.getModel(), streamFn: faux.streamSimple };
+
+		const chat = createConfiguredChat("Test: steer live");
+		createdChats.push(chat.id);
+
+		// The turn starts and holds at the first model call.
+		const turnRes = await handleChatRequest(post(chat.id, { type: "text", text: "teach me" }), agentFactory(engine as never));
+		await waitFor(() => calls.length === 1, 8000, "first model call started");
+
+		// The steer lands mid-turn: 200, handed to the live agent.
+		const res = await steerPost(chat.id, { input: { type: "steer", id: "steer_live1", text: "also cover Venus" } });
+		assert.equal(res.status, 200);
+		assert.equal((await res.json() as { ok: boolean }).ok, true);
+
+		release(); // the first response completes → the drain → the second call
+		const body = await drain(turnRes);
+		assert.match(body, /also cover Venus/, "the drained steer rode the live stream verbatim");
+
+		// ONE turn: the second model call's context contains the steer
+		// BETWEEN the user message and the continuing assistant text.
+		assert.equal(calls.length, 2, "still one run — the steer continued it, not a new turn");
+		assert.match(calls[1]!.join("\n"), /also cover Venus/, "the model saw the steer in its context");
+
+		// The record persists the user steer in its true position.
+		const saved = chatStore.getChat(chat.id)!;
+		const roles = saved.messages.map((m) => (m as { role?: string }).role);
+		assert.deepEqual(roles, ["user", "assistant", "user", "assistant"], "text → teaching → STEER → steered reply");
+		const steerMsg = saved.messages[2] as { id?: string; content?: unknown };
+		assert.equal(steerMsg.id, "steer_live1", "the client-minted id survived to the record");
+		assert.equal(steerMsg.content, "also cover Venus");
 	});
 });

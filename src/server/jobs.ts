@@ -64,7 +64,7 @@ import {
 	type SteerMessage,
 } from "../core/contracts.ts";
 import type { TurnInput } from "../core/input-events.ts";
-import { danglingQuestionOf, endsInDismissal } from "../core/native-messages.ts";
+import { danglingQuestionOf, endsInDismissal, type LhMessage } from "../core/native-messages.ts";
 import { fireJobAbort, isJobLive } from "../agent/subagents/aborts.ts";
 import { stores } from "./stores.ts";
 import { isTurnRunning } from "./turn-liveness.ts";
@@ -97,6 +97,12 @@ interface WakeState {
 	 *  delivery registry (Wave C: the agent's own follow-up queue is a
 	 *  per-run VEHICLE, not the registry — settlement reconciles here). */
 	queues: Map<string, QueuedSteer[]>;
+	/** chatId → user-steered messages awaiting drain (composer steering,
+	 *  2026-10-03). Same deliver-or-requeue lifecycle as job markers: the
+	 *  live agent's steering queue is the VEHICLE, this is the registry —
+	 *  a steer stranded behind a question or an abort stays parked here
+	 *  and rides the chat's NEXT run (handOffEligible). */
+	userSteers: Map<string, UserSteerEntry[]>;
 	/** chatId → the agent of the CURRENTLY streaming turn (cleared at
 	 *  settlement, before settleSteers). The pump's live path hands
 	 *  markers to this agent's follow-up queue. */
@@ -113,7 +119,7 @@ interface LhWakeGlobal {
 
 function state(): WakeState {
 	const g = globalThis as typeof globalThis & LhWakeGlobal;
-	return (g.__lhWakePipeline ??= { queues: new Map(), liveAgents: new Map(), pumping: new Set(), lastSweepAt: 0 });
+	return (g.__lhWakePipeline ??= { queues: new Map(), liveAgents: new Map(), userSteers: new Map(), pumping: new Set(), lastSweepAt: 0 });
 }
 
 /** chat-handler wires this at module init: its adapter around handleChatRequest. */
@@ -206,11 +212,25 @@ export function deliverJobResult(steer: SteerMessage): Promise<void> {
  *  coalescing). */
 function handOffEligible(chatId: string, agent: Agent): void {
 	const queue = state().queues.get(chatId);
-	if (!queue || queue.length === 0) return;
-	for (const entry of queue) {
-		if (entry.handedTo !== agent && entry.steer.customType !== "probe-handoff") {
-			agent.steer(entry.steer);
-			entry.handedTo = agent;
+	if (queue && queue.length > 0) {
+		for (const entry of queue) {
+			if (entry.handedTo !== agent && entry.steer.customType !== "probe-handoff") {
+				agent.steer(entry.steer);
+				entry.handedTo = agent;
+			}
+		}
+	}
+	// User steers (2026-10-03): same hand-off, any live run — a steer
+	// stranded behind a question or abort rides the chat's next run's
+	// first boundary. No probe-handoff exclusion: these are learner
+	// words, owed to whatever run is live.
+	const userQueue = state().userSteers.get(chatId);
+	if (userQueue && userQueue.length > 0) {
+		for (const entry of userQueue) {
+			if (entry.handedTo !== agent) {
+				agent.steer(entry.message);
+				entry.handedTo = agent;
+			}
 		}
 	}
 }
@@ -224,6 +244,47 @@ function handOffEligible(chatId: string, agent: Agent): void {
 export function registerLiveAgent(chatId: string, agent: Agent): void {
 	state().liveAgents.set(chatId, agent);
 	handOffEligible(chatId, agent);
+}
+
+/** A parked user steer: the message plus the agent it was last handed to
+ *  (the double-handoff guard — a reconcile keeps it only when its id
+ *  never landed in the persisted record). */
+export interface UserSteerEntry {
+	message: LhMessage;
+	handedTo?: Agent;
+}
+
+/** The steer route's live hand-off (composer steering, 2026-10-03).
+ *  Synchronous by design — no interleaving between the live-agent check
+ *  and the queue() means a settling turn can never race the hand-off.
+ *  Returns false when no turn is live: the caller 409s and the client
+ *  falls back to a plain text send (the settle race). The registry copy
+ *  is the stranding safety net: if this agent dies undelivered (question
+ *  termination, abort), reconcileUserSteers keeps it parked for the
+ *  chat's next run. */
+export function steerLiveChat(chatId: string, message: LhMessage): boolean {
+	const agent = state().liveAgents.get(chatId);
+	if (!agent) return false;
+	const entry: UserSteerEntry = { message };
+	const q = state().userSteers.get(chatId) ?? [];
+	q.push(entry);
+	state().userSteers.set(chatId, q);
+	agent.steer(message);
+	entry.handedTo = agent;
+	return true;
+}
+
+/** TURN SETTLEMENT RECONCILIATION for user steers: delivered ids drop
+ *  (the record holds them); undelivered stay parked for the next run.
+ *  Memory-only by design (same tradeoff as job markers): a server
+ *  restart drops parked steers — and the whole turn dies with it anyway. */
+export function reconcileUserSteers(chatId: string, persisted: readonly LhMessage[]): void {
+	const q = state().userSteers.get(chatId);
+	if (!q || q.length === 0) return;
+	const ids = new Set(persisted.map((m) => (m as { id?: string }).id));
+	const kept = q.filter((e) => !ids.has(e.message.id));
+	if (kept.length === 0) state().userSteers.delete(chatId);
+	else state().userSteers.set(chatId, kept);
 }
 
 /** Clear the live agent at settlement — MUST run before settleSteers so the

@@ -57,13 +57,19 @@ describe("Composer", () => {
 	});
 });
 
-// The Enter decision: stop a busy stream, otherwise send. (The plan-verdict
-// accept branch died 2026-09-26 with the verdict itself — the post-plan
-// reply is a natural text message.) Pure function so the static-render
-// harness can pin it (key events can't be simulated in renderToStaticMarkup).
+// The Enter decision (composer steering, 2026-10-03): while a turn runs,
+// typed text makes Enter a STEER; Enter with an empty composer stays the
+// stop shortcut. (The plan-verdict accept branch died 2026-09-26 with the
+// verdict itself — the post-plan reply is a natural text message.) Pure
+// function so the static-render harness can pin it (key events can't be
+// simulated in renderToStaticMarkup).
 describe("enterAction", () => {
-	it("busy stream: Enter stops", () => {
-		assert.equal(enterAction({ busy: true, canSend: true }), "stop");
+	it("busy stream with text: Enter steers (the queued send)", () => {
+		assert.equal(enterAction({ busy: true, canSend: true }), "send");
+	});
+
+	it("busy stream, empty composer: Enter stops", () => {
+		assert.equal(enterAction({ busy: true, canSend: false }), "stop");
 	});
 
 	it("idle: send when there is text, nothing when there is not", () => {
