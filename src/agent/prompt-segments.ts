@@ -34,6 +34,12 @@ import { FRAGMENT_RE, isValidSegmentPath, type PromptAgent, type PromptSegmentIn
 
 const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
 
+/** Shared fragments the PRACTICE agent composes (owner, 2026-10-04
+ *  late): the formatting guide — LaTeX delimiters, markdown, mermaid —
+ *  applies in every setting; the question/confidence/file mechanics do
+ *  not (practice has no such tools). */
+const PRACTICE_SHARED_FRAGMENTS = ["40-formatting.md"];
+
 /** Absolute path for an override file (unchecked — validate first). */
 function overrideFileFor(segmentPath: string): string {
 	return path.join(PROMPTS_OVERRIDE_DIR, ...segmentPath.split("/"));
@@ -57,10 +63,12 @@ export function readPromptOverride(segmentPath: string): string | null {
  *  method lead; the shared tool/file/format mechanics are an appendix).
  *  The exact order composeInstructions composes them in. */
 export function listSourceSegments(agent: PromptAgent): Array<{ path: string; shared: boolean; file: string }> {
-	// PRACTICE (owner, 2026-10-04): its own directory ONLY — the practice
-	// doctrine contradicts the teaching base and the shared question/
-	// confidence mechanics; prompts/practice/00-base.md plays the base
-	// role (voice + accuracy), so nothing shared composes.
+	// PRACTICE (owner, 2026-10-04): its own directory plus a CURATED
+	// shared appendix — the teaching base and the question/confidence/
+	// file mechanics stay out (the doctrine contradicts them; 00-base.md
+	// plays the base role), but the FORMATTING guide composes for every
+	// agent (owner, 2026-10-04 late): LaTeX delimiters and markdown apply
+	// in all settings — practice must write \(...\)/\[...\] too.
 	const segments: Array<{ path: string; shared: boolean; file: string }> = agent === "practice" ? [] : [
 		{ path: "system-prompt.md", shared: true, file: PATHS.teacherPrompt },
 	];
@@ -71,9 +79,14 @@ export function listSourceSegments(agent: PromptAgent): Array<{ path: string; sh
 			segments.push({ path: `${agent}/${f}`, shared: false, file: path.join(dir, f) });
 		}
 	}
-	const sharedDir = agent === "practice" ? null : path.join(PROMPTS_DIR, "shared");
-	if (sharedDir && fs.existsSync(sharedDir)) {
-		const sharedFragments = fs.readdirSync(sharedDir).filter((f) => FRAGMENT_RE.test(f)).sort();
+	const sharedDir = path.join(PROMPTS_DIR, "shared");
+	if (fs.existsSync(sharedDir)) {
+		// The practice allowlist (owner, 2026-10-04 late): formatting only.
+		const allow = agent === "practice" ? PRACTICE_SHARED_FRAGMENTS : null;
+		const sharedFragments = fs
+			.readdirSync(sharedDir)
+			.filter((f) => FRAGMENT_RE.test(f) && (allow === null || allow.includes(f)))
+			.sort();
 		for (const f of sharedFragments) {
 			segments.push({ path: `shared/${f}`, shared: true, file: path.join(sharedDir, f) });
 		}

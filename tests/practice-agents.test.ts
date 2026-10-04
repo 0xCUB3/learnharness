@@ -153,8 +153,8 @@ describe("the practice agent", () => {
 
 // ── the prompt composition ──────────────────────────────────────────────────
 
-describe("practice prompt composition (own directory alone)", () => {
-	it("composes base + doctrine — never the teaching base or shared fragments", () => {
+describe("practice prompt composition (own directory + the formatting appendix)", () => {
+	it("composes base + doctrine — never the teaching base or question/confidence mechanics", () => {
 		const prompt = composeInstructions("practice");
 		// The base's voice section and the doctrine's spine are present…
 		assert.match(prompt, /Everything in this section deletes a default/);
@@ -165,6 +165,13 @@ describe("practice prompt composition (own directory alone)", () => {
 		// The shared 20-question-tools doctrine (predict/check) must not
 		// compose — practice has its own demand theory.
 		assert.doesNotMatch(prompt, /predict/i);
+	});
+
+	it("the SHARED formatting guide composes (owner, 2026-10-04 late): LaTeX delimiters in every setting", () => {
+		const prompt = composeInstructions("practice");
+		// The delimiter law — practice must write \(...\)/\[...\] too.
+		assert.match(prompt, /NEVER `\$` or `\$\$`/);
+		assert.ok(prompt.indexOf("# The practice session") < prompt.indexOf("## Formatting"), "formatting rides as the appendix");
 	});
 
 	it("base precedes doctrine (00- sorts before 10-)", () => {
