@@ -24,7 +24,7 @@ import { createPortal } from "react-dom";
  */
 
 /** What Esc is aborting — drives copy and the confirm action. */
-export type AbortMode = "turn" | "question";
+export type AbortMode = "turn" | "question" | "problem";
 
 const COPY: Record<AbortMode, { title: string; line: string; action: string }> = {
 	turn: {
@@ -36,6 +36,11 @@ const COPY: Record<AbortMode, { title: string; line: string; action: string }> =
 		title: "Dismiss this question?",
 		line: "Skipped — the teacher moves on without it.",
 		action: "Dismiss",
+	},
+	problem: {
+		title: "Discard this problem?",
+		line: "The problem is dropped — no solution is revealed.",
+		action: "Discard",
 	},
 };
 

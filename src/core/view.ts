@@ -220,6 +220,18 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 	return out;
 }
 
+/** The dock-owned tools: question tools (client-owned results — the dock
+ *  mounts on the dangling call) and the practice pose (its ack is FINAL —
+ *  details: null, never replaced — and the card + dock read the call's
+ *  input; the placeholder must never flip the part to output-available).
+ *  PRACTICE (2026-10-04): problem joins the placeholder fork; conclude is
+ *  a NORMAL tool part (its result acks with no payload, details null —
+ *  but the ConcludeCard reads the call's input, and output-available with
+ *  output undefined renders fine). */
+function isPlaceholderResultTool(name: string): boolean {
+	return (QUESTION_TOOLS as readonly string[]).includes(name) || name === "problem";
+}
+
 /** A tool call block → its view part, with the live execution layer. */
 function toolPartOf(
 	block: { id: string; name: string; arguments?: unknown },
@@ -231,7 +243,7 @@ function toolPartOf(
 		input: block.arguments,
 	};
 	const exec = live?.executions.get(block.id);
-	const isQuestion = (QUESTION_TOOLS as readonly string[]).includes(block.name);
+	const isQuestion = isPlaceholderResultTool(block.name);
 	if (exec) {
 		if (exec.isError) {
 			// An invalid call NEVER becomes input-available — the dock's mount
@@ -267,7 +279,7 @@ function applyResultTo(part: LhViewPart | undefined, result: ToolResultMessage):
 		// Flipping the part to output-available on the placeholder would hand
 		// AnsweredCard a null and crash the render (the live crash, 2026-09-26).
 		const tool = part.type.startsWith("tool-") ? part.type.slice("tool-".length) : part.type;
-		const isQuestion = (QUESTION_TOOLS as readonly string[]).includes(tool);
+		const isQuestion = isPlaceholderResultTool(tool);
 		if (isQuestion && !result.isError && result.details == null) return;
 		applyResult(part, result);
 	}
@@ -313,6 +325,22 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
+		case "practice-thinking": {
+			// The learner's working trace / committed answer (practice
+			// sessions): a user-side card keyed on the structured details
+			// (problemCallId, commit, text) — the register lives in the card,
+			// not re-parsed from content.
+			out.push({
+				id: marker.id,
+				role: "user",
+				parts: [{ type: "data-practice-thinking", id: `pt_${marker.id}`, data: marker.details }],
+			});
+			return;
+		}
+		case "problem-dismissed":
+			// UI-only (the ask-style dismissal): the synthesized conclude
+			// pair — which rides the NEXT input — carries the record's face.
+			return;
 		case "plan-block": {
 			// No message of its own: splice into the preceding assistant
 			// group, IN FLOW after the last successful plan_init call.

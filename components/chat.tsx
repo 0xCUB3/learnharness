@@ -36,12 +36,22 @@ import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog"
 import { WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
+import { PracticeDock } from "@/components/practice-dock";
+import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-cards";
 import { TopBar } from "@/components/top-bar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsage } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import { CoverageRing } from "@/components/extraction-coverage";
-import { dismissedAnswer, findPendingToolCall, phaseAt3, phaseTimeline, toolQuestionKind, quizNeedsReveal } from "@/src/core";
+import {
+	activeProblemOf,
+	dismissedAnswer,
+	findPendingToolCall,
+	phaseAt3,
+	phaseTimeline,
+	toolQuestionKind,
+	quizNeedsReveal,
+} from "@/src/core";
 import { ReadingThinkingField } from "@/components/reading-thinking";
 import { slotsConfigured, type ModelsSettings } from "@/src/core";
 import { useSettingsSaved } from "@/components/settings-signal";
@@ -190,7 +200,7 @@ export function Chat({
 	// (core/view.ts projectView); sends are ONE explicit input event each
 	// ({chatId, input} — the stash indirection died with the SDK), and the
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
-	const { messages, nativeMessages, send, steer, steerQueue, submitAnswer, dismissQuestion, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
+	const { messages, nativeMessages, send, steer, steerQueue, submitAnswer, dismissQuestion, dismissProblem, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initiallyInFlight });
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
@@ -321,9 +331,11 @@ export function Chat({
 				planOpen: planOpenRef.current,
 				setupOpen: setupOpenRef.current,
 				pending: pendingRef.current !== null,
+				problem: activeProblemRef.current !== null,
 				busy: busyRef.current,
 			});
 			if (target === "question") setAbortAsk("question");
+			else if (target === "problem") setAbortAsk("problem");
 			else if (target === "turn") setAbortAsk("turn");
 			else if (target === "mermaid") setMermaidFocus(null);
 			else if (target === "plan") setPlanOpen(false);
@@ -344,14 +356,21 @@ export function Chat({
 			// SILENT route — no turn, no wake, nothing generates. The session
 			// pauses at the user's choice; the next plain send is the wake.
 			const p = pendingRef.current;
-			if (!p) return;
-			const question = (p.input as { question?: string } | null)?.question ?? "";
-			const reading = readingThinkingRef.current.trim() || undefined;
-			clearReadingThinking();
-			const answer = dismissedAnswer(toolQuestionKind(p.tool), question);
-			void dismissQuestion(p.toolCallId, reading ? { ...answer, readingThinking: reading } : answer);
+			if (p) {
+				const question = (p.input as { question?: string } | null)?.question ?? "";
+				const reading = readingThinkingRef.current.trim() || undefined;
+				clearReadingThinking();
+				const answer = dismissedAnswer(toolQuestionKind(p.tool), question);
+				void dismissQuestion(p.toolCallId, reading ? { ...answer, readingThinking: reading } : answer);
+				return;
+			}
+			// The practice discard (owner, 2026-10-04): ask-style — the
+			// silent marker route; the conclude synthesis rides the user's
+			// next input. The composer returns immediately.
+			const problem = activeProblemRef.current;
+			if (problem) void dismissProblem(problem.toolCallId);
 		},
-		[abortInFlightTurn, dismissQuestion],
+		[abortInFlightTurn, dismissQuestion, dismissProblem],
 	);
 	// Mount continuation: if the stored transcript ends with a fulfilled tool
 	// (a job result landed while no client was open), resume the lesson — the
@@ -375,6 +394,15 @@ export function Chat({
 	// listener is mount-scoped; the value it needs is render-scoped).
 	const pendingRef = useRef(pending);
 	pendingRef.current = pending;
+
+	// THE ACTIVE PRACTICE PROBLEM (practice sessions, 2026-10-04): the
+	// same dock-ownership rule as a pending question — an active problem
+	// replaces the composer. Computed from the NATIVE record (the fold is
+	// the gate the tools themselves read), not the projected view.
+	const activeProblem = activeProblemOf(nativeMessages);
+	const activeProblemRef = useRef(activeProblem);
+	activeProblemRef.current = activeProblem;
+
 	const localStream = status === "submitted" || status === "streaming";
 	const busy = localStream || turnInFlight;
 	const busyRef = useRef(busy);
@@ -402,6 +430,20 @@ export function Chat({
 		setTurnInFlight(true);
 		void resumeStream();
 	}, [resumeStream]);
+
+	// The practice dock's two lanes (owner, 2026-10-04): both POST one
+	// thinking input against the ACTIVE problem — commit=false is the
+	// nudge (hint request), commit=true the answer commit. Each starts a
+	// turn; the dock stays mounted (the problem is still active until the
+	// agent concludes).
+	const submitThinking = useCallback(
+		(commit: boolean, text: string) => {
+			const problem = activeProblemRef.current;
+			if (!problem) return;
+			void send({ type: "thinking", problemCallId: problem.toolCallId, commit, text });
+		},
+		[send],
+	);
 
 	// Teach-phase check (W5, vision §2): a pending QUIZ that lands once a
 	// plan node is OCCUPIED (phaseAt3 "teach") starts collapsed behind a
@@ -553,7 +595,7 @@ export function Chat({
 	// a pending question still owns the interaction (the dock replaces the
 	// composer, and there is no live turn to steer anyway — questions end
 	// turns).
-	const canSend = (text.trim().length > 0 || dictation.active) && !pending;
+	const canSend = (text.trim().length > 0 || dictation.active) && !pending && !activeProblem;
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
@@ -1194,6 +1236,13 @@ export function Chat({
 														);
 													case "step-start":
 														return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
+													case "data-practice-thinking":
+														// The learner's practice submission (2026-10-04):
+														// user-side — the register (thinking trace /
+														// committed answer) is the card's title.
+														return (
+															<ThinkingCard key={pi} data={part.data as PracticeThinkingData} />
+														);
 													case "data-plan-block":
 														// The plan in the chat (wave 4): a frozen snapshot
 														// block — rendered as carried, never re-derived.
@@ -1285,6 +1334,8 @@ export function Chat({
 				    fold) and NEVER overlaps the composer. */}
 				<DockOverlay
 					pending={pending}
+					practice={activeProblem}
+					onSubmitThinking={submitThinking}
 					chatId={chatId}
 					plan={hasPlan ? <PlanMarginalia messages={messages} /> : undefined}
 					onOpenPlan={() => setPlanOpen(true)}
@@ -1426,13 +1477,19 @@ export function Chat({
  *  then the session overlays (mermaid paints above plan — later in DOM),
  *  then setup (self-closing — the gate only must not fire), then the
  *  2026-10-02 abort chain proper (question before turn). */
-export type EscAbortTarget = "mermaid" | "plan" | "setup" | "question" | "turn" | null;
+export type EscAbortTarget = "mermaid" | "plan" | "setup" | "question" | "problem" | "turn" | null;
 export function escAbortTarget(s: {
 	abortAsk: boolean;
 	mermaidFocus: boolean;
 	planOpen: boolean;
 	setupOpen: boolean;
 	pending: boolean;
+	/** An active practice problem (practice sessions, 2026-10-04): Esc
+	 *  opens the discard confirm — below a pending question (the two
+	 *  never coexist, but the layering stays strict), above the turn
+	 *  abort (a live turn can be running BEHIND an idle problem only in
+	 *  teaching sessions — practice problems end their pose turns). */
+	problem: boolean;
 	busy: boolean;
 }): EscAbortTarget {
 	if (s.abortAsk) return null; // the popup's own Esc — claimed by the dialog
@@ -1440,6 +1497,7 @@ export function escAbortTarget(s: {
 	if (s.planOpen) return "plan";
 	if (s.setupOpen) return "setup";
 	if (s.pending) return "question";
+	if (s.problem) return "problem";
 	if (s.busy) return "turn";
 	return null;
 }
@@ -1477,6 +1535,8 @@ export function shouldStampGeometryMute(nextH: number, prevH: number, pending: b
 
 function DockOverlay({
 	pending,
+	practice,
+	onSubmitThinking,
 	requiresReveal,
 	readingThinking,
 	onReadingThinking,
@@ -1494,6 +1554,12 @@ function DockOverlay({
 	queuedSteers,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
+	/** The ACTIVE practice problem (practice sessions, 2026-10-04):
+	 *  {toolCallId, input} — dock ownership exactly like a pending
+	 *  question (the composer is replaced); null in teaching sessions. */
+	practice: { toolCallId: string; input: unknown } | null;
+	/** (commit, text) — the practice dock's two submit lanes. */
+	onSubmitThinking: (commit: boolean, text: string) => void;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
 	requiresReveal: boolean;
 	/** The reading-thinking draft (owner 2026-10-03) — owned by ChatView so
@@ -1592,8 +1658,11 @@ function DockOverlay({
 	// again → re-open. The dead band keeps trackpad drift from chattering.
 	const expandedRef = useRef(expanded);
 	expandedRef.current = expanded;
-	const pendingRef = useRef(!!pending);
-	pendingRef.current = !!pending;
+	// Dock ownership (the fold machine, the reserve immunity, the arrival
+	// states): a pending question OR an active practice problem — either
+	// replaces the composer and owns the band.
+	const pendingRef = useRef(!!pending || !!practice);
+	pendingRef.current = !!pending || !!practice;
 	const requiresRevealRef = useRef(requiresReveal);
 	requiresRevealRef.current = requiresReveal;
 	const revealedRef = useRef(revealed);
@@ -1765,7 +1834,11 @@ function DockOverlay({
 		if (b) offer(b.getBoundingClientRect().height);
 	};
 
-	const mode = pending ? `question:${pending.toolCallId}` : "chat";
+	const mode = pending
+		? `question:${pending.toolCallId}`
+		: practice
+			? `practice:${practice.toolCallId}`
+			: "chat";
 	// The opening variant of a session appears instantly — the fade/rise is
 	// reserved for mid-session transitions.
 	const initialModeRef = useRef(mode);
@@ -1842,6 +1915,18 @@ function DockOverlay({
 									onSubmit={onSubmitAnswer}
 									onEscape={dictationCancel}
 									dictationClaim={!revealPending}
+								/>
+							) : practice ? (
+								<PracticeDock
+									problemCallId={practice.toolCallId}
+									input={practice.input as { statement: string }}
+									expanded={expanded}
+									onExpand={() => {
+										setExpanded(true);
+										void suppressFoldDuringReveal();
+									}}
+									onSubmit={onSubmitThinking}
+									onEscape={dictationCancel}
 								/>
 							) : (
 								composer

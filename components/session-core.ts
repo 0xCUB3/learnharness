@@ -18,6 +18,8 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
 	needsContinuation,
 	newAnswerResult,
+	newProblemDismissedMarker,
+	newThinkingMessage,
 	newUserMessage,
 	projectView,
 	type ChatInput,
@@ -503,7 +505,12 @@ export class SessionModel {
 		// adoption can tell them from the record's absorbed copies.
 		const optimistic: LhMessage[] = [];
 		if (input.type === "text") optimistic.push({ ...newUserMessage(input.text), id: localId() });
-		else if (input.type === "answer") {
+		else if (input.type === "thinking") {
+			// The practice submissions (2026-10-04): the marker lands
+			// optimistically — the register (trace / commit) renders from
+			// its details the moment the button fires.
+			optimistic.push({ ...newThinkingMessage(input.problemCallId, input.commit, input.text), id: localId() });
+		} else if (input.type === "answer") {
 			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
 			optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });
 		}
@@ -598,6 +605,27 @@ export class SessionModel {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ input: { type: "dismiss", toolCallId, answer } }),
+			});
+			if (!res.ok) throw new Error(`The dismissal failed (${res.status}).`);
+		} catch (err) {
+			this.setError((err as Error).message);
+		}
+	}
+
+	/** The problem discard (practice sessions, owner 2026-10-04): the
+	 *  ask-style dismissal — the UI-only marker lands optimistically, then
+	 *  the SILENT route persists it (no turn, no wake). The composer
+	 *  returns; the conclude synthesis rides the user's next input. */
+	async dismissProblem(problemCallId: string): Promise<void> {
+		if (!this.readyRef) return;
+		this.mutate(() => {
+			this.tail = [...this.tail, { ...newProblemDismissedMarker(problemCallId), id: localId() }];
+		});
+		try {
+			const res = await this.fetch(`/api/chats/${this.chatId}/dismiss`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ input: { type: "dismiss-problem", problemCallId } }),
 			});
 			if (!res.ok) throw new Error(`The dismissal failed (${res.status}).`);
 		} catch (err) {

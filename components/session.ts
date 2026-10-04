@@ -98,6 +98,10 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight }: U
 		(toolCallId: string, answer: QuestionAnswerData) => void model.dismissQuestion(toolCallId, answer),
 		[model],
 	);
+	const dismissProblem = useCallback(
+		(problemCallId: string) => void model.dismissProblem(problemCallId),
+		[model],
+	);
 	const setMessages = useCallback((record: LhMessage[]) => model.setMessages(record), [model]);
 	const adoptRecord = useCallback((record: LhMessage[]) => model.adoptRecord(record), [model]);
 	const stop = useCallback(() => model.stop(), [model]);
@@ -114,6 +118,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight }: U
 		steer,
 		submitAnswer,
 		dismissQuestion,
+		dismissProblem,
 		setMessages,
 		adoptRecord,
 		stop,
