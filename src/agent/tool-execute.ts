@@ -9,10 +9,10 @@ import type { Static, TSchema } from "typebox";
  * (lh-tool.ts, deleted) used to add around every execute:
  *
  * - the system-level per-call timeout + abort cascade (runWithAbortGuard),
- * - the authoring-refinement failure shape (ToolInputError — thrown from
- *   execute; pi's loop converts the throw into an error tool result the
- *   model sees and retries on, exactly the old InvalidToolInputError
- *   semantics),
+ * - the authoring-refinement failure shape (invalidInputResult —
+ *   returned from execute as an isError result; pi 1.0's convention, the
+ *   model sees the same retryable problem list it always did, and
+ *   `details` keeps the problems as data),
  * - the result mapping (string verbatim / object JSON / image results to
  *   native content parts; details carries the record-facing value),
  * - the question-tool placeholder (quiz / ask_user_question): a synthetic
@@ -107,17 +107,26 @@ function runWithAbortGuard<T>(
 		.finally(cleanup);
 }
 
-/** lh's port of the SDK's invalid-input message: what the model retried on.
- *  Thrown from a tool's execute when the authoring refinements fail —
- *  pi's loop catches the throw and turns it into an error tool result. */
-export class ToolInputError extends Error {
-	constructor(
-		public readonly toolName: string,
-		public readonly problems: string[],
-	) {
-		super(`Invalid tool input for tool "${toolName}":\n${problems.map((p) => `- ${p}`).join("\n")}`);
-		this.name = "ToolInputError";
-	}
+/** The 1.0-native authoring-failure result (pi convention, agent-core
+ *  1.0): return an isError result instead of throwing — the model sees the
+ *  same retryable problem list it always did (pi minted exactly this shape
+ *  from a thrown ToolInputError), but `details` now keeps the problems as
+ *  DATA for the record and the UI instead of the throw path's empty {}.
+ *  Content text is byte-identical to the old thrown message. */
+export function invalidInputResult(
+	toolName: string,
+	problems: string[],
+): AgentToolResult<{ tool: string; problems: string[] }> {
+	return {
+		content: [
+			{
+				type: "text",
+				text: `Invalid tool input for tool "${toolName}":\n${problems.map((p) => `- ${p}`).join("\n")}`,
+			},
+		],
+		isError: true,
+		details: { tool: toolName, problems },
+	};
 }
 
 /**

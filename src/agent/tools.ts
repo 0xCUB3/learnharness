@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { questionResult, serverExecute, ToolInputError } from "./tool-execute.ts";
+import { invalidInputResult, questionResult, serverExecute } from "./tool-execute.ts";
 import {
 	askInputSchema,
 	askOptionProblems,
@@ -88,7 +88,7 @@ export const askUserQuestionTool: AgentTool<typeof askInputSchema> = {
 	executionMode: "sequential",
 	execute: async (_toolCallId, input) => {
 		const problems = askOptionProblems(input.options ?? []);
-		if (problems.length > 0) throw new ToolInputError("ask_user_question", problems);
+		if (problems.length > 0) return invalidInputResult("ask_user_question", problems);
 		return questionResult();
 	},
 };
@@ -153,7 +153,7 @@ export const probeQuizTool: AgentTool<typeof probeQuizInputSchema> = {
 	executionMode: "sequential",
 	execute: async (_toolCallId, input) => {
 		const problems = quizInputProblems(input);
-		if (problems.length > 0) throw new ToolInputError("quiz", problems);
+		if (problems.length > 0) return invalidInputResult("quiz", problems);
 		return questionResult();
 	},
 };
@@ -174,7 +174,7 @@ export function teachExplainToolFor(
 			const problems = [...explainInputProblems(input)];
 			const nodeIdProblemText = nodeIdProblem(ctx, input.nodeId);
 			if (nodeIdProblemText) problems.push(nodeIdProblemText);
-			if (problems.length > 0) throw new ToolInputError("explain", problems);
+			if (problems.length > 0) return invalidInputResult("explain", problems);
 			return questionResult();
 		},
 	};
@@ -191,7 +191,7 @@ export const probeExplainTool: AgentTool<typeof explainInputBase> = {
 	executionMode: "sequential",
 	execute: async (_toolCallId, input) => {
 		const problems = explainInputProblems(input);
-		if (problems.length > 0) throw new ToolInputError("explain", problems);
+		if (problems.length > 0) return invalidInputResult("explain", problems);
 		return questionResult();
 	},
 };
@@ -317,7 +317,7 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 			const problems = [...quizInputProblems(input)];
 			const nodeIdProblemText = nodeIdProblem(ctx, input.nodeId);
 			if (nodeIdProblemText) problems.push(nodeIdProblemText);
-			if (problems.length > 0) throw new ToolInputError("quiz", problems);
+			if (problems.length > 0) return invalidInputResult("quiz", problems);
 			return questionResult();
 		},
 	};

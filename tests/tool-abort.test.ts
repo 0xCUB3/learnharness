@@ -15,7 +15,6 @@ import {
 	questionResult,
 	serverExecute,
 	toolTimeoutMs,
-	ToolInputError,
 	toToolResult,
 	type ToolExecuteContext,
 } from "../src/agent/tool-execute.ts";
@@ -121,23 +120,18 @@ describe("serverExecute: cooperative settle, mapping parity, question bypass", (
 		assert.equal(result.terminate, true, "owner Option A: question results end the batch natively");
 	});
 
-	it("authoring failures throw ToolInputError with the retryable problem list", async () => {
-		await assert.rejects(
-			askUserQuestionTool.execute("c7", {
-				question: "q",
-				options: [
-					{ label: "A", value: "same" },
-					{ label: "B", value: "same" },
-				],
-			}),
-			(e: unknown) => {
-				assert.ok(e instanceof ToolInputError);
-				assert.equal(e.toolName, "ask_user_question");
-				assert.match(e.message, /Invalid tool input for tool "ask_user_question":/);
-				assert.match(e.message, /- .*same value/s);
-				return true;
-			},
-		);
+	it("authoring failures return an isError result with the retryable problem list", async () => {
+		const result = (await askUserQuestionTool.execute("c7", {
+			question: "q",
+			options: [
+				{ label: "A", value: "same" },
+			{ label: "B", value: "same" },
+			],
+		})) as { isError?: boolean; content: Array<{ text?: string }>; details?: { tool: string; problems: string[] } };
+		assert.equal(result.isError, true, "pi 1.0 convention: returned, not thrown");
+		assert.equal(result.details?.tool, "ask_user_question");
+		assert.match(result.content[0]!.text!, /Invalid tool input for tool "ask_user_question":/);
+		assert.match(result.details!.problems.map((p) => `- ${p}`).join("\n"), /- .*same value/s);
 	});
 
 	it("toToolResult parity: string verbatim, object as JSON, details rides the raw value", () => {

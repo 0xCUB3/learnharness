@@ -64,29 +64,29 @@ const validQuiz = {
 };
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { ToolInputError } from "../src/agent/tool-execute.ts";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 
 /** The Wave A boundary predicate (2026-09-26): pi's loop structurally
  *  validates against the TypeBox parameters, then execute re-runs the
- *  authoring refinements (the old superRefine) and throws ToolInputError
- *  on problems — the model sees both as retryable input errors. This
- *  helper replicates the old safeParse seam end to end. */
+ *  authoring refinements (the old superRefine) and returns an isError
+ *  result on problems (pi 1.0 convention — invalidInputResult; the model
+ *  sees both as retryable input errors). This helper replicates the old
+ *  safeParse seam end to end. */
 async function boundaryParse(
 	// `input: never` param: contravariance lets any AgentTool's execute slot in.
 	tool: { parameters: any; execute: (id: string, input: never) => Promise<unknown> },
 	input: unknown,
-): Promise<{ success: boolean; error?: ToolInputError }> {
+): Promise<{ success: boolean; error?: AgentToolResult<{ tool: string; problems: string[] }> }> {
 	if (!Value.Check(tool.parameters, input)) return { success: false };
-	try {
-		await tool.execute("tc", input as never);
-		return { success: true };
-	} catch (e) {
-		assert.ok(e instanceof ToolInputError, `expected ToolInputError, got: ${e}`);
-		return { success: false, error: e };
-	}
+	const result = (await tool.execute("tc", input as never)) as AgentToolResult<{
+		tool: string;
+		problems: string[];
+	}>;
+	if (result.isError) return { success: false, error: result };
+	return { success: true };
 }
-const problemLines = (e?: ToolInputError): string[] =>
-	(e?.message.split("\n") ?? []).filter((l) => l.startsWith("- "));
+const problemLines = (r?: AgentToolResult<{ tool: string; problems: string[] }>): string[] =>
+	r?.details.problems ?? [];
 
 describe("teachQuizToolFor: the dynamic plan-nodeId validation (position signal)", () => {
 	it("accepts a nodeId that matches a node of the session's tree", async () => {

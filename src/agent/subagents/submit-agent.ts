@@ -10,7 +10,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
-import { toToolResult, ToolInputError } from "../tool-execute.ts";
+import { invalidInputResult, toToolResult } from "../tool-execute.ts";
 import type { ModelRole } from "../../../config.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
@@ -63,14 +63,16 @@ export async function runSubmitAgent<T>(opts: {
 	/** Turn budget for the loop (default 4 = retry-only; the auditor runs
 	 *  an exploration loop instead — 16). */
 	maxTurns?: number;
+	/** Debug: raw provider-event recording key (LH_PROVIDER_EVENTS=1). */
+	chatId?: string;
 	/** Weak-model argument heal at pi's prepareArguments seam (runs BEFORE
 	 *  TypeBox validation — the sanctioned shim point). Identity by
 	 *  default; extraction wires healStringifiedArrays here. */
 	prepareArguments?: (args: unknown) => unknown;
 	/** Semantic validation at the submit seam: the value is schema-valid
 	 *  but may violate a PIPELINE law (coverage, echo-equality). Returning
-	 *  a problem string throws ToolInputError → pi turns it into an error
-	 *  tool result → the model retries within maxTurns. null = accept. */
+	 *  a problem string yields an isError result (invalidInputResult) →
+	 *  the model retries within maxTurns. null = accept. */
 	validate?: (value: T) => string | null;
 }): Promise<T> {
 	let submitted: T | undefined;
@@ -87,7 +89,7 @@ export async function runSubmitAgent<T>(opts: {
 				execute: async (_toolCallId, input) => {
 					const value = opts.fill(input);
 					const problem = opts.validate?.(value) ?? null;
-					if (problem) throw new ToolInputError(opts.toolName, [problem]);
+					if (problem) return invalidInputResult(opts.toolName, [problem]);
 					submitted = value;
 					return toToolResult(submitted);
 				},
@@ -100,6 +102,7 @@ export async function runSubmitAgent<T>(opts: {
 			prompt: opts.prompt,
 			maxTurns: opts.maxTurns ?? 4,
 			abortSignal: opts.signal,
+			chatId: opts.chatId,
 			onAssistantMessage: (message, step) =>
 				opts.onStep(
 					message.usage,

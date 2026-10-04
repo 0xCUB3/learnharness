@@ -4,7 +4,7 @@
  * Three single-submit workers on the shared runSubmitAgent seam (one
  * TypeBox-validated submit call each; a pi agent purely so the model can
  * retry a schema-invalid or LAW-violating call — the validate hook throws
- * ToolInputError at the execute seam and pi turns it into an error tool
+ * an invalidInputResult isError result at the execute seam (pi 1.0 convention)
  * result the model sees).
  *
  * Roles: partitioner | problemGenerator | grader — all strong-tier
