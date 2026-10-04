@@ -2,6 +2,7 @@ import type { AssistantMessage, Message, Tool, ToolResultMessage, Usage } from "
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { piEngineFor, type PiEngine, type ThinkingLevel } from "../models.ts";
+import { providerEventObserver, type ProviderEventObserver } from "../provider-events.ts";
 import type { VisualResult } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
 
@@ -44,6 +45,8 @@ export interface VisualMakerOptions {
 	/** Money channel: one call per loop iteration (streamSimple), folded
 	 * into JobRecord.usage. */
 	onUsage?: (usage: Usage) => void;
+	/** Debug: raw provider-event recording key (LH_PROVIDER_EVENTS=1). */
+	chatId?: string;
 }
 
 const INSTRUCTIONS = `You are a visual maker — a diagram author + renderer for precise, spatial figures. You
@@ -155,7 +158,15 @@ export async function runVisualMaker(input: VisualMakerInput, opts: VisualMakerO
 		for (let iteration = 0; iteration < maxIterations; iteration++) {
 			// One model call per iteration (streamSimple, no agent loop — this
 			// loop owns tool execution and the image-in-the-loop injection).
-			const result = await streamOnce(engine, INSTRUCTIONS, messages, toolDeclarations, reasoning, opts.abortSignal);
+			const result = await streamOnce(
+				engine,
+				INSTRUCTIONS,
+				messages,
+				toolDeclarations,
+				reasoning,
+				opts.abortSignal,
+				opts.chatId ? providerEventObserver(opts.chatId, "job:visualMaker") : undefined,
+			);
 			// Money channel: each iteration is one model call.
 			opts.onUsage?.(result.usage);
 			messages = [...messages, result];
@@ -307,6 +318,7 @@ async function streamOnce(
 	tools: Tool[],
 	reasoning: ThinkingLevel | undefined,
 	abortSignal?: AbortSignal,
+	onProviderStreamEvent?: ProviderEventObserver,
 ): Promise<AssistantMessage> {
 	// 0.87.1: provider-facing contexts are TranscriptContexts — the prompt
 	// and tool declarations fold into a leading system message.
@@ -315,6 +327,7 @@ async function streamOnce(
 		reasoning: reasoning && reasoning !== "off" ? reasoning : undefined,
 		apiKey: process.env.OPENROUTER_API_KEY || undefined,
 		signal: abortSignal,
+		onProviderStreamEvent: onProviderStreamEvent as never,
 	} as never);
 	for await (const event of stream) {
 		if (event.type === "done") return event.message;

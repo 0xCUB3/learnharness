@@ -18,6 +18,7 @@ import {
 } from "./jobs.ts";
 import { piTurnResponse, runPiTurn } from "./pi/ui-stream.ts";
 import { collectToolCallIds } from "./pi/call-ids.ts";
+import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { providerKeyPresent } from "./keys.ts";
@@ -321,6 +322,9 @@ export async function handleChatInput(
 		messages: asAgentMessages(merged),
 		onUsage: collectUsage,
 		toolToggles: effective.agent.tools,
+		// Debug (owner, 2026-10-04): teacher/prober raw provider events under
+		// LH_PROVIDER_EVENTS=1 (provider-events.ts); no-op otherwise.
+		chatId,
 		// The prompt-override switches (P2, 2026-09-19): same resolution
 		// point as the tool delta — the agent layer composes the system
 		// prompt fresh per turn, swapping in any enabled override segments.
@@ -378,6 +382,10 @@ export async function handleChatInput(
 		// coalescing). Settlement still cannot beat the flow below: it needs
 		// a streamed response, which never happens inside the constructor.
 		registerLiveAgent(chatId, constructed);
+		// Debug recorder run marker (owner, 2026-10-04): correlates the
+		// JSONL event stream with the record's turns; no-op unless
+		// LH_PROVIDER_EVENTS=1.
+		providerEventNote(chatId, "turn", `run start (base: ${merged.length} messages)`);
 		const handle = runPiTurn({
 			agent: constructed,
 			// THE LACAN FIX (2026-10-04): seed the uniquifier with every

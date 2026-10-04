@@ -71,6 +71,8 @@ export interface ResearcherRunOptions {
 	abortSignal?: AbortSignal;
 	onUsage?: (usage: Usage) => void;
 	onToolStart?: (toolName: string, args: unknown) => void;
+	/** Debug: raw provider-event recording key (LH_PROVIDER_EVENTS=1). */
+	chatId?: string;
 }
 
 /**
@@ -88,6 +90,7 @@ export async function runResearcherAgent(prompt: string, opts: ResearcherRunOpti
 		abortSignal: opts.abortSignal,
 		onUsage: opts.onUsage,
 		onToolStart: opts.onToolStart,
+		chatId: opts.chatId,
 	});
 	return text;
 }

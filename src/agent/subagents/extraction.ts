@@ -372,6 +372,7 @@ export function sourceDigest(graph: DerivedGraph, sourceId: string): string {
 /** The extractor over ONE session transcript (the chat front door). */
 function runExtractor(
 	engine: PiEngine | undefined,
+	sourceId: string,
 	prompt: string,
 	existingIds: ReadonlySet<string>,
 	signal: AbortSignal | undefined,
@@ -382,6 +383,9 @@ function runExtractor(
 	// over the MIXED namespace: local ids + existing graph ids.
 	return runSubmitAgent<FindingsSubmit>({
 		role: "extractor",
+		// Debug recorder key: the source id (the run's ledger key — the
+		// chat's chatId for chat runs, the src id for notes).
+		chatId: sourceId,
 		toolName: "submit_findings",
 		toolDescription: "Submit the session findings.",
 		parameters: findingsSchema,
@@ -401,6 +405,7 @@ function runExtractor(
  *  front door): same single-submit shape, notes-mode prompt + schema. */
 function runNotesExtractor(
 	engine: PiEngine | undefined,
+	sourceId: string,
 	prompt: string,
 	existingIds: ReadonlySet<string>,
 	signal: AbortSignal | undefined,
@@ -408,6 +413,8 @@ function runNotesExtractor(
 ): Promise<NotesFindings> {
 	return runSubmitAgent<FindingsSubmit>({
 		role: "extractor",
+		// Debug recorder key: the notes' source id (the ledger key).
+		chatId: sourceId,
 		toolName: "submit_findings",
 		toolDescription: "Submit the notes findings.",
 		parameters: findingsSchema,
@@ -467,6 +474,7 @@ Include the "links" field even when empty — "links": [] when nothing links. NE
  *  tools plus the one submit call. */
 function runAuditor(
 	engine: PiEngine | undefined,
+	sourceId: string,
 	prompt: string,
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
@@ -474,6 +482,8 @@ function runAuditor(
 ): Promise<AuditVerdicts> {
 	return runSubmitAgent({
 		role: "auditor",
+		// Debug recorder key: same source id as the extractor run.
+		chatId: sourceId,
 		toolName: "submit_review",
 		toolDescription: "Submit the identity verdicts ONLY (links) — never the propositions themselves.",
 		parameters: auditSchema,
@@ -804,6 +814,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 
 		const findings = await runExtractor(
 			stageEngine("extractor", deps.extractor),
+			sourceId,
 			prompt,
 			new Set(graph.nodes.map((n) => n.id)),
 			signal,
@@ -816,7 +827,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		return findings;
 	}
 
-	async function audit(jobKey: string, findings: SessionFindings): Promise<AuditVerdicts> {
+	async function audit(jobKey: string, sourceId: string, findings: SessionFindings): Promise<AuditVerdicts> {
 		const signal = runningExtractions.get(jobKey)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during the extract→audit gap ends here
 		const graph = getGraph(graphStore);
@@ -831,6 +842,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		// exploration tools instead of an injected dump.
 		const auditResult = await runAuditor(
 			stageEngine("auditor", deps.auditor),
+			sourceId,
 			`Proposed findings from the extractor (the source itself is not available to you — the extractor is fully trusted; the propositions only — the reasoning chains are the merger's business, owner 2026-09-30):\n\n` +
 				`${JSON.stringify({ propositions: findings.propositions }, null, 2)}\n\n` +
 				`The current knowledge graph has ${graph.nodes.length} node(s). Explore it with your tools and link what links.`,
@@ -1017,7 +1029,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 							// stands AFTER every earlier job's merge.
 							return withAuditLock(jobKey, "chat", undefined, async () => {
 								setPhase(jobKey, "auditing", "chat", undefined, part);
-								const auditResult = await audit(jobKey, findings);
+								const auditResult = await audit(jobKey, chatId, findings);
 								setPhase(jobKey, "merging", "chat", undefined, part);
 								// SESSION-DELETION GUARD (wave 6): a chat deleted mid-run must never
 								// merge. The deletion route aborts this run first and runs its purge
@@ -1131,6 +1143,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		const t0 = performance.now();
 		const findings = await runNotesExtractor(
 			stageEngine("extractor", deps.extractor),
+			input.id,
 			prompt,
 			new Set(graph.nodes.map((n) => n.id)),
 			signal,
@@ -1191,7 +1204,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 							// per chunk so cross-source runs interleave fairly.
 							return withAuditLock(jobKey, "notes", input.filePath, async () => {
 								setPhase(jobKey, "auditing", "notes", input.filePath, part);
-								const auditResult = await audit(jobKey, findings);
+								const auditResult = await audit(jobKey, input.id, findings);
 								setPhase(jobKey, "merging", "notes", input.filePath, part);
 								const merged = mergeFindings(
 									id,

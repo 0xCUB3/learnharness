@@ -2,6 +2,7 @@ import type { AssistantMessage, Message, ToolResultMessage, Usage, Tool } from "
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { piEngineFor, type PiEngine, type ThinkingLevel } from "../models.ts";
+import { providerEventObserver, type ProviderEventObserver } from "../provider-events.ts";
 import type { PdfResult, PdfToolInput } from "../../core/contracts.ts";
 import { getHeadless, type HeadlessApi } from "./headless.ts";
 import { pdfExtract, pdfInfo, pdfProbe, pdfSearch, type PdfSearchHit } from "./pdf-ops.ts";
@@ -66,6 +67,8 @@ export interface PdfReaderOptions {
 	onActivity?: (line: string) => void;
 	headless?: HeadlessApi;
 	maxIterations?: number;
+	/** Debug: raw provider-event recording key (LH_PROVIDER_EVENTS=1). */
+	chatId?: string;
 }
 
 export interface PdfReaderInput extends PdfToolInput {}
@@ -199,7 +202,15 @@ export async function runPdfReaderAgent(
 
 	try {
 		for (let iteration = 0; iteration < maxIterations; iteration++) {
-			const result = await streamOnce(engine, INSTRUCTIONS, messages, toolDeclarations, reasoning, opts.abortSignal);
+			const result = await streamOnce(
+				engine,
+				INSTRUCTIONS,
+				messages,
+				toolDeclarations,
+				reasoning,
+				opts.abortSignal,
+				opts.chatId ? providerEventObserver(opts.chatId, "job:pdfReader") : undefined,
+			);
 			// Money channel: each iteration is one model call.
 			opts.onUsage?.(result.usage);
 			messages = [...messages, result];
@@ -392,6 +403,7 @@ async function streamOnce(
 	tools: Tool[],
 	reasoning: ThinkingLevel | undefined,
 	abortSignal?: AbortSignal,
+	onProviderStreamEvent?: ProviderEventObserver,
 ): Promise<AssistantMessage> {
 	// 0.87.1: provider-facing contexts are TranscriptContexts — the prompt
 	// and tool declarations fold into a leading system message.
@@ -400,6 +412,7 @@ async function streamOnce(
 		reasoning: reasoning && reasoning !== "off" ? reasoning : undefined,
 		apiKey: process.env.OPENROUTER_API_KEY || undefined,
 		signal: abortSignal,
+		onProviderStreamEvent: onProviderStreamEvent as never,
 	} as never);
 	for await (const event of stream) {
 		if (event.type === "done") return event.message;

@@ -1,6 +1,7 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
-import { questionResult, ToolInputError } from "./tool-execute.ts";
+import { invalidInputResult, questionResult } from "./tool-execute.ts";
+import { providerEventObserver } from "./provider-events.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
 import { piEngineFor, type PiEngine } from "./models.ts";
@@ -111,6 +112,11 @@ export interface AgentBuildOptions {
 	 *  fresh per turn, honoring enabled overrides (switch on + file
 	 *  exists); absent → the cached pure-source composition. */
 	promptSwitches?: Record<string, boolean>;
+	/** Debug: when set AND LH_PROVIDER_EVENTS=1, raw provider stream events
+	 *  (pre-normalization) append to data/debug/provider-events/
+	 *  <chatId>.jsonl via providerEventObserver — the GLM-truncation /
+	 *  DeepSeek-id incident layer. Absent or env-off → no observer. */
+	chatId?: string;
 }
 
 /**
@@ -158,6 +164,10 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	const systemPrompt = opts.promptSwitches
 		? composeInstructions(kind, opts.promptSwitches)
 		: composedInstructions[kind]!;
+	// Debug recorder (owner, 2026-10-04): raw provider events when
+	// LH_PROVIDER_EVENTS=1 and the caller handed a chatId; undefined is
+	// the normal no-observer path (tests, env-off).
+	const providerEvents = opts.chatId ? providerEventObserver(opts.chatId, kind) : undefined;
 	const agent = new Agent({
 		initialState: {
 			systemPrompt,
@@ -167,6 +177,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			messages: opts.messages ?? [],
 		},
 		streamFn: engine.streamFn,
+		...(providerEvents ? { onProviderStreamEvent: providerEvents } : {}),
 		// 0.87.1: shouldStopAfterTurn → finishTurn. Same call point (after
 		// tool results attach, before turn_end) and `{ action: "end" }` still
 		// exits BEFORE the steering poll — the parked-marker stranding our
@@ -232,9 +243,9 @@ export function createTeacherAgent(
 }
 
 /** The bare teach question set (tests, bare agents): quiz with the shared
- *  authoring refinement (quizInputProblems, run in execute — throws
- *  ToolInputError, which pi's loop converts to the error tool result the
- *  model retries on) but NO per-session nodeId check (no record to read),
+ *  authoring refinement (quizInputProblems, run in execute — returns an
+ *  invalidInputResult isError result the model retries on, pi 1.0
+ *  convention) but NO per-session nodeId check (no record to read),
  *  plus ask. */
 export function bareQuestionTools(): Record<string, AgentTool<any>> {
 	// A typed const (not an inline literal): the specific AgentTool typing
@@ -248,7 +259,7 @@ export function bareQuestionTools(): Record<string, AgentTool<any>> {
 		executionMode: "sequential",
 		execute: async (_toolCallId, input) => {
 			const problems = quizInputProblems(input);
-			if (problems.length > 0) throw new ToolInputError("quiz", problems);
+			if (problems.length > 0) return invalidInputResult("quiz", problems);
 			return questionResult();
 		},
 	};

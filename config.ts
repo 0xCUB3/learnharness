@@ -30,6 +30,9 @@ export const PATHS = {
 	 * Bounded self-contained snapshots (propositions + chains frozen at
 	 * creation), not append-only ledgers. */
 	practice: path.join(DATA_ROOT, "practice"),
+	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
+	 * raw provider stream recordings (src/agent/provider-events.ts). */
+	debug: path.join(DATA_ROOT, "debug"),
 } as const;
 
 // ─── Models ────────────────────────────────────────────────────────────────
