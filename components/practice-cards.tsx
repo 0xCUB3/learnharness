@@ -17,8 +17,12 @@ import { cn } from "@/lib/utils";
  *   (the committed solution, shown when the problem ended). A dismissal
  *   synthesis (outcome:"dismissed") renders as one muted line.
  * - ThinkingCard — the learner's own submission, user-side: the register
- *   is the two buttons' (Nudge = working trace, Commit = answer).
+ *   is the two buttons' (Nudge = working trace, Commit = answer). The
+ *   UNIFIED ThinkingBlock (owner round 2026-10-05): the quiz quote-block
+ *   language in a faint user-side shell, never collapsible.
  */
+
+import { ThinkingBlock } from "@/components/thinking-block";
 
 /** The practice-thinking marker's details (native-messages.ts). */
 export interface PracticeThinkingData {
@@ -115,24 +119,16 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 }
 
 export function ThinkingCard({ data }: { data: PracticeThinkingData }) {
-	const [open, setOpen] = useState(true);
+	// One component, two registers (owner ruling): the committed register
+	// carries the primary rail (the quiz answer thinking's paint), the
+	// working register the muted one.
 	return (
-		<div
-			data-testid="thinking-card"
-			data-commit={data.commit ? "true" : "false"}
-			className="ml-auto max-w-[85%] rounded-2xl border border-border/60 bg-muted/40 px-4 py-3"
-		>
-			<button
-				type="button"
-				onClick={() => setOpen((v) => !v)}
-				className="flex w-full cursor-pointer items-center gap-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground"
-			>
-				{data.commit ? "Your solution" : "Your thinking"}
-				<ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
-			</button>
-			{open && (
-				<div className="mt-1.5 whitespace-pre-wrap text-[15px]">{data.text}</div>
-			)}
-		</div>
+		<ThinkingBlock
+			testId="thinking-card"
+			dataCommit={data.commit}
+			label={data.commit ? "Your solution" : "Your thinking"}
+			text={data.text}
+			rail={data.commit ? "primary" : "muted"}
+		/>
 	);
 }

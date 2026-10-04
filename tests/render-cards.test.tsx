@@ -572,15 +572,24 @@ describe("predict vs check rendering", () => {
 		assert.ok(!html.includes("tucked-explanation"));
 	});
 
-	it("the reading-thinking channel renders as its own block; legacy `note` still renders", () => {
+	it("the reading-thinking channel is LIFTED above the card as its own user-side block", () => {
 		const withReading = buildAnswer(quizQD(), {
 			values: ["Mercury"],
 			thinking: "answering thought",
 			readingThinking: "was unsure mid-paragraph",
 		});
 		const html = renderToStaticMarkup(<AnsweredCard answer={withReading} />);
-		assert.ok(html.includes("Your thinking while reading"), "the reading channel is labeled distinctly");
-		assert.ok(html.includes("answering thought"));
+		// The unified ThinkingBlock (owner round, 2026-10-05): the reading
+		// thoughts render BEFORE the card, user-side (right shell), under the
+		// plain "Your thinking" label — no longer an inset inside the answer.
+		const blockAt = html.indexOf("reading-thinking-block");
+		const cardAt = html.indexOf("answered-card");
+		assert.ok(blockAt !== -1, "the lifted block renders");
+		assert.ok(blockAt < cardAt, "it sits ABOVE the answered card");
+		assert.ok(html.includes("Your thinking"), "the plain label");
+		assert.ok(!html.includes("Your thinking while reading"), "the old verbose label is gone");
+		assert.ok(!html.includes("your-reading-thinking"), "the in-card inset is gone");
+		assert.ok(html.includes("answering thought"), "the answer thinking stays inside the card");
 		assert.ok(html.includes("was unsure mid-paragraph"));
 		const legacy = { ...buildAnswer(quizQD(), { values: ["Mercury"] }), note: "a 2026-09 answer" };
 		const legacyHtml = renderToStaticMarkup(<AnsweredCard answer={legacy} />);

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ConfidenceRail } from "@/components/confidence-rail";
 import { GlyphMark } from "@/components/ui/glyph-mark";
+import { ThinkingBlock } from "@/components/thinking-block";
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
@@ -33,6 +34,15 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 	const correctIdx = new Set(answer.correctIndices ?? []);
 
 	return (
+		<>
+		{/* The reading channel LIFTED (owner round, 2026-10-05): thoughts
+		    captured while reading are chronologically PRIOR to the question —
+		    rendered as its own user-side block ABOVE the card, the unified
+		    ThinkingBlock, instead of an inset inside the answer. Same muted
+		    rail as before; the label is now plain "Your thinking". */}
+		{answer.readingThinking && (
+			<ThinkingBlock testId="reading-thinking-block" label="Your thinking" text={answer.readingThinking} rail="muted" />
+		)}
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="answered-card">
 			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{isQuiz ? (answer.questionType === "predict" ? "Prediction" : "Quiz") : isExplain ? "Explain" : "Question"}
@@ -133,18 +143,6 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				</div>
 			)}
 
-			{/* The reading channel (owner 2026-10-03): thoughts captured while
-			    reading the teaching prose — a separate block from the question
-			    thinking, same quiet voice. */}
-			{answer.readingThinking && (
-				<div data-testid="your-reading-thinking" className="mt-3 border-l-2 border-muted-foreground/30 pl-3">
-					<span className="mb-0.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-						Your thinking while reading
-					</span>
-					<span className="lh-prose block whitespace-pre-wrap text-foreground/90">{answer.readingThinking}</span>
-				</div>
-			)}
-
 			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper
 			    than the option box edges (owner, round 3). Sides flush with everything
 			    else; py-2 stays for vertical air. */}
@@ -190,5 +188,6 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				</div>
 			)}
 		</div>
+		</>
 	);
 }
