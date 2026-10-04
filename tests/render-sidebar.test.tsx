@@ -21,6 +21,7 @@ function item(overrides: Partial<ChatListItem>): ChatListItem {
 	return {
 		id: "c1",
 		title: "Test session",
+		kind: "teach",
 		createdAt: "2026-01-01T00:00:00.000Z",
 		updatedAt: "2026-01-02T00:00:00.000Z",
 		messageCount: 4,
