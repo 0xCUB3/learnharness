@@ -316,9 +316,26 @@ export function concludedByDismissalPair(
  *  conclude call or a dismissal marker deactivates. The ack result at pose
  *  time does NOT (the problem stays on screen through nudges; the dock's
  *  subject is the call, not a dangling result). */
+/** The ids of tool calls whose results are CLEAN (not errored) — the only
+ *  calls that ever happened, per the honest-activation ruling. */
+function cleanToolCallIds(messages: readonly LhMessage[]): Set<string> {
+	const ids = new Set<string>();
+	for (const m of messages) {
+		if ((m as { role?: string }).role !== "toolResult") continue;
+		const result = m as ToolResultMessage;
+		if (!result.isError) ids.add(result.toolCallId);
+	}
+	return ids;
+}
+
 export function activeProblemOf(
 	messages: readonly LhMessage[],
 ): { toolCallId: string; input: unknown } | null {
+	// HONEST ACTIVATION (owner ruling, 2026-10-05 — the BKT incident):
+	// calls count only through their RESULTS — a problem activates on its
+	// clean ack, a conclude frees on its clean ack; errored and dangling
+	// calls are skipped ("either it goes through or it doesn't").
+	const cleanCallIds = cleanToolCallIds(messages);
 	for (let mi = messages.length - 1; mi >= 0; mi--) {
 		const m = messages[mi]!;
 		const role = (m as { role?: string }).role;
@@ -332,9 +349,13 @@ export function activeProblemOf(
 			for (let bi = assistant.content.length - 1; bi >= 0; bi--) {
 				const block = assistant.content[bi]!;
 				if (block.type !== "toolCall") continue;
-				if (block.name === PRACTICE_CONCLUDE_TOOL) return null;
+				if (block.name === PRACTICE_CONCLUDE_TOOL) {
+					if (cleanCallIds.has(block.id)) return null; // a CLEAN conclude frees
+					continue; // errored/dangling conclude: the free never happened
+				}
 				if (block.name !== PRACTICE_PROBLEM_TOOL) continue;
-				return { toolCallId: block.id, input: block.arguments };
+				if (cleanCallIds.has(block.id)) return { toolCallId: block.id, input: block.arguments };
+				// errored/dangling pose — it did not go through; keep scanning
 			}
 			continue;
 		}
@@ -347,6 +368,7 @@ export function activeProblemOf(
  *  (input-events). Newest-marker-wins scan: the first dismissal marker or
  *  conclude call from the end decides. */
 export function pendingProblemDismissalOf(messages: readonly LhMessage[]): string | null {
+	const cleanCallIds = cleanToolCallIds(messages);
 	for (let mi = messages.length - 1; mi >= 0; mi--) {
 		const m = messages[mi]!;
 		const role = (m as { role?: string }).role;
@@ -362,8 +384,14 @@ export function pendingProblemDismissalOf(messages: readonly LhMessage[]): strin
 			for (let bi = assistant.content.length - 1; bi >= 0; bi--) {
 				const block = assistant.content[bi]!;
 				if (block.type !== "toolCall" && block.type !== "text") continue;
-				if (block.type === "toolCall" && block.name === PRACTICE_CONCLUDE_TOOL) return null;
-				if (block.type === "toolCall" && block.name === PRACTICE_PROBLEM_TOOL) return null;
+				if (block.type === "toolCall" && block.name === PRACTICE_CONCLUDE_TOOL) {
+					if (cleanCallIds.has(block.id)) return null; // a CLEAN conclude settles it
+					continue; // errored/dangling: it never happened
+				}
+				if (block.type === "toolCall" && block.name === PRACTICE_PROBLEM_TOOL) {
+					if (cleanCallIds.has(block.id)) return null; // a CLEAN pose supersedes it
+					continue;
+				}
 			}
 			continue;
 		}

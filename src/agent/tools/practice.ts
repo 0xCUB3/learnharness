@@ -111,6 +111,27 @@ export interface PracticeToolContext {
 	chatStore: { getChat(id: string): { messages: LhMessage[]; kind?: string } | null };
 }
 
+/** TURN-SCOPED GATE STATE (the BKT incident, 2026-10-05): the gates used
+ *  to read the STORED record — but the record freezes at the turn's
+ *  write-ahead (persistTurn lands only at turn END), so a mid-turn
+ *  conclude → pose pair could never see each other: every conclude
+ *  succeeded against the stale record and every following pose died on
+ *  "a problem is already active" until the model gave up ("the problem
+ *  slot is stuck"). The gate seeds ONCE from the record at construction
+ *  (one practiceTools per turn — chat-handler builds the agent per
+ *  request, so there is no cross-turn leakage), and the executes flip
+ *  this closure — the intra-turn truth the record cannot hold yet. */
+export interface PracticeGate {
+	problemActive: boolean;
+}
+
+/** Seed the turn's gate from the record (result-aware activeProblemOf —
+ *  only a cleanly-posed problem counts). */
+export function createPracticeGate(ctx: PracticeToolContext): PracticeGate {
+	const record = ctx.chatStore.getChat(ctx.chatId);
+	return { problemActive: record ? activeProblemOf(record.messages) !== null : false };
+}
+
 // ─── problem: the pose ───────────────────────────────────────────────────────
 
 export const problemInputObject = Type.Object({
@@ -144,7 +165,7 @@ export const problemInputObject = Type.Object({
 
 export type ProblemInput = Static<typeof problemInputObject>;
 
-export function problemTool(ctx: PracticeToolContext): AgentTool<typeof problemInputObject> {
+export function problemTool(gate: PracticeGate): AgentTool<typeof problemInputObject> {
 	return {
 		name: "problem",
 		label: "problem",
@@ -157,12 +178,12 @@ export function problemTool(ctx: PracticeToolContext): AgentTool<typeof problemI
 		executionMode: "sequential",
 		prepareArguments: (args: unknown) => healEncodedArguments(args, problemInputObject) as never,
 		execute: async (_toolCallId, _input) => {
-			const record = ctx.chatStore.getChat(ctx.chatId);
-			if (record && activeProblemOf(record.messages) !== null) {
+			if (gate.problemActive) {
 				return invalidInputResult("problem", [
 					"a problem is already active — call conclude on it before posing the next one",
 				]);
 			}
+			gate.problemActive = true;
 			return problemResult();
 		},
 	};
@@ -207,7 +228,7 @@ export const concludeInputObject = Type.Object({
 
 export type ConcludeInput = Static<typeof concludeInputObject>;
 
-export function concludeTool(ctx: PracticeToolContext): AgentTool<typeof concludeInputObject> {
+export function concludeTool(gate: PracticeGate): AgentTool<typeof concludeInputObject> {
 	return {
 		name: "conclude",
 		label: "conclude",
@@ -219,10 +240,10 @@ export function concludeTool(ctx: PracticeToolContext): AgentTool<typeof conclud
 		prepareArguments: (args: unknown) => healEncodedArguments(args, concludeInputObject) as never,
 		executionMode: "sequential",
 		execute: async (_toolCallId, _input) => {
-			const record = ctx.chatStore.getChat(ctx.chatId);
-			if (!record || activeProblemOf(record.messages) === null) {
+			if (!gate.problemActive) {
 				return invalidInputResult("conclude", ["no active problem to conclude — pose one first"]);
 			}
+			gate.problemActive = false;
 			return concludeResult();
 		},
 	};
@@ -230,8 +251,10 @@ export function concludeTool(ctx: PracticeToolContext): AgentTool<typeof conclud
 
 /** The practice toolset (the practice agent's whole registry). */
 export function practiceTools(ctx: PracticeToolContext): Record<string, AgentTool<any>> {
+	// ONE gate per turn, shared by both tools — the intra-turn truth.
+	const gate = createPracticeGate(ctx);
 	return {
-		problem: problemTool(ctx),
-		conclude: concludeTool(ctx),
+		problem: problemTool(gate),
+		conclude: concludeTool(gate),
 	};
 }

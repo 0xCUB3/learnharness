@@ -68,21 +68,35 @@ function problemPose(callId = "call_p1", statement = "Show that…"): LhMessage[
 	return [assistant, ack];
 }
 
-function concludeCall(outcome: string): LhMessage & AssistantMessage {
-	return {
-		id: `msg_c_${outcome}`,
-		role: "assistant",
-		content: [
-			{
-				type: "toolCall",
-				id: `call_conclude_${outcome}`,
-				name: PRACTICE_CONCLUDE_TOOL,
-				arguments: { outcome },
-			},
-		],
-		timestamp: 3,
-		...STAMPS,
-	};
+function concludeCall(outcome: string): LhMessage[] {
+	// Honest folds: the conclude call rides WITH its clean ack — a
+	// dangling or errored conclude never freed anything.
+	return [
+		{
+			id: `msg_c_${outcome}`,
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: `call_conclude_${outcome}`,
+					name: PRACTICE_CONCLUDE_TOOL,
+					arguments: { outcome },
+				},
+			],
+			timestamp: 3,
+			...STAMPS,
+		},
+		{
+			id: `msg_cr_${outcome}`,
+			role: "toolResult",
+			toolCallId: `call_conclude_${outcome}`,
+			toolName: PRACTICE_CONCLUDE_TOOL,
+			content: [{ type: "text", text: "Problem concluded — the composer is free; pose the next problem or wrap up." }],
+			details: null,
+			isError: false,
+			timestamp: 4,
+		},
+	];
 }
 
 // ── the active-problem fold ──────────────────────────────────────────────────
@@ -108,8 +122,37 @@ describe("activeProblemOf (the conclude-before-next-problem gate's fold)", () =>
 	});
 
 	it("a conclude call deactivates", () => {
-		const messages = [...problemPose(), concludeCall("solved")];
+		const messages = [...problemPose(), ...concludeCall("solved")];
 		assert.equal(activeProblemOf(messages), null);
+	});
+
+	it("an ERRORED pose never activates (the BKT phantom — honest activation)", () => {
+		// The gate refused the pose ("a problem is already active" in the
+		// BKT incident); the composer must not mount from its arguments.
+		const rejected = problemPose("call_bad", "A different student…");
+		(rejected[1]! as unknown as { isError: boolean }).isError = true;
+		assert.equal(activeProblemOf(rejected), null, "a lone refused pose is nothing");
+	});
+
+	it("a clean pose UNDER an errored rejection stays active (the scan skips refusals)", () => {
+		const rejected = problemPose("call_bad", "A different student…");
+		(rejected[1]! as unknown as { isError: boolean }).isError = true;
+		const active = activeProblemOf([...problemPose(), ...rejected]);
+		assert.ok(active, "the clean pose below is still the active one");
+		assert.equal(active!.toolCallId, "call_p1");
+	});
+
+	it("an ERRORED conclude does not free (only the clean ack frees)", () => {
+		const badConclude = concludeCall("solved");
+		(badConclude[1]! as unknown as { isError: boolean }).isError = true;
+		const active = activeProblemOf([...problemPose(), ...badConclude]);
+		assert.ok(active, "the conclude never happened — the problem stays live");
+		assert.equal(active!.toolCallId, "call_p1");
+	});
+
+	it("a DANGLING pose (mid-turn, no result) does not activate — it has not gone through", () => {
+		const dangling = problemPose("call_new", "Fresh problem…")[0]!;
+		assert.equal(activeProblemOf([dangling]), null, "no ack, no problem");
 	});
 
 	it("a dismissal marker deactivates immediately (the card closes at Esc)", () => {
@@ -120,7 +163,7 @@ describe("activeProblemOf (the conclude-before-next-problem gate's fold)", () =>
 	it("a NEWER problem after a conclude is the active one", () => {
 		const messages = [
 			...problemPose("call_p1"),
-			concludeCall("solved"),
+			...concludeCall("solved"),
 			...problemPose("call_p2", "second"),
 		];
 		assert.equal(activeProblemOf(messages)?.toolCallId, "call_p2");
@@ -235,7 +278,7 @@ describe("the dismiss-problem input (ask-style discard)", () => {
 
 	it("400s when nothing active or a stale id", () => {
 		assert.throws(() => dismissAppends({ messages: [] }, { type: "dismiss-problem", problemCallId: "x" }), /no active problem/);
-		const concluded = [...problemPose(), concludeCall("solved")];
+		const concluded = [...problemPose(), ...concludeCall("solved")];
 		assert.throws(() => dismissAppends({ messages: concluded }, { type: "dismiss-problem", problemCallId: "call_p1" }), /no active problem/);
 	});
 });
@@ -278,7 +321,7 @@ describe("needsContinuation (a persisted pose ack owes nothing)", () => {
 	it("a mixed batch (conclude ack then pose ack) still owes nothing — the pose is terminal", () => {
 		const messages = [
 			...problemPose("call_p0", "the earlier one"),
-			concludeCall("solved"),
+			...concludeCall("solved"),
 			{
 				id: "msg_r_conclude",
 				role: "toolResult",

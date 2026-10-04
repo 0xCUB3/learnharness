@@ -17,7 +17,7 @@ import {
 	PRACTICE_PROBLEM_TOOL,
 	type LhMessage,
 } from "../src/core/native-messages.ts";
-import { concludeTool, problemTool, practiceTools } from "../src/agent/tools/practice.ts";
+import { concludeTool, createPracticeGate, problemTool, practiceTools } from "../src/agent/tools/practice.ts";
 import { composeInstructions, createPracticeAgent } from "../src/agent/teacher-agent.ts";
 import { allSegmentPaths } from "../src/agent/prompt-segments.ts";
 
@@ -95,14 +95,14 @@ const CONCLUDE_INPUT = {
 
 describe("the practice tool gating law", () => {
 	it("problem acks on a quiet record and ends the turn (terminate)", async () => {
-		const result = await problemTool(ctxOf([])).execute("call_x", PROBLEM_INPUT as never);
+		const result = await problemTool(createPracticeGate(ctxOf([]))).execute("call_x", PROBLEM_INPUT as never);
 		assert.equal(result.isError, undefined);
 		assert.equal(result.terminate, true);
 		assert.match((result.content[0] as { text: string }).text, /Problem posed/);
 	});
 
 	it("problem is REJECTED while a problem is active (conclude first)", async () => {
-		const result = await problemTool(ctxOf(activeProblemRecord())).execute("call_x", PROBLEM_INPUT as never);
+		const result = await problemTool(createPracticeGate(ctxOf(activeProblemRecord()))).execute("call_x", PROBLEM_INPUT as never);
 		assert.equal(result.isError, true);
 		assert.deepEqual((result.details as { problems: string[] }).problems, [
 			"a problem is already active — call conclude on it before posing the next one",
@@ -110,7 +110,7 @@ describe("the practice tool gating law", () => {
 	});
 
 	it("conclude is REJECTED with nothing active", async () => {
-		const result = await concludeTool(ctxOf([])).execute("call_x", CONCLUDE_INPUT as never);
+		const result = await concludeTool(createPracticeGate(ctxOf([]))).execute("call_x", CONCLUDE_INPUT as never);
 		assert.equal(result.isError, true);
 		assert.deepEqual((result.details as { problems: string[] }).problems, [
 			"no active problem to conclude — pose one first",
@@ -118,9 +118,25 @@ describe("the practice tool gating law", () => {
 	});
 
 	it("conclude acks on the active problem and the turn CONTINUES (no terminate)", async () => {
-		const result = await concludeTool(ctxOf(activeProblemRecord())).execute("call_x", CONCLUDE_INPUT as never);
+		const result = await concludeTool(createPracticeGate(ctxOf(activeProblemRecord()))).execute("call_x", CONCLUDE_INPUT as never);
 		assert.equal(result.isError, undefined);
 		assert.equal(result.terminate, undefined);
+	});
+
+	it("THE BKT INCIDENT — a mid-turn conclude → pose pair works (the gate is turn-scoped, not record-frozen)", async () => {
+		// One turn, one toolset: the record froze at the write-ahead with
+		// the old problem active. The gates used to re-read that frozen
+		// record per execute, so the pose after a successful conclude
+		// always died on "a problem is already active" until the model
+		// gave up ("the problem slot is stuck").
+		const gate = createPracticeGate(ctxOf(activeProblemRecord()));
+		const tools = { problem: problemTool(gate), conclude: concludeTool(gate) };
+		const conclude = await tools.conclude.execute("call_c1", CONCLUDE_INPUT as never);
+		assert.equal(conclude.isError, undefined, "the conclude acks against the seeded record");
+		const pose = await tools.problem.execute("call_p2", PROBLEM_INPUT as never);
+		assert.equal(pose.isError, undefined, "the freed gate lets the next problem through — SAME turn");
+		const greedy = await tools.problem.execute("call_p3", PROBLEM_INPUT as never);
+		assert.equal(greedy.isError, true, "the gate re-arms on the successful pose");
 	});
 });
 
