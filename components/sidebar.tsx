@@ -227,6 +227,9 @@ export function timeAgo(iso: string, now = new Date()): string {
  *  ever wanted. */
 function sessionMeta(chat: ChatListItem): string {
 	if (chat.pendingQuestion) return `Waiting for your answer · ${timeAgo(chat.updatedAt)}`;
+	if ((chat.kind ?? "teach") === "practice" && chat.pendingProblem) {
+		return `Problem waiting · ${timeAgo(chat.updatedAt)}`;
+	}
 	if (chat.busy) return (chat.kind ?? "teach") === "practice" ? "Practicing…" : "Teacher is working…";
 	return timeAgo(chat.updatedAt);
 }

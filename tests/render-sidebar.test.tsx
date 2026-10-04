@@ -27,6 +27,7 @@ function item(overrides: Partial<ChatListItem>): ChatListItem {
 		messageCount: 4,
 		phase: "probe",
 		pendingQuestion: false,
+		pendingProblem: false,
 		busy: false,
 		...overrides,
 	};
@@ -134,5 +135,10 @@ describe("SessionRow practice badge (practice sessions, 2026-10-04)", () => {
 	it("busy teaching rows still say the teacher is working", () => {
 		const html = render(item({ busy: true }));
 		assert.match(html, /Teacher is working…/);
+	});
+
+	it("a practice row with a posed problem says the problem is waiting", () => {
+		const html = render(item({ kind: "practice", pendingProblem: true }));
+		assert.match(html, /Problem waiting ·/);
 	});
 });

@@ -33,7 +33,7 @@ import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
-import { WaypointsIcon } from "lucide-react";
+import { DumbbellIcon, WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { PracticeDock } from "@/components/practice-dock";
@@ -176,10 +176,15 @@ export function Chat({
 	initialPrompt,
 	initiallyInFlight,
 	initialConfigured = false,
+	kind = "teach",
 }: {
 	chatId: string;
 	title: string;
 	initialMessages: LhMessage[];
+	/** The session kind (practice sessions, owner 2026-10-04): practice
+	 *  renders no phase chip (no probe→teach arc applies) and a Practice
+	 *  tag rides the header instead. */
+	kind?: "teach" | "practice";
 	initialPrompt?: string;
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
@@ -1146,8 +1151,25 @@ export function Chat({
 					    with uncovered vs the chunk threshold, pulses while a run is in
 					    flight, vanishes when the graph is off. Click → the exact
 					    numbers. Before the phase label — the chips cluster right. */}
-					<CoverageRing chatId={chatId} refreshKey={coverageTick} />
-					<PhaseChip phase={phases.at(-1) ?? "probe"} />
+					{/* Practice (owner, 2026-10-04): the coverage ring hides —
+				    practice never extracts, so an ever-filling ring with no
+				    run behind it would lie. */}
+					{kind !== "practice" && <CoverageRing chatId={chatId} refreshKey={coverageTick} />}
+					{/* Practice sessions: no phase arc — a quiet Practice tag
+					    instead of the phase chip. */}
+					{kind === "practice" ? (
+						<span
+							data-testid="phase-chip"
+							data-phase="practice"
+							aria-hidden="true"
+							className="pointer-events-none flex shrink-0 select-none items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+						>
+							<DumbbellIcon className="size-3" />
+							Practice
+						</span>
+					) : (
+						<PhaseChip phase={phases.at(-1) ?? "probe"} />
+					)}
 				</TopBar>
 
 				<div className="relative flex min-h-0 flex-1">

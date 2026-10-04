@@ -187,7 +187,7 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 					    the chain table as the picker. Quiet, left-aligned above
 					    the composer; teaching mode renders nothing. */}
 					{mode === "practice" && (
-						<div className="mb-2 flex justify-start">
+						<div className="mb-2 flex items-center justify-start gap-1.5">
 							<button
 								type="button"
 								data-testid="practice-props-chip"
@@ -199,6 +199,16 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 									? `${practiceProps.length} ${practiceProps.length === 1 ? "proposition" : "propositions"} selected`
 									: "Pick propositions from the map"}
 							</button>
+							{practiceProps.length > 0 && (
+								<button
+									type="button"
+									data-testid="practice-props-clear"
+									onClick={() => setPracticeProps([])}
+									className="rounded-full px-2 py-1 font-ui text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+								>
+									Clear
+								</button>
+							)}
 						</div>
 					)}
 					{zeroKeys ? (

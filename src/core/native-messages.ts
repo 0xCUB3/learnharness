@@ -515,9 +515,18 @@ export function needsContinuation(messages: readonly LhMessage[]): boolean {
 	if (!owner || (owner as { role?: string }).role !== "assistant") return false;
 	const content = (owner as { content?: unknown }).content;
 	if (!Array.isArray(content)) return false;
-	const answered = new Set(
-		messages.slice(start).map((m) => (m as ToolResultMessage).toolCallId),
+	const results = messages.slice(start) as ToolResultMessage[];
+	// PRACTICE (owner design, 2026-10-04): a batch acking a problem POSE
+	// owes nothing — terminate:true ended that turn DELIBERATELY (the
+	// learner's next thinking submission is the next turn), and unlike a
+	// question's placeholder this ack PERSISTS (the model reads its own
+	// "Problem posed" result later). Without this fold a reload after a
+	// pose would wake a phantom continuation turn.
+	const posedProblem = results.some(
+		(m) => m.toolName === PRACTICE_PROBLEM_TOOL && !m.isError && m.details == null,
 	);
+	if (posedProblem) return false;
+	const answered = new Set(results.map((m) => m.toolCallId));
 	const calls = (content as Array<{ type?: string; id?: string }>).filter(
 		(b) => b.type === "toolCall" && typeof b.id === "string",
 	);

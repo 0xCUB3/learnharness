@@ -17,6 +17,7 @@ import {
 	concludedByDismissalPair,
 	newProblemDismissedMarker,
 	newThinkingMessage,
+	needsContinuation,
 	newUserMessage,
 	pendingProblemDismissalOf,
 	toLlmMessages,
@@ -260,5 +261,44 @@ describe("toLlmMessages (practice shapes)", () => {
 		assert.equal(out.length, 2);
 		assert.equal(out[0]!.role, "assistant");
 		assert.equal(out[1]!.role, "toolResult");
+	});
+});
+
+// ── the continuation fold's practice carve-out ──────────────────────────────
+
+describe("needsContinuation (a persisted pose ack owes nothing)", () => {
+	it("a record ending on a problem-pose ack does NOT wake a continuation", () => {
+		// The pose's terminate:true ended that turn deliberately; the
+		// ack persists (unlike a question's placeholder). Without the
+		// carve-out, a reload after a posed problem would wake a
+		// phantom turn (owner design, 2026-10-04).
+		assert.equal(needsContinuation(problemPose()), false);
+	});
+
+	it("a mixed batch (conclude ack then pose ack) still owes nothing — the pose is terminal", () => {
+		const messages = [
+			...problemPose("call_p0", "the earlier one"),
+			concludeCall("solved"),
+			{
+				id: "msg_r_conclude",
+				role: "toolResult",
+				toolCallId: "call_conclude_solved",
+				toolName: PRACTICE_CONCLUDE_TOOL,
+				content: [{ type: "text", text: CONCLUDE_ACK_TEXT }],
+				details: null,
+				isError: false,
+				timestamp: 4,
+			} as LhMessage & ToolResultMessage,
+			...problemPose("call_p2", "the next one"),
+		];
+		assert.equal(needsContinuation(messages), false);
+	});
+
+	it("an ERROR result is not a pose — the agent loop continues past it, so a record ending there (an abort) is owed the wake like any interrupted tool", () => {
+		const messages = [...problemPose("call_pe")];
+		const err = messages[1] as LhMessage & ToolResultMessage;
+		err.isError = true;
+		err.content = [{ type: "text", text: "A problem is already active." }];
+		assert.equal(needsContinuation(messages), true);
 	});
 });
