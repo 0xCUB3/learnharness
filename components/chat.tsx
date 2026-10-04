@@ -306,14 +306,28 @@ export function Chat({
 	// popup EVERYWHERE (streams and pending questions alike). Both window
 	// listeners fire per Esc, so the state gate here — not stopPropagation
 	// ordering — is what keeps the popup's own Esc from chaining.
+	// LAYERED ESC (owner, 2026-10-04): an open overlay CLAIMS Esc — closing
+	// itself — before the abort chain may open its confirm. A mermaid focus,
+	// the plan popup, or the setup dialog over a pending question must not
+	// dismiss the question underneath.
 	const [abortAsk, setAbortAsk] = useState<AbortMode | null>(null);
 	const abortAskRef = useRef<AbortMode | null>(null);
 	abortAskRef.current = abortAsk;
 	useEffect(() => {
 		const onAbort = () => {
-			if (abortAskRef.current !== null) return; // the popup's Esc — claimed
-			if (pendingRef.current) setAbortAsk("question");
-			else if (busyRef.current) setAbortAsk("turn");
+			const target = escAbortTarget({
+				abortAsk: abortAskRef.current !== null,
+				mermaidFocus: mermaidFocusRef.current !== null,
+				planOpen: planOpenRef.current,
+				setupOpen: setupOpenRef.current,
+				pending: pendingRef.current !== null,
+				busy: busyRef.current,
+			});
+			if (target === "question") setAbortAsk("question");
+			else if (target === "turn") setAbortAsk("turn");
+			else if (target === "mermaid") setMermaidFocus(null);
+			else if (target === "plan") setPlanOpen(false);
+			// setup closes itself; null = nothing to do — both claimed.
 		};
 		window.addEventListener("lh:kbd-abort-turn", onAbort);
 		return () => window.removeEventListener("lh:kbd-abort-turn", onAbort);
@@ -648,6 +662,15 @@ export function Chat({
 	// popup) mount INSIDE the session-area div — both are session-scoped, so
 	// the drag bar stays sharp and draggable while a focus owns the area.
 	const [mermaidFocus, setMermaidFocus] = useState<string | null>(null);
+	// Overlay mirrors for the layered-Esc gate (owner 2026-10-04): the
+	// lh:kbd-abort-turn handler reads these at EVENT time — declared here
+	// beside their states, consumed below wherever the states live.
+	const mermaidFocusRef = useRef(mermaidFocus);
+	mermaidFocusRef.current = mermaidFocus;
+	const planOpenRef = useRef(planOpen);
+	planOpenRef.current = planOpen;
+	const setupOpenRef = useRef(setupOpen);
+	setupOpenRef.current = setupOpen;
 	// The session's live plan (drives the top-bar chip; the marginalia
 	// derives its own from the same transcript).
 	const planTree = useMemo(() => latestTree(messages), [messages]);
@@ -1395,6 +1418,32 @@ export function Chat({
  * nothing left to wait for and the scroll height it already had is the
  * honest height.
  */
+/** The layered-Esc ruling (owner, 2026-10-04): an open overlay claims Esc —
+ *  closing itself — before the abort chain may open its confirm. A mermaid
+ *  focus, the plan popup, or the setup dialog over a pending question must
+ *  close the OVERLAY, never dismiss the question underneath. Priority is
+ *  stacking order: the abort confirm (topmost, claims via its own dialog),
+ *  then the session overlays (mermaid paints above plan — later in DOM),
+ *  then setup (self-closing — the gate only must not fire), then the
+ *  2026-10-02 abort chain proper (question before turn). */
+export type EscAbortTarget = "mermaid" | "plan" | "setup" | "question" | "turn" | null;
+export function escAbortTarget(s: {
+	abortAsk: boolean;
+	mermaidFocus: boolean;
+	planOpen: boolean;
+	setupOpen: boolean;
+	pending: boolean;
+	busy: boolean;
+}): EscAbortTarget {
+	if (s.abortAsk) return null; // the popup's own Esc — claimed by the dialog
+	if (s.mermaidFocus) return "mermaid";
+	if (s.planOpen) return "plan";
+	if (s.setupOpen) return "setup";
+	if (s.pending) return "question";
+	if (s.busy) return "turn";
+	return null;
+}
+
 export function revealArrival(wasQuestion: boolean): { expanded: boolean; revealed: boolean } {
 	return wasQuestion ? { expanded: true, revealed: true } : { expanded: false, revealed: false };
 }
