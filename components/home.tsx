@@ -112,26 +112,25 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 		}
 		setBusy(true);
 		try {
-			// The practice seed: the picks ride the OPENING PROMPT (never
-			// the title — the title stays the learner's own words).
-			const seed =
-				mode === "practice" && practiceProps.length > 0
-					? `\n\nPropositions from the map:\n${practiceProps
-							.map((p) => `- ${p.name}: ${p.statement}`)
-							.join("\n")}`
-					: "";
+			// The map context (owner, 2026-10-04): picks in EITHER mode ride
+			// the CREATION as graphContext — the server writes a
+			// graph-context marker as message[0] (a separate custom message
+			// before the learner's first user message, propositions + the
+			// chains among them); the prompt stays the learner's own words.
 			const res = await fetch("/api/chats", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(
-					mode === "practice" ? { title: t, kind: "practice" } : { title: t },
-				),
+				body: JSON.stringify({
+					title: t,
+					...(mode === "practice" ? { kind: "practice" } : {}),
+					...(practiceProps.length > 0 ? { graphContext: { propositions: practiceProps } } : {}),
+				}),
 			});
 			const { id } = (await res.json()) as { id: string };
 			// No settings PUT on create (per-session models, owner
 			// 2026-09-28): the SERVER stamps the newborn from the strong
 			// slot — the same default this surface's model control edits.
-			router.push(`/chat/${id}?prompt=${encodeURIComponent(t + seed)}`);
+			router.push(`/chat/${id}?prompt=${encodeURIComponent(t)}`);
 		} catch {
 			setBusy(false);
 		}

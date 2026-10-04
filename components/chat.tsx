@@ -38,6 +38,7 @@ import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { PracticeDock } from "@/components/practice-dock";
 import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-cards";
+import { GraphContextCard, type GraphContextData } from "@/components/graph-context-card";
 import { TopBar } from "@/components/top-bar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsage } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
@@ -1258,6 +1259,13 @@ export function Chat({
 														);
 													case "step-start":
 														return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
+													case "data-graph-context":
+														// The session's map pick (2026-10-04): a minimal
+														// collapsible card — scaffolding above the first
+														// user message, never a bubble.
+														return (
+															<GraphContextCard key={pi} data={part.data as GraphContextData} />
+														);
 													case "data-practice-thinking":
 														// The learner's practice submission (2026-10-04):
 														// user-side — the register (thinking trace /
