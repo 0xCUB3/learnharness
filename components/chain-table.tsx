@@ -502,21 +502,36 @@ export function ChainTableBody({
 						>
 							Clear
 						</button>
-	{/* The danger fence (owner ruling): a divider quarantines
-						    the destructive action at the bar's right end — the
-						    safe actions and the kill switch never blend. The
-						    full-death confirm dialog catches the misclick. */}
-						<span data-testid="chain-danger-divider" aria-hidden="true" className="h-4 w-px bg-border/70" />
-						<button
-							type="button"
-							data-testid="chain-delete"
-							onClick={onDelete}
-							aria-label={`Delete ${selection.size} selected ${selection.size === 1 ? "node" : "nodes"}`}
-							className="flex items-center gap-1.5 rounded-full border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
-						>
-							<Trash2Icon aria-hidden="true" className="size-3.5" />
-							Delete
-						</button>
+						{selectMode ? (
+							<button
+								type="button"
+								data-testid="chain-practice-done"
+								onClick={onSelect}
+								aria-label={`Done picking — ${selection.size} ${selection.size === 1 ? "proposition" : "propositions"} selected`}
+								className="flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/80"
+							>
+								<DumbbellIcon aria-hidden="true" className="size-3.5" />
+								Done
+							</button>
+						) : (
+							<>
+							{/* The danger fence (owner ruling): a divider quarantines
+								    the destructive action at the bar's right end — the
+								    safe actions and the kill switch never blend. The
+								    full-death confirm dialog catches the misclick. */}
+							<span data-testid="chain-danger-divider" aria-hidden="true" className="h-4 w-px bg-border/70" />
+							<button
+								type="button"
+								data-testid="chain-delete"
+								onClick={onDelete}
+								aria-label={`Delete ${selection.size} selected ${selection.size === 1 ? "node" : "nodes"}`}
+								className="flex items-center gap-1.5 rounded-full border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+							>
+								<Trash2Icon aria-hidden="true" className="size-3.5" />
+								Delete
+							</button>
+							</>
+						)}
 					</div>
 				</div>
 			)}
@@ -583,11 +598,15 @@ export function ChainTableOverlay({
 	sessions,
 	fileSources,
 	onClose,
-	/** PRACTICE SELECT (2026-10-04): the table opens as a proposition
-	 *  picker — the floating bar confirms the selection to the caller
-	 *  (never deletes); the title says what the pick is for. */
+	/** PRACTICE SELECT (owner vision, 2026-10-04): the selection is
+	 *  PERSISTENT and caller-owned — when these props are present the
+	 *  table is CONTROLLED (every check/clear/delete-prune reports up
+	 *  immediately; the composer-side chip reflects it live). selectMode
+	 *  only changes the floating bar: Done instead of the delete fence
+	 *  (deleting while picking is a footgun). */
 	selectMode,
-	onConfirmSelection,
+	controlledSelection,
+	onSelectionChange,
 }: {
 	open: boolean;
 	nodes: GraphNode[];
@@ -596,14 +615,23 @@ export function ChainTableOverlay({
 	fileSources: Record<string, string>;
 	onClose: () => void;
 	selectMode?: boolean;
-	onConfirmSelection?: (nodes: GraphNode[]) => void;
+	controlledSelection?: ReadonlySet<string>;
+	onSelectionChange?: (next: ReadonlySet<string>) => void;
 }) {
 	const [query, setQuery] = useState("");
 	const [sort, setSort] = useState<ChainSort>({ col: "name", dir: 1 });
-	const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
+	const [internalSelection, setInternalSelection] = useState<ReadonlySet<string>>(() => new Set());
 	const [expandedClusters, setExpandedClusters] = useState<ReadonlySet<string>>(() => new Set());
 	const [expandedChains, setExpandedChains] = useState<ReadonlySet<string>>(() => new Set());
 	const [deleteOpen, setDeleteOpen] = useState(false);
+
+	// Controlled when the caller lifts the selection (the practice pick
+	// set); internal (uncontrolled) otherwise — the delete flow's own.
+	const selection = controlledSelection ?? internalSelection;
+	const applySelection = (next: ReadonlySet<string>) => {
+		if (onSelectionChange) onSelectionChange(next);
+		else setInternalSelection(next);
+	};
 
 	// Esc dismisses (unless a dialog has focus — each dialog's own Esc
 	// owns its layer; all listen on window, so the guards are explicit).
@@ -623,15 +651,14 @@ export function ChainTableOverlay({
 	const derived = chainsForSelection(selectedNodes, storedChains);
 	const nodeIds = [...selection].sort();
 
-	const toggleNodes = (ids: string[], next: boolean) =>
-		setSelection((prev) => {
-			const s = new Set(prev);
-			for (const id of ids) {
-				if (next) s.add(id);
-				else s.delete(id);
-			}
-			return s;
-		});
+	const toggleNodes = (ids: string[], next: boolean) => {
+		const s = new Set(selection);
+		for (const id of ids) {
+			if (next) s.add(id);
+			else s.delete(id);
+		}
+		applySelection(s);
+	};
 	const toggleIn = (set: ReadonlySet<string>, id: string) => {
 		const s = new Set(set);
 		if (s.has(id)) s.delete(id);
@@ -666,15 +693,11 @@ export function ChainTableOverlay({
 					onToggleCluster={(key) => setExpandedClusters((prev) => toggleIn(prev, key))}
 					onToggleChain={(id) => setExpandedChains((prev) => toggleIn(prev, id))}
 					onToggleNodes={toggleNodes}
-					onClear={() => setSelection(new Set())}
+					onClear={() => applySelection(new Set())}
 					onDelete={() => setDeleteOpen(true)}
 					onClose={onClose}
 					selectMode={selectMode}
-					onSelect={() => {
-						onConfirmSelection?.(selectedNodes);
-						setSelection(new Set());
-						onClose();
-					}}
+					onSelect={onClose}
 				/>
 			</div>
 			{deleteOpen && (
@@ -688,7 +711,7 @@ export function ChainTableOverlay({
 						// snapshot — fresh nodes/edges flow back in as props.
 						setDeleteOpen(false);
 						const dead = new Set(deadIds);
-						setSelection((prev) => new Set([...prev].filter((id) => !dead.has(id))));
+						applySelection(new Set([...selection].filter((id) => !dead.has(id))));
 						window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { graphRevision } }));
 					}}
 				/>

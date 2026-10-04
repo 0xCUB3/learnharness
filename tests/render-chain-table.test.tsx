@@ -27,7 +27,7 @@ import React from "react";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
-import { ChainTableBody } from "../components/chain-table.tsx";
+import { ChainTableBody, ChainTableOverlay } from "../components/chain-table.tsx";
 import type { ChainSort } from "../components/chain-table.tsx";
 import type { GraphChain, GraphNode } from "../src/core/contracts.ts";
 
@@ -317,5 +317,43 @@ describe("ChainTableBody — the fuzzy search (grouped + auto-expand)", () => {
 		const html = render({ query: "qqqq" });
 		assert.ok(html.includes('data-testid="chain-table-nomatch"'));
 		assert.ok(html.includes("No matching chains."));
+	});
+});
+
+describe("ChainTableOverlay — the lifted practice pick (owner vision, 2026-10-04)", () => {
+	function overlay(extra: Record<string, unknown> = {}) {
+		return renderToStaticMarkup(
+			React.createElement(ChainTableOverlay, {
+				open: true,
+				nodes: NODES,
+				chains: CHAINS,
+				sessions: { chat1: "Ethics lesson", chat2: "Follow-up", notes1: "Notes" },
+				fileSources: {},
+				onClose: () => {},
+				...extra,
+			} as never),
+		);
+	}
+
+	it("CONTROLLED selection renders the caller's set — the bar counts it live", () => {
+		const html = overlay({ controlledSelection: new Set(["a", "b", "c1"]) });
+		assert.ok(html.includes("3 nodes → 1 chain"), "the bar reflects the lifted set, not internal state");
+	});
+
+	it("select mode: Done replaces the delete fence — no way to delete while picking", () => {
+		const html = overlay({
+			selectMode: true,
+			controlledSelection: new Set(["a", "b"]),
+		});
+		assert.ok(html.includes('data-testid="chain-practice-done"'));
+		assert.ok(html.includes("Done"));
+		assert.ok(!html.includes('data-testid="chain-delete"'), "no delete while picking");
+		assert.ok(!html.includes('data-testid="chain-danger-divider"'));
+	});
+
+	it("browse mode unchanged: the fenced Delete remains", () => {
+		const html = overlay({ controlledSelection: new Set(["a"]) });
+		assert.ok(html.includes('data-testid="chain-delete"'));
+		assert.ok(!html.includes('data-testid="chain-practice-done"'));
 	});
 });

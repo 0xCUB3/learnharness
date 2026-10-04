@@ -946,14 +946,18 @@ export function GraphChromeRow({
 
 export function GraphView({
 	chainSelectOpen = false,
-	onChainSelected,
+	practiceSelection,
+	onPracticeSelectionChange,
 	onChainSelectClose,
 }: {
-	/** PRACTICE SELECT (owner, 2026-10-04): the home composer's practice
-	 *  chip opens the chain table as a proposition picker — this prop
-	 *  drives it; the confirm hands the picked nodes to the caller. */
+	/** PRACTICE SELECT (owner vision, 2026-10-04): the LIFTED, persistent
+	 *  pick set — every check/clear in the chain table (however opened)
+	 *  reports the full node list up immediately; the composer-side chip
+	 *  reflects it live. chainSelectOpen still drives the picker mode
+	 *  (Done instead of Delete). */
 	chainSelectOpen?: boolean;
-	onChainSelected?: (nodes: { id: string; name: string; statement: string }[]) => void;
+	practiceSelection?: ReadonlySet<string>;
+	onPracticeSelectionChange?: (nodes: { id: string; name: string; statement: string }[]) => void;
 	onChainSelectClose?: () => void;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1700,9 +1704,17 @@ export function GraphView({
 					onChainSelectClose?.();
 				}}
 				selectMode={chainSelectOpen}
-				onConfirmSelection={(picked) => {
-					onChainSelected?.(picked.map((n) => ({ id: n.id, name: n.name, statement: n.statement })));
-					onChainSelectClose?.();
+				controlledSelection={practiceSelection}
+				onSelectionChange={(ids) => {
+					// Resolve ids → nodes against the live snapshot; the
+					// caller holds the pick set (count + seed).
+					const props = snapshot?.propositions ?? [];
+					const picked: { id: string; name: string; statement: string }[] = [];
+					for (const id of ids) {
+						const n = props.find((node) => node.id === id);
+						if (n) picked.push({ id: n.id, name: n.name, statement: n.statement });
+					}
+					onPracticeSelectionChange?.(picked);
 				}}
 			/>		</div>
 	);

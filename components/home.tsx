@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
@@ -73,6 +73,8 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 	const [mode, setMode] = useState<"teach" | "practice">("teach");
 	const [practiceProps, setPracticeProps] = useState<{ id: string; name: string; statement: string }[]>([]);
 	const [chainSelectOpen, setChainSelectOpen] = useState(false);
+	// The chain table is CONTROLLED off this id set (the lifted pick).
+	const pickedIds = useMemo(() => new Set(practiceProps.map((p) => p.id)), [practiceProps]);
 
 	/* FINISH DICTATION FIRST (owner, 2026-10-01): Enter may arrive while a
 	 * run is live with the topic still deferred in the run's buffer — stop
@@ -154,13 +156,8 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 			<main className="absolute inset-0">
 				<GraphView
 					chainSelectOpen={chainSelectOpen}
-					onChainSelected={(picked) => {
-						setPracticeProps((prev) => {
-							const byId = new Map(prev.map((p) => [p.id, p]));
-							for (const p of picked) byId.set(p.id, p);
-							return [...byId.values()];
-						});
-					}}
+					practiceSelection={pickedIds}
+					onPracticeSelectionChange={setPracticeProps}
 					onChainSelectClose={() => setChainSelectOpen(false)}
 				/>
 			</main>
@@ -182,17 +179,25 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 			    px-4) so nothing shifts when a session starts (owner). */}
 			<div className="pointer-events-none absolute inset-x-0 bottom-0 pb-5">
 				<div className="pointer-events-auto mx-auto w-full max-w-[46rem] px-4">
-					{/* The practice chip (owner, 2026-10-04): the graph-view
-					    entry — a count of the picked propositions, click opens
-					    the chain table as the picker. Quiet, left-aligned above
-					    the composer; teaching mode renders nothing. */}
-					{mode === "practice" && (
+					{/* The pick bar (owner vision, 2026-10-04): the chain
+					    table's selection is PERSISTENT — picked
+					    propositions show here as a count + Clear in EITHER
+					    mode (it survives mode switches; only a practice
+					    send consumes it). Practice mode with nothing picked
+					    shows the pick HINT so the affordance is discoverable;
+					    teaching mode with nothing picked renders nothing. */}
+					{(practiceProps.length > 0 || mode === "practice") && (
 						<div className="mb-2 flex items-center justify-start gap-1.5">
 							<button
 								type="button"
 								data-testid="practice-props-chip"
 								onClick={() => setChainSelectOpen(true)}
-								className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+								className={
+									"flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 font-ui text-xs transition-colors " +
+									(practiceProps.length > 0
+										? "border-border bg-card text-foreground hover:bg-accent"
+										: "border-dashed border-border/80 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground")
+								}
 							>
 								<DumbbellIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
 								{practiceProps.length > 0
@@ -204,7 +209,7 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 									type="button"
 									data-testid="practice-props-clear"
 									onClick={() => setPracticeProps([])}
-									className="rounded-full px-2 py-1 font-ui text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+									className="cursor-pointer rounded-full px-2 py-1 font-ui text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 								>
 									Clear
 								</button>
