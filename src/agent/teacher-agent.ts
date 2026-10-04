@@ -14,6 +14,7 @@ import {
 	type ProberToolContext,
 	type TeacherToolContext,
 } from "./tools.ts";
+import { practiceTools, type PracticeToolContext } from "./tools/practice.ts";
 import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
 import { QUESTION_TOOLS, type EnabledTools } from "../core/pending.ts";
 import { toLlmMessages } from "../core/native-messages.ts";
@@ -42,8 +43,9 @@ import { toLlmMessages } from "../core/native-messages.ts";
  * without ever leaking into the model's prompt.
  */
 
-/** Which agent's prompt directory to compose. */
-export type AgentKind = "prober" | "teacher";
+/** Which agent's prompt directory to compose. Practice (2026-10-04)
+ *  composes ONLY its own directory — see prompt-segments.ts. */
+export type AgentKind = "prober" | "teacher" | "practice";
 
 // P2 (2026-09-19): segment discovery + override resolution live in ONE
 // canonical place now — src/store/prompt-overrides.ts (listSourceSegments
@@ -82,6 +84,7 @@ export function composeInstructions(kind: AgentKind, switches?: Record<string, b
 const composedInstructions: Record<AgentKind, string> = {
 	prober: composeInstructions("prober"),
 	teacher: composeInstructions("teacher"),
+	practice: composeInstructions("practice"),
 };
 
 // Money channel (wave 4): the chat-handler passes a per-turn collector;
@@ -159,7 +162,11 @@ function makeQuestionStopper() {
 }
 
 function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: AgentTool<any, any>[]) {
-	const engine = opts.engine ?? piEngineFor(kind);
+	// Practice never reaches the role fallback (the handler ALWAYS injects
+	// the session's conversation engine — practice rides the same
+	// conversation-spec resolution as teaching); the cast keeps AgentKind
+	// ("practice" is not a ModelRole) honest about that.
+	const engine = opts.engine ?? piEngineFor(kind as "prober" | "teacher");
 	const stopper = makeQuestionStopper();
 	const systemPrompt = opts.promptSwitches
 		? composeInstructions(kind, opts.promptSwitches)
@@ -269,7 +276,23 @@ export function bareQuestionTools(): Record<string, AgentTool<any>> {
 	};
 }
 
+/**
+ * The PRACTITIONER (practice sessions, owner design 2026-10-04): built
+ * from turn 1 of a kind:"practice" session — no prober→teacher split,
+ * no plan tools, no question tools. Its ENTIRE registry is
+ * problem + conclude (tools/practice.ts); the doctrine prompt
+ * (prompts/practice/) carries the method. The question-stop rule does
+ * not apply (problem rides terminate: true natively —
+ * QUESTION_TOOLS does not include it), so baseAgentOptions's stopper is
+ * a no-op here; it stays wired for uniformity.
+ */
+export function createPracticeAgent(ctx: PracticeToolContext, opts: AgentBuildOptions = {}) {
+	const tools = opts.tools ?? practiceTools(ctx);
+	return baseAgentOptions("practice", opts, Object.values(tools));
+}
+
 export type ProberAgent = ReturnType<typeof createProberAgent>;
 export type TeacherAgent = ReturnType<typeof createTeacherAgent>;
-export type TeachingAgent = ProberAgent | TeacherAgent;
+export type PracticeAgent = ReturnType<typeof createPracticeAgent>;
+export type TeachingAgent = ProberAgent | TeacherAgent | PracticeAgent;
 

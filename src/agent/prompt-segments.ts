@@ -57,7 +57,11 @@ export function readPromptOverride(segmentPath: string): string | null {
  *  method lead; the shared tool/file/format mechanics are an appendix).
  *  The exact order composeInstructions composes them in. */
 export function listSourceSegments(agent: PromptAgent): Array<{ path: string; shared: boolean; file: string }> {
-	const segments: Array<{ path: string; shared: boolean; file: string }> = [
+	// PRACTICE (owner, 2026-10-04): its own directory ONLY — the practice
+	// doctrine contradicts the teaching base and the shared question/
+	// confidence mechanics; prompts/practice/00-base.md plays the base
+	// role (voice + accuracy), so nothing shared composes.
+	const segments: Array<{ path: string; shared: boolean; file: string }> = agent === "practice" ? [] : [
 		{ path: "system-prompt.md", shared: true, file: PATHS.teacherPrompt },
 	];
 	const dir = path.join(PROMPTS_DIR, agent);
@@ -67,8 +71,8 @@ export function listSourceSegments(agent: PromptAgent): Array<{ path: string; sh
 			segments.push({ path: `${agent}/${f}`, shared: false, file: path.join(dir, f) });
 		}
 	}
-	const sharedDir = path.join(PROMPTS_DIR, "shared");
-	if (fs.existsSync(sharedDir)) {
+	const sharedDir = agent === "practice" ? null : path.join(PROMPTS_DIR, "shared");
+	if (sharedDir && fs.existsSync(sharedDir)) {
 		const sharedFragments = fs.readdirSync(sharedDir).filter((f) => FRAGMENT_RE.test(f)).sort();
 		for (const f of sharedFragments) {
 			segments.push({ path: `shared/${f}`, shared: true, file: path.join(sharedDir, f) });
@@ -108,7 +112,7 @@ export function effectivePromptSegments(
 /** Every known segment path across both agents (route validation). */
 export function allSegmentPaths(): string[] {
 	const paths = new Set<string>();
-	for (const agent of ["prober", "teacher"] as const) {
+	for (const agent of ["prober", "teacher", "practice"] as const) {
 		for (const segment of listSourceSegments(agent)) paths.add(segment.path);
 	}
 	return [...paths].sort();

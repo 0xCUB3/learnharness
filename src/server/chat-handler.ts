@@ -1,5 +1,11 @@
 import type { Usage } from "@earendil-works/pi-ai";
-import { createProberAgent, createTeacherAgent, type AgentBuildOptions, type TeachingAgent } from "../agent/teacher-agent.ts";
+import {
+	createPracticeAgent,
+	createProberAgent,
+	createTeacherAgent,
+	type AgentBuildOptions,
+	type TeachingAgent,
+} from "../agent/teacher-agent.ts";
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
@@ -313,9 +319,16 @@ export async function handleChatInput(
 		// prompt fresh per turn, swapping in any enabled override segments.
 		promptSwitches: effective.agent.prompts,
 	};
+	// PRACTICE BRANCH (owner design, 2026-10-04): a kind:"practice"
+	// session builds the practitioner from turn 1 — no prober→teacher
+	// split, no plan/question/job tools; the whole registry is
+	// problem + conclude. buildAgent stays honored (the test seam is
+	// uniform across kinds).
 	const constructed: TeachingAgent = buildAgent
 		? buildAgent({ ...agentOpts, teaching })
-		: teaching
+		: record.kind === "practice"
+			? createPracticeAgent({ chatId, chatStore: stores.chatStore }, agentOpts)
+			: teaching
 			? createTeacherAgent(
 					{
 						chatId,
@@ -404,7 +417,10 @@ export async function handleChatInput(
 				}
 				// GRAPH GATE (settings-storage wave, 2026-09-19): the write channel —
 				// extraction, its auditor — dies with the master switch.
-				if (extractionEnabled(effective.graph)) {
+				// PRACTICE (owner, 2026-10-04): practice sessions write nothing —
+				// no extraction, no graph, no coverage (v1: the session itself
+				// is the deliverable).
+				if (record.kind !== "practice" && extractionEnabled(effective.graph)) {
 					// Fresh per-turn read of the graph section's chunk budget
 					// (extraction-UX redesign, 2026-09-24): the trigger compares
 					// against it and the pipeline's batches share it.

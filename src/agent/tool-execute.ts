@@ -1,5 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Static, TSchema } from "typebox";
+import { CONCLUDE_ACK_TEXT } from "../core/contracts/chat.ts";
 
 /**
  * tool-execute — the execution machinery every server-side lh tool shares,
@@ -228,5 +229,33 @@ export function questionResult(): AgentToolResult<null> {
 		],
 		details: null,
 		terminate: true,
+	};
+}
+
+/** The practice pose's ack (practice sessions, owner 2026-10-04): unlike
+ *  a question, this result is FINAL — it persists (persistTurn filters
+ *  only QUESTION_TOOLS placeholders), because the learner's submissions
+ *  arrive as MESSAGES, never as this call's result. terminate: true ends
+ *  the turn at the pose; the commitment rides the call's arguments. */
+export function problemResult(): AgentToolResult<null> {
+	return {
+		content: [
+			{
+				type: "text",
+				text: "Problem posed — the turn ends here; the learner's thinking traces and answer commits arrive as labeled messages.",
+			},
+		],
+		details: null,
+		terminate: true,
+	};
+}
+
+/** The conclude ack: NOT terminate — the turn continues so the same reply
+ *  can reveal + pose the next problem. Text single-sourced in contracts
+ *  (CONCLUDE_ACK_TEXT — shared with the dismissal-synthesized pair). */
+export function concludeResult(): AgentToolResult<null> {
+	return {
+		content: [{ type: "text", text: CONCLUDE_ACK_TEXT }],
+		details: null,
 	};
 }
