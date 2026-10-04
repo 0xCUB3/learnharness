@@ -1770,14 +1770,46 @@ function DockOverlay({
 	// round 2): the scroller reserves symmetric gutters (scrollbar-gutter:
 	// stable both-edges), so inset the overlay's right edge by the gutter —
 	// zero on macOS overlay scrollbars, the real width on classic platforms.
+	// The same measure owns the QUESTION/PROBLEM HEIGHT CAP (owner round,
+	// 2026-10-05): the old fixed fractions (55dvh / 40vh) cut long problems
+	// off absurdly short — the cap is now the AVAILABLE COLUMN (the
+	// scroller already starts below the top bar) minus a 2rem breathing
+	// gap, carried as --dock-max-h for the docks' scroll areas.
 	const [sbInset, setSbInset] = useState(0);
+	const [dockMaxH, setDockMaxH] = useState<number | null>(null);
 	useEffect(() => {
 		const el = scrollRef.current;
 		if (!el) return;
-		const measure = () => setSbInset(Math.round((el.offsetWidth - el.clientWidth) / 2));
+		const measure = () => {
+			setSbInset(Math.round((el.offsetWidth - el.clientWidth) / 2));
+			setDockMaxH(Math.max(el.clientHeight - 32, 160));
+		};
 		measure();
 		window.addEventListener("resize", measure);
 		return () => window.removeEventListener("resize", measure);
+	}, [scrollRef]);
+
+	// GROWTH MUTE (owner round, 2026-10-05 — the generation churn): during a
+	// live turn the transcript content grows and stick-to-bottom chases it;
+	// the transient distance-from-bottom used to read as the learner
+	// leaving, folding the dock open↔bar ("disappear and appear again").
+	// A ResizeObserver on the scroller's content stamps the SAME mute the
+	// dock's own resizes use — growth frames can never fold. Shrinks stamp
+	// nothing (the fold's own morph shrinks the reserve; muting that would
+	// self-mute the at-bottom re-expand).
+	const growthAtRef = useRef(0);
+	useEffect(() => {
+		const el = scrollRef.current;
+		const content = el?.firstElementChild as HTMLElement | null | undefined;
+		if (!el || !content) return;
+		let prevH = content.getBoundingClientRect().height;
+		const ro = new ResizeObserver(() => {
+			const h = content.getBoundingClientRect().height;
+			if (h > prevH + 0.5) growthAtRef.current = Date.now();
+			prevH = Math.max(prevH, h);
+		});
+		ro.observe(content);
+		return () => ro.disconnect();
 	}, [scrollRef]);
 
 	// Wheel over the dock must still scroll the transcript (owner, scroll
@@ -1871,9 +1903,16 @@ function DockOverlay({
 			// reading the transient position folded the box to the bar for a
 			// flicker. Real scrolling resumes after the brief mute window.
 			if (Date.now() - geometryAtRef.current < 400) return;
+			// Growth mute (owner round, 2026-10-05): the transcript growing
+			// under a live turn is not the learner leaving.
+			if (Date.now() - growthAtRef.current < 400) return;
 			const d = el.scrollHeight - el.clientHeight - el.scrollTop;
 			if (expandedRef.current) {
-				if (d > COLLAPSE_DIST && !expandIntentRef.current) setExpanded(false);
+				// INTENT-GATED FOLD (owner ruling, 2026-10-05): distance alone
+				// folded on stick-to-bottom's catch-up transients; a real fold
+				// needs the distance AND stick-to-bottom agreeing the learner
+				// left the bottom.
+				if (d > COLLAPSE_DIST && !expandIntentRef.current && !atBottomRef.current) setExpanded(false);
 			} else if (d < EXPAND_DIST) {
 				// Teach checks stay collapsed until the learner opens them (W5): the
 				// at-bottom auto-expand would pop the form over the teaching.
@@ -1907,6 +1946,19 @@ function DockOverlay({
 	// whenever the variant (chat ↔ question ↔ collapsed bar) changes. Typing
 	// growth keeps the same stateKey and is NOT animated.
 	const shellRef = useRef<HTMLDivElement>(null);
+	// The fold's CONTENT fade (owner round, 2026-10-05): the shell height
+	// morphs, but the bar↔form content used to hard-swap. A WAAPI fade/rise
+	// on the toggle — no remount, so the question form's state survives.
+	const contentRef = useRef<HTMLDivElement>(null);
+	const prevExpandedForFadeRef = useRef(expanded);
+	useIsoLayoutEffect(() => {
+		if (prevExpandedForFadeRef.current === expanded) return;
+		prevExpandedForFadeRef.current = expanded;
+		contentRef.current?.animate(
+			[{ opacity: 0, transform: "translateY(6px)" }, { opacity: 1, transform: "translateY(0)" }],
+			{ duration: 160, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
+		);
+	}, [expanded]);
 	const stateKey = `${mode}:${pending ? expanded : "-"}`;
 	const prevRef = useRef<{ key: string; height: number } | null>(null);
 	useIsoLayoutEffect(() => {
@@ -1941,7 +1993,7 @@ function DockOverlay({
 	return (
 		<div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ right: sbInset }}>
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-			<div ref={blockRef} className="relative bg-background pb-5">
+			<div ref={blockRef} className="relative bg-background pb-5" style={{ "--dock-max-h": dockMaxH ? `${dockMaxH}px` : undefined } as React.CSSProperties}>
 				<div className={DOCK}>
 					{setupCta}
 					{/* The queued-steer indicator (owner spec 2026-10-03): quiet
@@ -1962,7 +2014,11 @@ function DockOverlay({
 						/>
 					)}
 					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
-						<div key={mode} className={mode === initialModeRef.current ? undefined : "dock-variant"}>
+						<div
+						ref={contentRef}
+						key={mode}
+						className={mode === initialModeRef.current ? undefined : "dock-variant"}
+					>
 							{pending ? (
 								<QuestionDock
 									toolName={pending.tool as "quiz" | "ask_user_question" | "explain"}

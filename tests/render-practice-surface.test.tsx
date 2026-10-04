@@ -50,6 +50,11 @@ describe("PracticeDock", () => {
 			/>,
 		);
 		assert.match(html, /Show that the sum is even\./);
+		// The 'Problem' eyebrow (owner round, 2026-10-05): the quiz cards'
+		// label row, mirrored — dock and transcript card read identically.
+		assert.match(html, /Problem/);
+		// The measured column cap (the old fixed 40vh is only the fallback).
+		assert.match(html, /--dock-max-h/);
 		assert.match(html, /Your thinking/);
 		assert.match(html, /data-testid="practice-nudge"/);
 		assert.match(html, /data-testid="practice-commit"/);

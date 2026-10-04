@@ -510,8 +510,10 @@ function QuestionDockForm({
 
 	return (
 		<div ref={rootRef} data-testid="question-dock">
-			{/* Question area — scrolls internally if very tall; the bottom row stays put. */}
-			<div className="max-h-[55dvh] overflow-y-auto px-4 pt-3">
+			{/* Question area — scrolls internally if very tall; the bottom row stays put.
+			    Capped by the measured column (--dock-max-h; the old fixed 55dvh cut
+			    long questions short — owner round, 2026-10-05). */}
+			<div className="max-h-[var(--dock-max-h,55dvh)] overflow-y-auto px-4 pt-3">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 					{kind === "quiz" ? (qd.questionType === "predict" ? "Prediction" : "Quiz") : kind === "explain" ? "Explain" : "Question"}
 					{qd.mode === "multi-select" && " · select all that apply"}
