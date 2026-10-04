@@ -36,7 +36,12 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { QUESTION_TOOLS } from "./pending.ts";
-import { HANDOFF_TEXT } from "./contracts/chat.ts";
+import {
+	CONCLUDE_ACK_TEXT,
+	HANDOFF_TEXT,
+	THINKING_COMMIT_LABEL,
+	THINKING_HINT_LABEL,
+} from "./contracts/chat.ts";
 import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
 
 /** The hard-invariant wording for an aborted turn's unanswered calls —
@@ -59,7 +64,13 @@ export interface LhMarkerMessage {
 	/** Record identity (pi messages carry no id — see the file header). */
 	id: string;
 	role: "custom";
-	customType: "probe-handoff" | "subagent-steer" | "subagent-abort" | "plan-block";
+	customType:
+		| "probe-handoff"
+		| "subagent-steer"
+		| "subagent-abort"
+		| "plan-block"
+		| "practice-thinking"
+		| "problem-dismissed";
 	/** The model-facing text ("" for plan blocks — UI-only). */
 	content: string;
 	display: boolean;
@@ -169,6 +180,160 @@ export function newPlanBlockMessage(
 	};
 }
 
+// ─── practice sessions (owner, 2026-10-04) ───────────────────────────────────
+
+/** The practice agent's two tools (the conclude-before-next-problem gate's
+ *  vocabulary — the tool-execute layer owns the tools themselves). */
+export const PRACTICE_PROBLEM_TOOL = "problem";
+export const PRACTICE_CONCLUDE_TOOL = "conclude";
+
+/** The learner's thinking submission (the practice dock's two buttons):
+ *  a user-register message the model reads WITH its label (hint vs
+ *  commit — the register is the whole difference), while `details` keeps
+ *  the raw payload for the transcript card. One problem may carry many
+ *  submissions. */
+export function newThinkingMessage(problemCallId: string, commit: boolean, text: string): LhMarkerMessage {
+	const label = commit ? THINKING_COMMIT_LABEL : THINKING_HINT_LABEL;
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "practice-thinking",
+		content: `${label}:\n${text}`,
+		display: true,
+		details: { problemCallId, commit, text },
+		timestamp: Date.now(),
+	};
+}
+
+/** The problem-dismissal marker (ask-style discard, owner 2026-10-04):
+ *  UI-ONLY — toLlmMessages filters it. The model's face arrives later, at
+ *  the user's next input, as the synthesized conclude pair
+ *  (concludedByDismissalPair below) — the agent sees the dismissal as a
+ *  conclude call it "made" with outcome "dismissed", so the slot-freed
+ *  state and the dismissal read through the one vocabulary it owns. */
+export function newProblemDismissedMarker(problemCallId: string): LhMarkerMessage {
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "problem-dismissed",
+		content: "",
+		display: true,
+		details: { problemCallId },
+		timestamp: Date.now(),
+	};
+}
+
+/** The dismissal's deferred conclude (owner ruling 2026-10-04): the pair
+ *  prepended to the user's NEXT input — a synthetic assistant message
+ *  carrying a conclude call (outcome "dismissed") plus its ack result, so
+ *  both the record and the model context read the problem as concluded
+ *  by dismissal, slot freed. Pure; ids are deterministic off the problem
+ *  call id (idempotent shape — the pending-dismissal gate guarantees the
+ *  pair appends at most once per marker). */
+export function concludedByDismissalPair(
+	problemCallId: string,
+): [LhMessage & AssistantMessage, LhMessage & ToolResultMessage] {
+	const callId = `call_conc_${problemCallId}`;
+	const now = Date.now();
+	// The stamps are placeholders by design: history serialization reads
+	// ONLY the content blocks (verified in pi-ai's converters), and the
+	// app's money channel is the parallel turns log, never message
+	// objects — so "synthetic" never corrupts a wire view or a cost fold.
+	const syntheticStamps = {
+		api: "faux",
+		provider: "synthetic",
+		model: "synthetic-conclude",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+	} as const;
+	return [
+		{
+			id: newMessageId(),
+			role: "assistant",
+			content: [{ type: "toolCall", id: callId, name: PRACTICE_CONCLUDE_TOOL, arguments: { outcome: "dismissed" } }],
+			timestamp: now,
+			...syntheticStamps,
+		},
+		{
+			id: newMessageId(),
+			role: "toolResult",
+			toolCallId: callId,
+			toolName: PRACTICE_CONCLUDE_TOOL,
+			content: [{ type: "text", text: CONCLUDE_ACK_TEXT }],
+			details: { outcome: "dismissed", problemCallId },
+			isError: false,
+			timestamp: now,
+		},
+	];
+}
+
+/** The active-problem fold (the conclude-before-next-problem gate): the
+ *  NEWEST problem tool call with nothing concluding after it — either a
+ *  conclude call or a dismissal marker deactivates. The ack result at pose
+ *  time does NOT (the problem stays on screen through nudges; the dock's
+ *  subject is the call, not a dangling result). */
+export function activeProblemOf(
+	messages: readonly LhMessage[],
+): { toolCallId: string; input: unknown } | null {
+	for (let mi = messages.length - 1; mi >= 0; mi--) {
+		const m = messages[mi]!;
+		const role = (m as { role?: string }).role;
+		if (role === "custom") {
+			const marker = m as LhMarkerMessage;
+			if (marker.customType === "problem-dismissed") return null;
+			continue;
+		}
+		if (role === "assistant") {
+			const assistant = m as AssistantMessage & { id: string };
+			for (let bi = assistant.content.length - 1; bi >= 0; bi--) {
+				const block = assistant.content[bi]!;
+				if (block.type !== "toolCall") continue;
+				if (block.name === PRACTICE_CONCLUDE_TOOL) return null;
+				if (block.name !== PRACTICE_PROBLEM_TOOL) continue;
+				return { toolCallId: block.id, input: block.arguments };
+			}
+			continue;
+		}
+	}
+	return null;
+}
+
+/** Is a problem-dismissal marker waiting for its conclude synthesis? The
+ *  text/continue appends read this: the pair rides the user's next input
+ *  (input-events). Newest-marker-wins scan: the first dismissal marker or
+ *  conclude call from the end decides. */
+export function pendingProblemDismissalOf(messages: readonly LhMessage[]): string | null {
+	for (let mi = messages.length - 1; mi >= 0; mi--) {
+		const m = messages[mi]!;
+		const role = (m as { role?: string }).role;
+		if (role === "custom") {
+			const marker = m as LhMarkerMessage;
+			if (marker.customType === "problem-dismissed") {
+				return (marker.details as { problemCallId?: unknown }).problemCallId as string;
+			}
+			continue;
+		}
+		if (role === "assistant") {
+			const assistant = m as AssistantMessage;
+			for (let bi = assistant.content.length - 1; bi >= 0; bi--) {
+				const block = assistant.content[bi]!;
+				if (block.type !== "toolCall" && block.type !== "text") continue;
+				if (block.type === "toolCall" && block.name === PRACTICE_CONCLUDE_TOOL) return null;
+				if (block.type === "toolCall" && block.name === PRACTICE_PROBLEM_TOOL) return null;
+			}
+			continue;
+		}
+	}
+	return null;
+}
+
 // ─── the one model-facing seam (the agent's convertToLlm) ────────────────────
 
 /** The ids of every toolResult in the tail (for the dangling-call scan). */
@@ -206,7 +371,9 @@ export function toLlmMessages(messages: readonly AgentMessage[]): Message[] {
 		const role = (m as { role?: string }).role;
 		if (role === "custom") {
 			const marker = m as LhMarkerMessage;
-			if (marker.customType === "plan-block") continue; // UI-only
+			// UI-only markers: plan blocks, and problem dismissals (the
+			// synthesized conclude pair carries the model's face).
+			if (marker.customType === "plan-block" || marker.customType === "problem-dismissed") continue;
 			out.push({
 				role: "user",
 				content: [{ type: "text", text: marker.content }],

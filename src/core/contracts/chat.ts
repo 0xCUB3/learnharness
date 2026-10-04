@@ -179,6 +179,22 @@ export const HANDOFF_TEXT =
 	"Take your time here and really think this through. " +
 	"When it's genuinely reasoned out, call plan_init and present the plan; I'll accept it or ask for changes.";
 
+// ─── Practice sessions (owner, 2026-10-04) — marker + ack texts ──────────────
+// Single-sourced here per the marker law: the model-facing text of every
+// custom marker lives in core/contracts, never in the flattening seam.
+
+/** The model-facing register of a thinking submission (newThinkingMessage
+ *  prefixes the learner's text with this label). Hints and commits ride
+ *  one channel — the label is the ONLY difference the model sees. */
+export const THINKING_HINT_LABEL = "Thinking trace (working, not committed)";
+export const THINKING_COMMIT_LABEL = "Committed answer";
+
+/** The conclude tool's ack — shared by the executed call (agent layer) and
+ *  the dismissal-synthesized pair (input-events), so a concluded problem
+ *  reads identically to the model however it concluded. */
+export const CONCLUDE_ACK_TEXT =
+	"Problem concluded — the composer is free; pose the next problem or wrap up.";
+
 
 export interface PlanBlockData {
 	/** Only "full" survives (the 2026-09-11 pivot): the plan renders IN

@@ -28,9 +28,14 @@
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { LhMessage } from "./native-messages.ts";
 import {
+	activeProblemOf,
+	concludedByDismissalPair,
 	danglingQuestionOf,
 	newAnswerResult,
+	newProblemDismissedMarker,
+	newThinkingMessage,
 	newUserMessage,
+	pendingProblemDismissalOf,
 } from "./native-messages.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "./pending.ts";
 
@@ -38,7 +43,12 @@ import { QUESTION_TOOLS, toolQuestionKind } from "./pending.ts";
 export type ChatInput =
 	| { type: "text"; text: string }
 	| { type: "answer"; toolCallId: string; answer: QuestionAnswerData }
-	| { type: "continue" };
+	| { type: "continue" }
+	/** The practice dock's two buttons (owner, 2026-10-04): the learner's
+	 *  thinking on the ACTIVE problem — commit=false is the hint request
+	 *  (working, not committed), commit=true the answer commit. One
+	 *  problem may carry many submissions; each is its own turn. */
+	| { type: "thinking"; problemCallId: string; commit: boolean; text: string };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -56,12 +66,23 @@ export type TurnInput = ChatInput | SteerInput;
  *  BE a dismissal: the silent path must never inject a live answer
  *  wake-free. Parallel question calls each get their own dismiss event;
  *  results reference their calls by id, so the appends stay independent. */
-export type DismissInput = { type: "dismiss"; toolCallId: string; answer: QuestionAnswerData };
+export type DismissInput =
+	| { type: "dismiss"; toolCallId: string; answer: QuestionAnswerData }
+	/** The problem discard (practice, owner 2026-10-04): ask-style — the
+	 *  silent route appends the UI-only marker and wakes nothing; the
+	 *  conclude pair rides the user's NEXT input (inputAppends). */
+	| { type: "dismiss-problem"; problemCallId: string };
 
 /** Parse and validate a dismissal event off a request body. */
 export function parseDismissInput(input: unknown): DismissInput {
 	if (typeof input !== "object" || input === null) throw new ChatInputError("input must be an object");
 	const i = input as Record<string, unknown>;
+	if (i.type === "dismiss-problem") {
+		if (typeof i.problemCallId !== "string" || i.problemCallId.length === 0) {
+			throw new ChatInputError("dismiss-problem input requires problemCallId");
+		}
+		return { type: "dismiss-problem", problemCallId: i.problemCallId };
+	}
 	if (i.type !== "dismiss") throw new ChatInputError(`unknown input type: ${String(i.type)}`);
 	if (typeof i.toolCallId !== "string" || i.toolCallId.length === 0) {
 		throw new ChatInputError("dismiss input requires toolCallId");
@@ -100,8 +121,16 @@ export function parseUserSteerInput(input: unknown): UserSteerInput {
 }
 
 /** The native appends a dismissal makes (pure — same orphan discipline
- *  as answers: the call must be a DANGLING question call). */
+ *  as answers: the call must be a DANGLING question call, or — the
+ *  practice variant — the ACTIVE problem). */
 export function dismissAppends(record: { messages: LhMessage[] }, input: DismissInput): LhMessage[] {
+	if (input.type === "dismiss-problem") {
+		const active = activeProblemOf(record.messages);
+		if (!active || active.toolCallId !== input.problemCallId) {
+			throw new ChatInputError("dismiss-problem input targets no active problem");
+		}
+		return [newProblemDismissedMarker(input.problemCallId)];
+	}
 	const pending = danglingQuestionOf(record.messages);
 	if (!pending || pending.toolCallId !== input.toolCallId) {
 		throw new ChatInputError("dismiss input targets no pending question call");
@@ -135,6 +164,17 @@ export function parseChatInput(input: unknown): ChatInput {
 			return { type: "answer", toolCallId: i.toolCallId, answer: i.answer as QuestionAnswerData };
 		case "continue":
 			return { type: "continue" };
+		case "thinking":
+			if (typeof i.problemCallId !== "string" || i.problemCallId.length === 0) {
+				throw new ChatInputError("thinking input requires problemCallId");
+			}
+			if (typeof i.commit !== "boolean") {
+				throw new ChatInputError("thinking input requires commit (boolean)");
+			}
+			if (typeof i.text !== "string" || i.text.trim().length === 0) {
+				throw new ChatInputError("thinking input requires non-empty text");
+			}
+			return { type: "thinking", problemCallId: i.problemCallId, commit: i.commit, text: i.text };
 		default:
 			throw new ChatInputError(`unknown input type: ${String(i.type)}`);
 	}
@@ -152,7 +192,7 @@ export function parseChatInput(input: unknown): ChatInput {
 export function inputAppends(record: { messages: LhMessage[] }, input: ChatInput): LhMessage[] {
 	switch (input.type) {
 		case "text":
-			return [newUserMessage(input.text)];
+			return [...dismissalConclusion(record), newUserMessage(input.text)];
 		case "answer": {
 			const pending = danglingQuestionOf(record.messages);
 			if (!pending || pending.toolCallId !== input.toolCallId) {
@@ -161,8 +201,25 @@ export function inputAppends(record: { messages: LhMessage[] }, input: ChatInput
 			return [newAnswerResult(input.toolCallId, pending.tool, input.answer)];
 		}
 		case "continue":
-			return [];
+			return dismissalConclusion(record);
+		case "thinking": {
+			const active = activeProblemOf(record.messages);
+			if (!active || active.toolCallId !== input.problemCallId) {
+				throw new ChatInputError("thinking input targets no active problem");
+			}
+			return [...dismissalConclusion(record), newThinkingMessage(input.problemCallId, input.commit, input.text)];
+		}
 	}
+}
+
+/** The deferred conclude synthesis (owner ruling, 2026-10-04): a
+ *  problem-dismissal marker waits for the user's next input — the pair
+ *  (synthetic conclude call + ack) rides ahead of it, so the agent reads
+ *  the dismissal through its own vocabulary and the slot frees. Pure;
+ *  empty when nothing dismissals pend. */
+function dismissalConclusion(record: { messages: LhMessage[] }): LhMessage[] {
+	const problemCallId = pendingProblemDismissalOf(record.messages);
+	return problemCallId ? concludedByDismissalPair(problemCallId) : [];
 }
 
 /** Is this tool name a question tool (dock-owned, answer-gated)? */
