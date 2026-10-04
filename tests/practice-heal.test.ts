@@ -41,12 +41,6 @@ describe("healEncodedArguments — the GLM incident", () => {
 			mode: QUOTED("recall"), // the incident: every field valid BUT mode
 			target: ["group-order"],
 			modelSolution: "Let |G| = p. Any x ≠ e generates a subgroup whose order divides p…",
-			decisionPoints: ["pick an element and consider ⟨x⟩"],
-			expectedWrongMoves: [
-				{ move: "reaching for Sylow", resolution: "Sylow needs p² at least; order p is direct" },
-			],
-			strategy: "single-cue recall, minimal parse cost",
-			rationale: "first problem of the session — baseline the cue",
 		};
 		// The raw shape is the incident: validation throws.
 		assert.throws(() => {

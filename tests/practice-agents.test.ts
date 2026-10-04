@@ -76,16 +76,11 @@ const PROBLEM_INPUT = {
 	mode: "recall",
 	target: ["parity-sum"],
 	modelSolution: "Pair them; each pair is even.",
-	decisionPoints: ["pairing move"],
-	expectedWrongMoves: [{ move: "induction", resolution: "pairing is direct" }],
-	strategy: "near-twin surfaces",
-	rationale: "weakest target, undemonstrated recall",
 } as const;
 
 const CONCLUDE_INPUT = {
 	outcome: "solved",
 	verdict: "Clean — the pairing came unaided.",
-	solutionReveal: "Pair them; each pair is even.",
 	rung: null,
 	missClass: null,
 	retest: false,

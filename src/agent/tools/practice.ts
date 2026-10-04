@@ -145,21 +145,7 @@ export const problemInputObject = Type.Object({
 	}),
 	target: Type.Array(Type.String(), { minItems: 1, description: "REQUIRED — the proposition id(s) or names this problem exercises." }),
 	modelSolution: Type.String({
-		description: "REQUIRED — the full solution, moves in order, committed BEFORE the learner sees the problem.",
-	}),
-	decisionPoints: Type.Array(Type.String(), {
-		description: "REQUIRED — each juncture where a not-yet-active proposition must be selected.",
-	}),
-	expectedWrongMoves: Type.Array(
-		Type.Object({
-			move: Type.String({ description: "The wrong move an honest attempt may take." }),
-			resolution: Type.String({ description: "What resolves it back to the right move." }),
-		}),
-		{ description: "REQUIRED — the wrong moves you expect, each with its resolution." },
-	),
-	strategy: Type.String({ description: "REQUIRED — why this shape: the situation class, parse cost, density." }),
-	rationale: Type.String({
-		description: "REQUIRED — why this problem now: target + mode + difficulty against the session's last outcomes.",
+		description: "REQUIRED — the full solution, moves in order, committed BEFORE the learner sees the problem. This IS the reveal — conclude shows it verbatim; never re-author it.",
 	}),
 });
 
@@ -171,9 +157,9 @@ export function problemTool(gate: PracticeGate): AgentTool<typeof problemInputOb
 		label: "problem",
 		description:
 			"Pose one practice problem. Ends the turn — the learner works in the thinking field; their thinking " +
-			"traces and answer commits arrive back as labeled messages. The full commitment (solution, decision points, " +
-			"expected wrong moves) rides this call's arguments and stays hidden from the learner until you conclude. " +
-			"Only one problem may be active — conclude it before posing the next.",
+			"traces and answer commits arrive back as labeled messages. The modelSolution rides this call's " +
+			"arguments and stays hidden from the learner until you conclude (conclude shows it verbatim — the " +
+			"reveal needs no new field). Only one problem may be active — conclude it before posing the next.",
 		parameters: problemInputObject,
 		executionMode: "sequential",
 		prepareArguments: (args: unknown) => healEncodedArguments(args, problemInputObject) as never,
@@ -204,9 +190,6 @@ export const concludeInputObject = Type.Object({
 	),
 	verdict: Type.String({
 		description: "REQUIRED — the plain-language verdict: what was credited, where it broke. On a wrong answer: localize the break, do NOT give the correction.",
-	}),
-	solutionReveal: Type.String({
-		description: "REQUIRED — the committed solution, shown to the learner now (the reveal spend; moving on spends it).",
 	}),
 	rung: Type.Union(
 		[Type.Literal("R0"), Type.Literal("R1"), Type.Literal("R2"), Type.Literal("R3"), Type.Literal("R4"), Type.Literal("R5"), Type.Null()],

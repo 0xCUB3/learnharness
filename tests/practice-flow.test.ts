@@ -38,25 +38,19 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai";
 // The BYOK key-presence gate reads env-first (chat-flow.test.ts's idiom).
 process.env.OPENROUTER_API_KEY ??= "test-key-presence-gate";
 
-/** A valid problem pose (the full commitment — the schema's every field). */
+/** A valid problem pose — the slim schema: statement, mode, target,
+ *  modelSolution (the commitment, which is also the reveal). */
 const POSE = {
 	statement: "Prove that every finite group of prime order is cyclic.",
 	mode: "recall",
 	target: ["group-order"],
 	modelSolution: "Let |G| = p. Any x ≠ e generates a subgroup whose order divides p…",
-	decisionPoints: ["pick an element and consider ⟨x⟩"],
-	expectedWrongMoves: [
-		{ move: "reaching for Sylow", resolution: "Sylow needs p² at least; order p is direct" },
-	],
-	strategy: "single-cue recall, minimal parse cost",
-	rationale: "first problem of the session — baseline the cue",
 } as const;
 
-/** A valid conclude (the reveal spend). */
+/** A valid conclude — no reveal field; the pose's modelSolution is the reveal. */
 const CONCLUDE = {
 	outcome: "solved",
 	verdict: "The subgroup-order argument is credited in full.",
-	solutionReveal: "Let |G| = p; ⟨x⟩'s order divides p and exceeds 1, so it is p — G = ⟨x⟩.",
 	rung: null,
 	missClass: null,
 	retest: false,

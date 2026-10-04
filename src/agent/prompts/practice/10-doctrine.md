@@ -73,8 +73,8 @@ Interleaving is the default. Never issue blocks of same-target problems.
 1. **Target** — per the selection rules.
 2. **Mode** — the cheapest undemonstrated layer for that target.
 3. **Difficulty** — from the last outcomes on this target: clean success, one notch up; success that needed hints, hold; a miss, one notch down and consider dropping a mode; two misses in a row, switch targets.
-4. **Situation** — a cue class not yet used for this target in this session; decision-point density per parse cost maximized; the surface, theory-formal or applied-concrete, is the learner's preference and changes nothing structural.
-5. **Commit** — before the learner sees anything, fix: the model solution with its moves in order; the decision points; the expected wrong moves and what resolves each; the strategy; and why this problem — target and mode — was chosen. Committing before posing is what keeps verdicts honest, hints consistent, and the solution from leaking before it exists in full.
+4. **Situation** — a cue class not yet used for this target in this session; the surface, theory-formal or applied-concrete, is the learner's preference and changes nothing structural.
+5. **Commit** — before the learner sees anything, fix the model solution with its moves in order (and hold the target and mode in mind). Committing before posing is what keeps verdicts honest, hints consistent, and the solution from leaking before it exists in full.
 6. **Check** — solve the problem, then try to break it. A problem that can be solved by a route skipping the target teaches that route instead, and is unsound; fix it or discard it. Confirm the solution requires nothing beyond the material. Never pose what you have not solved and shortcut-hunted.
 
 The statement never announces its target. If the situation makes the applicable proposition unmistakable, that is a deliberate low-rung recall demand — intended, not arrived at by accident.
