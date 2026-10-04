@@ -34,6 +34,7 @@
 
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
+import { modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL } from "./native-messages.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 import type { SubagentArtifactData, SubagentResultMeta } from "./contracts/jobs.ts";
 import type { PlanBlockData } from "./contracts/chat.ts";
@@ -194,7 +195,14 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 				} else if (block.type === "thinking") {
 					reasoning.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
 				} else if (block.type === "toolCall") {
-					rest.push(toolPartOf(block, live, streamingMessage));
+					const part = toolPartOf(block, live, streamingMessage);
+					// The conclusion's reveal join (owner round, 2026-10-05): the
+					// hero of a conclude card is the modelSolution committed at POSE
+					// time — a record fold, enriched here so the card renders pure.
+					if (block.name === PRACTICE_CONCLUDE_TOOL) {
+						part.reveal = modelSolutionForConclude(messages, block.id);
+					}
+					rest.push(part);
 				}
 			}
 			const parts: LhViewPart[] = [...reasoning, ...rest];

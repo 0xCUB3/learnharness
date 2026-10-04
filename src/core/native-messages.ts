@@ -328,6 +328,40 @@ function cleanToolCallIds(messages: readonly LhMessage[]): Set<string> {
 	return ids;
 }
 
+/** The conclusion's reveal (owner round, 2026-10-05): the hero of a
+ *  conclude card is the modelSolution committed at POSE time — the newest
+ *  cleanly-posed problem BEFORE this conclude call. The reveal is never
+ *  re-authored (the slim schema dropped solutionReveal); legacy conclude
+ *  inputs that still carry their own solutionReveal fall back to it at the
+ *  card. Undefined when the pose carries no string solution. */
+export function modelSolutionForConclude(
+	messages: readonly LhMessage[],
+	concludeCallId: string,
+): string | undefined {
+	let mi = messages.findIndex(
+		(m) =>
+			(m as { role?: string }).role === "assistant" &&
+			(m as AssistantMessage).content.some(
+				(b) => b.type === "toolCall" && b.id === concludeCallId,
+			),
+	);
+	if (mi < 0) return undefined;
+	const clean = cleanToolCallIds(messages);
+	for (; mi >= 0; mi--) {
+		const m = messages[mi]!;
+		if ((m as { role?: string }).role !== "assistant") continue;
+		const assistant = m as AssistantMessage;
+		for (let bi = assistant.content.length - 1; bi >= 0; bi--) {
+			const block = assistant.content[bi]!;
+			if (block.type !== "toolCall" || block.name !== PRACTICE_PROBLEM_TOOL) continue;
+			if (!clean.has(block.id)) continue; // a refused pose revealed nothing
+			const solution = (block.arguments as { modelSolution?: unknown } | undefined)?.modelSolution;
+			return typeof solution === "string" ? solution : undefined;
+		}
+	}
+	return undefined;
+}
+
 export function activeProblemOf(
 	messages: readonly LhMessage[],
 ): { toolCallId: string; input: unknown } | null {

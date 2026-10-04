@@ -27,6 +27,8 @@ import {
 } from "../src/core/native-messages.ts";
 import { CONCLUDE_ACK_TEXT } from "../src/core/contracts/chat.ts";
 import { dismissAppends, inputAppends, parseChatInput, parseDismissInput } from "../src/core/input-events.ts";
+import { modelSolutionForConclude } from "../src/core/native-messages.ts";
+import { projectView } from "../src/core/index.ts";
 
 // ── builders (native-shaped test fixtures) ───────────────────────────────────
 
@@ -50,7 +52,7 @@ function problemPose(callId = "call_p1", statement = "Show that…"): LhMessage[
 		id: `msg_a_${callId}`,
 		role: "assistant",
 		content: [
-			{ type: "toolCall", id: callId, name: PRACTICE_PROBLEM_TOOL, arguments: { statement, mode: "recall" } },
+			{ type: "toolCall", id: callId, name: PRACTICE_PROBLEM_TOOL, arguments: { statement, mode: "recall", modelSolution: statement } },
 		],
 		timestamp: 1,
 		...STAMPS,
@@ -110,7 +112,7 @@ describe("activeProblemOf (the conclude-before-next-problem gate's fold)", () =>
 		const messages = problemPose();
 		const active = activeProblemOf(messages);
 		assert.equal(active?.toolCallId, "call_p1");
-		assert.deepEqual(active?.input, { statement: "Show that…", mode: "recall" });
+		assert.deepEqual(active?.input, { statement: "Show that…", mode: "recall", modelSolution: "Show that…" });
 	});
 
 	it("thinking submissions keep it active (nudges never conclude)", () => {
@@ -343,5 +345,41 @@ describe("needsContinuation (a persisted pose ack owes nothing)", () => {
 		err.isError = true;
 		err.content = [{ type: "text", text: "A problem is already active." }];
 		assert.equal(needsContinuation(messages), true);
+	});
+});
+
+
+// ── the reveal join (owner round, 2026-10-05) ───────────────────────────────
+
+describe("modelSolutionForConclude (the conclusion's hero is the pose's commitment)", () => {
+	it("returns the cleanly-posed problem's modelSolution before the conclude", () => {
+		const messages = [...problemPose(), ...concludeCall("solved")];
+		assert.equal(modelSolutionForConclude(messages, "call_conclude_solved"), "Show that…");
+	});
+
+	it("skips refused poses — a rejected pose revealed nothing", () => {
+		const rejected = problemPose("call_bad", "A different student…");
+		(rejected[1]! as unknown as { isError: boolean }).isError = true;
+		const messages = [...rejected, ...concludeCall("solved")];
+		assert.equal(modelSolutionForConclude(messages, "call_conclude_solved"), undefined);
+	});
+
+	it("the newest pose before ITS conclude wins (multi-problem records)", () => {
+		const messages = [
+			...problemPose("call_p1", "first"),
+			...concludeCall("solved"),
+			...problemPose("call_p2", "second"),
+			...concludeCall("movedOn"),
+		];
+		assert.equal(modelSolutionForConclude(messages, "call_conclude_movedOn"), "second");
+		assert.equal(modelSolutionForConclude(messages, "call_conclude_solved"), "first");
+	});
+
+	it("projectView enriches the conclude part with the reveal", () => {
+		const messages = [...problemPose(), ...concludeCall("solved")];
+		const view = projectView(messages);
+		const conclude = view.flatMap((m) => m.parts).find((p) => p.type === "tool-conclude");
+		assert.ok(conclude, "the conclude part projects");
+		assert.equal(conclude!.reveal, "Show that…", "the view-seam join carries the committed solution");
 	});
 });

@@ -76,7 +76,7 @@ describe("PracticeDock", () => {
 // ── the transcript cards ─────────────────────────────────────────────────────
 
 describe("the practice transcript cards", () => {
-	it("ProblemCard: the statement renders — the commitment NEVER does", () => {
+	it("ProblemCard: ALWAYS OPEN, the 'Problem' eyebrow + the statement — the commitment NEVER renders", () => {
 		const html = renderToStaticMarkup(
 			<ProblemCard
 				part={part({
@@ -84,33 +84,48 @@ describe("the practice transcript cards", () => {
 						statement: "Prove the parity claim.",
 						mode: "recall",
 						modelSolution: "Pair them.",
-						decisionPoints: ["pairing"],
-						expectedWrongMoves: [{ move: "induction", resolution: "pairing is direct" }],
-						strategy: "near-twin",
-						rationale: "weakest target",
 					},
 				})}
 			/>,
 		);
 		assert.match(html, /data-testid="problem-card"/);
+		assert.match(html, /Problem/);
 		assert.match(html, /Prove the parity claim\./);
-		for (const hidden of ["Pair them.", "induction", "near-twin", "weakest target", "pairing"]) {
-			assert.doesNotMatch(html, new RegExp(hidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `commitment leaked: ${hidden}`);
-		}
+		assert.doesNotMatch(html, /Pair them\./, "the commitment stays hidden");
+		// No chevron, no collapsed bar (owner round, 2026-10-05).
+		assert.doesNotMatch(html, /lucide-chevron|<button/, "nothing collapsible");
 	});
 
-	it("ConcludeCard: outcome badge + verdict headline; the reveal expands", () => {
+	it("ConcludeCard: the SOLUTION is the hero (the pose's modelSolution via part.reveal); the verdict rides below, low-key", () => {
 		const html = renderToStaticMarkup(
 			<ConcludeCard
 				part={part({
 					type: "tool-conclude",
-					input: { outcome: "solvedWithHints", verdict: "The pairing came after R2.", solutionReveal: "Pair them; each pair is even." },
+					input: { outcome: "solvedWithHints", verdict: "The pairing came after R2." },
+					reveal: "Pair them; each pair is even.",
 				})}
 			/>,
 		);
 		assert.match(html, /data-testid="conclude-card"/);
 		assert.match(html, /Solved with hints/);
+		assert.match(html, /Pair them; each pair is even\./, "the committed solution, verbatim");
+		assert.match(html, /Verdict:/);
 		assert.match(html, /The pairing came after R2\./);
+		// The verdict row renders AFTER the solution (the hero first).
+		assert.ok(html.indexOf("Pair them; each pair is even.") < html.indexOf("The pairing came after R2."));
+		assert.doesNotMatch(html, /<button/, "nothing collapsible");
+	});
+
+	it("ConcludeCard: legacy records fall back to their own solutionReveal", () => {
+		const html = renderToStaticMarkup(
+			<ConcludeCard
+				part={part({
+					type: "tool-conclude",
+					input: { outcome: "solved", verdict: "Clean.", solutionReveal: "Pair them; each pair is even." },
+				})}
+			/>,
+		);
+		assert.match(html, /Pair them; each pair is even\./);
 	});
 
 	it("ConcludeCard: the dismissal synthesis is one muted line — no reveal card", () => {

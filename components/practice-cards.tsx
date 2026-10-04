@@ -1,10 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { ArtifactPartProps } from "@/src/core";
-import { cn } from "@/lib/utils";
 
 /**
  * The practice transcript cards (practice sessions, owner design
@@ -32,25 +29,18 @@ export interface PracticeThinkingData {
 }
 
 export function ProblemCard({ part }: ArtifactPartProps) {
-	const [open, setOpen] = useState(false);
+	// Always open, no chevron (owner round, 2026-10-05): the record IS the
+	// statement — same container + eyebrow discipline as the answered card
+	// and the dock (which mirrors this in Slice D). The commitment never
+	// renders — only the call's statement.
 	const input = (part.input ?? {}) as { statement?: string };
 	const statement = typeof input.statement === "string" ? input.statement : "";
 	return (
-		<div data-testid="problem-card" className="my-1">
-		<button
-			type="button"
-			onClick={() => setOpen((v) => !v)}
-			className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-border/60 bg-card/60 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
-		>
-			<ChevronRightIcon className={cn("size-4 shrink-0 transition-transform", open && "rotate-90")} />
-			<span className="font-medium">Problem</span>
-			<span className="min-w-0 flex-1 truncate">{statement}</span>
-		</button>
-		{open && (
-			<div className="lh-prose mt-1 rounded-lg border border-border/60 bg-card/60 px-4 py-3 text-[15px]">
+		<div data-testid="problem-card" className="lh-card-enter my-1 rounded-xl border bg-card p-4">
+			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Problem</div>
+			<div className="lh-prose text-[15px]">
 				<MessageResponse>{statement}</MessageResponse>
 			</div>
-		)}
 		</div>
 	);
 }
@@ -64,15 +54,17 @@ const OUTCOME_LABEL: Record<string, string> = {
 };
 
 export function ConcludeCard({ part }: ArtifactPartProps) {
-	const [open, setOpen] = useState(false);
-	const input = (part.input ?? {}) as {
-		outcome?: string;
-		verdict?: string;
-		solutionReveal?: string;
-	};
+	// The conclusion redesigned (owner round, 2026-10-05): the SOLUTION is
+	// the hero — the modelSolution committed at pose time (part.reveal, the
+	// view-seam join), shown verbatim, never re-authored. The verdict sits
+	// below in the quiz-explanation register (small, muted, low-key).
+	// Nothing collapsible. Legacy inputs (pre-slim records) that carry
+	// their own solutionReveal fall back to it.
+	const input = (part.input ?? {}) as { outcome?: string; verdict?: string; solutionReveal?: string };
 	const outcome = typeof input.outcome === "string" ? input.outcome : "";
 	const verdict = typeof input.verdict === "string" ? input.verdict : "";
-	const reveal = typeof input.solutionReveal === "string" ? input.solutionReveal : "";
+	const reveal =
+		typeof part.reveal === "string" ? part.reveal : typeof input.solutionReveal === "string" ? input.solutionReveal : "";
 
 	// The dismissal synthesis: no verdict, no reveal — one muted line (the
 	// learner clicked; the record needs only the fact).
@@ -85,35 +77,21 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 	}
 
 	return (
-		<div data-testid="conclude-card" className="my-1">
-		<button
-			type="button"
-			onClick={() => setOpen((v) => !v)}
-			className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-border/60 bg-card/60 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
-		>
-			<ChevronRightIcon className={cn("size-4 shrink-0 transition-transform", open && "rotate-90")} />
-			<span className="font-medium">{OUTCOME_LABEL[outcome] ?? "Concluded"}</span>
-			<span className="min-w-0 flex-1 truncate">{verdict}</span>
-		</button>
-		{open && (
-			<div className="mt-1 space-y-2 rounded-lg border border-border/60 bg-card/60 px-4 py-3 text-[15px]">
-				{verdict.length > 0 && (
-					<div className="text-sm text-foreground">
-						<MessageResponse>{verdict}</MessageResponse>
-					</div>
-				)}
-				{reveal.length > 0 && (
-					<div className="border-t border-border/50 pt-2">
-						<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-							The solution
-						</div>
-						<div className="lh-prose">
-							<MessageResponse>{reveal}</MessageResponse>
-						</div>
-					</div>
-				)}
+		<div data-testid="conclude-card" className="lh-card-enter my-1 rounded-xl border bg-card p-4">
+			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				{OUTCOME_LABEL[outcome] ?? "Concluded"}
 			</div>
-		)}
+			{reveal.length > 0 && (
+				<div className="lh-prose text-[15px]">
+					<MessageResponse>{reveal}</MessageResponse>
+				</div>
+			)}
+			{verdict.length > 0 && (
+				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
+					<span className="font-medium text-foreground">Verdict: </span>
+					<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{verdict}</MessageResponse>
+				</div>
+			)}
 		</div>
 	);
 }

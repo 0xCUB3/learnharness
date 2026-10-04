@@ -270,5 +270,9 @@ export interface ArtifactPartProps {
 		toolCallId: string;
 		input?: unknown;
 		output?: unknown;
+		/** The view-seam join for conclude cards (owner round, 2026-10-05):
+		 *  the modelSolution committed at POSE time, folded onto the part by
+		 *  projectView — the reveal is never re-authored. */
+		reveal?: unknown;
 	};
 }
