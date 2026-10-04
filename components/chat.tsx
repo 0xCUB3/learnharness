@@ -212,14 +212,15 @@ export function Chat({
 	// The reattach settled terminal → the sync-and-continue seam (below).
 	setReattachSettled(() => reattachSettledRef.current());
 
-	// New chat with a topic: send the first message exactly once.
+	// New chat with a topic: send the first message exactly once
+	// (initialPromptOwed — the pure gate, pinned in the test suite).
 	const sentInitial = useRef(false);
 	useEffect(() => {
-		if (!sentInitial.current && initialPrompt && initialMessages.length === 0) {
+		if (!sentInitial.current && initialPromptOwed(initialMessages, initialPrompt)) {
 			sentInitial.current = true;
-			void send({ type: "text", text: initialPrompt });
+			void send({ type: "text", text: initialPrompt! });
 		}
-	}, [initialPrompt, initialMessages.length, send]);
+	}, [initialPrompt, initialMessages, send]);
 
 	// A turn running server-side, attached to no live view of ours (navigate
 	// away mid-turn, or a wake turn discovered mid-session): the reattach
@@ -1202,6 +1203,26 @@ export function Chat({
 								// assistant group — is gone). Never a user bubble: the wake is
 								// scaffolding; the model-facing instruction lives in the adapter.
 								<PhaseDivider key={m.id || `m-${mi}`} phase="plan" />
+							) : m.role === "user" && m.parts.length > 0 && m.parts.every((p) => p.type.startsWith("data-")) ? (
+								// Marker cards (custom messages, 2026-10-04): user-side
+								// scaffolding — the graph-context pick, the practice
+								// thinking trace — render as cards in the transcript
+								// column directly, NO chat bubble (the subagent-steer
+								// precedent). The user branch below renders text only;
+								// without this hoist a data-only message read as an
+								// EMPTY bubble (owner report, 2026-10-04).
+								<Fragment key={m.id || `m-${mi}`}>
+									{m.parts.map((part, pi) => {
+										switch (part.type) {
+											case "data-graph-context":
+												return <GraphContextCard key={pi} data={part.data as GraphContextData} />;
+											case "data-practice-thinking":
+												return <ThinkingCard key={pi} data={part.data as PracticeThinkingData} />;
+											default:
+												return null;
+										}
+									})}
+								</Fragment>
 							) : (
 									<Fragment key={m.id || `m-${mi}`}>
 									{/* THE INFERRED TEACH SEAM (owner ruling 2026-09-26, the verdict
@@ -1259,20 +1280,6 @@ export function Chat({
 														);
 													case "step-start":
 														return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
-													case "data-graph-context":
-														// The session's map pick (2026-10-04): a minimal
-														// collapsible card — scaffolding above the first
-														// user message, never a bubble.
-														return (
-															<GraphContextCard key={pi} data={part.data as GraphContextData} />
-														);
-													case "data-practice-thinking":
-														// The learner's practice submission (2026-10-04):
-														// user-side — the register (thinking trace /
-														// committed answer) is the card's title.
-														return (
-															<ThinkingCard key={pi} data={part.data as PracticeThinkingData} />
-														);
 													case "data-plan-block":
 														// The plan in the chat (wave 4): a frozen snapshot
 														// block — rendered as carried, never re-derived.
@@ -1508,6 +1515,19 @@ export function Chat({
  *  then setup (self-closing — the gate only must not fire), then the
  *  2026-10-02 abort chain proper (question before turn). */
 export type EscAbortTarget = "mermaid" | "plan" | "setup" | "question" | "problem" | "turn" | null;
+	/**
+ * Does the ?prompt topic still owe its first send? The gate is "no real
+ * conversation yet" (no user/assistant message) — NOT emptiness: a
+ * session started with map picks carries a graph-context MARKER as
+ * message[0], and that scaffolding must never swallow the first send
+ * (owner report, 2026-10-04: the turn went dead behind it — the old
+ * `length === 0` check saw the marker and refused to fire).
+ */
+export function initialPromptOwed(messages: readonly { role: string }[], prompt: string | undefined): boolean {
+	if (!prompt) return false;
+	return !messages.some((m) => m.role === "user" || m.role === "assistant");
+}
+
 export function escAbortTarget(s: {
 	abortAsk: boolean;
 	mermaidFocus: boolean;
