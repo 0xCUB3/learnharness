@@ -66,9 +66,9 @@ describe("the model catalog projection", () => {
 		assert.ok(glm, "glm-5.3-flash in catalog");
 		assert.deepEqual(glm!.supportedLevels, ["low", "high", "max"]);
 		assert.deepEqual(glm!.input, ["text", "image"]);
-		// pi's current glm price (0.87.1 raised it back to 0.15/0.5 — the
-		// 0.85.x catalog had temporarily listed 0.075/0.25/0.015)
-		assert.deepEqual(glm!.cost, { input: 0.15, output: 0.5, cacheRead: 0.05, cacheWrite: 0 });
+		// pi's current glm price (pi 1.0.2 catalog refresh: cacheRead
+		// corrected 0.05 → 0.03; input/output unchanged since 0.87.1)
+		assert.deepEqual(glm!.cost, { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 });
 		// model slots wave: the providers surface + the resolved slot pins
 		const openrouter = providers.find((p) => p.id === "openrouter");
 		assert.ok(openrouter && openrouter.keyPresent, "openrouter federated (key pinned above)");

@@ -70,9 +70,10 @@ describe("activity dock pure layer", () => {
 			},
 		});
 		const blob = toBlobs({ jobs: [priced], extractions: [] })[0]!;
-		// (10000-5000)/1e6*0.15 + 5000/1e6*0.05 + 1000/1e6*0.5 = 0.0015
-		// (pi-ai catalog prices — glm-5.3-flash drifted in pi-ai 0.87.1)
-		assert.ok(blob.cost !== null && blob.cost > 0.0014 && blob.cost < 0.0016);
+		// (10000-5000)/1e6*0.15 + 5000/1e6*0.03 + 1000/1e6*0.5 = 0.0014
+		// (pi-ai catalog prices — glm-5.3-flash cacheRead corrected
+		// 0.05 → 0.03 in the pi 1.0.2 catalog refresh)
+		assert.ok(blob.cost !== null && blob.cost > 0.0013 && blob.cost < 0.0015);
 		const absent = toBlobs({ jobs: [job()], extractions: [] })[0]!;
 		assert.equal(absent.cost, null);
 	});

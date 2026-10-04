@@ -36,6 +36,8 @@ const OUT = path.join(import.meta.dirname, "..", "src", "core", "prices.ts");
 interface CatalogModel {
 	id: string;
 	name: string;
+	/** pi-ai 1.0 (catalog schema v6): every entry is type-tagged. */
+	type?: "chat" | "image" | "classifier";
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
@@ -53,13 +55,21 @@ export function buildPrices(): Map<string, CatalogModel["cost"]> {
 		>;
 		for (const models of Object.values(catalog)) {
 			for (const [id, m] of Object.entries(models)) {
+				// pi-ai 1.0 (catalog schema v6): keys are type-qualified
+				// ("chat:<id>", "image:<id>", "classifier:<id>") and entries
+				// carry their own `type`. We price CHAT models only — our
+				// usage records are chat — and keys stay "provider:id"
+				// (owner format, 2026-09-20): strip the chat: prefix, skip the
+				// rest.
+				if (m.type && m.type !== "chat") continue;
+				const plainId = id.startsWith("chat:") ? id.slice("chat:".length) : id;
 				// A catalog entry without pricing data gets no key at all
 				// (cost renders "—", never zero).
 				if (!m.cost) continue;
 				// First writer wins (an id can appear under two apis within one
 				// file with identical pricing; cross-file collisions cannot
 				// happen — keys are provider-qualified).
-				priced.set(`${provider}:${id}`, m.cost);
+				priced.set(`${provider}:${plainId}`, m.cost);
 			}
 		}
 	}

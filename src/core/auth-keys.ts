@@ -111,6 +111,7 @@ export const AUTH_PROVIDER_KEYS: readonly AuthProviderInfo[] = [
 	{ id: "qwen-token-plan-individual", envVar: "QWEN_TOKEN_PLAN_API_KEY", label: "Qwen Token Plan Individual" },
 	{ id: "radius", envVar: "RADIUS_API_KEY", label: "Radius" },
 	{ id: "together", envVar: "TOGETHER_API_KEY", label: "Together" },
+	{ id: "typesafe", envVar: "TYPESAFE_API_KEY", label: "TypeSafe" },
 	{ id: "vercel-ai-gateway", envVar: "AI_GATEWAY_API_KEY", label: "Vercel AI Gateway" },
 	{ id: "xai", envVar: "XAI_API_KEY", label: "xAI" },
 	{ id: "xiaomi", envVar: "XIAOMI_API_KEY", label: "Xiaomi" },
