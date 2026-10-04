@@ -48,7 +48,8 @@
  */
 
 import { randomBytes } from "node:crypto";
-import type { CoverageEntry } from "./contracts/graph.ts";
+import type { CoverageEntry,
+} from "./contracts/graph.ts";
 import type {
 	AuditVerdicts,
 	ExtractedChain,
@@ -62,8 +63,8 @@ import type {
 	GraphSnapshot,
 } from "./contracts.ts";
 import { MIN_CLUSTER_SIZE } from "./clusters.ts";
+import { formatChainLine } from "./chains.ts";
 import { attachImpToCommunities, birthSessionOf, birthSessionPartition } from "./session-clusters.ts";
-import { formatChainLine } from "./practice.ts";
 import type { ChatStore, GraphStore } from "./ports.ts";
 
 /** The storage ports every graph operation needs, passed explicitly. */
@@ -500,7 +501,7 @@ export function graphSnapshot(deps: GraphDeps): GraphSnapshot {
 	const graph = getGraph(deps.graphStore);
 	// The canvas-facing lossy image: propositions + derived implication
 	// nodes, untyped arrows. `chains` (the stored truth) ride along for
-	// the chain table and the practice pipeline — they read the truth,
+	// the chain table — it reads the truth, never the derived fan-out,
 	// never the derived fan-out.
 	const view = deriveView(graph);
 	const nodes = view.nodes;
@@ -657,7 +658,7 @@ export function graphSessionIndex(deps: GraphDeps): GraphSessionEntry[] {
 }
 
 /** One birth proposition of one session — WHAT WAS COVERED there (2026-09-27
- *  cleanup: no understanding levels; assessment is practice-module
+ *  cleanup: no understanding levels; assessment is
  *  territory and nothing writes it until that module exists). */
 export interface GraphSessionProposition {
 	nodeId: string;
@@ -676,3 +677,5 @@ export function graphSessionPropositions(deps: GraphDeps, sessionId: string): Gr
 
 // Re-export: the contract owns the shape; legacy importers still reach it.
 export type { EmissionStats };
+
+

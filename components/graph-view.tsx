@@ -880,12 +880,11 @@ export function GraphChromeRow({
 					)}
 				</div>
 			)}
-			{/* The chain table (chains overlay, owner plan 2026-09-29) — the
-			    graph's free-form practice entry. Own container (36px band),
-			    between the search and Import. */}
+			{/* The chain table (chains overlay, owner plan 2026-09-29). Own
+			    container (36px band), between the search and Import. */}
 			{!isEmpty && (
 				<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
-					<Hint label="Every reasoning chain, selectable for practice" side="bottom">
+					<Hint label="Every reasoning chain" side="bottom">
 						<button
 							type="button"
 							onClick={onOpenChains}
@@ -1664,7 +1663,7 @@ export function GraphView() {
 			    ABSOLUTE INSIDE the graph area (the session-overlay idiom —
 			    never a body portal) so the app chrome stays sharp and
 			    reachable; the overlay itself is read-only toward the graph
-			    and owns its selection + the custom practice dialog.
+			    and owns its selection.
 			    LAST CHILD OF THE ROOT, DELIBERATELY (owner, 2026-09-29
 			    night): app-region subtraction resolves by DOM order, not
 			    z-index — mounted earlier, the chrome's lh-no-drag column

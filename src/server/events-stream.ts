@@ -2,7 +2,7 @@
  * THE NOTIFICATION CHANNEL (push-architecture slice 1): GET /api/events is
  * an SSE response over the core event bus — one connection per open
  * window, held open until the view goes away, fed by every emitter
- * (turn lifecycle, job/chat stores, extraction/practice registries).
+ * (turn lifecycle, job/chat stores, extraction registry).
  *
  * NOTIFY → FETCH (the architecture's whole trick): frames carry only the
  * event type + a tiny payload; consumers respond by fetching truth

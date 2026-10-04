@@ -72,8 +72,7 @@ import { runSubmitAgent, healStringifiedArrays } from "./submit-agent.ts";
  *
  * The events ledger is GONE (2026-09-27): quiz outcomes and understanding
  * observations are no longer formalized in the graph — the graph is purely
- * extracted reasoning chains (nodes + edges). Understanding-level
- * assessment is practice-module territory.
+ * extracted reasoning chains (nodes + edges).
  *
  * The extractor is a single-tool-call worker (one TypeBox-validated submit
  * call — a pi agent purely so the model can retry a schema-invalid call).
@@ -244,7 +243,7 @@ function fillFindings(raw: FindingsSubmit): FindingsSubmit {
 /** The chain laws (extractor redesign, 2026-09-30; digest-aware
  *  2026-09-30 evening) — the LOUD channel: runSubmitAgent turns a
  *  problem string into an error tool result and the model re-submits
- *  within its turns (the practice-proven hook). The MIXED NAMESPACE: an
+ *  within its turns. The MIXED NAMESPACE: an
  *  endpoint resolves when it is a submitted proposition id OR an
  *  existing graph node id (the extractor continues a partly-extracted
  *  source and references digest ids verbatim). Identical (premise-set,
@@ -864,8 +863,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 
 	/** THE EXTRACT SLOT (unified 2026-09-29): extraction chunk jobs run
 	 *  under the SHARED background-LLM semaphore — one process-wide pool
-	 *  of 3 permits for extraction chunks AND practice's partitioner/
-	 *  generators/graders (owner ruling; see bg-llm-semaphore.ts). The
+	 *  of 3 permits (see bg-llm-semaphore.ts). The
 	 *  job's registry-row signal kills a queued ticket (dead-ticket
 	 *  handoff). The audit side needs no slot: audits already serialize
 	 *  behind their own global lock. */

@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIcon, BotIcon, FileTextIcon, GraduationCapIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
+import { ActivityIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
 import { isModelsRefusal, isProviderKeyRefusal, jobCost } from "@/src/core";
@@ -65,24 +65,9 @@ export interface FeedExtraction {
 	startedAt: number;
 }
 
-/** A live practice row — per-problem (owner ruling, 2026-09-29),
- *  matching the extraction per-chunk pattern. id is the ROW KEY
- *  (setId:partition | setId:gen:pid | setId:grade:pid) — the abort
- *  seam is row-keyed; the label carries the i/N. */
-export interface FeedPractice {
-	id: string;
-	kind: "generation" | "grading";
-	title: string;
-	phase: string;
-	startedAt: number;
-	problemIndex?: number;
-	problemTotal?: number;
-}
-
 export interface ActivityFeed {
 	jobs: FeedJob[];
 	extractions: FeedExtraction[];
-	practice?: FeedPractice[];
 }
 
 const EMPTY_FEED: ActivityFeed = { jobs: [], extractions: [] };
@@ -98,12 +83,12 @@ const ActivityContext = createContext<{ feed: ActivityFeed; refresh: () => void 
  * THE ACTIVITY FEED, PUSH-DRIVEN (architecture S5, 2026-10-02): the
  * adaptive poll is RETIRED — the dock refetches exactly when truth moves.
  * Every cause is announced on the events channel: extraction phase
- * transitions and practice rows (activity-changed), job writes
+ * transitions (activity-changed), job writes
  * (jobs-changed — the running-jobs blobs), and channel resync (reconnect /
  * dev-restart catch-up) — plus the one client-local cause that predates
  * the channel: visibility, a tab becoming visible refetches at once.
- * Announced fetches ride a 250ms trailing debounce (extraction phases and
- * practice progress burst); resync and visibility are immediate. A failed
+ * Announced fetches ride a 250ms trailing debounce (extraction phase
+ * bursts); resync and visibility are immediate. A failed
  * fetch keeps the last feed (the dock never flickers to empty on a blip).
  */
 export function ActivityProvider({ children }: { children: React.ReactNode }) {
@@ -122,7 +107,7 @@ export function ActivityProvider({ children }: { children: React.ReactNode }) {
 				if (res.ok) {
 					const data = (await res.json()) as Partial<ActivityFeed>;
 					if (alive)
-						setFeed({ jobs: data.jobs ?? [], extractions: data.extractions ?? [], practice: data.practice ?? [] });
+						setFeed({ jobs: data.jobs ?? [], extractions: data.extractions ?? [] });
 				}
 			} catch {
 				// transport blip: keep the last feed, announce again next event
@@ -177,18 +162,14 @@ export function useActivity(): { feed: ActivityFeed; refresh: () => void } {
 
 // ─── Pure presentation helpers (exported for tests) ──────────────────────────
 
-/** One dock blob: the unified view of a job, an extraction run, or a
- *  practice run. */
+/** One dock blob: the unified view of a job or an extraction run. */
 export interface ActivityBlob {
-	/** job.id, the extraction job's row id (source id, or "src#i" for
-	 *  chunk jobs — unique per row, per-chunk jobs owner 2026-09-28), or
-	 *  the practice SET id (the abort seam is set-keyed). */
+	/** job.id, or the extraction job's row id (source id, or "src#i" for
+	 *  chunk jobs — unique per row, per-chunk jobs owner 2026-09-28). */
 	id: string;
-	process: "job" | "extraction" | "practice";
-	/** Sub-agent kind for jobs (extraction/practice blobs have none). */
+	process: "job" | "extraction";
+	/** Sub-agent kind for jobs (extraction blobs have none). */
 	jobKind?: JobKind;
-	/** Practice run kind (generation | grading) — practice blobs only. */
-	practiceKind?: "generation" | "grading";
 	/** Extraction phase (extracting/auditing/merging/embedding); jobs carry none. */
 	phase?: string;
 	title: string;
@@ -269,20 +250,6 @@ export function toBlobs(feed: ActivityFeed): ActivityBlob[] {
 			activity: "",
 		});
 	}
-	for (const run of feed.practice ?? []) {
-		blobs.push({
-			id: run.id, // the ROW key — practice abort is row-keyed
-			process: "practice",
-			practiceKind: run.kind,
-			phase: run.phase,
-			title: run.title,
-			chatId: "", // practice is not chat-scoped
-			startedAt: run.startedAt,
-			cost: null, // practice runs ride no live cost channel (v1)
-			context: null,
-			activity: "",
-		});
-	}
 	blobs.sort((a, b) => a.startedAt - b.startedAt);
 	return blobs;
 }
@@ -346,7 +313,7 @@ export function ActivitySection({ feed: feedProp }: { feed?: ActivityFeed }) {
 				body: JSON.stringify({
 					kind: blob.process,
 					// Extractions abort by SOURCE id (chatId) — chunk rows share one
-					// source and die together; practice aborts by SET id (blob.id).
+					// source and die together.
 					id: blob.process === "extraction" ? blob.chatId : blob.id,
 				}),
 			});
@@ -420,14 +387,11 @@ function ActivityBlobRow({
 	abortState: AbortState | undefined;
 	onAbort: () => void;
 }) {
-	const Icon =
-		blob.process === "extraction" ? WaypointsIcon : blob.process === "practice" ? GraduationCapIcon : (blob.jobKind && KIND_ICON[blob.jobKind]) || BotIcon;
+	const Icon = blob.process === "extraction" ? WaypointsIcon : (blob.jobKind && KIND_ICON[blob.jobKind]) || BotIcon;
 	const label =
 		blob.process === "extraction"
 			? `Extraction — ${blob.phase ?? "running"}`
-			: blob.process === "practice"
-				? `Practice — ${blob.phase ?? "running"}`
-				: blob.jobKind === "research"
+			: blob.jobKind === "research"
 				? "Researcher"
 				: blob.jobKind === "demo"
 					? "Demo builder"

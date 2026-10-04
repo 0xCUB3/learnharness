@@ -46,9 +46,6 @@ export const BACKGROUND_MODEL_ROLES = [
 	"visualMaker",
 	"extractor",
 	"auditor",
-	"partitioner",
-	"problemGenerator",
-	"grader",
 ] as const;
 
 export type BackgroundModelRole = (typeof BACKGROUND_MODEL_ROLES)[number];
@@ -229,12 +226,6 @@ export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
 	auditor: "cheap",
 	visualMaker: "vision",
 	pdfReader: "vision",
-	// The practice trio (2026-09-29): problem engineering is the product's
-	// quality-critical component — strong tier for partitioner/generator/
-	// grader alike (owner-approved plan default; one edit away from cheap).
-	partitioner: "strong",
-	problemGenerator: "strong",
-	grader: "strong",
 };
 
 /** General settings — app-level behavior. Version DISPLAY and plans login

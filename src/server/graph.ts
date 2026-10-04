@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import { LEDGER_FILES, POSITIONS_FILE } from "../../config.ts";
-import type { GraphClusterGroup, GraphSnapshot } from "../core/contracts.ts";
+import type { GraphSnapshot } from "../core/contracts.ts";
 import type { GraphCostSummary } from "../core/cost-summary.ts";
 import { graphCostSummary } from "../core/cost-summary.ts";
 import { graphSnapshot } from "../core/graph.ts";
@@ -20,29 +20,6 @@ import { stores } from "./stores.ts";
  */
 export function graphView(): GraphSnapshot {
 	return graphSnapshot(stores);
-}
-
-/** GET /api/graph/clusters — the birth-session groups, resolved to node
- *  ids for the practice picker (owner ruling 2026-09-29: cluster→nodeIds
- *  resolves in the UI; the API stays graph-domain). EVERY group is
- *  listed regardless of size (owner ruling, same evening:
- *  MIN_CLUSTER_SIZE is a hull-DRAWING rule — practice availability must
- *  not inherit a visual threshold), with the partition's own ordering
- *  (size desc, ties by id asc). The label join mirrors the snapshot's:
- *  chat title / notes file path, null when the naming record is gone —
- *  honest, never guessed. A corrupt/empty graph is an empty list. */
-export function graphClusters(): GraphClusterGroup[] {
-	const snap = graphSnapshot(stores);
-	// PROPOSITIONS ONLY: snap.nodes is the canvas image (imp nodes ride
-	// it); the picker offers propositions — an arg_ id in nodeIds would
-	// silently vanish inside chainsForSelection and lie about nodeCount.
-	return birthSessionPartition(snap.propositions).map((group) => ({
-		key: group.id,
-		kind: group.id in snap.sessions ? "chat" : "notes",
-		label: snap.sessions[group.id] ?? snap.fileSources[group.id] ?? null,
-		nodeIds: group.members,
-		nodeCount: group.members.length,
-	}));
 }
 
 /** The graph view's cost surface (GET /api/graph/costs — the 2026-09 cost

@@ -102,7 +102,7 @@ export const askUserQuestionTool: AgentTool<typeof askInputSchema> = {
 // chunk both agents compose (prompts/shared/20-question-tools.md and the
 // teacher's question fragments), reversing the 2026-09-27 placement now
 // that the question family has grown (predict/check roles, future
-// practice variants): duplicates stay honest by sharing SCHEMA ATOMS
+// quiz variants): duplicates stay honest by sharing SCHEMA ATOMS
 // (question-core) + PROMPT CHUNKS, and each tool declares only its
 // mechanical delta.
 

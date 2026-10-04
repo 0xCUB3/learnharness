@@ -265,13 +265,12 @@ describe("ChainTableBody — the floating selection bar (never shifts layout)", 
 		assert.ok(!html.includes('data-testid="chain-selection-bar"'));
 	});
 
-	it("appears with the derived N nodes → M chains + Clear + Generate + the FENCED Delete", () => {
+	it("appears with the derived N nodes → M chains + Clear + the FENCED Delete", () => {
 		const html = render({ selection: new Set(["a", "b", "c1"]) });
 		assert.ok(html.includes('data-testid="chain-selection-bar"'));
 		assert.ok(html.includes('data-testid="chain-selected-summary"'));
 		assert.ok(html.includes("3 nodes → 1 chain"));
 		assert.ok(html.includes('data-testid="chain-clear"'));
-		assert.ok(html.includes('data-testid="chain-generate"'));
 		// The danger fence (owner, 2026-09-29 night): a divider quarantines
 		// the destructive action at the bar's right end, red + trash icon,
 		// riding the same confirm dialog as the canvas delete.
@@ -280,8 +279,7 @@ describe("ChainTableBody — the floating selection bar (never shifts layout)", 
 		assert.match(del, /border-destructive\/50/); // the destructive pair
 		assert.match(del, /aria-label="Delete 3 selected nodes"/);
 		assert.ok(html.includes("lucide-trash-2"), "the trash icon");
-		// the fence is AFTER generate in the DOM (right end of the bar)
-		assert.ok(html.indexOf('chain-generate"') < html.indexOf('chain-danger-divider"'));
+		// the fence is before Delete in the DOM (right end of the bar)
 		assert.ok(html.indexOf('chain-danger-divider"') < html.indexOf('chain-delete"'));
 	});
 

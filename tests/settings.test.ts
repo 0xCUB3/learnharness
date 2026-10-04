@@ -203,16 +203,13 @@ describe("sanitizeUserSettings", () => {
 		assert.deepEqual(out.agent?.tools, { quiz: false, demo: true });
 	});
 
-	it("BACKGROUND_MODEL_ROLES matches the eight background roles (practice trio 2026-09-29)", () => {
+	it("BACKGROUND_MODEL_ROLES matches the five background roles (practice trio deleted 2026-10-04)", () => {
 		assert.deepEqual([...BACKGROUND_MODEL_ROLES], [
 			"researcher",
 			"demoBuilder",
 			"visualMaker",
 			"extractor",
 			"auditor",
-			"partitioner",
-			"problemGenerator",
-			"grader",
 		]);
 	});
 });

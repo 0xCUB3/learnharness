@@ -3,7 +3,6 @@ import { createProberAgent, createTeacherAgent, type AgentBuildOptions, type Tea
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
-import { createPracticePipeline } from "../agent/subagents/practice-pipeline.ts";
 import type { ModelRole } from "../../config.ts";
 import {
 	deliverJobResult,
@@ -104,22 +103,6 @@ export const extraction = createExtractionPipeline({
 		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
 });
 
-/** The app's ONE practice pipeline instance — the API routes reach it
- *  through the server barrel / service, same discipline as extraction. */
-export const practice = createPracticePipeline({
-	graphStore: stores.graphStore,
-	practiceStore: stores.practiceStore,
-	// BYOK (owner, 2026-09-22): the practice stages resolve the chain —
-	// role override → slot → NOTHING — read FRESH per stage call; an empty
-	// chain flows through as undefined and the pipeline refuses the run
-	// with the typed ModelsNotConfiguredError. Direct test values still win.
-	engineFor: (role) =>
-		resolveEngine(role),
-	// Key-presence gate: same check extraction gets — a stage engine whose
-	// provider key is gone refuses BEFORE any set is created.
-	providerKeyMissing: (provider, tier) =>
-		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
-});
 
 // Wake-pipeline wiring (contracts.ts "THE ASYNC PROTOCOL" §4): the pipeline
 // delivers its steers through THIS composition root (one event: the steer

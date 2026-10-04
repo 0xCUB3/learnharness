@@ -1,14 +1,14 @@
 /**
  * THE SHARED BACKGROUND-LLM SEMAPHORE (owner ruling, 2026-09-29): ONE
  * process-wide pool of 3 permits for ALL background LLM jobs — extraction
- * chunks AND practice partitioner/generators/graders. Total background
+ * chunks. Total background
  * LLM concurrency is bounded at 3, whoever is calling: no subsystem gets
  * a private lane past the provider-facing stance.
  *
  * Extraction owned this gate alone first (owner, 2026-09-28: at most 3
- * concurrent extractor calls). Practice grew its own twin that evening;
+ * concurrent extractor calls).
  * the ruling then unified them — this module is the single truth, so
- * extraction.ts and practice-pipeline.ts must never cross-import.
+ * extraction chunks are the only holders.
  *
  * FIFO; abort-aware (a queued caller that aborts marks its ticket dead —
  * the permit handoff skips it and hands to the next waiter).
@@ -26,7 +26,7 @@
 
 /** Total background LLM concurrency, process-wide, across ALL subsystems
  *  (owner ruling 2026-09-29: one shared pool — extraction chunks +
- *  practice partitioner/generators/graders). */
+ *  extraction chunks). */
 const PERMIT_COUNT = 3;
 
 export interface LlmSlots {

@@ -1,6 +1,6 @@
 /**
  * runSubmitAgent — the shared single-submit agent seam (moved verbatim from
- * extraction.ts, practice slice 3, 2026-09-29): one TypeBox-validated submit
+ * extraction.ts): one TypeBox-validated submit
  * call is the whole deliverable (a pi agent purely so the model can retry a
  * schema-invalid call). The submitted value is captured from the execute
  * seam, which only fires on a schema-valid call — the ??-fill (the old zod

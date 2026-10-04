@@ -40,7 +40,7 @@
  * the Google-Photos pattern — appears only when something is selected,
  * showing the agents' ACTUAL input (chainsForSelection over the flat
  * node-id selection: a premise without its conclusion counts as the
- * singleton it becomes) + Clear + Generate problem set. DELETE (owner,
+ * singleton it becomes) + Clear. DELETE (owner,
  * 2026-09-29 night: "this is really the view deletion should be done
  * in") rides the same bar FENCED at the right end — divider + the
  * destructive red pair — and opens the SAME full-death confirm dialog
@@ -51,8 +51,7 @@
  * auto-expanded under their clusters (non-matching clusters hide; the
  * collapsed view returns on clear).
  *
- * Read-only toward the graph. Named neutrally (ChainTable, not
- * Practice*) — only the Generate handoff knows about practice.
+ * Read-only toward the graph.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -70,7 +69,6 @@ import {
 import { chainsForSelection, formatChainLine, fuzzyScore } from "@/src/core";
 import type { GraphChain, GraphNode } from "@/src/core";
 import { TopBar } from "@/components/top-bar";
-import { PracticeDialog } from "@/components/practice-dialog";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog";
 import { LatexGlyph } from "@/components/latex-glyph";
 
@@ -113,7 +111,6 @@ export function ChainTableBody({
 	onToggleChain,
 	onToggleNodes,
 	onClear,
-	onGenerate,
 	onDelete,
 	onClose,
 }: {
@@ -134,7 +131,6 @@ export function ChainTableBody({
 	 *  proposition checks all reduce to this. */
 	onToggleNodes: (ids: string[], next: boolean) => void;
 	onClear: () => void;
-	onGenerate: () => void;
 	/** Opens the full-death confirm dialog (owner, 2026-09-29 night). */
 	onDelete: () => void;
 	onClose: () => void;
@@ -235,7 +231,7 @@ export function ChainTableBody({
 		<div data-testid="chain-table" className="relative flex h-full min-h-0 flex-col">
 			{/* THE shared top bar (standardization ruling): title at the standard
 			    size, drag mechanics, sidebar reopen, traffic-light gutter — the
-			    same element as every chat/practice surface. Search + close
+			    same element as every chat surface. Search + close
 			    carve out with lh-no-drag (the mask law: later in the DOM). */}
 			<TopBar>
 				<span className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">Chains</span>
@@ -498,15 +494,7 @@ export function ChainTableBody({
 						>
 							Clear
 						</button>
-						<button
-							type="button"
-							data-testid="chain-generate"
-							onClick={onGenerate}
-							className="rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-						>
-							Generate problem set
-						</button>
-						{/* The danger fence (owner ruling): a divider quarantines
+	{/* The danger fence (owner ruling): a divider quarantines
 						    the destructive action at the bar's right end — the
 						    safe actions and the kill switch never blend. The
 						    full-death confirm dialog catches the misclick. */}
@@ -576,7 +564,7 @@ function RowCheckbox({
 }
 
 /** The graph view's overlay wrapper: owns query + sort + selection +
- *  expansion + the custom practice dialog; mounts ABSOLUTE INSIDE the
+ *  expansion; mounts ABSOLUTE INSIDE the
  *  graph area, full-bleed (owner ruling: the translucent blurred surface
  *  IS the overlay — no inner card). Esc + the top-bar X dismiss (there
  *  is no backdrop margin to click anymore). Read-only toward the graph. */
@@ -600,19 +588,18 @@ export function ChainTableOverlay({
 	const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
 	const [expandedClusters, setExpandedClusters] = useState<ReadonlySet<string>>(() => new Set());
 	const [expandedChains, setExpandedChains] = useState<ReadonlySet<string>>(() => new Set());
-	const [dialogOpen, setDialogOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
 
 	// Esc dismisses (unless a dialog has focus — each dialog's own Esc
 	// owns its layer; all listen on window, so the guards are explicit).
 	useEffect(() => {
-		if (!open || dialogOpen || deleteOpen) return;
+		if (!open || deleteOpen) return;
 		const onKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape") onClose();
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [open, dialogOpen, deleteOpen, onClose]);
+	}, [open, deleteOpen, onClose]);
 
 	if (!open) return null;
 
@@ -665,18 +652,10 @@ export function ChainTableOverlay({
 					onToggleChain={(id) => setExpandedChains((prev) => toggleIn(prev, id))}
 					onToggleNodes={toggleNodes}
 					onClear={() => setSelection(new Set())}
-					onGenerate={() => setDialogOpen(true)}
 					onDelete={() => setDeleteOpen(true)}
 					onClose={onClose}
 				/>
 			</div>
-			{dialogOpen && (
-				<PracticeDialog
-					mode="custom"
-					selection={{ nodeIds, propositions: selectedNodes.length, chains: derived.length }}
-					onClose={() => setDialogOpen(false)}
-				/>
-			)}
 			{deleteOpen && (
 				<DeleteNodeDialog
 					nodes={selectedNodes.map((n) => ({ id: n.id, name: n.name }))}

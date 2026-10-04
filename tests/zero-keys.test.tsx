@@ -128,9 +128,6 @@ const catalog = (strongProvider: string | null, ...keyedProviders: string[]): Mo
 		visualMaker: null,
 		extractor: null,
 		auditor: null,
-		partitioner: null,
-		problemGenerator: null,
-		grader: null,
 	},
 	slots: {
 		strong: strongProvider

@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import type { ChatDeleteMode } from "@/src/core";
-import { GraduationCapIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
@@ -653,21 +653,6 @@ function SessionsSidebar() {
 					<PlusIcon className="size-3" />
 					New session
 					<span className="sr-only">create a new session</span>
-				</button>
-
-				{/* Practice (slice 5, 2026-09-29): the set list's entry — the same
-				    quiet row language as New session, active-state lit while any
-				    /practice route is open. GraduationCapIcon to match the dock. */}
-				<button
-					type="button"
-					data-testid="nav-practice"
-					onClick={() => router.push("/practice")}
-					className={`mx-3 mb-1 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground ${
-						pathname.startsWith("/practice") ? "bg-accent text-foreground" : "text-muted-foreground"
-					}`}
-				>
-					<GraduationCapIcon className="size-3" />
-					Practice
 				</button>
 
 				<div className="mx-3 mb-1 flex items-center gap-2">

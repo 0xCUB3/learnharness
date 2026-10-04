@@ -4,7 +4,7 @@
  *
  * One bus, every layer: server emits turn lifecycle here, the store
  * adapters emit job/chat mutations, the agent layer's background
- * registries (extraction, practice) emit activity changes — and
+ * registries (extraction) emit activity changes — and
  * GET /api/events turns every emission into an SSE frame for any open
  * window. The events carry the FACT, never the data: consumers fetch
  * truth on receipt (push the poke, pull the data), so payloads stay
@@ -34,7 +34,7 @@ export interface ServerEvents {
 	/** A job record changed (dispatch, progress, settle, abort, recovery).
 	 *  chatId when known — consumers that own one chat filter on it. */
 	"jobs-changed": { chatId?: string };
-	/** An extraction or practice run changed phase (activity dock). */
+	/** An extraction run changed phase (activity dock). */
 	"activity-changed": Record<string, never>;
 	/** The session list changed (create, delete, title). */
 	"chats-changed": Record<string, never>;

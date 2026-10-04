@@ -7,8 +7,8 @@
  * message-granular; extraction is free-form and post-hoc, fully decoupled
  * from the session's plan tree. The graph is an extraction of the reasoning
  * chains from all teaching sessions (and imported notes) — NOTHING else:
- * no quiz outcomes, no understanding assessments (2026-09-27 cleanup —
- * understanding becomes practice-module territory). Anything not
+ * no quiz outcomes, no understanding assessments (2026-09-27 cleanup).
+ * Anything not
  * yet decided (the state model, strength derivation, selection strategies) is deliberately NOT here — transitional
  * stubs carry the renderer until those land.
  *
@@ -287,26 +287,6 @@ export interface Cluster {
 	label: string | null;
 	/** Node ids, sorted. Hull + centroid are renderer concerns. */
 	members: string[];
-}
-
-/** One birth-session cluster as the practice picker consumes it (owner
- *  ruling 2026-09-29: problem sets take NODES — the UI resolves a picked
- *  cluster to its member ids). EVERY birth-session group regardless of
- *  size (owner ruling, same evening: MIN_CLUSTER_SIZE is a hull-drawing
- *  rule — practice availability must not inherit a visual threshold);
- *  `label` is null when the naming record is gone — honest, never
- *  guessed (the graph view renders those unlabeled). */
-export interface GraphClusterGroup {
-	/** The birth session's id — a chatId or a notes source id. */
-	key: string;
-	/** What kind of record names the group. */
-	kind: "chat" | "notes";
-	/** Session title / source file path; null when the record is gone. */
-	label: string | null;
-	/** Member node ids, sorted (the partition's members). */
-	nodeIds: string[];
-	/** === nodeIds.length, denormalized for the picker row. */
-	nodeCount: number;
 }
 
 export interface GraphSnapshot {
