@@ -181,13 +181,20 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 			const reasoning: LhViewPart[] = [];
 			let textN = 0;
 			let reasoningN = 0;
+			// LIVE IS POSITIVE EVIDENCE (owner, 2026-10-05): a call renders
+			// live ONLY when its own message is streaming THIS turn — session
+			// busyness alone can never resurrect a settled call (the practice
+			// bug: a thinking submission flipped the POSE turn's problem call
+			// back to a spinner mid-transcript; live cards belong at the
+			// bottom, and this gate is what puts them there by construction).
+			const streamingMessage = live?.streamingIds.has(m.id) === true;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
 					rest.push({ type: "text", id: `${m.id}-t${textN++}`, text: block.text, state: "done" });
 				} else if (block.type === "thinking") {
 					reasoning.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
 				} else if (block.type === "toolCall") {
-					rest.push(toolPartOf(block, live));
+					rest.push(toolPartOf(block, live, streamingMessage));
 				}
 			}
 			const parts: LhViewPart[] = [...reasoning, ...rest];
@@ -232,10 +239,15 @@ function isPlaceholderResultTool(name: string): boolean {
 	return (QUESTION_TOOLS as readonly string[]).includes(name) || name === "problem";
 }
 
-/** A tool call block → its view part, with the live execution layer. */
+/** A tool call block → its view part, with the live execution layer.
+ * `streamingMessage` — POSITIVE EVIDENCE (owner, 2026-10-05): this call's
+ * own message is streaming THIS turn. The input-streaming shimmer keys on
+ * it, never on session busyness: a call from a settled message can never
+ * render live, whatever else is running. */
 function toolPartOf(
 	block: { id: string; name: string; arguments?: unknown },
 	live: LiveTurnState | undefined,
+	streamingMessage: boolean,
 ): LhViewPart {
 	const part: LhViewPart = {
 		type: `tool-${block.name}`,
@@ -262,10 +274,11 @@ function toolPartOf(
 			part.output = exec.output;
 		}
 	} else {
-		// No execution yet: mid-turn it is input-streaming (the shimmer
-		// activity); in a settled record a dangling call is the dock's
-		// pending question (input-available).
-		part.state = live?.inFlight ? "input-streaming" : "input-available";
+		// No execution yet: live ONLY on positive evidence — the call's own
+		// message is streaming this turn (its arguments may literally be
+		// mid-write). Anything else is a dangling call from a settled
+		// message — the dock's pending state, never a shimmer.
+		part.state = streamingMessage ? "input-streaming" : "input-available";
 	}
 	return part;
 }
@@ -280,7 +293,17 @@ function applyResultTo(part: LhViewPart | undefined, result: ToolResultMessage):
 		// AnsweredCard a null and crash the render (the live crash, 2026-09-26).
 		const tool = part.type.startsWith("tool-") ? part.type.slice("tool-".length) : part.type;
 		const isQuestion = isPlaceholderResultTool(tool);
-		if (isQuestion && !result.isError && result.details == null) return;
+		if (isQuestion && !result.isError && result.details == null) {
+			// The placeholder fork (fork 2) stands: the clean pose/ask ack carries
+			// no card data — NEVER output-available. But the call IS settled
+			// (the practice bug, 2026-10-05: this early-return left the part on
+			// whatever toolPartOf guessed, which mid-turn resurrected a settled
+			// problem as a live spinner). input-available is the settled truth:
+			// the ProblemCard reads the call's input, the dock keys on the
+			// native fold — neither wants the ack's (null) payload.
+			part.state = "input-available";
+			return;
+		}
 		applyResult(part, result);
 	}
 	// A result with no visible part (e.g. a call whose assistant message

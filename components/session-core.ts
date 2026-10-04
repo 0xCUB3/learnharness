@@ -23,6 +23,7 @@ import {
 	newUserMessage,
 	projectView,
 	type ChatInput,
+	type LhMarkerMessage,
 	type LhMessage,
 	type LhViewMessage,
 	type LiveExecution,
@@ -134,7 +135,28 @@ export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
 				(r as ToolResultMessage).toolCallId === toolCallId,
 		);
 	}
+	if (role === "custom") {
+		// Markers (the thinking submission, 2026-10-05 — the doubled-card
+		// bug: the optimistic practice-thinking card was never absorbed, so
+		// the adoption window rendered it beside the write-ahead's server
+		// copy for the whole turn). TOTAL over roles by identity key — a
+		// marker is itself when its customType AND structured details match;
+		// types that never appear optimistically simply never reach here.
+		const marker = m as LhMarkerMessage;
+		return record.some(
+			(r) =>
+				(r as { role?: string }).role === "custom" &&
+				(r as LhMarkerMessage).customType === marker.customType &&
+				sameDetails((r as LhMarkerMessage).details, marker.details),
+		);
+	}
 	return false;
+}
+
+/** Structural deep-equal for marker details (JSON-stable payloads — the
+ *  constructors mint plain data). */
+function sameDetails(a: unknown, b: unknown): boolean {
+	return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export interface SessionState {
