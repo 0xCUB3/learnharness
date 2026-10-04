@@ -117,3 +117,22 @@ describe("timeAgo", () => {
 		assert.equal(timeAgo("2026-01-02T12:01:00.000Z", now), "just now");
 	});
 });
+
+describe("SessionRow practice badge (practice sessions, 2026-10-04)", () => {
+	it("a practice row carries the dumbbell badge and the Practicing meta while busy", () => {
+		const html = render(item({ kind: "practice", busy: true }));
+		assert.match(html, /Practicing…/);
+		assert.match(html, /aria-label="Practice session"/);
+	});
+
+	it("a teaching row carries neither", () => {
+		const html = render(item({}));
+		assert.doesNotMatch(html, /Practice session/);
+		assert.doesNotMatch(html, /Practicing…/);
+	});
+
+	it("busy teaching rows still say the teacher is working", () => {
+		const html = render(item({ busy: true }));
+		assert.match(html, /Teacher is working…/);
+	});
+});

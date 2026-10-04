@@ -59,6 +59,7 @@ import {
 	ChevronDownIcon,
 	ChevronRightIcon,
 	ChevronUpIcon,
+	DumbbellIcon,
 	FolderIcon,
 	FolderOpenIcon,
 	Trash2Icon,
@@ -113,6 +114,8 @@ export function ChainTableBody({
 	onClear,
 	onDelete,
 	onClose,
+	selectMode,
+	onSelect,
 }: {
 	nodes: GraphNode[];
 	chains: GraphChain[];
@@ -134,6 +137,11 @@ export function ChainTableBody({
 	/** Opens the full-death confirm dialog (owner, 2026-09-29 night). */
 	onDelete: () => void;
 	onClose: () => void;
+	/** PRACTICE SELECT (2026-10-04): the floating bar's confirm becomes
+	 *  "Practice these" — no delete fence; the caller owns what the
+	 *  selection becomes. */
+	selectMode?: boolean;
+	onSelect?: () => void;
 }) {
 	const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
 	const chains = useMemo(() => chainsForSelection(nodes, storedChains), [nodes, storedChains]);
@@ -575,6 +583,11 @@ export function ChainTableOverlay({
 	sessions,
 	fileSources,
 	onClose,
+	/** PRACTICE SELECT (2026-10-04): the table opens as a proposition
+	 *  picker — the floating bar confirms the selection to the caller
+	 *  (never deletes); the title says what the pick is for. */
+	selectMode,
+	onConfirmSelection,
 }: {
 	open: boolean;
 	nodes: GraphNode[];
@@ -582,6 +595,8 @@ export function ChainTableOverlay({
 	sessions: Record<string, string>;
 	fileSources: Record<string, string>;
 	onClose: () => void;
+	selectMode?: boolean;
+	onConfirmSelection?: (nodes: GraphNode[]) => void;
 }) {
 	const [query, setQuery] = useState("");
 	const [sort, setSort] = useState<ChainSort>({ col: "name", dir: 1 });
@@ -654,6 +669,12 @@ export function ChainTableOverlay({
 					onClear={() => setSelection(new Set())}
 					onDelete={() => setDeleteOpen(true)}
 					onClose={onClose}
+					selectMode={selectMode}
+					onSelect={() => {
+						onConfirmSelection?.(selectedNodes);
+						setSelection(new Set());
+						onClose();
+					}}
 				/>
 			</div>
 			{deleteOpen && (

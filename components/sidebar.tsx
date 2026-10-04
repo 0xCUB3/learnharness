@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import type { ChatDeleteMode } from "@/src/core";
-import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
@@ -227,7 +227,7 @@ export function timeAgo(iso: string, now = new Date()): string {
  *  ever wanted. */
 function sessionMeta(chat: ChatListItem): string {
 	if (chat.pendingQuestion) return `Waiting for your answer · ${timeAgo(chat.updatedAt)}`;
-	if (chat.busy) return "Teacher is working…";
+	if (chat.busy) return (chat.kind ?? "teach") === "practice" ? "Practicing…" : "Teacher is working…";
 	return timeAgo(chat.updatedAt);
 }
 
@@ -265,6 +265,9 @@ export function SessionRow({
 			)}
 		>
 			<SessionStatus busy={chat.busy} />
+			{(chat.kind ?? "teach") === "practice" && (
+				<DumbbellIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-label="Practice session" />
+			)}
 			<span className="min-w-0 flex-1">
 				{/* Titles are the learner's/teacher's WORDS — Source Sans 3, the
 				    same voice the words were typed in (every input is lh-prose);
@@ -328,10 +331,25 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 	);
 }
 
+/** The three-way kind filter (practice sessions, owner 2026-10-04):
+ *  Teaching / All / Practice — a client-side filter over the same
+ *  snapshot, persisted in localStorage, defaulting to All. */
+export type SessionKindFilter = "teach" | "all" | "practice";
+const KIND_FILTER_KEY = "lh:session-kind-filter";
+
 function SessionsSidebar() {
 	const { open, toggle } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
+	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
+	useEffect(() => {
+		const stored = window.localStorage.getItem(KIND_FILTER_KEY);
+		if (stored === "teach" || stored === "all" || stored === "practice") setKindFilter(stored);
+	}, []);
+	const setFilter = useCallback((f: SessionKindFilter) => {
+		setKindFilter(f);
+		window.localStorage.setItem(KIND_FILTER_KEY, f);
+	}, []);
 	const pathname = usePathname();
 	const router = useRouter();
 	const { open: openSettings } = useSettingsDialog();
@@ -346,10 +364,14 @@ function SessionsSidebar() {
 
 	const shown = useMemo(() => {
 		const q = query.trim().toLowerCase();
-		if (!chats) return chats;
-		if (!q) return chats;
-		return chats.filter((c) => c.title.toLowerCase().includes(q));
-	}, [chats, query]);
+		let list = chats;
+		if (list && kindFilter !== "all") {
+			list = list.filter((c) => (c.kind ?? "teach") === kindFilter);
+		}
+		if (!list) return list;
+		if (!q) return list;
+		return list.filter((c) => c.title.toLowerCase().includes(q));
+	}, [chats, query, kindFilter]);
 
 	const refreshInFlightRef = useRef(false);
 	const refresh = useCallback(async () => {
@@ -644,16 +666,51 @@ function SessionsSidebar() {
 					</Hint>
 				</div>
 
-				<button
-					type="button"
-					data-testid="new-session"
-					onClick={() => void newSession()}
-					className="mx-3 mb-1 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-				>
-					<PlusIcon className="size-3" />
-					New session
-					<span className="sr-only">create a new session</span>
-				</button>
+				{/* Two doors (practice sessions, owner 2026-10-04): teaching
+				    keeps the original draft route; practice carries its mode. */}
+				<div className="mx-3 mb-1 flex gap-1.5">
+					<button
+						type="button"
+						data-testid="new-session"
+						onClick={() => void newSession()}
+						className="flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<PlusIcon className="size-3" />
+						Teaching
+						<span className="sr-only">create a new teaching session</span>
+					</button>
+					<button
+						type="button"
+						data-testid="new-session-practice"
+						onClick={() => router.push("/chat/new?mode=practice")}
+						className="flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<DumbbellIcon className="size-3" />
+						Practice
+						<span className="sr-only">create a new practice session</span>
+					</button>
+				</div>
+
+				{/* The three-way filter (owner, 2026-10-04): Teaching / All /
+				    Practice, quiet segmented, persisted client-side. */}
+				<div className="mx-3 mb-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="session-kind-filter">
+					{(["teach", "all", "practice"] as const).map((f) => (
+						<button
+							key={f}
+							type="button"
+							data-testid={`kind-filter-${f}`}
+							onClick={() => setFilter(f)}
+							className={cn(
+								"flex-1 rounded-sm px-2 py-1 text-[11px] uppercase tracking-wider transition-colors",
+								kindFilter === f
+									? "bg-accent text-foreground"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							{f === "teach" ? "Teaching" : f === "all" ? "All" : "Practice"}
+						</button>
+					))}
+				</div>
 
 				<div className="mx-3 mb-1 flex items-center gap-2">
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>

@@ -108,3 +108,40 @@ describe("DraftShell — the sessionless surface", () => {
 		assert.ok(!/\/chat\/c[a-z0-9_]+/.test(html));
 	});
 });
+describe("the practice draft (?mode=practice, 2026-10-04)", () => {
+	it("the shell swaps copy: practice title, empty state, placeholder", () => {
+		const html = renderToStaticMarkup(
+			<DraftShell
+				busy={false}
+				text=""
+				onChange={() => {}}
+				onSend={() => {}}
+				mode="practice"
+			/>,
+		);
+		assert.match(html, /New practice session/);
+		assert.match(html, /Describe what to practice/);
+		assert.match(html, /What do you want to practice\?/);
+	});
+
+	it("startDraftSession carries kind:\"practice\" to the create route", async () => {
+		let body: Record<string, unknown> | null = null;
+		const f = (async (_url: string, init?: RequestInit) => {
+			body = JSON.parse(String(init?.body));
+			return new Response(JSON.stringify({ id: "c9" }), { status: 201 });
+		}) as unknown as typeof fetch;
+		const target = await startDraftSession("the parity chain", f, "practice");
+		assert.equal(target, "/chat/c9?prompt=the%20parity%20chain");
+		assert.deepEqual(body, { title: "the parity chain", kind: "practice" });
+	});
+
+	it("the teaching default is unchanged — no kind key on the wire", async () => {
+		let body: Record<string, unknown> | null = null;
+		const f = (async (_url: string, init?: RequestInit) => {
+			body = JSON.parse(String(init?.body));
+			return new Response(JSON.stringify({ id: "c8" }), { status: 201 });
+		}) as unknown as typeof fetch;
+		await startDraftSession("orbital mechanics", f);
+		assert.deepEqual(body, { title: "orbital mechanics" });
+	});
+});

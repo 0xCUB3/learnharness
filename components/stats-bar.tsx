@@ -30,6 +30,7 @@ export function StatsBar({
 	turns,
 	dictationSlot,
 	chatId,
+	leadingSlot,
 }: {
 	turns: TurnUsage[];
 	/** The bound session (per-session models, owner 2026-09-28): present
@@ -42,6 +43,10 @@ export function StatsBar({
 	 *  button lives there, and while recording the meter unfurls to fill
 	 *  whatever width the row has (owner placement). */
 	dictationSlot?: ReactNode;
+	/** The row's LEFT edge (practice sessions, 2026-10-04): the home
+	 *  composer's teach | practice switch rides here — before the session
+	 *  data (which renders nothing pre-chat on that surface). */
+	leadingSlot?: ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
 	// Same dropdown discipline as the model control (owner, df4433f treatment,
@@ -94,6 +99,9 @@ export function StatsBar({
 			    outside-close ref anchors HERE too (owner, round 3): on the whole
 			    bar it wrapped the model control, so clicking model/thinking never
 			    counted as outside — the asymmetry the owner observed. */}
+			{/* The leading slot (2026-10-04): the leftmost control surface —
+			    the home composer's mode switch. */}
+			{leadingSlot}
 			{/* The left side: the session-data summary — only once a session
 			    exists (turns). Pre-chat renders nothing (see the header). */}
 			{turns.length > 0 && (

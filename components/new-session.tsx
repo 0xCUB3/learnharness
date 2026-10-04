@@ -36,13 +36,14 @@ const DOCK = "mx-auto w-full max-w-[46rem] px-4";
 export async function startDraftSession(
 	text: string,
 	fetchLike: typeof fetch,
+	mode?: "practice",
 ): Promise<string | null> {
 	const t = text.trim();
 	if (!t) return null;
 	const res = await fetchLike("/api/chats", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ title: t }),
+		body: JSON.stringify(mode === "practice" ? { title: t, kind: "practice" } : { title: t }),
 	});
 	const { id } = (await res.json()) as { id: string };
 	// No settings PUT on create (per-session models, owner 2026-09-28):
@@ -61,11 +62,16 @@ export function DraftShell({
 	onChange,
 	onSend,
 	setupCta,
+	mode = "teach",
 }: {
 	busy: boolean;
 	text: string;
 	onChange: (v: string) => void;
 	onSend: () => void;
+	/** The practice draft (owner, 2026-10-04): ?mode=practice — the
+	 *  created session carries kind:"practice" and the copy changes
+	 *  (the practice agent opens; no probing). */
+	mode?: "teach" | "practice";
 	/** The first-run CTA (fix wave chunk B): the same "Set up your models"
 	 *  affordance home carries, rendered above the draft shell — passed by
 	 *  NewSession, which owns the configured state and the SetupDialog. */
@@ -112,7 +118,9 @@ export function DraftShell({
 			    element, every surface — h-15, drag, sidebar reopen, lights
 			    gutter. h-15 (60px) matches the sidebar's wordmark band. */}
 			<TopBar>
-				<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">New session</div>
+				<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">
+					{mode === "practice" ? "New practice session" : "New session"}
+				</div>
 			</TopBar>
 
 				<div className="relative flex min-h-0 flex-1">
@@ -123,8 +131,12 @@ export function DraftShell({
 						<Conversation className="h-full min-w-0 flex-1" initial="instant">
 							<ConversationContent className="min-h-full gap-0 p-0">
 								<ConversationEmptyState
-									title="New session"
-									description="The teacher will open by probing what you already know."
+									title={mode === "practice" ? "New practice session" : "New session"}
+									description={
+										mode === "practice"
+											? "Describe what to practice — propositions, a chain, or a problem you brought."
+											: "The teacher will open by probing what you already know."
+									}
 								/>
 							</ConversationContent>
 						</Conversation>
@@ -147,7 +159,7 @@ export function DraftShell({
 										// input (owner refinement round, 2026-09-24) — no lesson has
 										// started yet, so the composer must not read like one is in
 										// flight.
-										placeholder="What do you want to learn?"
+										placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
 									/>
 								</div>
 								<StatsBar
@@ -163,7 +175,7 @@ export function DraftShell({
 	);
 }
 
-export function NewSession({ initialConfigured }: { initialConfigured: boolean }) {
+export function NewSession({ initialConfigured, mode = "teach" }: { initialConfigured: boolean; mode?: "teach" | "practice" }) {
 	const router = useRouter();
 	const [text, setText] = useState("");
 	/* The draft MIRROR ("nothing gets lost" round, 2026-10-01): the shell's
@@ -211,7 +223,7 @@ export function NewSession({ initialConfigured }: { initialConfigured: boolean }
 			return;
 		}
 		setBusy(true);
-		void startDraftSession(draft, fetch)
+		void startDraftSession(draft, fetch, mode === "practice" ? "practice" : undefined)
 			.then((target) => {
 				if (target) router.push(target);
 				else setBusy(false);
@@ -226,6 +238,7 @@ export function NewSession({ initialConfigured }: { initialConfigured: boolean }
 				text={text}
 				onChange={applyText}
 				onSend={send}
+				mode={mode}
 				setupCta={
 					zeroKeys ? (
 						<ZeroKeysPill onOpen={() => setSetupOpen(true)} />

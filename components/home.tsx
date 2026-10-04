@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CornerDownLeftIcon } from "lucide-react";
+import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
@@ -65,6 +65,15 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 		}
 	}, [dictation.active]);
 
+	/* PRACTICE MODE (owner, 2026-10-04): the graph composer's teach |
+	 *  practice switch — practice creates a kind:"practice" session and
+	 *  may carry proposition picks from the chain table (the chip above
+	 *  the composer opens the picker; the picks seed the opening prompt).
+	 *  Not enforcing any input format — the picks are a convenience. */
+	const [mode, setMode] = useState<"teach" | "practice">("teach");
+	const [practiceProps, setPracticeProps] = useState<{ id: string; name: string; statement: string }[]>([]);
+	const [chainSelectOpen, setChainSelectOpen] = useState(false);
+
 	/* FINISH DICTATION FIRST (owner, 2026-10-01): Enter may arrive while a
 	 * run is live with the topic still deferred in the run's buffer — stop
 	 * the run, let the last finals land, THEN read the REF mirror (not the
@@ -101,16 +110,26 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 		}
 		setBusy(true);
 		try {
+			// The practice seed: the picks ride the OPENING PROMPT (never
+			// the title — the title stays the learner's own words).
+			const seed =
+				mode === "practice" && practiceProps.length > 0
+					? `\n\nPropositions from the map:\n${practiceProps
+							.map((p) => `- ${p.name}: ${p.statement}`)
+							.join("\n")}`
+					: "";
 			const res = await fetch("/api/chats", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ title: t }),
+				body: JSON.stringify(
+					mode === "practice" ? { title: t, kind: "practice" } : { title: t },
+				),
 			});
 			const { id } = (await res.json()) as { id: string };
 			// No settings PUT on create (per-session models, owner
 			// 2026-09-28): the SERVER stamps the newborn from the strong
 			// slot — the same default this surface's model control edits.
-			router.push(`/chat/${id}?prompt=${encodeURIComponent(t)}`);
+			router.push(`/chat/${id}?prompt=${encodeURIComponent(t + seed)}`);
 		} catch {
 			setBusy(false);
 		}
@@ -133,7 +152,17 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 			    padding on any side; the canvas runs from the sidebar to the right
 			    edge and from the bottom to the top, under everything else. */}
 			<main className="absolute inset-0">
-				<GraphView />
+				<GraphView
+					chainSelectOpen={chainSelectOpen}
+					onChainSelected={(picked) => {
+						setPracticeProps((prev) => {
+							const byId = new Map(prev.map((p) => [p.id, p]));
+							for (const p of picked) byId.set(p.id, p);
+							return [...byId.values()];
+						});
+					}}
+					onChainSelectClose={() => setChainSelectOpen(false)}
+				/>
 			</main>
 
 			{/* Header floats over the graph — pointer-events-none except the
@@ -153,6 +182,25 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 			    px-4) so nothing shifts when a session starts (owner). */}
 			<div className="pointer-events-none absolute inset-x-0 bottom-0 pb-5">
 				<div className="pointer-events-auto mx-auto w-full max-w-[46rem] px-4">
+					{/* The practice chip (owner, 2026-10-04): the graph-view
+					    entry — a count of the picked propositions, click opens
+					    the chain table as the picker. Quiet, left-aligned above
+					    the composer; teaching mode renders nothing. */}
+					{mode === "practice" && (
+						<div className="mb-2 flex justify-start">
+							<button
+								type="button"
+								data-testid="practice-props-chip"
+								onClick={() => setChainSelectOpen(true)}
+								className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+							>
+								<DumbbellIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
+								{practiceProps.length > 0
+									? `${practiceProps.length} ${practiceProps.length === 1 ? "proposition" : "propositions"} selected`
+									: "Pick propositions from the map"}
+							</button>
+						</div>
+					)}
 					{zeroKeys ? (
 						<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
 					) : (
@@ -198,7 +246,7 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 								void start();
 							}
 						}}
-						placeholder="What do you want to learn?"
+						placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
 						autoFocus
 						rows={1}
 						className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
@@ -221,6 +269,27 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 					<StatsBar
 						dictationSlot={<DictationBar dictation={dictation} />}
 						turns={[] as TurnUsage[]}
+						leadingSlot={
+							<div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="home-mode-switch">
+								{(["teach", "practice"] as const).map((m) => (
+									<button
+										key={m}
+										type="button"
+										data-testid={`home-mode-${m}`}
+										onClick={() => setMode(m)}
+										className={
+											"flex items-center gap-1 rounded-sm px-2 py-0.5 text-[11px] uppercase tracking-wider transition-colors " +
+											(mode === m
+												? "bg-accent text-foreground"
+												: "text-muted-foreground hover:text-foreground")
+										}
+									>
+										{m === "practice" ? <DumbbellIcon aria-hidden="true" className="size-3" /> : null}
+										{m === "teach" ? "Teach" : "Practice"}
+									</button>
+								))}
+							</div>
+						}
 					/>
 				</div>
 			</div>

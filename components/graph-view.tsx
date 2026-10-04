@@ -944,7 +944,18 @@ export function GraphChromeRow({
 	);
 }
 
-export function GraphView() {
+export function GraphView({
+	chainSelectOpen = false,
+	onChainSelected,
+	onChainSelectClose,
+}: {
+	/** PRACTICE SELECT (owner, 2026-10-04): the home composer's practice
+	 *  chip opens the chain table as a proposition picker — this prop
+	 *  drives it; the confirm hands the picked nodes to the caller. */
+	chainSelectOpen?: boolean;
+	onChainSelected?: (nodes: { id: string; name: string; statement: string }[]) => void;
+	onChainSelectClose?: () => void;
+}) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const cardRef = useRef<HTMLDivElement | null>(null);
@@ -1048,6 +1059,12 @@ export function GraphView() {
 	// The chain table overlay (chains-overlay plan, 2026-09-29) —
 	// component-local: a browsing surface, not graph state.
 	const [chainsOpen, setChainsOpen] = useState(false);
+	// PRACTICE SELECT (2026-10-04): the parent's chip drives the select
+	// mode; closing (either the picker's confirm or its X) reports back so
+	// the chip's open state and the table's never disagree.
+	useEffect(() => {
+		if (chainSelectOpen) setChainsOpen(true);
+	}, [chainSelectOpen]);
 	useEffect(() => {
 		let cancelled = false;
 		fetch("/api/graph")
@@ -1678,7 +1695,15 @@ export function GraphView() {
 				chains={snapshot?.chains ?? []}
 				sessions={snapshot?.sessions ?? {}}
 				fileSources={snapshot?.fileSources ?? {}}
-				onClose={() => setChainsOpen(false)}
+				onClose={() => {
+					setChainsOpen(false);
+					onChainSelectClose?.();
+				}}
+				selectMode={chainSelectOpen}
+				onConfirmSelection={(picked) => {
+					onChainSelected?.(picked.map((n) => ({ id: n.id, name: n.name, statement: n.statement })));
+					onChainSelectClose?.();
+				}}
 			/>		</div>
 	);
 }
