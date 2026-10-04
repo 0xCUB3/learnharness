@@ -358,24 +358,34 @@ export function Chat({
 				abortInFlightTurn();
 				return;
 			}
-			// From a pending question there is no turn to kill — abort IS
-			// dismissal (A2, 2026-10-03): the skipped toolResult lands via the
-			// SILENT route — no turn, no wake, nothing generates. The session
-			// pauses at the user's choice; the next plain send is the wake.
+			// From a pending question the dismiss is silent (A2, 2026-10-03):
+			// the skipped toolResult lands via the SILENT route, no turn, no
+			// wake — the next plain send is the wake. MID-TURN (owner,
+			// 2026-10-04 — the GLM loop): the question can only dangle because a
+			// turn is STILL RUNNING, so the discard ALSO kills that turn; the
+			// route parks the dismissal (202) and the settle applies it.
 			const p = pendingRef.current;
 			if (p) {
 				const question = (p.input as { question?: string } | null)?.question ?? "";
 				const reading = readingThinkingRef.current.trim() || undefined;
 				clearReadingThinking();
 				const answer = dismissedAnswer(toolQuestionKind(p.tool), question);
-				void dismissQuestion(p.toolCallId, reading ? { ...answer, readingThinking: reading } : answer);
+				void dismissQuestion(
+					p.toolCallId,
+					reading ? { ...answer, readingThinking: reading } : answer,
+				);
+				if (busyRef.current) abortInFlightTurn();
 				return;
 			}
 			// The practice discard (owner, 2026-10-04): ask-style — the
 			// silent marker route; the conclude synthesis rides the user's
-			// next input. The composer returns immediately.
+			// next input. The composer returns immediately. Mid-turn the
+			// discard also kills the running turn (same park + settle law).
 			const problem = activeProblemRef.current;
-			if (problem) void dismissProblem(problem.toolCallId);
+			if (problem) {
+				void dismissProblem(problem.toolCallId);
+				if (busyRef.current) abortInFlightTurn();
+			}
 		},
 		[abortInFlightTurn, dismissQuestion, dismissProblem],
 	);
@@ -1444,7 +1454,7 @@ export function Chat({
 					<MermaidOverlay chart={mermaidFocus} onClose={() => setMermaidFocus(null)} />
 				)}
 				{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
-				<AbortTurnDialog mode={abortAsk} onClose={() => setAbortAsk(null)} onConfirm={confirmAbort} />
+				<AbortTurnDialog mode={abortAsk} onClose={() => setAbortAsk(null)} onConfirm={confirmAbort} busy={busy} />
 				</div>
 			</div>
 		</div>

@@ -13,11 +13,14 @@
  *
  * Guards mirror the turn route's honesty: 404 unknown chat, 400 for an
  * input that targets no dangling question call (or isn't a real
- * dismissal), 409 when a turn is somehow running — the dismissing client
- * heals via the record-changed sync, same as any raced settle.
+ * dismissal). A RUNNING turn no longer refuses (owner, 2026-10-04 — the
+ * GLM practice-loop incident): the dismissal is PARKED server-side and
+ * the turn's settle path applies it against the persisted record, so
+ * ESC-discard now doubles as the turn abort's bookkeeper (the client
+ * fires both).
  */
 import { ChatInputError, dismissAppends, emit, parseDismissInput } from "@/src/core";
-import { getChat, isTurnRunning, stores } from "@/src/server";
+import { getChat, isTurnRunning, parkDismissal, stores } from "@/src/server";
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }): Promise<Response> {
 	const { id } = await ctx.params;
@@ -35,11 +38,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 		throw err;
 	}
 
-	// A dismissal can only target a settled question (question tools end
-	// their turn) — a running turn means something raced; refuse, never
-	// append around a live turn's own persist.
+	// A running turn owns the chat's record (its messages persist at
+	// settle) — the dismissal cannot validate against stale truth, so it
+	// is PARKED (owner, 2026-10-04): onFinish applies it to the settled
+	// record if the dismissed question/problem really is pending there.
+	// The dismissing client has also aborted the turn — this 202 is the
+	// "noted, will land" contract.
 	if (isTurnRunning(id)) {
-		return Response.json({ error: "A turn is running for this session" }, { status: 409 });
+		parkDismissal(id, input);
+		return Response.json({ ok: true, parked: true }, { status: 202 });
 	}
 
 	let appends;

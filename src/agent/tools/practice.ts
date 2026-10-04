@@ -20,6 +20,91 @@ import { activeProblemOf } from "../../core/native-messages.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { concludeResult, invalidInputResult, problemResult } from "../tool-execute.ts";
 
+// ─── the weak-model argument heal ─────────────────────────────────────────────────
+
+/** One property schema of a TypeBox object (the shapes this fork emits:
+ * literal unions carry anyOf[{const}], scalars carry type). */
+type PropSchema = {
+	type?: string;
+	const?: unknown;
+	anyOf?: PropSchema[];
+};
+
+/** The literal values a property accepts ([] when it is not a literal
+ *  union / bare literal). */
+function literalsOf(prop: PropSchema): unknown[] {
+	if (prop.anyOf) return prop.anyOf.flatMap((m) => literalsOf(m));
+	return "const" in prop ? [prop.const] : [];
+}
+
+/** Does the property accept null (Type.Null standalone or as a union
+ *  member)? */
+function acceptsNull(prop: PropSchema): boolean {
+	if (prop.type === "null") return true;
+	return (prop.anyOf ?? []).some((m) => m.type === "null");
+}
+
+/** JSON.parse that never throws (undefined for malformed input). */
+function tryParse(raw: string): unknown {
+	try {
+		return JSON.parse(raw) as unknown;
+	} catch {
+		return undefined;
+	}
+}
+
+/** THE WEAK-MODEL ARGUMENT HEAL (owner, 2026-10-04 — the GLM incident:
+ *  19 consecutive rejected `problem` calls, every one carrying
+ *  `"mode": "\"recall\""` — a JSON-string-encoded enum — while the
+ *  TypeBox error text `must be equal to constant` never named the expected
+ *  values, so the model re-emitted the identical payload each time). At
+ *  pi's prepareArguments seam — BEFORE validation — the same discipline as
+ *  healStringifiedArrays (extraction) and parseOptionsIfString (questions):
+ *  a STRING value where the schema expects a literal union / boolean /
+ *  null / number / array is JSON.parse-d and kept when the parsed value
+ *  satisfies the expectation. Well-formed args pass through UNTOUCHED
+ *  (same reference); unhealable values stay for validation to reject
+ *  honestly. */
+export function healEncodedArguments(
+	args: unknown,
+	schema: { properties?: Record<string, PropSchema> },
+): unknown {
+	if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
+	const properties = schema.properties;
+	if (!properties) return args;
+	let healed: Record<string, unknown> | null = null;
+	for (const [key, prop] of Object.entries(properties)) {
+		const raw = (args as Record<string, unknown>)[key];
+		if (typeof raw !== "string") continue;
+		const parsed = tryParse(raw);
+		let fixed: unknown;
+		const literals = literalsOf(prop);
+		if (literals.length > 0) {
+			if (literals.includes(raw)) continue; // already a valid member
+			if (literals.includes(parsed)) fixed = parsed;
+		}
+		// The literal branch does not cover null (Type.Null carries no
+		// const) — a union of literals ∪ null must also accept "null".
+		if (fixed === undefined && acceptsNull(prop) && parsed === null) fixed = null;
+		if (fixed === undefined && prop.type === "boolean" && typeof parsed === "boolean") {
+			fixed = parsed;
+		}
+		if (
+			fixed === undefined &&
+			(prop.type === "number" || prop.type === "integer") &&
+			typeof parsed === "number"
+		) {
+			fixed = parsed;
+		}
+		if (fixed === undefined && prop.type === "array" && Array.isArray(parsed)) fixed = parsed;
+		if (fixed !== undefined) {
+			healed ??= { ...(args as Record<string, unknown>) };
+			healed[key] = fixed;
+		}
+	}
+	return healed ?? args;
+}
+
 /** The record-reading context the gates need (the plan-tools idiom). */
 export interface PracticeToolContext {
 	chatId: string;
@@ -70,6 +155,7 @@ export function problemTool(ctx: PracticeToolContext): AgentTool<typeof problemI
 			"Only one problem may be active — conclude it before posing the next.",
 		parameters: problemInputObject,
 		executionMode: "sequential",
+		prepareArguments: (args: unknown) => healEncodedArguments(args, problemInputObject) as never,
 		execute: async (_toolCallId, _input) => {
 			const record = ctx.chatStore.getChat(ctx.chatId);
 			if (record && activeProblemOf(record.messages) !== null) {
@@ -130,6 +216,7 @@ export function concludeTool(ctx: PracticeToolContext): AgentTool<typeof conclud
 			"the learner's composer. The turn CONTINUES after conclude — reveal, then pose the next problem (or wrap " +
 			"up in text). Nothing may conclude unless a problem is active.",
 		parameters: concludeInputObject,
+		prepareArguments: (args: unknown) => healEncodedArguments(args, concludeInputObject) as never,
 		executionMode: "sequential",
 		execute: async (_toolCallId, _input) => {
 			const record = ctx.chatStore.getChat(ctx.chatId);

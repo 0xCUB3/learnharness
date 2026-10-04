@@ -50,10 +50,14 @@ export function AbortTurnBody({
 	mode,
 	onClose,
 	onConfirm,
+	busy = false,
 }: {
 	mode: AbortMode;
 	onClose: () => void;
 	onConfirm: () => void;
+	/** The dismiss doubles as the abort when a turn is still running
+	 * (owner, 2026-10-04): the line says so. */
+	busy?: boolean;
 }) {
 	const copy = COPY[mode];
 	return (
@@ -75,7 +79,10 @@ export function AbortTurnBody({
 				<h2 className="text-sm font-semibold text-card-foreground" data-testid="abort-turn-title">
 					{copy.title}
 				</h2>
-				<p className="mt-1.5 text-xs text-muted-foreground">{copy.line}</p>
+				<p className="mt-1.5 text-xs text-muted-foreground" data-testid="abort-turn-line">
+					{copy.line}
+					{busy && mode !== "turn" ? " The working turn stops too." : ""}
+				</p>
 				<div className="mt-4 flex justify-end gap-2">
 					<button
 						type="button"
@@ -104,11 +111,13 @@ export function AbortTurnDialog({
 	mode,
 	onClose,
 	onConfirm,
+	busy = false,
 }: {
 	/** What Esc is aborting; null = closed (nothing rendered). */
 	mode: AbortMode | null;
 	onClose: () => void;
 	onConfirm: (mode: AbortMode) => void;
+	busy?: boolean;
 }) {
 	// Esc cancels the popup (claimed — never a chained abort).
 	useEffect(() => {
@@ -125,7 +134,7 @@ export function AbortTurnDialog({
 
 	if (mode === null || typeof document === "undefined") return null;
 	return createPortal(
-		<AbortTurnBody mode={mode} onClose={onClose} onConfirm={() => onConfirm(mode)} />,
+		<AbortTurnBody mode={mode} onClose={onClose} onConfirm={() => onConfirm(mode)} busy={busy} />,
 		document.body,
 	);
 }

@@ -35,6 +35,7 @@ import {
 } from "../core/settings-resolution.ts";
 import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope, type ProviderKeyMissing } from "../core/settings.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
+import { applyParkedDismissal } from "./dismissal-park.ts";
 import { registerTurn, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn, triggerExtraction } from "./turn-service.ts";
 import { hasProbeDone, danglingQuestionOf } from "../core/native-messages.ts";
@@ -426,6 +427,13 @@ export async function handleChatInput(
 					// against it and the pipeline's batches share it.
 					triggerExtraction(stores, extraction, chatId, effective.graph.extractionChunkTokens);
 				}
+				// PARKED DISMISSAL (owner, 2026-10-04): a dismissal that arrived
+				// mid-turn was parked by the dismiss route (202); now that
+				// persistTurn has landed the turn's messages, apply it against
+				// real truth — BEFORE endTurn, so "turn-settled" guarantees a
+				// subsequent fetch reads the dismissal already in the record
+				// (the same ordering law as persistTurn itself).
+				applyParkedDismissal(stores.chatStore, chatId);
 				// LAST: a poller that sees not-in-flight must read an already-persisted
 				// record — endTurn only after persistTurn has done its job.
 				endTurn(chatId);
