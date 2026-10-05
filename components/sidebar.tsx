@@ -723,29 +723,6 @@ function SessionsSidebar() {
 					</button>
 				</div>
 
-				{/* The three-way filter (owner, 2026-10-04; order owner round 8,
-				    2026-10-05): Teaching / Practice / All — the two real modes
-				    first, "All" as the escape hatch on the right, mirroring the
-				    stacked create-buttons above. Persisted client-side. */}
-				<div className="mx-3 mb-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="session-kind-filter">
-					{(["teach", "practice", "all"] as const).map((f) => (
-						<button
-							key={f}
-							type="button"
-							data-testid={`kind-filter-${f}`}
-							onClick={() => setFilter(f)}
-							className={cn(
-								"flex-1 rounded-sm px-2 py-1 text-[11px] uppercase tracking-wider transition-colors",
-								kindFilter === f
-									? "bg-accent text-foreground"
-									: "text-muted-foreground hover:text-foreground",
-							)}
-						>
-							{f === "teach" ? "Teaching" : f === "all" ? "All" : "Practice"}
-						</button>
-					))}
-				</div>
-
 				<div className="mx-3 mb-1 flex items-center gap-2">
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
 					<Hint label="Search sessions" action="sessions-search" side="bottom">
@@ -771,6 +748,32 @@ function SessionsSidebar() {
 						<SearchIcon className="pointer-events-none absolute left-1.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground/70" />
 					</span>
 					</Hint>
+				</div>
+
+				{/* The three-way filter, HEADING THE LIST (owner round 8b,
+				    2026-10-05 — moved below the search): it scopes what the
+				    list shows, so it sits directly above it as a caption row;
+				    search stays the top muscle-memory target. Order: Teaching /
+				    Practice / All — the real modes first, "All" as the escape
+				    hatch on the right, mirroring the create-buttons above.
+				    Persisted client-side. */}
+				<div className="mx-3 mb-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="session-kind-filter">
+					{(["teach", "practice", "all"] as const).map((f) => (
+						<button
+							key={f}
+							type="button"
+							data-testid={`kind-filter-${f}`}
+							onClick={() => setFilter(f)}
+							className={cn(
+								"flex-1 rounded-sm px-2 py-1 text-[11px] uppercase tracking-wider transition-colors",
+								kindFilter === f
+									? "bg-accent text-foreground"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							{f === "teach" ? "Teaching" : f === "all" ? "All" : "Practice"}
+						</button>
+					))}
 				</div>
 
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
