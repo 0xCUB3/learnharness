@@ -54,7 +54,12 @@ const IS_ELECTRON = typeof navigator !== "undefined" && navigator.userAgent.incl
 declare global {
 	interface Window {
 		/** Preload bridge (electron/preload.cjs) — Electron only, absent in the browser. */
-		lh?: { expandWindow: () => void };
+		lh?: {
+			expandWindow: () => void;
+			/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
+			onZoom?: (cb: (factor: number) => void) => () => void;
+			getZoom?: () => Promise<number>;
+		};
 	}
 }
 
@@ -84,10 +89,21 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			document.documentElement.classList.add("lh-electron");
 		}
 
+		// THE ZOOM TRUTH (owner round 7, 2026-10-05): ⌘±/⌘0 zoom the UI
+		// (Electron zoomFactor) while the native traffic lights stay
+		// physical-fixed — the CSS gutter lengths divide by this factor so
+		// their RENDERED size never moves. getZoom covers the first-paint
+		// race; every later change arrives as an lh:zoom push.
+		const setZoomVar = (factor: number) =>
+			document.documentElement.style.setProperty("--lh-zoom", String(factor));
+		const off = window.lh?.onZoom?.(setZoomVar);
+		void window.lh?.getZoom?.().then(setZoomVar);
+
 		const stored = localStorage.getItem(STORAGE_KEY);
 		// Default: open (first run introduces the sidebar).
 		setOpen(stored === null ? true : stored === "1");
 		setMounted(true);
+		return () => off?.();
 	}, []);
 
 	// Narrow-window auto-close/auto-restore (see SIDEBAR_AUTOCLOSE note):

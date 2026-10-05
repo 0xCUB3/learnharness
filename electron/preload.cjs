@@ -8,10 +8,22 @@
  *   threshold (928px) when the sidebar is opened below it. The main
  *   process clamps: no-op if the window is already wide enough.
  *
+ *   window.lh.onZoom(cb) / window.lh.getZoom() — the zoom truth (owner
+ *   round 7, 2026-10-05): every ⌘±/⌘0 change arrives as "lh:zoom" with
+ *   the new factor; getZoom covers the first-paint race. The renderer
+ *   publishes it as --lh-zoom so physical-constant lengths (the traffic-
+ *   light gutter) can divide by it.
+ *
  * Channel names are mirrored in electron/main.cjs — keep them in sync.
  */
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("lh", {
 	expandWindow: () => ipcRenderer.send("lh:expand-window"),
+	onZoom: (cb) => {
+		const listener = (_event, factor) => cb(factor);
+		ipcRenderer.on("lh:zoom", listener);
+		return () => ipcRenderer.removeListener("lh:zoom", listener);
+	},
+	getZoom: () => ipcRenderer.invoke("lh:zoom:get"),
 });

@@ -516,12 +516,21 @@ body {
 	-webkit-app-region: no-drag;
 }
 /* 92px = measured lights' right edge (~75pt) + the lights' own 16px
-   inset from the window edge — comfortable, symmetric air (owner). */
+   inset from the window edge — comfortable, symmetric air (owner).
+   PHYSICAL-CONSTANT under zoom (owner round 7, 2026-10-05): ⌘±/⌘0 scale
+   every CSS px by the zoomFactor while the native lights never move —
+   so these lengths DIVIDE by --lh-zoom (published by the renderer from
+   the lh:zoom IPC) to render at the same physical size at every zoom.
+   The graph button stays glued next to the lights zoomed in; nothing
+   slides under them zoomed out. Default 1 until the first push lands. */
+.lh-electron {
+	--lh-zoom: 1;
+}
 .lh-electron .lh-lights-gutter {
-	padding-left: 92px;
+	padding-left: calc(92px / var(--lh-zoom));
 }
 .lh-electron .lh-closed-toggle {
-	margin-left: 92px;
+	margin-left: calc(92px / var(--lh-zoom));
 }
 
 /* --font-title deliberately NOT @theme inline (see comment above): the

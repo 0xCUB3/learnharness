@@ -252,8 +252,57 @@ function createWindow(url) {
 	});
 
 	void win.loadURL(url);
+	// Zoom truth reaches the renderer for EVERY load (reload, nav): the
+	// renderer's --lh-zoom must never go stale. The fallback catcher below
+	// covers ⌘= / layout variants the menu's ⌘Plus may not claim — menu-
+	// claimed keys never reach before-input-event, so exactly one of the
+	// two applies any given zoom keypress.
+	win.webContents.on("did-finish-load", () => {
+		win.webContents.send("lh:zoom", win.webContents.getZoomFactor());
+	});
+	win.webContents.on("before-input-event", (event, input) => {
+		if (input.type !== "keyDown" || !(input.meta || input.control)) return;
+		if (input.key === "=" || input.key === "+") zoomStep(win, +1);
+		else if (input.key === "-") zoomStep(win, -1);
+		else if (input.key === "0") applyZoom(win, 1);
+		else return;
+		event.preventDefault();
+	});
+
 	win.once("ready-to-show", () => win.show());
 	return win;
+}
+
+/* ── Zoom (owner round 7, 2026-10-05): ⌘±/⌘0 as an OWNED ladder ──────────
+ * The stock zoomIn/zoomOut roles change zoomLevel silently — the renderer
+ * never learns the factor, and the native traffic lights (physical-fixed,
+ * hiddenInset) drift out of relation to the scaled chrome: the graph
+ * button rides away from them zoomed in, content slides under them
+ * zoomed out. Here zoom is explicit: a factor ladder, applied through
+ * setZoomFactor, and broadcast to the renderer ("lh:zoom" — it publishes
+ * --lh-zoom so gutter lengths can divide by it and stay PHYSICAL-
+ * constant). The traffic lights themselves stay at their construction
+ * position ({x:16, y:22.5} — Electron 44 has NO runtime setter, only
+ * the BrowserWindow option), which is HIG-correct anyway: native lights
+ * hug the window corner while the web chrome compensates around them.
+ * Vertical note: at large factors the taller bands' content centers
+ * drift below the fixed lights — accepted (the alternative, moving the
+ * lights, is impossible without rebuilding the window). */
+const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+
+function zoomStep(win, dir) {
+	const current = win.webContents.getZoomFactor();
+	const next =
+		dir > 0
+			? ZOOM_LADDER.find((f) => f > current + 0.001) ?? ZOOM_LADDER[ZOOM_LADDER.length - 1]
+			: [...ZOOM_LADDER].reverse().find((f) => f < current - 0.001) ?? ZOOM_LADDER[0];
+	applyZoom(win, next);
+}
+
+function applyZoom(win, factor) {
+	factor = Math.min(2, Math.max(0.75, factor)); // ladder clamps; ⌘0 = 1
+	win.webContents.setZoomFactor(factor);
+	win.webContents.send("lh:zoom", factor);
 }
 
 /** macOS needs an application menu with the Edit roles — without one,
@@ -274,7 +323,32 @@ function installMenu() {
 		{ label: "Edit", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
 		{
 			label: "View",
-			submenu: [{ role: "reload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }],
+			submenu: [
+				{ role: "reload" },
+				{ role: "toggleDevTools" },
+				{ type: "separator" },
+				// OWNED zoom (see applyZoom): the roles change zoomLevel
+				// silently; these broadcast the factor and re-seat the
+				// traffic lights. The renderer's --lh-zoom depends on
+				// hearing every change.
+				{
+					label: "Actual Size",
+					accelerator: "CommandOrControl+0",
+					click: () => applyZoom(BrowserWindow.getAllWindows()[0], 1),
+				},
+				{
+					label: "Zoom In",
+					accelerator: "CommandOrControl+Plus",
+					click: () => zoomStep(BrowserWindow.getAllWindows()[0], +1),
+				},
+				{
+					label: "Zoom Out",
+					accelerator: "CommandOrControl+-",
+					click: () => zoomStep(BrowserWindow.getAllWindows()[0], -1),
+				},
+				{ type: "separator" },
+				{ role: "togglefullscreen" },
+			],
 		},
 		{ role: "windowMenu" },
 	];
@@ -316,6 +390,9 @@ async function main() {
 	// width asks the window to widen instead — the layout never has to
 	// accommodate a narrow window + open sidebar. Top-left stays fixed, the
 	// window grows right. No-op when already wide.
+	// The renderer's first paint can race did-finish-load — it asks for
+	// the current factor itself (mirrors "lh:zoom" pushes).
+	ipcMain.handle("lh:zoom:get", (event) => BrowserWindow.fromWebContents(event.sender)?.webContents.getZoomFactor() ?? 1);
 	ipcMain.on("lh:expand-window", (event) => {
 		const win = BrowserWindow.fromWebContents(event.sender);
 		if (!win) return;

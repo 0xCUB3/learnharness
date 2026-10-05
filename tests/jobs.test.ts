@@ -26,7 +26,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { after, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 import { createFauxCore, fauxAssistantMessage, fauxText, fauxToolCall, type AssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import {
 	accumulateJobUsage,
@@ -122,6 +122,33 @@ function nativeToolMessages(text: string, tool: string, toolCallId: string, inpu
 function trackJob(id: string) {
 	createdJobs.push(id);
 }
+
+/* THE HERMETICITY FENCE (owner round 7, 2026-10-05): the jobs seams are
+ * MODULE-GLOBAL (setJobRespawn / setTurnRunner / the abort registry) and
+ * the sweep scans EVERY job in the store. An async test that times out
+ * under full-suite load leaves a "running" record and a late wake behind
+ * — and that stray state then poisons the NEXT test (a foreign respawn
+ * lands in its counter; a foreign orphan in its sweep). Under isolation
+ * nothing ever times out, which is why the file passes alone and flaked
+ * in the full run. The fence makes every test's start state identical:
+ * all tracked jobs settled, aborts unregistered, seams inert. */
+afterEach(() => {
+	for (const id of createdJobs) {
+		try {
+			const job = jobStore.getJob(id);
+			if (job && job.status === "running") {
+				jobStore.updateJob(id, { status: "done", activity: "settled (fence)" });
+			}
+			unregisterJobAbort(id);
+		} catch {
+			/* already gone */
+		}
+	}
+	// Late wakes from a prior test must be inert: a no-op respawn can't
+	// increment anyone's counter, a no-op runner can't spawn real work.
+	setJobRespawn(() => {});
+	setTurnRunner(async () => 200);
+});
 
 after(() => {
 	for (const id of createdChats) {
