@@ -77,20 +77,20 @@ describe("stats bar", () => {
 		assert.match(html, /data-testid="stats-context">11k</);
 	});
 
-	it("prettyModel strips vendor + date suffix (no auto-caps)", () => {
-		assert.equal(prettyModel("z-ai/glm-5.3-flash"), "glm 5.3 flash"); // no auto-caps (owner round 4)
-		assert.equal(prettyModel("qwen/qwen3.8-max-0902"), "qwen3.8 max");
+	it("prettyModel strips vendor + date suffix, keeps dashes", () => {
+		assert.equal(prettyModel("z-ai/glm-5.3-flash"), "glm-5.3-flash"); // dashes kept (owner round 5)
+		assert.equal(prettyModel("qwen/qwen3.8-max-0902"), "qwen3.8-max");
 	});
 
 	it("provider-qualified stamps (usage contract, model-slots wave)", () => {
 		// qualified: the provider rides as a quiet suffix — federation makes
 		// the same model via two providers different bookkeeping
-		assert.equal(prettyModel("openrouter:z-ai/glm-5.3-flash", true), "glm 5.3 flash · openrouter");
-		assert.equal(prettyModel("openai:gpt-5.2", true), "gpt 5.2 · openai");
+		assert.equal(prettyModel("openrouter:z-ai/glm-5.3-flash", true), "glm-5.3-flash · openrouter");
+		assert.equal(prettyModel("openai:gpt-5.2", true), "gpt-5.2 · openai");
 		// unqualified on a qualified stamp: provider silently dropped (old shape)
-		assert.equal(prettyModel("openrouter:z-ai/glm-5.3-flash"), "glm 5.3 flash");
+		assert.equal(prettyModel("openrouter:z-ai/glm-5.3-flash"), "glm-5.3-flash");
 		// qualified on a bare id: no suffix invented
-		assert.equal(prettyModel("z-ai/glm-5.3-flash", true), "glm 5.3 flash");
+		assert.equal(prettyModel("z-ai/glm-5.3-flash", true), "glm-5.3-flash");
 	});
 });
 

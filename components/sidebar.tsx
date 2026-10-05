@@ -268,9 +268,6 @@ export function SessionRow({
 			)}
 		>
 			<SessionStatus busy={chat.busy} />
-			{(chat.kind ?? "teach") === "practice" && (
-				<DumbbellIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-label="Practice session" />
-			)}
 			<span className="min-w-0 flex-1">
 				{/* Titles are the learner's/teacher's WORDS — Source Sans 3, the
 				    same voice the words were typed in (every input is lh-prose);
@@ -280,6 +277,12 @@ export function SessionRow({
 				<span className="block truncate font-prose text-(length:--lh-prose-size)">{chat.title}</span>
 				<span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>
 			</span>
+			{/* The dumbbell rides the FAR RIGHT (owner round 6, 2026-10-05) —
+			    was left of the name; right-aligned keeps the titles flush with
+			    the teaching rows and reads cleaner. */}
+			{(chat.kind ?? "teach") === "practice" && (
+				<DumbbellIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-label="Practice session" />
+			)}
 		</button>
 	);
 }

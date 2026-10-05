@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
+import { useEnterSubmits } from "@/components/enter-submits";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
@@ -366,6 +367,11 @@ function QuestionDockForm({
 		};
 		onSubmit(buildAnswer(qd, req));
 	};
+
+	/* ENTER SUBMITS FROM ANYWHERE (owner round 6, 2026-10-05): the same
+	 * law as the practice dock — dictated answers rarely focus the field.
+	 * Rides submit() so the dictation-flush law is shared, not forked. */
+	useEnterSubmits(submit);
 
 	// Selecting Other never clears the thinking field — two channels, the
 	// answer and the reasoning behind it, side by side.

@@ -5,6 +5,7 @@ import { ChevronRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { joinDictation, useDictationTarget } from "@/components/dictation";
+import { useEnterSubmits } from "@/components/enter-submits";
 import { cn } from "@/lib/utils";
 
 /**
@@ -68,6 +69,12 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 		setThinking("");
 		onSubmit(text);
 	};
+
+	/* ENTER SUBMITS FROM ANYWHERE (owner round 6, 2026-10-05): dictation
+	 * means the field is often never focused — the window-level Enter
+	 * (typing surfaces and buttons excluded) submits the trace. Mounted
+	 * while the dock is — collapsed bar included (the trace survives). */
+	useEnterSubmits(submit);
 
 	/* ── the collapsed bar ── */
 	if (!expanded) {

@@ -155,7 +155,7 @@ describe("AgentSection (thin SSR)", () => {
 		);
 		// The trigger shows the stored id even with no catalog loaded (a
 		// trigger reading "Default" over a live override would lie).
-		assert.ok(html.includes("glm 4.7 flash"), "the override id is visible (prettyModel form, no auto-caps)");
+		assert.ok(html.includes("glm-4.7-flash"), "the override id is visible (prettyModel form, no auto-caps)");
 		assert.ok(tagOf(html, "toggle-tool-demo").includes('aria-checked="false"'), "demo off");
 		assert.ok(tagOf(html, "toggle-tool-visual").includes('aria-checked="true"'), "visual still on");
 	});

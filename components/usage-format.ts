@@ -25,12 +25,14 @@ export function splitQualified(id: string): { provider: string | null; id: strin
 }
 
 /**
- * "z-ai/glm-5.3-flash" → "Glm 5.3 Flash" — vendor prefix dropped, dashes to
- * spaces, capitalized; a trailing all-digit segment (OpenRouter's date
- * suffix, "qwen3.8-max-0902") is dropped. Quiet-chip friendly.
+ * "z-ai/glm-5.3-flash" → "glm-5.3-flash" — vendor prefix dropped, the
+ * name KEPT EXACTLY as its provider writes it (dashes stay, no
+ * auto-caps — owner rounds 4-5, 2026-10-05); a trailing all-digit
+ * segment (OpenRouter's date suffix, "qwen3.8-max-0902") is dropped.
+ * Quiet-chip friendly.
  *
  * With `qualified` (usage stamps are "provider:id", model-slots wave):
- * the provider rides as a quiet suffix — "Glm 5.3 Flash · openrouter" —
+ * the provider rides as a quiet suffix — "glm-5.3-flash · openrouter" —
  * because with federation the same model via two providers is genuinely
  * different bookkeeping. Bare catalog ids are unchanged.
  */
@@ -39,8 +41,8 @@ export function prettyModel(id: string, qualified = false): string {
 	const short = bare.includes("/") ? bare.slice(bare.lastIndexOf("/") + 1) : bare;
 	const parts = short.split("-");
 	const trimmed = /^\d+$/.test(parts[parts.length - 1] ?? "") ? parts.slice(0, -1) : parts;
-	// No auto-capitalization (owner round 4, 2026-10-05): model names
-	// render exactly as their providers write them.
-	const pretty = trimmed.join(" ");
+	// No auto-capitalization, dashes KEPT (owner rounds 4-5, 2026-10-05):
+	// model names render exactly as their providers write them.
+	const pretty = trimmed.join("-");
 	return qualified && provider ? `${pretty} · ${provider}` : pretty;
 }
