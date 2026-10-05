@@ -1,4 +1,4 @@
-import { deleteChatSession, getChat, isTurnRunning, sessionCoverage, stores, type ChatDeleteMode } from "@/src/server";
+import { compactionInFlight, deleteChatSession, getChat, isTurnRunning, sessionCoverage, stores, type ChatDeleteMode } from "@/src/server";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
@@ -18,6 +18,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 		...chat,
 		messages: chat.messages,
 		turnInFlight: isTurnRunning(id),
+		compacting: compactionInFlight(id),
 		coverage: sessionCoverage(id),
 	});
 }

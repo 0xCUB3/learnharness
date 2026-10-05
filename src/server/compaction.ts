@@ -34,6 +34,7 @@ import {
 	buildCompactionPrompt,
 	compactionCutIndex,
 	COMPACTION_RESERVE_TOKENS,
+	estimateContextTokens,
 	estimateTokens,
 	newCompactionMarker,
 	planTreeToText,
@@ -142,13 +143,19 @@ export function effectiveThresholdTokens(settingTokens: number | undefined, cont
 
 // ─── the estimate over the ACTIVE projection ────────────────────────────────
 
-/** The projected context estimate: what the next LLM call would carry —
- *  toLlmMessages output (cut honored) + the system prompt. The record
- *  path carries no leading system message (settleWith filters it), so
- *  the chrome rides as the additive term instead: prompt text here,
- *  tool declarations absorbed by the 16k reserve (the declarations are
- *  a few k and stable per session). chars/4. */
+/** The projected context estimate: what the next LLM call would carry.
+ *  THE TRIGGER LAW (pi's, verified 2026-10-05): anchor on the last
+ *  assistant message's provider-reported usage — it already counted
+ *  the system prompt, tool declarations, and the provider's own
+ *  tokenizer — and chars/4-estimate ONLY messages appended after it.
+ *  estimateContextTokens refuses anchors that predate a compaction
+ *  marker (that usage described context the next request will NOT
+ *  carry), so the fallback path runs the plain heuristic over the
+ *  CUT-HONORED projection (never the dropped span) plus the additive
+ *  prompt term the anchor would have covered. */
 export function projectedContextTokens(messages: readonly LhMessage[], systemPromptTokens: number): number {
+	const est = estimateContextTokens(messages);
+	if (est.lastUsageIndex !== null) return est.tokens;
 	return estimateTokens(toLlmMessages(messages as readonly AgentMessage[]) as unknown as readonly LhMessage[]) + systemPromptTokens;
 }
 

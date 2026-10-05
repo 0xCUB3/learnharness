@@ -16,8 +16,11 @@
  *
  * Trigger threshold (owner ruling): effective = min(settings threshold,
  * model contextWindow − 16k reserve). Defaults: threshold 150k, kept
- * tail ~20k recent tokens (pi's defaults, owner-approved), token
- * estimates chars/4 (pi's method).
+ * tail ~20k recent tokens (pi's defaults, owner-approved). Token
+ * estimation follows pi's law (2026-10-05 incident fix): anchor on the
+ * provider-reported usage of the last assistant message, chars/4 only
+ * for messages appended after that anchor; the heuristic alone runs
+ * only when no usage exists yet.
  *
  * Summary content (owner's three requirements + continuity): the
  * learner's understanding and its EVOLUTION (quiz outcomes, confidence,
@@ -56,17 +59,119 @@ export const DEFAULT_COMPACTION_THRESHOLD_TOKENS = 150_000;
  * in the SUMMARY INPUT — the kept tail carries them whole). */
 const SUMMARY_TOOL_RESULT_TRUNCATE = 2_000;
 
-// ─── token estimation (pi's method: chars/4, uniform over shapes) ───────────
+// ─── token estimation (pi's law: usage-anchored, chars/4 only for the tail) ─
 
-/** Estimate a message's context tokens. JSON-serializes the message minus
- * its record id — uniform across user/assistant/toolResult/markers, no
- * shape forking. An ESTIMATE (the trigger check, not billing). */
-export function estimateMessageTokens(message: LhMessage | AgentMessage): number {
-	const { id: _id, ...rest } = message as LhMessage;
-	return Math.ceil(JSON.stringify(rest).length / 4);
+/** Context tokens from a provider-reported usage block — the most honest
+ * measure of "what the last request actually carried." Mirrors pi's
+ * calculateContextTokens. */
+export function calculateContextTokens(usage: {
+	totalTokens?: number;
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+}): number {
+	return (
+		usage.totalTokens ||
+		(usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)
+	);
 }
 
-/** Estimate a whole message list. */
+/** Estimate a message's context tokens from its WIRE-relevant text only
+ * (pi's estimator): text + thinking + toolCall name/args for assistants,
+ * content text for user/toolResult/custom. NEVER JSON.stringify of the
+ * whole message — record scaffolding (ids, usage, responseId, app-side
+ * details, escaped quotes/backslashes) inflates ~3x (measured on the
+ * 2026-10-05 relational-databases incident: 84k estimated vs ~30k real). */
+export function estimateMessageTokens(message: LhMessage | AgentMessage): number {
+	const content: unknown = (message as { content?: unknown }).content;
+	let chars = 0;
+	if ((message as { role?: string }).role === "assistant") {
+		for (const block of (Array.isArray(content) ? content : []) as Array<{
+			type: string;
+			text?: string;
+			thinking?: string;
+			name?: string;
+			arguments?: unknown;
+		}>) {
+			if (block.type === "text") chars += block.text?.length ?? 0;
+			else if (block.type === "thinking") chars += block.thinking?.length ?? 0;
+			else if (block.type === "toolCall") chars += (block.name?.length ?? 0) + JSON.stringify(block.arguments ?? {}).length;
+		}
+	} else {
+		chars += textCharsOfContent(content);
+	}
+	return Math.ceil(chars / 4);
+}
+
+function textCharsOfContent(content: unknown): number {
+	if (typeof content === "string") return content.length;
+	if (!Array.isArray(content)) return 0;
+	let chars = 0;
+	for (const block of content as Array<string | { type?: string; text?: string }>) {
+		if (typeof block === "string") chars += block.length;
+		else if (block?.type === "text" || "text" in block) chars += block.text?.length ?? 0;
+	}
+	return chars;
+}
+
+/** The newest assistant message carrying VALID provider-reported usage
+ * (pi's rule: skip aborted messages and all-zero usage — they carry no
+ * truth about the wire). The scan STOPS at the newest compaction
+ * marker: usage captured before a compaction described the pre-cut
+ * context — the next request carries the summary + kept tail instead,
+ * so pre-marker usage is not a valid anchor (pi's "don't trust usage
+ * captured before a later compaction" law). Index into messages, or
+ * null. */
+export function lastAssistantUsageIndex(
+	messages: readonly (LhMessage | AgentMessage)[],
+): number | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i]!;
+		if ((m as { role?: string }).role === "custom" && (m as LhMarkerMessage).customType === "compaction") return null;
+		if ((m as { role?: string }).role !== "assistant") continue;
+		const a = m as AssistantMessage & { stopReason?: string };
+		if (a.stopReason === "aborted") continue;
+		if (calculateContextTokens((a.usage ?? {}) as Parameters<typeof calculateContextTokens>[0]) === 0) continue;
+		return i;
+	}
+	return null;
+}
+
+export interface ContextTokenEstimate {
+	/** The estimate the trigger should compare against the threshold. */
+	tokens: number;
+	/** Provider-reported tokens from the usage anchor (0 when unanchored). */
+	usageTokens: number;
+	/** chars/4-estimated tokens after the anchor (or everything, unanchored). */
+	trailingTokens: number;
+	/** Index of the usage anchor, or null (diagnostics). */
+	lastUsageIndex: number | null;
+}
+
+/** THE trigger estimator (pi's estimateContextTokens): anchor on the last
+ * assistant usage the provider reported — prompt, tools, tokenizer
+ * density and all — and chars/4-estimate ONLY what was appended after
+ * it. The heuristic never re-estimates history the provider already
+ * counted (the relational-databases bug: full-record JSON.stringify/4
+ * tripled the true context and fired a 30k session at an 80k threshold). */
+export function estimateContextTokens(
+	messages: readonly (LhMessage | AgentMessage)[],
+): ContextTokenEstimate {
+	const anchor = lastAssistantUsageIndex(messages);
+	if (anchor === null) {
+		let trailing = 0;
+		for (const m of messages) trailing += estimateMessageTokens(m);
+		return { tokens: trailing, usageTokens: 0, trailingTokens: trailing, lastUsageIndex: null };
+	}
+	const anchored = messages[anchor]! as AssistantMessage;
+	const usageTokens = calculateContextTokens(anchored.usage as Parameters<typeof calculateContextTokens>[0]);
+	let trailing = 0;
+	for (let i = anchor + 1; i < messages.length; i++) trailing += estimateMessageTokens(messages[i]!);
+	return { tokens: usageTokens + trailing, usageTokens, trailingTokens: trailing, lastUsageIndex: anchor };
+}
+
+/** Estimate a whole message list (the plain heuristic — cut-walk use). */
 export function estimateTokens(messages: readonly (LhMessage | AgentMessage)[]): number {
 	let total = 0;
 	for (const m of messages) total += estimateMessageTokens(m);

@@ -29,6 +29,7 @@ function item(overrides: Partial<ChatListItem>): ChatListItem {
 		pendingQuestion: false,
 		pendingProblem: false,
 		busy: false,
+		compacting: false,
 		...overrides,
 	};
 }

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { Chat } from "@/components/chat";
 import { slotsConfigured } from "@/src/core";
-import { getChat, isTurnRunning, readSettingsRecord } from "@/src/server";
+import { compactionInFlight, getChat, isTurnRunning, readSettingsRecord } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +34,7 @@ export default async function ChatPage({
 			// A teacher turn that outlived its client: the remounted view must
 			// attach (busy shimmer + poll), never resurrect the stale record.
 			initiallyInFlight={isTurnRunning(chat.id)}
+			initiallyCompacting={compactionInFlight(chat.id)}
 		/>
 	);
 }

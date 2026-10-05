@@ -243,6 +243,7 @@ export function timeAgo(iso: string, now = new Date()): string {
  *  still rides the API payload, so this is a one-line flip back if it's
  *  ever wanted. */
 function sessionMeta(chat: ChatListItem): string {
+	if (chat.compacting) return `Compacting context · ${timeAgo(chat.updatedAt)}`;
 	if (chat.pendingQuestion) return `Waiting for your answer · ${timeAgo(chat.updatedAt)}`;
 	if ((chat.kind ?? "teach") === "practice" && chat.pendingProblem) {
 		return `Problem waiting · ${timeAgo(chat.updatedAt)}`;
@@ -284,7 +285,7 @@ export function SessionRow({
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
 		>
-			<SessionStatus busy={chat.busy} />
+			<SessionStatus busy={chat.busy || chat.compacting} />
 			<span className="min-w-0 flex-1">
 				{/* Titles are the learner's/teacher's WORDS — Source Sans 3, the
 				    same voice the words were typed in (every input is lh-prose);
@@ -486,6 +487,7 @@ function SessionsSidebar() {
 	useServerEvent("chats-changed", scheduleEventRefresh);
 	useServerEvent("turn-started", scheduleEventRefresh);
 	useServerEvent("turn-settled", scheduleEventRefresh);
+	useServerEvent("compaction-changed", scheduleEventRefresh);
 	useServerResync(() => void refreshRef.current());
 	useEffect(
 		() => () => {

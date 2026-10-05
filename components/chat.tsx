@@ -183,6 +183,7 @@ export function Chat({
 	initialMessages,
 	initialPrompt,
 	initiallyInFlight,
+	initiallyCompacting = false,
 	initialConfigured = false,
 	kind = "teach",
 }: {
@@ -197,6 +198,11 @@ export function Chat({
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
 	initiallyInFlight?: boolean;
+	/** A compaction holds the chat's model gate at mount (navigated away
+	 * mid-compaction — the registry is live server state, the
+	 * compaction-changed event already fired). The transcript spinner
+	 * and send gates key on it. */
+	initiallyCompacting?: boolean;
 	/** slotsConfigured(server record) — the persistent setup CTA keys on
 	 *  it (BYOK, owner 2026-09-22). The server gate stays the truth; this
 	 *  only decides whether the pill rides the composer. */
@@ -623,7 +629,7 @@ export function Chat({
 	// flips it; the send paths, canSend, and the docks gate on it (the
 	// server's registry mutex is the structural gate; this is the
 	// affordance). The summary dialog state rides with it.
-	const [compacting, setCompacting] = useState(false);
+	const [compacting, setCompacting] = useState(initiallyCompacting);
 	const [compactionSummary, setCompactionSummary] = useState<CompactionDividerData | null>(null);
 	const canSend =
 		(text.trim().length > 0 || dictation.active) && !pending && !activeProblem && !compacting;
@@ -1425,6 +1431,17 @@ export function Chat({
 							    provider-connect gap. turnInFlight: the same state
 							    entered by external discovery (wake) / the poll
 							    fallback. Never collapsible itself. */}
+							{/* Compaction (owner round 15): the same register as the
+						    thinking placeholder — a visible session-wide state while
+						    the summarizer holds the model gate. Mutually exclusive with
+						    the THINKING placeholder by construction (the gate sits
+						    BEFORE beginTurn; the settle kick runs after endTurn). */}
+							{compacting && (
+								<span className="flex items-center gap-2 font-ui text-xs font-medium uppercase tracking-wide text-muted-foreground">
+									<BrailleSpinner label="Compacting context" />
+									<Shimmer duration={1}>COMPACTING CONTEXT…</Shimmer>
+								</span>
+							)}
 							{(status === "submitted" || turnInFlight) && (
 								<span className="flex items-center gap-2 font-ui text-xs font-medium uppercase tracking-wide text-muted-foreground">
 									<BrailleSpinner label="Thinking" />
