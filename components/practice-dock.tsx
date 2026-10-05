@@ -10,16 +10,11 @@ import { cn } from "@/lib/utils";
  * The practice dock (practice sessions, owner design 2026-10-04): an
  * ACTIVE problem replaces the chat composer — the persistent bottom blob
  * morphs into the problem. The agent's statement above; the learner's
- * half below — "Your thinking", a labeled composer-twin field (the
- * question dock's discipline: Enter makes a newline, it is for dumping)
- * with TWO submit buttons:
- *
- * - **Nudge** — submit the thinking WITHOUT a committed answer: working
- *   trace, hint request (the ladder answers, one rung per request).
- * - **Commit** — the thinking contains an arrived answer.
- *
- * ⌘/Ctrl+Enter commits (the universal submit chord). One problem may
- * carry many submissions; each starts a turn.
+ * half below — "Your thinking", a labeled field with ONE Send button
+ * (owner round 2, 2026-10-05): Enter sends, Shift+Enter makes a newline.
+ * There are no lanes — whether a submission claims an answer is apparent
+ * from the thinking itself; the agent reads it. One problem may carry
+ * many submissions; each starts a turn.
  *
  * Collapse (scroll-up → slim bar) is owned by the DockOverlay; this
  * component is content only, and the expanded form stays MOUNTED while
@@ -40,8 +35,8 @@ export interface PracticeDockProps {
 	/** Collapse state, owned by the DockOverlay. */
 	expanded: boolean;
 	onExpand: () => void;
-	/** (commit, text) — POST {type:"thinking"}; commit=false is the nudge. */
-	onSubmit: (commit: boolean, text: string) => void;
+	/** text — POST {type:"thinking"} (one lane; the register is read from the text). */
+	onSubmit: (text: string) => void;
 	/** Escape in the thinking field stops dictation (threaded from the page). */
 	onEscape?: () => void;
 }
@@ -65,12 +60,12 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 		true,
 	);
 
-	const submit = (commit: boolean) => {
+	const submit = () => {
 		const text = thinkingRef.current.trim();
 		if (text.length === 0) return;
 		thinkingRef.current = "";
 		setThinking("");
-		onSubmit(commit, text);
+		onSubmit(text);
 	};
 
 	/* ── the collapsed bar ── */
@@ -103,8 +98,8 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 				</div>
 			</div>
 
-			{/* The learner's half — a composer TWIN (the question dock's
-			    discipline): Enter makes a newline; the buttons submit. */}
+			{/* The learner's half: Enter SENDS (owner round 2, 2026-10-05);
+			    Shift+Enter makes a newline — less to decide about. */}
 			<div
 				data-testid="practice-thinking-field"
 				className="m-1.5 rounded-xl border border-border/70 bg-background/60 transition-colors focus-within:border-primary/50"
@@ -127,39 +122,30 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 							onEscape();
 							return;
 						}
-						// ⌘↵ on macOS, Ctrl↵ elsewhere — the universal submit
-						// chord; here it COMMITS (the stronger of the two acts).
-						if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+						// Enter SENDS — the single lane (owner round 2, 2026-10-05);
+						// Shift+Enter is the newline, ⌘/Ctrl+Enter the chord too.
+						if (e.key === "Enter" && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
 							e.preventDefault();
-							submit(true);
+							submit();
 						}
 					}}
-					placeholder="Work here — say as much of your thinking as you have. Nudge asks for a hint without committing; Commit submits an answer."
+					placeholder="Work here — say as much of your thinking as you have."
 					rows={4}
 					className={cn(
 						"field-sizing-content lh-input max-h-64 min-h-16 w-full resize-none bg-transparent px-2.5 pb-2 outline-none placeholder:text-muted-foreground",
 					)}
 				/>
-				{/* The two submit lanes — docked inside the field like the
-				    composer's send, right-aligned. */}
-				<div className="flex items-center justify-end gap-1.5 px-1.5 pb-1.5">
+				{/* The one Send — docked inside the field like the composer's,
+				    right-aligned. */}
+				<div className="flex items-center justify-end px-1.5 pb-1.5">
 					<button
 						type="button"
-						data-testid="practice-nudge"
+						data-testid="practice-send"
 						disabled={thinking.trim().length === 0}
-						onClick={() => submit(false)}
-						className="rounded-lg border border-border/70 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-					>
-						Nudge
-					</button>
-					<button
-						type="button"
-						data-testid="practice-commit"
-						disabled={thinking.trim().length === 0}
-						onClick={() => submit(true)}
+						onClick={() => submit()}
 						className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-40"
 					>
-						Commit
+						Send
 					</button>
 				</div>
 			</div>

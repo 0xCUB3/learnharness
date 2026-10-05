@@ -2,8 +2,8 @@
  * THE PRACTICE SURFACE — SSR render pins (the render-suite discipline:
  * pure bodies, renderToStaticMarkup, testids). The dock (the active
  * problem replaces the composer: statement above, "Your thinking"
- * composer-twin below, the TWO submit lanes — Nudge without a commit,
- * Commit with one; ⌘/Ctrl+Enter commits), the transcript cards (the
+ * field below with ONE Send (Enter sends, Shift+Enter is a newline)),
+ * the transcript cards (the
  * problem's compact-expandable statement — commitment NEVER renders;
  * the conclusion's outcome + verdict + reveal; the learner's thinking
  * register cards), and the view projection (the thinking marker's
@@ -56,8 +56,8 @@ describe("PracticeDock", () => {
 		// The measured column cap (the old fixed 40vh is only the fallback).
 		assert.match(html, /--dock-max-h/);
 		assert.match(html, /Your thinking/);
-		assert.match(html, /data-testid="practice-nudge"/);
-		assert.match(html, /data-testid="practice-commit"/);
+		assert.match(html, /data-testid="practice-send"/);
+		assert.ok(!html.includes("practice-nudge") && !html.includes("practice-commit"), "the two-lane buttons are gone");
 		// The buttons carry their lane in the disabled gate; both start
 		// disabled (empty field).
 		assert.match(html, /disabled/);
@@ -142,12 +142,14 @@ describe("the practice transcript cards", () => {
 		assert.doesNotMatch(html, /The solution/);
 	});
 
-	it("ThinkingCard: the register is the title (trace vs solution)", () => {
+	it("ThinkingCard: one label, collapsed arrival (legacy commit flags ignored)", () => {
 		const trace = renderToStaticMarkup(<ThinkingCard data={{ problemCallId: "c", commit: false, text: "stuck at step two" }} />);
 		assert.match(trace, /Your thinking/);
-		assert.doesNotMatch(trace, /Your solution/);
-		const commit = renderToStaticMarkup(<ThinkingCard data={{ problemCallId: "c", commit: true, text: "It is 42." }} />);
-		assert.match(commit, /Your solution/);
+		assert.match(trace, /aria-expanded="false"/);
+		assert.ok(!trace.includes("stuck at step two"), "the text is one click away");
+		const legacy = renderToStaticMarkup(<ThinkingCard data={{ problemCallId: "c", commit: true, text: "It is 42." }} />);
+		assert.match(legacy, /Your thinking/);
+		assert.doesNotMatch(legacy, /Your solution/);
 	});
 });
 
@@ -155,13 +157,13 @@ describe("the practice transcript cards", () => {
 
 describe("the practice view projection", () => {
 	it("the thinking marker projects as a user-side data part (register in details)", () => {
-		const marker = newThinkingMessage("call_p1", true, "It is 42.");
+		const marker = newThinkingMessage("call_p1", "It is 42.");
 		const view = projectView([marker as LhMessage]);
 		assert.equal(view.length, 1);
 		assert.equal(view[0]!.role, "user");
 		const dataPart = view[0]!.parts[0]!;
 		assert.equal(dataPart.type, "data-practice-thinking");
-		assert.deepEqual(dataPart.data, { problemCallId: "call_p1", commit: true, text: "It is 42." });
+		assert.deepEqual(dataPart.data, { problemCallId: "call_p1", text: "It is 42." });
 	});
 
 	it("the problem pose's ack keeps the part input-available (the dock's mount)", () => {

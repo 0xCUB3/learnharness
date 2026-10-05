@@ -39,8 +39,7 @@ import { QUESTION_TOOLS } from "./pending.ts";
 import {
 	CONCLUDE_ACK_TEXT,
 	HANDOFF_TEXT,
-	THINKING_COMMIT_LABEL,
-	THINKING_HINT_LABEL,
+	THINKING_LABEL,
 } from "./contracts/chat.ts";
 import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
 
@@ -224,20 +223,20 @@ export function newGraphContextMessage(picks: readonly GraphContextPick[], chain
 	};
 }
 
-/** The learner's thinking submission (the practice dock's two buttons):
- *  a user-register message the model reads WITH its label (hint vs
- *  commit — the register is the whole difference), while `details` keeps
- *  the raw payload for the transcript card. One problem may carry many
+/** The learner's thinking submission (ONE send lane, owner round
+ *  2026-10-05): the register is no longer declared by a button — the
+ *  model READS the text to tell working traces from claimed answers. The
+ *  content label is the single "Your thinking"; `details` keeps the raw
+ *  payload for the transcript card. One problem may carry many
  *  submissions. */
-export function newThinkingMessage(problemCallId: string, commit: boolean, text: string): LhMarkerMessage {
-	const label = commit ? THINKING_COMMIT_LABEL : THINKING_HINT_LABEL;
+export function newThinkingMessage(problemCallId: string, text: string): LhMarkerMessage {
 	return {
 		id: newMessageId(),
 		role: "custom",
 		customType: "practice-thinking",
-		content: `${label}:\n${text}`,
+		content: `${THINKING_LABEL}:\n${text}`,
 		display: true,
-		details: { problemCallId, commit, text },
+		details: { problemCallId, text },
 		timestamp: Date.now(),
 	};
 }

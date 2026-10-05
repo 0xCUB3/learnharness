@@ -448,16 +448,16 @@ export function Chat({
 		void resumeStream();
 	}, [resumeStream]);
 
-	// The practice dock's two lanes (owner, 2026-10-04): both POST one
-	// thinking input against the ACTIVE problem — commit=false is the
-	// nudge (hint request), commit=true the answer commit. Each starts a
-	// turn; the dock stays mounted (the problem is still active until the
-	// agent concludes).
+	// The practice dock's send (ONE lane, owner 2026-10-05): POSTs the
+	// thinking against the ACTIVE problem — whether it claims an answer is
+	// read from the text by the agent, not declared here. Starts a turn;
+	// the dock stays mounted (the problem is still active until the agent
+	// concludes).
 	const submitThinking = useCallback(
-		(commit: boolean, text: string) => {
+		(text: string) => {
 			const problem = activeProblemRef.current;
 			if (!problem) return;
-			void send({ type: "thinking", problemCallId: problem.toolCallId, commit, text });
+			void send({ type: "thinking", problemCallId: problem.toolCallId, text });
 		},
 		[send],
 	);
@@ -1631,7 +1631,7 @@ function DockOverlay({
 	 *  question (the composer is replaced); null in teaching sessions. */
 	practice: { toolCallId: string; input: unknown } | null;
 	/** (commit, text) — the practice dock's two submit lanes. */
-	onSubmitThinking: (commit: boolean, text: string) => void;
+	onSubmitThinking: (text: string) => void;
 	/** Teach-phase pending question: arrives collapsed behind the reveal button (W5). */
 	requiresReveal: boolean;
 	/** The reading-thinking draft (owner 2026-10-03) — owned by ChatView so

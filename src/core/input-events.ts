@@ -45,10 +45,10 @@ export type ChatInput =
 	| { type: "answer"; toolCallId: string; answer: QuestionAnswerData }
 	| { type: "continue" }
 	/** The practice dock's two buttons (owner, 2026-10-04): the learner's
-	 *  thinking on the ACTIVE problem — commit=false is the hint request
-	 *  (working, not committed), commit=true the answer commit. One
+	 *  thinking on the ACTIVE problem — one lane (owner 2026-10-05):
+	 *  whether it claims an answer is read from the text. One
 	 *  problem may carry many submissions; each is its own turn. */
-	| { type: "thinking"; problemCallId: string; commit: boolean; text: string };
+	| { type: "thinking"; problemCallId: string; text: string };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -168,13 +168,10 @@ export function parseChatInput(input: unknown): ChatInput {
 			if (typeof i.problemCallId !== "string" || i.problemCallId.length === 0) {
 				throw new ChatInputError("thinking input requires problemCallId");
 			}
-			if (typeof i.commit !== "boolean") {
-				throw new ChatInputError("thinking input requires commit (boolean)");
-			}
 			if (typeof i.text !== "string" || i.text.trim().length === 0) {
 				throw new ChatInputError("thinking input requires non-empty text");
 			}
-			return { type: "thinking", problemCallId: i.problemCallId, commit: i.commit, text: i.text };
+			return { type: "thinking", problemCallId: i.problemCallId, text: i.text };
 		default:
 			throw new ChatInputError(`unknown input type: ${String(i.type)}`);
 	}
@@ -207,7 +204,7 @@ export function inputAppends(record: { messages: LhMessage[] }, input: ChatInput
 			if (!active || active.toolCallId !== input.problemCallId) {
 				throw new ChatInputError("thinking input targets no active problem");
 			}
-			return [...dismissalConclusion(record), newThinkingMessage(input.problemCallId, input.commit, input.text)];
+			return [...dismissalConclusion(record), newThinkingMessage(input.problemCallId, input.text)];
 		}
 	}
 }

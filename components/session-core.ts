@@ -529,9 +529,9 @@ export class SessionModel {
 		if (input.type === "text") optimistic.push({ ...newUserMessage(input.text), id: localId() });
 		else if (input.type === "thinking") {
 			// The practice submissions (2026-10-04): the marker lands
-			// optimistically — the register (trace / commit) renders from
-			// its details the moment the button fires.
-			optimistic.push({ ...newThinkingMessage(input.problemCallId, input.commit, input.text), id: localId() });
+			// optimistically — the card renders from its details the
+			// moment the button fires.
+			optimistic.push({ ...newThinkingMessage(input.problemCallId, input.text), id: localId() });
 		} else if (input.type === "answer") {
 			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
 			optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });

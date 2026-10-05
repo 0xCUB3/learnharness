@@ -1012,11 +1012,11 @@ describe("the live-view law — live is positive evidence, not session busyness"
 
 describe("absorbed — the custom role (the doubled thinking card)", () => {
 	it("absorbs the optimistic thinking marker by customType + details", () => {
-		const optimistic = { ...newThinkingMessage("call-p1", false, "my trace"), id: "c_opt1" } as LhMessage;
-		const serverCopy = { ...newThinkingMessage("call-p1", false, "my trace"), id: "srv_1" } as LhMessage;
+		const optimistic = { ...newThinkingMessage("call-p1", "my trace"), id: "c_opt1" } as LhMessage;
+		const serverCopy = { ...newThinkingMessage("call-p1", "my trace"), id: "srv_1" } as LhMessage;
 		assert.ok(absorbed(optimistic, [...poseRecord(), serverCopy]), "same submission → the local copy drops");
-		// A DIFFERENT submission (commit flag, text) is its own marker.
-		const other = { ...newThinkingMessage("call-p1", true, "my trace"), id: "srv_2" } as LhMessage;
+		// A DIFFERENT submission (different text) is its own marker.
+		const other = { ...newThinkingMessage("call-p1", "a later, different trace"), id: "srv_2" } as LhMessage;
 		assert.ok(!absorbed(optimistic, [...poseRecord(), other]), "different details → not the same submission");
 		// The c_ gate: server stamps are never absorbed, whatever the role.
 		assert.ok(!absorbed(serverCopy, [optimistic]), "server ids never drop");
@@ -1027,14 +1027,14 @@ describe("absorbed — the custom role (the doubled thinking card)", () => {
 		// the tail (client id), then the +400ms adoption fetch swaps in the
 		// write-ahead record (server id). ONE card must remain.
 		const m = model({ chatId: "chat_x", initialMessages: poseRecord() });
-		const optimistic = { ...newThinkingMessage("call-p1", false, "my trace"), id: "c_opt1" } as LhMessage;
+		const optimistic = { ...newThinkingMessage("call-p1", "my trace"), id: "c_opt1" } as LhMessage;
 		m.applyWireEvent({ type: "message_start", message: optimistic });
 		assert.equal(
 			m.getState().nativeMessages.filter((x) => (x as { role?: string }).role === "custom").length,
 			1,
 			"the optimistic marker is in the tail",
 		);
-		const serverCopy = { ...newThinkingMessage("call-p1", false, "my trace"), id: "srv_1" } as LhMessage;
+		const serverCopy = { ...newThinkingMessage("call-p1", "my trace"), id: "srv_1" } as LhMessage;
 		m.adoptRecord([...poseRecord(), serverCopy]);
 		const customs = m.getState().nativeMessages.filter((x) => (x as { role?: string }).role === "custom");
 		assert.equal(customs.length, 1, "the server copy replaced the optimistic one — no doubling");

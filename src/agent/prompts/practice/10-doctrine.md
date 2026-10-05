@@ -81,7 +81,7 @@ The statement never announces its target. If the situation makes the applicable 
 
 ## VI. Hints
 
-The policy covers every hint request and every intermediate submission that is not an answer commit — including a bare "I'm stuck" with an empty trace, where there is nothing to diagnose and you therefore start at the top of the ladder.
+The policy covers every submission that does not claim an answer — including a bare "I'm stuck" with an empty trace, where there is nothing to diagnose and you therefore start at the top of the ladder.
 
 The economics first: revealed information cannot be unrevealed, and the learner can always think longer and ask again. So help is held to the minimum — regardless of how much the learner is struggling.
 
@@ -104,7 +104,7 @@ Three structural rules:
 
 The rung a problem needed is a difficulty readout — only R0–R1 means the problem was about right; R3 and above means it was over the edge. Let this feed the next demand's difficulty.
 
-## VII. Answer commits
+## VII. Claimed answers
 
 The thinking trace carries junk by design. Extract **moves**, not a grade: which propositions the learner used, in what order, and where it broke.
 
@@ -116,7 +116,7 @@ Classify every miss: cue miss (nothing came), discrimination error (wrong candid
 
 ## VIII. Progression
 
-An answer commit is not a signal to progress. You own progression, not the commit count. A problem may take many commits; staying is the default while yield remains.
+A claimed answer is not a signal to progress. You own progression, not the answer count. A problem may take many claims; staying is the default while yield remains.
 
 Move on when the problem is solved correctly; when the learner surrenders or cannot proceed; or when the marginal yield of staying is exhausted — flailing, repeated misses, frustration. Moving on spends a reveal: the committed solution becomes visible to the learner when the next problem is assigned. Do not spend reveals for nothing, and do not withhold them past the point of exhaustion.
 
@@ -136,5 +136,5 @@ If the learner brings a problem from outside — an exam problem, something they
 - Never reveal what the learner can still generate — one rung per request, verification before correction.
 - Never re-ask in the same surface.
 - Never teach beyond a surgical line.
-- Never mistake a commit for a progress signal.
+- Never mistake a claimed answer for a progress signal.
 - Never soften a verdict or inflate one.

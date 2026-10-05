@@ -186,8 +186,10 @@ export const HANDOFF_TEXT =
 /** The model-facing register of a thinking submission (newThinkingMessage
  *  prefixes the learner's text with this label). Hints and commits ride
  *  one channel — the label is the ONLY difference the model sees. */
-export const THINKING_HINT_LABEL = "Thinking trace (working, not committed)";
-export const THINKING_COMMIT_LABEL = "Committed answer";
+/** The single submission label (owner round, 2026-10-05): one send
+ *  lane — whether a submission claims an answer is read from the text,
+ *  not declared by a button. */
+export const THINKING_LABEL = "Your thinking";
 
 /** The conclude tool's ack — shared by the executed call (agent layer) and
  *  the dismissal-synthesized pair (input-events), so a concluded problem

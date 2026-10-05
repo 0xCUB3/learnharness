@@ -137,15 +137,16 @@ describe("practice flow (scripted model)", () => {
 		assert.equal(needsContinuation(afterPose), false);
 		assert.equal(activeProblemOf(afterPose)?.toolCallId, "call-p1");
 
-		// ── Turn 2: the commit arrives as a labeled thinking message ──
+		// ── Turn 2: the submission arrives as a single-lane thinking message ──
 		await drain(
 			await handleChatRequest(
-				post(chat.id, { type: "thinking", problemCallId: "call-p1", commit: true, text: "|G|=p; ⟨x⟩ has order dividing p" }),
+				post(chat.id, { type: "thinking", problemCallId: "call-p1", text: "|G|=p; ⟨x⟩ has order dividing p" }),
 				factory,
 			),
 		);
-		// The model saw the COMMIT label, not the hint label.
-		assert.ok(lastSaw(calls, "Committed answer:"), "the conclude turn's prompt carries the committed answer");
+		// The model saw the one label (owner round 2, 2026-10-05): the
+		// register is read from the text, not declared by a button.
+		assert.ok(lastSaw(calls, "Your thinking:"), "the conclude turn's prompt carries the thinking");
 		const afterConclude = chatStore.getChat(chat.id)!.messages;
 		const concludeAck = afterConclude.find(
 			(m) => (m as ToolResultMessage).role === "toolResult" && (m as ToolResultMessage).toolName === "conclude",
@@ -157,7 +158,7 @@ describe("practice flow (scripted model)", () => {
 		assert.equal(activeProblemOf(afterConclude), null);
 	});
 
-	it("the nudge (commit:false) carries the hint label", async () => {
+	it("a working-trace submission keeps the problem active", async () => {
 		const chat = createPracticeChat("Test: practice nudge");
 		const { engine, calls } = scripted([
 			() => fauxAssistantMessage([fauxToolCall("problem", POSE, { id: "call-p2" })], { stopReason: "toolUse" }),
@@ -167,12 +168,12 @@ describe("practice flow (scripted model)", () => {
 		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "go" }), factory));
 		await drain(
 			await handleChatRequest(
-				post(chat.id, { type: "thinking", problemCallId: "call-p2", commit: false, text: "stuck at the second step" }),
+				post(chat.id, { type: "thinking", problemCallId: "call-p2", text: "stuck at the second step" }),
 				factory,
 			),
 		);
-		assert.ok(lastSaw(calls, "Thinking trace (working, not committed):"), "the nudge turn's prompt carries the hint label");
-		// The problem is still active — a nudge never concludes.
+		assert.ok(lastSaw(calls, "Your thinking:"), "the turn's prompt carries the thinking");
+		// The problem is still active — a trace never concludes.
 		assert.equal(activeProblemOf(chatStore.getChat(chat.id)!.messages)?.toolCallId, "call-p2");
 	});
 

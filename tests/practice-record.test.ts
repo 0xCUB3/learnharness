@@ -118,7 +118,7 @@ describe("activeProblemOf (the conclude-before-next-problem gate's fold)", () =>
 	it("thinking submissions keep it active (nudges never conclude)", () => {
 		const messages = [
 			...problemPose(),
-			newThinkingMessage("call_p1", false, "stuck at the second step"),
+			newThinkingMessage("call_p1", "stuck at the second step"),
 		];
 		assert.equal(activeProblemOf(messages)?.toolCallId, "call_p1");
 	});
@@ -193,52 +193,43 @@ describe("pendingProblemDismissalOf (the marker waiting for its synthesis)", () 
 // ── the input channel ────────────────────────────────────────────────────────
 
 describe("the thinking input", () => {
-	it("parses and appends the marker against the active problem", () => {
+	it("parses and appends the marker against the active problem (ONE lane)", () => {
 		const input = parseChatInput({
 			type: "thinking",
 			problemCallId: "call_p1",
-			commit: false,
 			text: "I think the inactivity constraint applies here",
 		});
 		assert.deepEqual(input, {
 			type: "thinking",
 			problemCallId: "call_p1",
-			commit: false,
 			text: "I think the inactivity constraint applies here",
 		});
 		const appends = inputAppends({ messages: problemPose() }, input);
 		assert.equal(appends.length, 1);
 		const marker = appends[0] as { customType: string; content: string; details: unknown };
 		assert.equal(marker.customType, "practice-thinking");
-		assert.match(marker.content, /Thinking trace \(working, not committed\):\n/);
+		// The single label (owner round 2, 2026-10-05): the register is read
+		// from the text by the agent, never declared by a button.
+		assert.match(marker.content, /Your thinking:\n/);
 		assert.deepEqual(marker.details, {
 			problemCallId: "call_p1",
-			commit: false,
 			text: "I think the inactivity constraint applies here",
 		});
 	});
 
-	it("commit=true carries the committed register", () => {
-		const appends = inputAppends(
-			{ messages: problemPose() },
-			{ type: "thinking", problemCallId: "call_p1", commit: true, text: "The answer is 42 because…" },
-		);
-		assert.match((appends[0] as { content: string }).content, /Committed answer:\n/);
-	});
-
 	it("400s against a stale or unknown problem call", () => {
 		assert.throws(
-			() => inputAppends({ messages: problemPose() }, { type: "thinking", problemCallId: "call_ghost", commit: true, text: "x" }),
+			() => inputAppends({ messages: problemPose() }, { type: "thinking", problemCallId: "call_ghost", text: "x" }),
 			/targets no active problem/,
 		);
 		assert.throws(
-			() => inputAppends({ messages: [] }, { type: "thinking", problemCallId: "call_p1", commit: true, text: "x" }),
+			() => inputAppends({ messages: [] }, { type: "thinking", problemCallId: "call_p1", text: "x" }),
 			/targets no active problem/,
 		);
 	});
 
 	it("empty text 400s at parse", () => {
-		assert.throws(() => parseChatInput({ type: "thinking", problemCallId: "c", commit: false, text: "  " }), /non-empty/);
+		assert.throws(() => parseChatInput({ type: "thinking", problemCallId: "c", text: "  " }), /non-empty/);
 	});
 });
 
@@ -289,11 +280,11 @@ describe("the dismiss-problem input (ask-style discard)", () => {
 
 describe("toLlmMessages (practice shapes)", () => {
 	it("the thinking marker flattens to a labeled user message", () => {
-		const out = toLlmMessages(asAgentMessages([newThinkingMessage("call_p1", true, "It is 42")]));
+		const out = toLlmMessages(asAgentMessages([newThinkingMessage("call_p1", "It is 42")]));
 		assert.equal(out.length, 1);
 		const user = out[0] as { role: string; content: Array<{ type: string; text: string }> };
 		assert.equal(user.role, "user");
-		assert.match(user.content[0]!.text, /^Committed answer:\nIt is 42$/);
+		assert.match(user.content[0]!.text, /^Your thinking:\nIt is 42$/);
 	});
 
 	it("the dismissal marker is UI-only (the synthesized pair carries the face)", () => {

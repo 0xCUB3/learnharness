@@ -24,7 +24,8 @@ import { ThinkingBlock } from "@/components/thinking-block";
 /** The practice-thinking marker's details (native-messages.ts). */
 export interface PracticeThinkingData {
 	problemCallId: string;
-	commit: boolean;
+	/** Legacy records (pre 2026-10-05) carry the old two-lane flag; ignored. */
+	commit?: boolean;
 	text: string;
 }
 
@@ -104,16 +105,8 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 }
 
 export function ThinkingCard({ data }: { data: PracticeThinkingData }) {
-	// The unified row (owner round, 2026-10-05): one style — collapsed
-	// arrival, 50%-italic quote block on expand. The register survives only
-	// in the label ("Your solution" when committed) and the data-commit
-	// flag for the tests.
-	return (
-		<ThinkingBlock
-			testId="thinking-card"
-			dataCommit={data.commit}
-			label={data.commit ? "Your solution" : "Your thinking"}
-			text={data.text}
-		/>
-	);
+	// The unified row (owner rounds, 2026-10-05): one style, one label —
+	// collapsed arrival, "Your thinking", 50%-italic quote block on expand.
+	// Legacy records' commit flag is deliberately unread (one lane now).
+	return <ThinkingBlock testId="thinking-card" label="Your thinking" text={data.text} />;
 }
