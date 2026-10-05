@@ -135,6 +135,50 @@ describe("the practice tool gating law", () => {
 	});
 });
 
+// ── target validation (the mastery-trace contract, owner round 9) ──────────
+
+describe("target validation — names normalize to ids, unknowns reject", () => {
+	const NODES = [
+		{ id: "n_parity", name: "Parity of a sum", statement: "The sum of two odds is even." },
+		{ id: "n_pairing", name: "Pairing", statement: "Pair elements to count parity." },
+	] as const;
+	const graphNodes = () => NODES;
+
+	it("a NAME target silently normalizes to the canonical id (the record carries ids)", async () => {
+		const healed = problemTool(createPracticeGate(ctxOf([])), graphNodes).prepareArguments!({
+			...PROBLEM_INPUT,
+			target: ["Parity of a sum", "pairing"],
+		}) as { target: string[] };
+		assert.deepEqual(healed.target, ["n_parity", "n_pairing"], "case-insensitive name → id, whole-graph set");
+	});
+
+	it("an id target passes through untouched (already canonical)", async () => {
+		const healed = problemTool(createPracticeGate(ctxOf([])), graphNodes).prepareArguments!({
+			...PROBLEM_INPUT,
+			target: ["n_parity"],
+		}) as { target: string[] };
+		assert.deepEqual(healed.target, ["n_parity"]);
+	});
+
+	it("an UNKNOWN target rejects with a one-line error and does NOT arm the gate", async () => {
+		const gate = createPracticeGate(ctxOf([]));
+		const tool = problemTool(gate, graphNodes);
+		const rejected = await tool.execute("call_x", { ...PROBLEM_INPUT, target: ["ghost-prop"] } as never);
+		assert.equal(rejected.isError, true);
+		assert.match((rejected.details as { problems: string[] }).problems[0]!, /ghost-prop/);
+		assert.match((rejected.details as { problems: string[] }).problems[0]!, /proposition ids from the session context/);
+		// honest activation (the BKT law): a rejected pose frees the slot —
+		// the next, valid pose goes through.
+		const valid = await tool.execute("call_y", { ...PROBLEM_INPUT, target: ["n_parity"] } as never);
+		assert.equal(valid.isError, undefined);
+	});
+
+	it("NO node source (the legacy/test wiring) = no validation, free strings ack", async () => {
+		const result = await problemTool(createPracticeGate(ctxOf([]))).execute("call_x", PROBLEM_INPUT as never);
+		assert.equal(result.isError, undefined);
+	});
+});
+
 // ── the registry + the agent ────────────────────────────────────────────────
 
 describe("the practice agent", () => {
