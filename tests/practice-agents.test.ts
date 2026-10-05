@@ -251,6 +251,20 @@ describe("practice prompt composition (own directory + the formatting appendix)"
 		assert.doesNotMatch(prompt, /predict/i);
 	});
 
+	it("the SHARED voice + accuracy compose (owner round 13): ONE law across every agent, and the stale line is dead", () => {
+		const prompt = composeInstructions("practice");
+		// accuracy: the shared chunk's research-tool reference (round 10 gave
+		// practice research — the old near-copy said "You have no research
+		// tool here", which was false)
+		assert.match(prompt, /one confidently-delivered hallucination poisons that/);
+		assert.match(prompt, /you have a `research` tool/);
+		assert.ok(!prompt.includes("no research tool here"), "the stale line is gone");
+		// the teacher composes the same shared chunks (one law)
+		const teacher = composeInstructions("teacher");
+		assert.match(teacher, /one confidently-delivered hallucination poisons that/);
+		assert.match(teacher, /Everything in this section deletes a default/);
+	});
+
 	it("the SHARED formatting guide composes (owner, 2026-10-04 late): LaTeX delimiters in every setting", () => {
 		const prompt = composeInstructions("practice");
 		// The delimiter law — practice must write \(...\)/\[...\] too.

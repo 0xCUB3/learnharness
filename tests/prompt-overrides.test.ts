@@ -178,8 +178,10 @@ describe("the source-derived segment list", () => {
 			[
 				"system-prompt.md",
 				"prober/10-probe-doctrine.md",
+				"shared/10-voice.md",
+				"shared/15-accuracy.md",
 				"shared/20-question-tools.md",
-			"shared/25-confidence.md",
+				"shared/25-confidence.md",
 				"shared/30-learner-files.md",
 				"shared/40-formatting.md",
 			],
@@ -196,11 +198,12 @@ describe("the source-derived segment list", () => {
 		// the shared fragments compose for BOTH agents, same path key.
 		assert.equal(teacher.some((s) => s.path === "shared/30-learner-files.md" && s.shared), true);
 		assert.equal(prober.some((s) => s.path === "shared/30-learner-files.md" && s.shared), true);
-		// The voice block (owner, interlude 2026-09-23) lives in the BASE now
-		// (moved out of shared/ 2026-09-27) — one base for both agents.
-		assert.equal(prober.some((s) => s.path === "shared/10-personality.md"), false);
-		assert.equal(teacher.some((s) => s.path === "shared/10-personality.md"), false);
-		assert.ok(prober[0].sourceText.includes("## Voice"), "the voice composes via the base");
+		// Voice + accuracy moved BACK to shared/ fragments (owner round 13,
+		// 2026-10-05): one law across every agent — including practice, whose
+		// near-copy had drifted stale ("You have no research tool here").
+		assert.equal(prober.some((s) => s.path === "shared/10-voice.md" && s.shared), true);
+		assert.equal(teacher.some((s) => s.path === "shared/10-voice.md" && s.shared), true);
+		assert.equal(prober.some((s) => s.path === "shared/15-accuracy.md" && s.shared), true);
 		// Tool MECHANICS are shared; question METHODOLOGY is phase-owned.
 		assert.equal(prober.some((s) => s.path.startsWith("teacher/")), false);
 		assert.equal(teacher.some((s) => s.path.startsWith("prober/")), false);
