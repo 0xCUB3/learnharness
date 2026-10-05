@@ -184,7 +184,13 @@ function post(chatId: string, input: unknown): Request {
 	});
 }
 
-function waitFor(cond: () => boolean, timeoutMs = 8000, what = "condition"): Promise<void> {
+/* 30s budget (owner round, 2026-10-05): under the FULL suite's parallel
+ * load the event loop starves and an 8s wall-clock budget expired before
+ * healthy conditions were ever observed — and a timed-out delivery leaked
+ * a late wake into the NEXT test (the respawn hook is module-global),
+ * poisoning even synchronous neighbors. waitFor returns the instant the
+ * condition holds, so the generous budget costs nothing when healthy. */
+function waitFor(cond: () => boolean, timeoutMs = 30_000, what = "condition"): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const started = Date.now();
 		const tick = () => {
