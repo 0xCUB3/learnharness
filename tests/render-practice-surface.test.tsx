@@ -114,6 +114,7 @@ describe("the practice transcript cards", () => {
 		assert.match(html, /data-testid="conclude-card"/);
 		assert.match(html, /Solved with hints/);
 		assert.match(html, /Pair them; each pair is even\./, "the committed solution, verbatim");
+		assert.match(html, /Model solution/); // the labeled hero (owner round 2)
 		assert.match(html, /Verdict:/);
 		assert.match(html, /The pairing came after R2\./);
 		// The verdict row renders AFTER the solution (the hero first).

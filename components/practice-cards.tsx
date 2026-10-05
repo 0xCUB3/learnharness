@@ -81,14 +81,21 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{OUTCOME_LABEL[outcome] ?? "Concluded"}
 			</div>
+			{/* LABELED SECTIONS (owner round 2, 2026-10-05): 'Solved' alone over
+			    unlabeled prose didn't read as the model solution — the hero now
+			    carries its own label, and the verdict section mirrors it. Same
+			    register as the quiz cards' section labels. */}
 			{reveal.length > 0 && (
-				<div className="lh-prose text-[15px]">
-					<MessageResponse>{reveal}</MessageResponse>
+				<div>
+					<div className="mb-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">Model solution</div>
+					<div className="lh-prose text-[15px]">
+						<MessageResponse>{reveal}</MessageResponse>
+					</div>
 				</div>
 			)}
 			{verdict.length > 0 && (
-				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
-					<span className="font-medium text-foreground">Verdict: </span>
+				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-foreground/50">
+					<span className="font-medium text-muted-foreground">Verdict: </span>
 					<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{verdict}</MessageResponse>
 				</div>
 			)}
