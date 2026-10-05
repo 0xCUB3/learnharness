@@ -150,7 +150,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				   verdict shows, but the explanation sits collapsed — viewable,
 				   never center stage. The teaching that follows resolves the
 				   prediction; THAT is the real explanation. */
-				<div className="mt-3" data-testid="tucked-explanation">
+				<div className="mt-2" data-testid="tucked-explanation">
 					<button
 						type="button"
 						onClick={() => setWhyOpen((v) => !v)}
@@ -168,7 +168,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			) : (
 				isQuiz &&
 				answer.explanation && (
-					<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-foreground/50">
+					<div className="mt-2 rounded-lg bg-muted py-2 text-sm text-foreground/50">
 						<span className="font-medium text-muted-foreground">Why: </span>
 						{/* The markdown wrapper must go truly inline — a block <p> after the
 						   "Why:" label created the oversized leading gap (owner's fix list). */}

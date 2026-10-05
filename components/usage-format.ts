@@ -39,6 +39,8 @@ export function prettyModel(id: string, qualified = false): string {
 	const short = bare.includes("/") ? bare.slice(bare.lastIndexOf("/") + 1) : bare;
 	const parts = short.split("-");
 	const trimmed = /^\d+$/.test(parts[parts.length - 1] ?? "") ? parts.slice(0, -1) : parts;
-	const pretty = trimmed.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+	// No auto-capitalization (owner round 4, 2026-10-05): model names
+	// render exactly as their providers write them.
+	const pretty = trimmed.join(" ");
 	return qualified && provider ? `${pretty} · ${provider}` : pretty;
 }

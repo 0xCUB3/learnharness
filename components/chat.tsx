@@ -1259,14 +1259,15 @@ export function Chat({
 										    User text renders plain — the model's LaTeX pipeline is not
 										    applied to learner-authored text ($ stays $, no surprises).
 										    Rendered WITHOUT the Message wrapper — that is the bubble. */
-										<div data-testid="user-message" className="my-1 w-full">
-											<div className="mb-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">You</div>
-											<div className="border-l-2 border-muted-foreground/30 pl-3 text-foreground">
-												<div className="lh-prose whitespace-pre-wrap">
+											<div data-testid="user-message" className="my-1 w-full border-l-2 border-muted-foreground/30 pl-[calc(1ch-2px)] font-ui text-xs">
+												{/* The rail GROUPS (owner round 4, 2026-10-05): the YOU heading
+												    sits INSIDE the rail, same mono-xs register and same 1ch
+												    rail as the thinking rows — one quote geometry. */}
+												<div className="font-medium uppercase tracking-wide text-muted-foreground">You</div>
+												<div className="lh-prose whitespace-pre-wrap text-foreground">
 													{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
 												</div>
 											</div>
-										</div>
 									) : (
 									<Message from="assistant" className="max-w-full">
 									<MessageContent className="w-full">

@@ -31,27 +31,31 @@ export function ThinkingBlock({
 }) {
 	const [open, setOpen] = useState(false); // arrives collapsed, always
 	return (
-		/* The rail GROUPS (owner correction, 2026-10-05): the label sits
-		   INSIDE the rail — the block reads as one quote, ownership clear
-		   from the rail alone, collapsed or expanded. Same shape as the
-		   user text ("You") row. */
+		/* The rail GROUPS and the rail IS THE MISSING CHARACTER (owner
+		   rounds, 2026-10-05): the heading sits INSIDE the rail, and the
+		   rail's full width (border + padding) is exactly ONE CHARACTER of
+		   the mono heading font — 'YOUR THINKING' is one char shorter than
+		   'AGENT THINKING', so with the user row offset by the rail and the
+		   agent row flush, the chevrons line up vertically. The heading
+		   register is the card eyebrows' small mono caps (text-xs = the
+		   11px rung). */
 		<div
 			data-testid={testId}
 			data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"}
-			className="lh-card-enter my-1 w-full border-l-2 border-muted-foreground/30 pl-3"
+			className="lh-card-enter my-1 w-full border-l-2 border-muted-foreground/30 pl-[calc(1ch-2px)] font-ui text-xs"
 		>
 			<button
 				type="button"
 				data-testid={testId ? `${testId}-trigger` : undefined}
 				onClick={() => setOpen((v) => !v)}
 				aria-expanded={open}
-				className="flex w-full items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground"
+				className="flex w-full items-center gap-2 font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
 			>
 				{label}
-				<ChevronDownIcon className={cn("size-4 transition-transform", open ? "rotate-180" : "rotate-0")} />
+				<ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open ? "rotate-180" : "rotate-0")} />
 			</button>
 			{open && (
-				<span className="lh-prose mt-1.5 block whitespace-pre-wrap italic text-foreground/50">{text}</span>
+				<span className="lh-prose mt-1.5 block whitespace-pre-wrap text-[15px] italic text-foreground/50">{text}</span>
 			)}
 		</div>
 	);
