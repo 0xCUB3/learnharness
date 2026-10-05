@@ -146,7 +146,7 @@ describe("render smoke tests", () => {
 		assert.match(html, /Why this answer\? What are you unsure about\?/, "placeholder invites, not apologizes");
 		assert.ok(!html.includes("optional"), "the field is never called optional");
 		assert.match(html, /Submit answer/, "send becomes Submit answer");
-		assert.match(html, /⌘\/Ctrl \+ ↵ submits/, "the ⌘/Ctrl+Enter shortcut is discoverable");
+		assert.match(html, /↵ submits · ⇧↵ newline/, "the standard chord is discoverable (owner round 5)");
 		// The v1 desync bug: options are buttons with ARIA roles, not native inputs.
 		assert.ok(!html.includes('type="radio"'), "no native radio inputs");
 		assert.ok(html.includes('role="radio"'), "button-based radio role present");

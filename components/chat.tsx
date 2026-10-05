@@ -1259,7 +1259,7 @@ export function Chat({
 										    User text renders plain — the model's LaTeX pipeline is not
 										    applied to learner-authored text ($ stays $, no surprises).
 										    Rendered WITHOUT the Message wrapper — that is the bubble. */
-											<div data-testid="user-message" className="my-1 w-full border-l-2 border-muted-foreground/30 pl-[calc(1ch-2px)] font-ui text-xs">
+											<div data-testid="user-message" className="my-1 w-full border-l-2 border-muted-foreground/30 pl-[calc(3ch-2px)] font-ui text-xs">
 												{/* The rail GROUPS (owner round 4, 2026-10-05): the YOU heading
 												    sits INSIDE the rail, same mono-xs register and same 1ch
 												    rail as the thinking rows — one quote geometry. */}
@@ -1365,10 +1365,10 @@ export function Chat({
 							    entered by external discovery (wake) / the poll
 							    fallback. Never collapsible itself. */}
 							{(status === "submitted" || turnInFlight) && (
-								<span className="flex items-center gap-2">
+								<span className="flex items-center gap-2 font-ui text-xs font-medium uppercase tracking-wide text-muted-foreground">
 									<BrailleSpinner label="Thinking" />
-									<Shimmer duration={1} className="text-sm">
-										Thinking…
+									<Shimmer duration={1}>
+										THINKING…
 									</Shimmer>
 								</span>
 							)}

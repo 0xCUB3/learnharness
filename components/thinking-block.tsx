@@ -33,16 +33,18 @@ export function ThinkingBlock({
 	return (
 		/* The rail GROUPS and the rail IS THE MISSING CHARACTER (owner
 		   rounds, 2026-10-05): the heading sits INSIDE the rail, and the
-		   rail's full width (border + padding) is exactly ONE CHARACTER of
-		   the mono heading font — 'YOUR THINKING' is one char shorter than
-		   'AGENT THINKING', so with the user row offset by the rail and the
-		   agent row flush, the chevrons line up vertically. The heading
+		   rail's full width (border + padding) is exactly THREE CHARACTERS of
+		   the mono heading font — 'YOUR THINKING' is three chars shorter
+		   than 'AGENT'S THINKING', so with the user row offset by the rail
+		   and the agent row flush, the chevrons line up vertically. Three
+		   (not one, owner round 5): the wider gap reads better than the
+		   cramped single-char rail. The heading
 		   register is the card eyebrows' small mono caps (text-xs = the
 		   11px rung). */
 		<div
 			data-testid={testId}
 			data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"}
-			className="lh-card-enter my-1 w-full border-l-2 border-muted-foreground/30 pl-[calc(1ch-2px)] font-ui text-xs"
+			className="lh-card-enter my-1 w-full border-l-2 border-muted-foreground/30 pl-[calc(3ch-2px)] font-ui text-xs"
 		>
 			<button
 				type="button"

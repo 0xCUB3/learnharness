@@ -820,9 +820,10 @@ function QuestionDockForm({
 									onEscape();
 									return;
 								}
-								// ⌘↵ on macOS, Ctrl↵ elsewhere — the Gmail convention; plain
-								// Enter stays a newline (this field is for dumping).
-								if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+								// THE STANDARD CHORD (owner round 5, 2026-10-05): Enter
+								// submits, Shift+Enter is a newline, ⌘/Ctrl+Enter works
+								// too — identical to the practice dock and the composer.
+								if (e.key === "Enter" && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
 									e.preventDefault();
 									submit();
 								}
@@ -838,11 +839,9 @@ function QuestionDockForm({
 						/>
 					)}
 					<div className="flex items-center justify-between gap-2 p-1">
-						{qd.mode !== "text" && (
-							<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">
-								⌘/Ctrl + ↵ submits
-							</span>
-						)}
+						<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">
+								↵ submits · ⇧↵ newline
+						</span>
 						<Button
 							type="submit"
 							disabled={!canSubmit}
