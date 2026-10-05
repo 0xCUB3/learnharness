@@ -17,6 +17,12 @@
 import { Type, type Static } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { resolveTargetId } from "../../core/chains.ts";
+import { readTool } from "./read.ts";
+import { lsTool } from "./ls.ts";
+import { findTool } from "./find.ts";
+import { grepTool } from "./grep.ts";
+import { jobTools, type JobToolContext } from "./jobs.ts";
+import { proberGraphTools, type GraphToolContext } from "./graph.ts";
 import { activeProblemOf } from "../../core/native-messages.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { concludeResult, invalidInputResult, problemResult } from "../tool-execute.ts";
@@ -115,6 +121,12 @@ export interface PracticeToolContext {
 	 *  not just the session's picks, so pickless sessions and future
 	 *  graph-tools poses stay valid. Absent (tests) = no validation. */
 	graphNodes?: () => ReadonlyArray<Pick<import("../../core/contracts/graph.ts").GraphNode, "id" | "name">>;
+	/** THE RARELY-NEEDED SET (owner round 10, 2026-10-05): the map readers
+	 *  behind the SAME settings gate as the prober's (graphToolsEnabled at
+	 *  the composition root); the research + pdf jobs with the honest
+	 *  searchAvailable drop. Each absent (tests) = absent from the registry. */
+	graph?: GraphToolContext;
+	jobs?: JobToolContext;
 }
 
 /** TURN-SCOPED GATE STATE (the BKT incident, 2026-10-05): the gates used
@@ -276,8 +288,23 @@ export function concludeTool(gate: PracticeGate): AgentTool<typeof concludeInput
 export function practiceTools(ctx: PracticeToolContext): Record<string, AgentTool<any>> {
 	// ONE gate per turn, shared by both tools — the intra-turn truth.
 	const gate = createPracticeGate(ctx);
+	// THE RARELY-NEEDED SET (owner round 10): read/ls/find/grep over the
+	// learner's files (always — the same read-only set the teacher and
+	// prober carry), the research + pdf jobs (research honestly absent
+	// when no search engine is live; demo/visual stay teach-only), and
+	// the prober's map readers when the settings gate opened. None are
+	// toggle-filtered: problem/conclude are the session; these are
+	// exceptions the doctrine says to reach for rarely.
+	const jobs = ctx.jobs ? jobTools(ctx.jobs) : null;
 	return {
 		problem: problemTool(gate, ctx.graphNodes),
 		conclude: concludeTool(gate),
+		read: readTool,
+		ls: lsTool,
+		find: findTool,
+		grep: grepTool,
+		...(jobs?.research ? { research: jobs.research } : {}),
+		...(jobs ? { pdf: jobs.pdf! } : {}),
+		...(ctx.graph ? proberGraphTools(ctx.graph) : {}),
 	};
 }

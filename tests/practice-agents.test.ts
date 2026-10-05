@@ -182,9 +182,26 @@ describe("target validation — names normalize to ids, unknowns reject", () => 
 // ── the registry + the agent ────────────────────────────────────────────────
 
 describe("the practice agent", () => {
-	it("registry is problem + conclude ONLY — no question, plan, or job tools", () => {
+	it("bare registry: the session pair + the learner-filesystem set — no question, plan, or lesson tools", () => {
 		const tools = practiceTools(ctxOf([]));
-		assert.deepEqual(Object.keys(tools).sort(), ["conclude", "problem"]);
+		assert.deepEqual(
+			Object.keys(tools).sort(),
+			["conclude", "find", "grep", "ls", "problem", "read"],
+		);
+	});
+
+	it("THE RARELY-NEEDED SET (owner round 10): jobs + map readers compose in when their roots are passed", () => {
+		const jobs = { chatId: "c1", jobStore: null as never, spawn: (() => {}) as never, searchAvailable: () => false };
+		const graph = { chatStore: null as never, graphStore: null as never };
+		const tools = practiceTools({ ...ctxOf([]), jobs, graph });
+		// research honestly absent (no search engine live); pdf always; the
+		// prober's two map readers behind the settings gate.
+		assert.deepEqual(
+			Object.keys(tools).sort(),
+			["conclude", "find", "grep", "list_propositions", "list_sessions", "ls", "pdf", "problem", "read"],
+		);
+		const withSearch = practiceTools({ ...ctxOf([]), jobs: { ...jobs, searchAvailable: () => true }, graph });
+		assert.ok(withSearch.research, "a live engine adds research");
 	});
 
 	it("constructs with exactly the two practice tools", () => {
