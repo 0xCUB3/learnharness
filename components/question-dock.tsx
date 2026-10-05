@@ -86,6 +86,11 @@ export interface QuestionDockProps {
 	 *  during the reading; the dock reclaims on reveal. Default true (probe
 	 *  questions, predictions, old callers). */
 	dictationClaim?: boolean;
+	/** Compaction is running for this chat (owner round 14): the answer
+	 *  POST would block on the server's compaction gate — disable submit
+	 *  and say so in the hint row. The server registry is the real gate;
+	 *  this is the affordance. */
+	compactionRunning?: boolean;
 }
 
 export function QuestionDock({
@@ -99,6 +104,7 @@ export function QuestionDock({
 	onEscape,
 	phase = "probe",
 	dictationClaim = true,
+	compactionRunning = false,
 }: QuestionDockProps) {
 	// Parse, don't cast (src/core/tool-parts.ts): the model authored this
 	// input, and only the schema the tool declared vouches for its shape.
@@ -140,6 +146,7 @@ export function QuestionDock({
 					onSubmit={onSubmit}
 					onEscape={onEscape}
 					dictationClaim={dictationClaim}
+					compactionRunning={compactionRunning}
 				/>
 			</div>
 		</>
@@ -228,6 +235,7 @@ function QuestionDockForm({
 	onSubmit,
 	onEscape,
 	dictationClaim = true,
+	compactionRunning = false,
 }: Omit<QuestionDockProps, "expanded" | "onExpand" | "reveal">) {
 	const kind = toolQuestionKind(toolName);
 
@@ -340,7 +348,7 @@ function QuestionDockForm({
 			: sel.dontKnow || (sel.otherSelected && other.trim().length > 0) || sel.selected.size > 0;
 
 	const submit = () => {
-		if (!canSubmit) return;
+		if (!canSubmit || compactionRunning) return;
 		/* FINISH DICTATION FIRST (owner, 2026-10-01): Enter may arrive while
 		 * a run is live with reasoning still in Deepgram's hands. Stop the
 		 * run, let the last finals land in the target field, and only then
@@ -846,11 +854,11 @@ function QuestionDockForm({
 					)}
 					<div className="flex items-center justify-between gap-2 p-1">
 						<span aria-hidden className="pl-1.5 text-xs text-muted-foreground">
-								↵ submits · ⇧↵ newline
+								{compactionRunning ? "compacting session…" : "↵ submits · ⇧↵ newline"}
 						</span>
 						<Button
 							type="submit"
-							disabled={!canSubmit}
+							disabled={!canSubmit || compactionRunning}
 							className="ml-auto h-9 rounded-[6px] px-3.5 text-sm font-medium"
 						>
 							Submit answer

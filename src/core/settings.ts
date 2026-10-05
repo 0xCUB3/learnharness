@@ -575,8 +575,9 @@ function sanitizeGraph(raw: Record<string, unknown>): GraphSettings {
 
 /** clamp-never-reject (the sanitizer's discipline): a finite positive
  *  number floors to COMPACTION_THRESHOLD_FLOOR, anything else drops (the
- *  factory default resolves at read time). */
-const COMPACTION_THRESHOLD_FLOOR = 32_000;
+ *  factory default resolves at read time). Exported for the PUT parser's
+ *  reject-with-rationale (the graph chunk-budget precedent). */
+export const COMPACTION_THRESHOLD_FLOOR = 32_000;
 
 function sanitizeCompaction(raw: Record<string, unknown>): CompactionSettings {
 	const out: CompactionSettings = {};

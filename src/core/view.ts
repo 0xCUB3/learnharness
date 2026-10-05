@@ -35,6 +35,7 @@
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
 import { modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL } from "./native-messages.ts";
+import { activeCompactionOf, type CompactionDetails } from "./compaction.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 import type { SubagentArtifactData, SubagentResultMeta } from "./contracts/jobs.ts";
 import type { PlanBlockData } from "./contracts/chat.ts";
@@ -145,8 +146,29 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 		return undefined;
 	};
 
+	// The active compaction (owner round 14): the fold emits the CUT
+	// DIVIDER — the longer, at-the-seam marker — immediately BEFORE the
+	// first kept message, so the transcript shows exactly where history
+	// was summarized away. Everything before it stays visible to the
+	// user (full history is never hidden); only the MODEL's context jumps.
+	const compaction = activeCompactionOf(messages);
+
 	for (const m of messages) {
 		const role = (m as { role?: string }).role;
+
+		if (compaction && m.id === compaction.details.firstKeptMessageId) {
+			out.push({
+				id: `cut_${compaction.id}`,
+				role: "user",
+				parts: [
+					{
+						type: "data-compaction-cut",
+						id: `cc_${compaction.id}`,
+						data: { content: compaction.content, details: compaction.details },
+					},
+				],
+			});
+		}
 
 		if (role === "user") {
 			const content = m.content as string | Array<{ type: string; text?: string }>;
@@ -383,6 +405,25 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			// UI-only (the ask-style dismissal): the synthesized conclude
 			// pair — which rides the NEXT input — carries the record's face.
 			return;
+		case "compaction": {
+			// THE MOMENT DIVIDER (owner round 14): minimal centered small
+			// text at the compaction moment — where the user currently is
+			// (the marker appends at the record's tail). Clicking opens the
+			// full summary. The cut divider is emitted by the fold loop at
+			// the kept boundary (see projectView).
+			out.push({
+				id: marker.id,
+				role: "user",
+				parts: [
+					{
+					type: "data-compaction",
+					id: `cm_${marker.id}`,
+					data: { content: marker.content, details: marker.details as CompactionDetails },
+				},
+				],
+			});
+			return;
+		}
 		case "plan-block": {
 			// No message of its own: splice into the preceding assistant
 			// group, IN FLOW after the last successful plan_init call.

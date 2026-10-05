@@ -57,8 +57,11 @@ import { useSettingsSaved } from "@/components/settings-signal";
 import { defaultOrderLevel, populateLevel } from "@/components/thinking-default";
 import type React from "react";
 import {
+	COMPACTION_THRESHOLD_FLOOR,
 	MODEL_SLOTS,
+	resolveSettings,
 	type AgentSettings,
+	type CompactionSettings,
 	type GraphSettings,
 	type ModelCatalogEntry,
 	type ModelSlotName,
@@ -67,7 +70,7 @@ import {
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
 import { cn } from "@/lib/utils";
-import { SettingsGroup, SettingsRow, Toggle } from "./controls.tsx";
+import { SettingsGroup, SettingsRow, Toggle, CommitInput } from "./controls.tsx";
 import { ModelMenuList, ThinkingMenuList } from "./model-menu";
 
 /** One slot's display identity — the tier's roster as the row hint rides
@@ -289,8 +292,10 @@ export function AgentSection({
 	agent,
 	models,
 	graph,
+	compaction,
 	onSectionChange,
 	onModelsChange,
+	onCompactionChange,
 }: {
 	agent: AgentSettings | undefined;
 	/** The `models` section (slot pins — engine-level, PUT /api/settings/models). */
@@ -299,10 +304,15 @@ export function AgentSection({
 	 *  master switch (graph.enabled off dims + disables the row; the
 	 *  effective gate is server-side, per-turn fresh). */
 	graph: GraphSettings | undefined;
+	/** The `compaction` section — its own PUT (the threshold is engine
+	 *  behavior, not an agent-section key; owner round 14, Agent tab). */
+	compaction: CompactionSettings | undefined;
 	/** Writes the composed WHOLE agent section (replace-PUT discipline). */
 	onSectionChange: (next: AgentSettings) => void;
 	/** Writes the composed models section (slots — replace-PUT discipline). */
 	onModelsChange: (next: ModelsSettings) => void;
+	/** Writes the whole compaction section (replace-PUT discipline). */
+	onCompactionChange: (next: CompactionSettings) => void;
 }) {
 	const [catalog, setCatalog] = useState<ModelCatalogEntry[] | null>(null);
 	/** The three tiers' resolved pins — GET /api/models `slots`. The rows'
@@ -599,6 +609,13 @@ export function AgentSection({
 
 
 
+	// Resolved through the SAME core resolver the server's effective
+	// settings use (the GraphSection precedent): the hint and placeholder
+	// report exactly the number the trigger waits for.
+	const resolvedCompaction = resolveSettings(
+		compaction === undefined ? null : { version: 1, compaction },
+	).compaction;
+
 	return (
 		<>
 			<SettingsGroup label="Models" testid="group-models">
@@ -842,6 +859,39 @@ export function AgentSection({
 						</SettingsRow>
 					);
 				})()}
+			</SettingsGroup>
+
+			<SettingsGroup label="Context" testid="group-context">
+				<SettingsRow
+					label="Compaction threshold"
+					hint={`${resolvedCompaction.thresholdTokens} tok`}
+					testid="compaction-row-threshold"
+				>
+					<CommitInput
+						type="number"
+						value={String(compaction?.thresholdTokens ?? "")}
+						placeholder={String(resolvedCompaction.thresholdTokens)}
+						ariaLabel="compaction threshold"
+						testid="input-compaction-threshold"
+						onCommit={(v) => {
+							// Empty = factory default (the budget row's discipline):
+							// absence is the unset for numbers.
+							if (v === "") {
+								onCompactionChange({ ...compaction, thresholdTokens: undefined });
+								return;
+							}
+							const n = Number(v);
+							if (!Number.isFinite(n) || n <= 0) return; // bad input: no write
+							// Mirror the server floor (anti-churn: each compaction
+							// keeps a ~20k-token tail); no ceiling — the effective
+							// trigger is min(threshold, contextWindow − 16k) anyway.
+							onCompactionChange({
+								...compaction,
+								thresholdTokens: Math.max(COMPACTION_THRESHOLD_FLOOR, Math.round(n)),
+							});
+						}}
+					/>
+				</SettingsRow>
 			</SettingsGroup>
 
 			<SettingsGroup label="System prompts" testid="group-prompts">

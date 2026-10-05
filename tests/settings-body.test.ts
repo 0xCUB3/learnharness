@@ -14,6 +14,7 @@ import {
 	parseModelsSettingsBody,
 	parseAppearanceSettingsBody,
 	parseGeneralSettingsBody,
+	parseCompactionSettingsBody,
 	parseGraphSettingsBody,
 	SETTINGS_SECTIONS,
 } from "../src/server/settings-body.ts";
@@ -194,9 +195,41 @@ describe("parseGraphSettingsBody", () => {
 	});
 });
 
+describe("parseCompactionSettingsBody (owner round 14)", () => {
+	it("parses a threshold; absent = the empty section (factory default at resolution)", () => {
+		const r = parseCompactionSettingsBody({ thresholdTokens: 120000 });
+		assert.ok(r.ok);
+		assert.deepEqual(r.settings, { thresholdTokens: 120000 });
+		const none = parseCompactionSettingsBody({});
+		assert.ok(none.ok);
+		assert.deepEqual(none.settings, {});
+	});
+	it("floors to integers", () => {
+		const r = parseCompactionSettingsBody({ thresholdTokens: 120000.9 });
+		assert.ok(r.ok);
+		assert.equal(r.settings.thresholdTokens, 120000);
+	});
+	it("rejects below the 32k floor with the anti-churn rationale", () => {
+		const r = parseCompactionSettingsBody({ thresholdTokens: 20_000 });
+		assert.ok(!r.ok);
+		assert.match(r.error ?? "", /at least 32000/);
+		assert.match(r.error ?? "", /churn/);
+	});
+	it("rejects non-numbers", () => {
+		const r = parseCompactionSettingsBody({ thresholdTokens: "big" });
+		assert.ok(!r.ok);
+		assert.match(r.error ?? "", /must be a number/);
+	});
+});
+
 describe("SETTINGS_SECTIONS (the route's section map)", () => {
-	it("maps exactly the six record sections", () => {
-		assert.deepEqual(Object.keys(SETTINGS_SECTIONS), ["general", "chat", "agent", "appearance", "graph", "models"]);
+	it("maps exactly the seven record sections", () => {
+		// compaction joined (owner round 14): its own section PUT — the
+		// threshold is engine behavior, not an agent-section key.
+		assert.deepEqual(
+			Object.keys(SETTINGS_SECTIONS),
+			["general", "chat", "agent", "appearance", "graph", "compaction", "models"],
+		);
 	});
 });
 

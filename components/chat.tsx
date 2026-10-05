@@ -43,6 +43,12 @@ import { TopBar } from "@/components/top-bar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsage } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
+import {
+	CompactionCutDivider,
+	CompactionMomentDivider,
+	CompactionSummaryDialog,
+	type CompactionDividerData,
+} from "@/components/compaction-divider";
 import { CoverageRing } from "@/components/extraction-coverage";
 import {
 	activeProblemOf,
@@ -613,7 +619,14 @@ export function Chat({
 	// a pending question still owns the interaction (the dock replaces the
 	// composer, and there is no live turn to steer anyway — questions end
 	// turns).
-	const canSend = (text.trim().length > 0 || dictation.active) && !pending && !activeProblem;
+	// Compaction (owner round 14): the RUNNING state — compaction-changed
+	// flips it; the send paths, canSend, and the docks gate on it (the
+	// server's registry mutex is the structural gate; this is the
+	// affordance). The summary dialog state rides with it.
+	const [compacting, setCompacting] = useState(false);
+	const [compactionSummary, setCompactionSummary] = useState<CompactionDividerData | null>(null);
+	const canSend =
+		(text.trim().length > 0 || dictation.active) && !pending && !activeProblem && !compacting;
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
@@ -722,6 +735,7 @@ export function Chat({
 	// popup) mount INSIDE the session-area div — both are session-scoped, so
 	// the drag bar stays sharp and draggable while a focus owns the area.
 	const [mermaidFocus, setMermaidFocus] = useState<string | null>(null);
+
 	// Overlay mirrors for the layered-Esc gate (owner 2026-10-04): the
 	// lh:kbd-abort-turn handler reads these at EVENT time — declared here
 	// beside their states, consumed below wherever the states live.
@@ -995,6 +1009,14 @@ export function Chat({
 		// Fully idle — a turn we never saw (every window missed): adopt now.
 		void syncFromServer();
 	});
+	useServerEvent("compaction-changed", (p) => {
+		// The settle-kick's background summary: while it runs, sends gate
+		// (the next turn's server-side ensureCompacted awaits it anyway —
+		// this only keeps the affordance honest). On finish, record-changed
+		// (emitted by the compaction write itself) carries the marker in.
+		if (p.chatId !== chatId) return;
+		setCompacting(p.running);
+	});
 	useServerEvent("record-changed", (p) => {
 		// The silent dismissal write (A2, 2026-10-03): no turn ever ran, so
 		// only the record moved. Other tabs and post-error windows adopt;
@@ -1008,7 +1030,7 @@ export function Chat({
 	});
 
 	const onSend = () => {
-		if (pending) return;
+		if (pending || compacting) return;
 		/* FINISH DICTATION FIRST (owner, 2026-10-01): a learner who keeps
 		 * talking right through Enter must not lose the tail — stop the run,
 		 * let the last finals land in the composer, then send the REF value
@@ -1020,7 +1042,7 @@ export function Chat({
 		void dictation.finish().then(doSteerOrSend);
 	};
 	const doSend = () => {
-		if (busy || pending) return;
+		if (busy || pending || compacting) return;
 		const t = textRef.current.trim();
 		if (!t) return;
 		draftRef.current = t; // the refusal flow's preserve-and-replay seam
@@ -1038,7 +1060,7 @@ export function Chat({
 	 * time the send's POST resolved, so the steer lands. Idle takes the
 	 * plain send; a raced settle 409s and falls back to exactly that. */
 	const doSteerOrSend = () => {
-		if (pending) return;
+		if (pending || compacting) return;
 		const t = textRef.current.trim();
 		if (!t) return;
 		if (busy) {
@@ -1227,6 +1249,22 @@ export function Chat({
 										switch (part.type) {
 											case "data-graph-context":
 												return <GraphContextCard key={pi} data={part.data as GraphContextData} />;
+											case "data-compaction":
+												return (
+													<CompactionMomentDivider
+														key={pi}
+														data={part.data as CompactionDividerData}
+														onOpen={() => setCompactionSummary(part.data as CompactionDividerData)}
+													/>
+												);
+											case "data-compaction-cut":
+												return (
+													<CompactionCutDivider
+														key={pi}
+														data={part.data as CompactionDividerData}
+														onOpen={() => setCompactionSummary(part.data as CompactionDividerData)}
+													/>
+												);
 											case "data-practice-thinking":
 												return <ThinkingCard key={pi} data={part.data as PracticeThinkingData} />;
 											default:
@@ -1418,6 +1456,7 @@ export function Chat({
 				<DockOverlay
 					pending={pending}
 					practice={activeProblem}
+					compactionRunning={compacting}
 					onSubmitThinking={submitThinking}
 					chatId={chatId}
 					plan={hasPlan ? <PlanMarginalia messages={messages} /> : undefined}
@@ -1491,6 +1530,7 @@ export function Chat({
 				)}
 				{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
 				<AbortTurnDialog mode={abortAsk} onClose={() => setAbortAsk(null)} onConfirm={confirmAbort} busy={busy} />
+				<CompactionSummaryDialog summary={compactionSummary} onClose={() => setCompactionSummary(null)} />
 				</div>
 			</div>
 		</div>
@@ -1632,6 +1672,7 @@ export function shouldStampGeometryMute(nextH: number, prevH: number, pending: b
 function DockOverlay({
 	pending,
 	practice,
+	compactionRunning,
 	onSubmitThinking,
 	requiresReveal,
 	readingThinking,
@@ -1650,6 +1691,9 @@ function DockOverlay({
 	queuedSteers,
 }: {
 	pending: ReturnType<typeof findPendingToolCall>;
+	/** Compaction running for this chat (round 14) — the docks' submit
+	 *  affordance gate (the server's registry is the real one). */
+	compactionRunning: boolean;
 	/** The ACTIVE practice problem (practice sessions, 2026-10-04):
 	 *  {toolCallId, input} — dock ownership exactly like a pending
 	 *  question (the composer is replaced); null in teaching sessions. */
@@ -2067,6 +2111,7 @@ function DockOverlay({
 									onSubmit={onSubmitAnswer}
 									onEscape={dictationCancel}
 									dictationClaim={!revealPending}
+									compactionRunning={compactionRunning}
 								/>
 							) : practice ? (
 								<PracticeDock
@@ -2079,6 +2124,7 @@ function DockOverlay({
 									}}
 									onSubmit={onSubmitThinking}
 									onEscape={dictationCancel}
+									compactionRunning={compactionRunning}
 								/>
 							) : (
 								composer
