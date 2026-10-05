@@ -143,7 +143,11 @@ export function effectiveThresholdTokens(settingTokens: number | undefined, cont
 // ─── the estimate over the ACTIVE projection ────────────────────────────────
 
 /** The projected context estimate: what the next LLM call would carry —
- *  toLlmMessages output (cut honored) + the system prompt. chars/4. */
+ *  toLlmMessages output (cut honored) + the system prompt. The record
+ *  path carries no leading system message (settleWith filters it), so
+ *  the chrome rides as the additive term instead: prompt text here,
+ *  tool declarations absorbed by the 16k reserve (the declarations are
+ *  a few k and stable per session). chars/4. */
 export function projectedContextTokens(messages: readonly LhMessage[], systemPromptTokens: number): number {
 	return estimateTokens(toLlmMessages(messages as readonly AgentMessage[]) as unknown as readonly LhMessage[]) + systemPromptTokens;
 }

@@ -491,8 +491,23 @@ export function toLlmMessages(messages: readonly AgentMessage[]): Message[] {
 			};
 		}
 	}
-	const out: Message[] = head ? [head] : [];
-	for (let i = start; i < messages.length; i++) {
+	// THE LEADING SYSTEM MESSAGE IS REQUEST CHROME, NEVER COMPACTABLE
+	// PAYLOAD (the OpenRouter no-tools incident, owner 2026-10-05):
+	// pi-agent-core's Agent seeds a SystemMessage carrying the system
+	// prompt AND the tool declarations at state.messages[0]
+	// (createInitialSystemMessage — "messages declare the provider-visible
+	// loadout"). The record never persists it (ui-stream's settleWith
+	// filters the role), so RECORD-path callers never see it — but the
+	// Agent's convertToLlm DOES. The cut slices the RECORD's history;
+	// when [0] is the chrome it must carry through AHEAD of the
+	// compaction head, exactly as pi's own prepareRequest re-applies
+	// context.systemPrompt + context.tools around its projection.
+	const leading =
+		(messages[0] as { role?: string } | undefined)?.role === "system" ? (messages[0] as Message) : null;
+	const out: Message[] = [];
+	if (leading) out.push(leading);
+	if (head) out.push(head);
+	for (let i = leading ? Math.max(start, 1) : start; i < messages.length; i++) {
 		const m = messages[i]!;
 		const role = (m as { role?: string }).role;
 		if (role === "custom") {
