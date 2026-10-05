@@ -237,13 +237,15 @@ export function ChainTableBody({
 
 	return (
 		<div data-testid="chain-table" className="relative flex h-full min-h-0 flex-col">
-			{/* THE shared top bar (standardization ruling): title at the standard
-			    size, drag mechanics, sidebar reopen, traffic-light gutter — the
-			    same element as every chat surface. Search + close
-			    carve out with lh-no-drag (the mask law: later in the DOM). */}
+			{/* THE shared top bar (standardization ruling): drag mechanics,
+			    sidebar reopen, traffic-light gutter — the same element as every
+			    chat surface. NO TITLE (owner round 11, 2026-10-05): the serif
+			    title register is RESERVED — it always names a session; the
+			    chain table names nothing, so its bar carries counts + search +
+			    close only. Search + close carve out with lh-no-drag (the mask
+			    law: later in the DOM). */}
 			<TopBar>
-				<span className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">Chains</span>
-				<span className="shrink-0 text-xs text-muted-foreground">
+				<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
 					{chains.length} {chains.length === 1 ? "chain" : "chains"} · {nodes.length} {nodes.length === 1 ? "node" : "nodes"}
 				</span>
 				<div className="relative shrink-0">

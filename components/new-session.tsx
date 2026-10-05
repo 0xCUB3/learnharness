@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
-import { TopBar } from "@/components/top-bar";
+import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
@@ -144,17 +144,19 @@ export function DraftShell({
 		}
 	}, [dictation.active]);
 	return (
-		<div className="flex h-dvh">
+		/* CHROME-LESS CREATION SURFACE (owner round 11, 2026-10-05): the
+		 * drafts join home's register — no TopBar, no title (the serif title
+		 * always names a session; a draft has none). Home's proven pattern
+		 * verbatim: a drag mask first in the DOM, a floating reopen toggle
+		 * (the only pointer-events-auto spot), the empty state carrying the
+		 * orientation. The chain picker then owns the column top exactly
+		 * like the graph view's — no stacked bars. */
+		<div className="relative flex h-dvh">
+			{/* Window-drag strip — deliberately FIRST in the DOM (the mask
+			    law: no-drag subtraction resolves by DOM order, so every
+			    carved control later in the tree subtracts correctly). */}
+			<div className="lh-drag absolute inset-x-0 top-0 h-13" aria-hidden="true" />
 			<div className="flex min-w-0 flex-1 flex-col">
-				{/* The shared top bar (standardization ruling, 2026-09-29): one
-			    element, every surface — h-15, drag, sidebar reopen, lights
-			    gutter. h-15 (60px) matches the sidebar's wordmark band. */}
-			<TopBar>
-				<div className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">
-					{mode === "practice" ? "New practice session" : "New session"}
-				</div>
-			</TopBar>
-
 				<div className="relative flex min-h-0 flex-1">
 					{/* The pointer-events pattern (953b22b): the sticky wrapper is
 					    pointer-events-none so nothing here blocks the empty-state
@@ -237,6 +239,14 @@ export function DraftShell({
 					{overlay}
 				</div>
 			</div>
+			{/* The floating reopen toggle — pointer-events-none except the
+			    toggle itself (home's pattern), painted AFTER the overlay's
+			    column so nothing of it blocks the canvas area. */}
+			<header className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-2">
+				<div className="pointer-events-auto">
+					<SidebarToggle />
+				</div>
+			</header>
 		</div>
 	);
 }
