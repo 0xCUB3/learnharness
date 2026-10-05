@@ -86,7 +86,7 @@ describe("stats bar", () => {
 		// qualified: the provider rides as a quiet suffix — federation makes
 		// the same model via two providers different bookkeeping
 		assert.equal(prettyModel("openrouter:z-ai/glm-5.3-flash", true), "glm 5.3 flash · openrouter");
-		assert.equal(prettyModel("openai:gpt-5.2", true), "Gpt 5.2 · openai");
+		assert.equal(prettyModel("openai:gpt-5.2", true), "gpt 5.2 · openai");
 		// unqualified on a qualified stamp: provider silently dropped (old shape)
 		assert.equal(prettyModel("openrouter:z-ai/glm-5.3-flash"), "glm 5.3 flash");
 		// qualified on a bare id: no suffix invented
