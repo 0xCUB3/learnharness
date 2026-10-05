@@ -31,7 +31,15 @@ export function ThinkingBlock({
 }) {
 	const [open, setOpen] = useState(false); // arrives collapsed, always
 	return (
-		<div data-testid={testId} data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"} className="lh-card-enter my-1 w-full">
+		/* The rail GROUPS (owner correction, 2026-10-05): the label sits
+		   INSIDE the rail — the block reads as one quote, ownership clear
+		   from the rail alone, collapsed or expanded. Same shape as the
+		   user text ("You") row. */
+		<div
+			data-testid={testId}
+			data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"}
+			className="lh-card-enter my-1 w-full border-l-2 border-muted-foreground/30 pl-3"
+		>
 			<button
 				type="button"
 				data-testid={testId ? `${testId}-trigger` : undefined}
@@ -43,9 +51,7 @@ export function ThinkingBlock({
 				<ChevronDownIcon className={cn("size-4 transition-transform", open ? "rotate-180" : "rotate-0")} />
 			</button>
 			{open && (
-				<div className="mt-1.5 border-l-2 border-muted-foreground/30 pl-3">
-					<span className="lh-prose block whitespace-pre-wrap italic text-foreground/50">{text}</span>
-				</div>
+				<span className="lh-prose mt-1.5 block whitespace-pre-wrap italic text-foreground/50">{text}</span>
 			)}
 		</div>
 	);

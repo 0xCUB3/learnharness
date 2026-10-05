@@ -292,6 +292,11 @@ describe("render smoke tests", () => {
 		// trigger row only — the thinking text is one click away, never loud.
 		assert.ok(html.includes('data-testid="your-thinking-trigger"'), "the trigger row");
 		assert.ok(html.includes('aria-expanded="false"'), "arrives collapsed");
+		// THE RAIL GROUPS (owner correction): the label sits INSIDE the rail —
+		// ownership readable from the rail alone, collapsed or expanded.
+		const railAt = html.indexOf("border-l-2");
+		const trigAt = html.indexOf("your-thinking-trigger");
+		assert.ok(railAt !== -1 && railAt < trigAt, "the rail opens before the label (same quote)");
 		assert.ok(!html.includes("brightness isn&#x27;t distance"), "the text is hidden until expanded");
 		assert.ok(!html.includes("Note:"), "no longer a muted 'Note:' footnote");
 		// The thinking sits ABOVE the verdict's explanation — the dialogue of
