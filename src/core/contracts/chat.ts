@@ -197,6 +197,16 @@ export const THINKING_LABEL = "Your thinking";
 export const CONCLUDE_ACK_TEXT =
 	"Problem concluded — the composer is free; pose the next problem or wrap up.";
 
+/** The compaction marker's model-facing header (owner round 14,
+ *  2026-10-05). The marker's content is this header + the summary — the
+ *  single text the provider sees in place of the dropped span. Wording
+ *  law: it must tell the model (a) a cut happened and is routine, (b) the
+ *  summary replaces everything before it, (c) what follows is verbatim
+ *  recent transcript — so the model neither re-asks covered ground nor
+ *  distrusts the seam. */
+export const COMPACTED_HISTORY_HEADER =
+	"[SESSION HISTORY COMPACTED] The transcript before this point was summarized to fit the context window; the summary below replaces it. Everything after this message is the verbatim recent transcript.";
+
 
 export interface PlanBlockData {
 	/** Only "full" survives (the 2026-09-11 pivot): the plan renders IN

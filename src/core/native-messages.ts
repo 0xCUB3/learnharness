@@ -42,6 +42,7 @@ import {
 	THINKING_LABEL,
 } from "./contracts/chat.ts";
 import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
+import { activeCompactionOf, keptIndexFor } from "./compaction.ts";
 
 /** The hard-invariant wording for an aborted turn's unanswered calls —
  *  carried over verbatim from the pre-native era so the model's view
@@ -70,7 +71,8 @@ export interface LhMarkerMessage {
 		| "subagent-abort"
 		| "plan-block"
 		| "practice-thinking"
-		| "problem-dismissed";
+		| "problem-dismissed"
+		| "compaction";
 	/** The model-facing text ("" for plan blocks — UI-only). */
 	content: string;
 	display: boolean;
@@ -468,8 +470,29 @@ function resultIdsFrom(messages: readonly AgentMessage[]): Set<string> {
  * through untouched rather than killing the loop.
  */
 export function toLlmMessages(messages: readonly AgentMessage[]): Message[] {
-	const out: Message[] = [];
-	for (let i = 0; i < messages.length; i++) {
+	// THE COMPACTION CUT (owner round 14, 2026-10-05): the ACTIVE marker
+	// (the newest — chained compactions rule last) names the first kept
+	// message; everything before it is replaced by the marker's content
+	// (header + summary) rendered ONCE, up top. The marker itself is then
+	// skipped in place — it must never render twice. A cut naming a
+	// missing id degrades honestly (everything renders — never throw).
+	const lhMessages = messages as readonly LhMessage[];
+	const active = activeCompactionOf(lhMessages);
+	let start = 0;
+	let head: Message | null = null;
+	if (active) {
+		const kept = keptIndexFor(lhMessages, active);
+		if (kept > 0) {
+			start = kept;
+			head = {
+				role: "user",
+				content: [{ type: "text", text: active.content }],
+				timestamp: active.timestamp,
+			};
+		}
+	}
+	const out: Message[] = head ? [head] : [];
+	for (let i = start; i < messages.length; i++) {
 		const m = messages[i]!;
 		const role = (m as { role?: string }).role;
 		if (role === "custom") {
@@ -477,10 +500,15 @@ export function toLlmMessages(messages: readonly AgentMessage[]): Message[] {
 			// UI-only markers: plan blocks, and problem dismissals (the
 			// synthesized conclude pair carries the model's face).
 			if (marker.customType === "plan-block" || marker.customType === "problem-dismissed") continue;
+			// The ACTIVE compaction marker already rendered as the head —
+			// never twice. (Stale markers before the cut are unreachable; a
+			// marker whose cut could not resolve has no head and renders as
+			// its user text — honest degradation.)
+			if (marker.customType === "compaction" && head !== null && marker.id === active!.id) continue;
 			out.push({
 				role: "user",
 				content: [{ type: "text", text: marker.content }],
-				timestamp: marker.timestamp,
+			timestamp: marker.timestamp,
 			});
 			continue;
 		}
