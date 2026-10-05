@@ -171,7 +171,10 @@ export function DraftShell({
 							<div className={DOCK}>
 								{setupCta}
 								{(picks.length > 0 || mode === "practice") && (
-									<div className="mb-2 flex items-center justify-start gap-1.5">
+									/* pointer-events-auto: the sticky wrapper is a none-mask
+									 * (953b22b) — every interactive row below it must re-enable
+									 * itself, like the composer box and the CTA row do. */
+									<div className="pointer-events-auto mb-2 flex items-center justify-start gap-1.5">
 										<button
 											type="button"
 											data-testid="practice-props-chip"
