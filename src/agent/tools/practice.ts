@@ -161,12 +161,15 @@ export const problemInputObject = Type.Object({
 	mode: Type.Union([Type.Literal("recall"), Type.Literal("discrimination"), Type.Literal("composition")], {
 		description: 'REQUIRED — the demand mode: "recall" | "discrimination" | "composition".',
 	}),
-	target: Type.Array(Type.String(), {
-		minItems: 1,
-		description:
-			"REQUIRED — the proposition id(s) this problem exercises, from the session context's [id] list. " +
-			"Names are normalized to ids at the seam; an unknown proposition is rejected.",
-	}),
+	target: Type.Optional(
+		Type.Array(Type.String(), {
+			minItems: 1,
+			description:
+				"The proposition id(s) this problem exercises, from the session context's [id] list — include when " +
+				"the material is in the map; OMIT entirely when it is not (a topic session poses untagged problems). " +
+				"Names are normalized to ids at the seam; an unknown proposition is rejected.",
+		}),
+	),
 	modelSolution: Type.String({
 		description: "REQUIRED — the full solution, moves in order, committed BEFORE the learner sees the problem. This IS the reveal — conclude shows it verbatim; never re-author it.",
 	}),
@@ -193,9 +196,19 @@ export function problemTool(
 			// TARGET NORMALIZATION (owner round 9): names silently become ids —
 			// the RECORD carries canonical ids (the mastery trace groups on
 			// them); unresolvable strings pass through for execute to reject.
-			if (!graphNodes) return healed as never;
+			// UNTAGGED PROBLEMS (owner round 12): an explicit empty list is
+			// the model saying "no targets" — healed AWAY, so the record's
+			// canonical form is tagged-or-absent, never [].
+			if (!graphNodes) {
+				const bare = (healed as { target?: unknown }).target;
+				return Array.isArray(bare) && bare.length === 0
+					? ({ ...(healed as Record<string, unknown>), target: undefined } as never)
+					: (healed as never);
+			}
 			const target = (healed as { target?: unknown }).target;
-			if (!Array.isArray(target)) return healed as never;
+			if (!Array.isArray(target) || target.length === 0) {
+				return { ...(healed as Record<string, unknown>), target: undefined } as never;
+			}
 			const list = graphNodes();
 			const normalized = target.map((t) =>
 				typeof t === "string" ? (resolveTargetId(t, list) ?? t) : t,
@@ -209,15 +222,18 @@ export function problemTool(
 					"a problem is already active — call conclude on it before posing the next one",
 				]);
 			}
-			// TARGET VALIDATION (owner round 9): against the WHOLE graph. A
-			// one-line rejection — the proposition list already sits in the
-			// agent's context (the [id] marker); no re-listing.
-			if (graphNodes) {
+			// TARGET VALIDATION (owner round 9, round 12): against the WHOLE
+			// graph, and ONLY when targets are present — absent means an
+			// untagged problem (topic sessions, owner round 12), which poses
+			// freely. A one-line rejection — the proposition list already
+			// sits in the agent's context (the [id] marker); no re-listing.
+			// The message teaches the exit: omitting always works.
+			if (graphNodes && input.target && input.target.length > 0) {
 				const list = graphNodes();
 				const unknown = input.target.filter((t) => resolveTargetId(t, list) === null);
 				if (unknown.length > 0) {
 					return invalidInputResult("problem", [
-						`target ${JSON.stringify(unknown)} is not a known proposition — targets must be proposition ids from the session context`,
+						`target ${JSON.stringify(unknown)} is not a known proposition — targets must be proposition ids from the session context; if the material is not in the map, omit target entirely`,
 					]);
 				}
 			}

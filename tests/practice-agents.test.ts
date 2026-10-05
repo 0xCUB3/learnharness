@@ -167,10 +167,22 @@ describe("target validation — names normalize to ids, unknowns reject", () => 
 		assert.equal(rejected.isError, true);
 		assert.match((rejected.details as { problems: string[] }).problems[0]!, /ghost-prop/);
 		assert.match((rejected.details as { problems: string[] }).problems[0]!, /proposition ids from the session context/);
+		// the message teaches the exit (round 12): omitting always works
+		assert.match((rejected.details as { problems: string[] }).problems[0]!, /omit target entirely/);
 		// honest activation (the BKT law): a rejected pose frees the slot —
 		// the next, valid pose goes through.
 		const valid = await tool.execute("call_y", { ...PROBLEM_INPUT, target: ["n_parity"] } as never);
 		assert.equal(valid.isError, undefined);
+	});
+
+	it("UNTAGGED PROBLEMS (owner round 12): absent target poses freely; [] heals away to absent", async () => {
+		const tool = problemTool(createPracticeGate(ctxOf([])), graphNodes);
+		const absent = await tool.execute("call_a", { statement: "S", mode: "recall", modelSolution: "M" } as never);
+		assert.equal(absent.isError, undefined, "no targets = an untagged problem, never a rejection");
+		const healed = tool.prepareArguments!({ statement: "S", mode: "recall", target: [], modelSolution: "M" }) as {
+			target?: string[];
+		};
+		assert.ok(!healed.target || healed.target.length === 0, "an explicit [] is the model saying no-targets — healed away");
 	});
 
 	it("NO node source (the legacy/test wiring) = no validation, free strings ack", async () => {
