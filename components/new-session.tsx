@@ -81,6 +81,7 @@ export function DraftShell({
 	picks = [],
 	onOpenPicker,
 	onClearPicks,
+	overlay,
 }: {
 	busy: boolean;
 	text: string;
@@ -102,6 +103,11 @@ export function DraftShell({
 	picks?: DraftPick[];
 	onOpenPicker?: () => void;
 	onClearPicks?: () => void;
+	/** THE PICKER SLOT (owner round 10b): the chain-table overlay hosts
+	 *  INSIDE the content column's relative container — the same law as
+	 *  the graph view (the overlay fills its column, never the sidebar).
+	 *  Passed as a node so the pick state stays in NewSession. */
+	overlay?: ReactNode;
 }) {
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// draft text (via the parent's onChange — the truth lives there); the
@@ -228,6 +234,7 @@ export function DraftShell({
 							</div>
 						</div>
 					</div>
+					{overlay}
 				</div>
 			</div>
 		</div>
@@ -327,6 +334,31 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 				picks={picks}
 				onOpenPicker={openPicker}
 				onClearPicks={() => applyPicks([])}
+				overlay={
+					// THE PICKER (owner round 10b): hosted INSIDE the content
+					// column — absolute inset-0 resolves to the column's relative
+					// container, the same confinement the graph view gives it;
+					// never over the sidebar or the traffic lights.
+					<ChainTableOverlay
+						open={pickerOpen}
+						nodes={snapshot?.propositions ?? []}
+						chains={snapshot?.chains ?? []}
+						sessions={snapshot?.sessions ?? {}}
+						fileSources={snapshot?.fileSources ?? {}}
+						onClose={() => setPickerOpen(false)}
+						selectMode
+						controlledSelection={new Set(picks.map((p) => p.id))}
+						onSelectionChange={(ids) => {
+							const byId = new Map((snapshot?.propositions ?? []).map((n) => [n.id, n]));
+							const next: DraftPick[] = [];
+							for (const id of ids) {
+								const n = byId.get(id);
+								if (n) next.push({ id: n.id, name: n.name, statement: n.statement });
+							}
+							applyPicks(next);
+						}}
+					/>
+				}
 				setupCta={
 					zeroKeys ? (
 						<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
@@ -345,29 +377,6 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 						)
 					)
 				}
-			/>
-			{/* THE PICKER (owner round 10): the standalone chain table over
-			    fetched snapshot data — the same select-mode overlay the home
-			    graph hosts, no graph canvas needed behind it. Controlled
-			    selection: every check/clear reports up live; Done closes. */}
-			<ChainTableOverlay
-				open={pickerOpen}
-				nodes={snapshot?.propositions ?? []}
-				chains={snapshot?.chains ?? []}
-				sessions={snapshot?.sessions ?? {}}
-				fileSources={snapshot?.fileSources ?? {}}
-				onClose={() => setPickerOpen(false)}
-				selectMode
-				controlledSelection={new Set(picks.map((p) => p.id))}
-				onSelectionChange={(ids) => {
-					const byId = new Map((snapshot?.propositions ?? []).map((n) => [n.id, n]));
-					const next: DraftPick[] = [];
-					for (const id of ids) {
-						const n = byId.get(id);
-						if (n) next.push({ id: n.id, name: n.name, statement: n.statement });
-					}
-					applyPicks(next);
-				}}
 			/>
 			{/* First-run setup: the send interception's landing surface — stage
 			    1 is the self-contained first-key screen (zero-keys wave). */}
