@@ -1,6 +1,7 @@
 "use client";
 
 import { MessageResponse } from "@/components/ai-elements/message";
+import { cn } from "@/lib/utils";
 import type { ArtifactPartProps } from "@/src/core";
 
 /**
@@ -54,6 +55,19 @@ const OUTCOME_LABEL: Record<string, string> = {
 	dismissed: "Dismissed",
 };
 
+/* The outcome chips (owner round 3, 2026-10-05): the EXACT register of the
+ * quiz cards' correct/incorrect bubbles. Colors per outcome — solved reads
+ * green (the "correct" twin), solved-with-hints amber (succeeded with
+ * cost), surrendered red (the problem beat the learner), moved on muted
+ * (the agent's call, not a verdict against him). */
+const OUTCOME_CHIP: Record<string, string> = {
+	solved: "bg-green-500/15 text-green-500",
+	solvedWithHints: "bg-amber-500/15 text-amber-500",
+	movedOn: "bg-muted text-muted-foreground",
+	surrendered: "bg-red-500/15 text-red-500",
+	dismissed: "bg-muted text-muted-foreground",
+};
+
 export function ConcludeCard({ part }: ArtifactPartProps) {
 	// The conclusion redesigned (owner round, 2026-10-05): the SOLUTION is
 	// the hero — the modelSolution committed at pose time (part.reveal, the
@@ -79,26 +93,36 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 
 	return (
 		<div data-testid="conclude-card" className="lh-card-enter my-1 rounded-xl border bg-card p-4">
-			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{OUTCOME_LABEL[outcome] ?? "Concluded"}
+			{/* The heading row (owner round 3, 2026-10-05): plain 'Concluded'
+			    eyebrow + the outcome in the quiz cards' EXACT chip register —
+			    no more two same-weight headings stacked. */}
+			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				Concluded
+				{(OUTCOME_LABEL[outcome] ?? "") !== "" && outcome !== "dismissed" && (
+					<span className={cn("rounded px-1.5 py-0.5", OUTCOME_CHIP[outcome] ?? OUTCOME_CHIP.movedOn)}>
+						{OUTCOME_LABEL[outcome]}
+					</span>
+				)}
 			</div>
-			{/* LABELED SECTIONS (owner round 2, 2026-10-05): 'Solved' alone over
-			    unlabeled prose didn't read as the model solution — the hero now
-			    carries its own label, and the verdict section mirrors it. Same
-			    register as the quiz cards' section labels. */}
-			{reveal.length > 0 && (
-				<div>
-					<div className="mb-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">Model solution</div>
-					<div className="lh-prose text-[15px]">
-						<MessageResponse>{reveal}</MessageResponse>
-					</div>
+			{/* The verdict — plain prose under the heading, no 'Verdict:' label
+			    (owner round 3): the same quiet 50% register as quiz explanations. */}
+			{verdict.length > 0 && (
+				<div className="text-sm text-foreground/50">
+					<MessageResponse>{verdict}</MessageResponse>
 				</div>
 			)}
-			{verdict.length > 0 && (
-				<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-foreground/50">
-					<span className="font-medium text-muted-foreground">Verdict: </span>
-					<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{verdict}</MessageResponse>
-				</div>
+			{/* Then the divider, then the labeled model solution (Slice G: the
+			    hero is the pose's commitment, verbatim). */}
+			{reveal.length > 0 && (
+				<>
+					<div className="my-3 border-t" />
+					<div>
+						<div className="mb-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">Model solution</div>
+						<div className="lh-prose text-[15px]">
+							<MessageResponse>{reveal}</MessageResponse>
+						</div>
+					</div>
+				</>
 			)}
 		</div>
 	);
@@ -108,5 +132,5 @@ export function ThinkingCard({ data }: { data: PracticeThinkingData }) {
 	// The unified row (owner rounds, 2026-10-05): one style, one label —
 	// collapsed arrival, "Your thinking", 50%-italic quote block on expand.
 	// Legacy records' commit flag is deliberately unread (one lane now).
-	return <ThinkingBlock testId="thinking-card" label="Your thinking" text={data.text} />;
+	return <ThinkingBlock testId="thinking-card" label="YOUR THINKING" text={data.text} />;
 }

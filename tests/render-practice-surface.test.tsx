@@ -55,7 +55,7 @@ describe("PracticeDock", () => {
 		assert.match(html, /Problem/);
 		// The measured column cap (the old fixed 40vh is only the fallback).
 		assert.match(html, /--dock-max-h/);
-		assert.match(html, /Your thinking/);
+		assert.match(html, /YOUR THINKING/);
 		assert.match(html, /data-testid="practice-send"/);
 		assert.ok(!html.includes("practice-nudge") && !html.includes("practice-commit"), "the two-lane buttons are gone");
 		// The buttons carry their lane in the disabled gate; both start
@@ -114,11 +114,14 @@ describe("the practice transcript cards", () => {
 		assert.match(html, /data-testid="conclude-card"/);
 		assert.match(html, /Solved with hints/);
 		assert.match(html, /Pair them; each pair is even\./, "the committed solution, verbatim");
-		assert.match(html, /Model solution/); // the labeled hero (owner round 2)
-		assert.match(html, /Verdict:/);
+		assert.match(html, /Concluded/); // the plain eyebrow (owner round 3)
+		assert.match(html, /Solved/); // the outcome rides the quiz chip
+		assert.match(html, /Model solution/); // the labeled hero after the divider
+		assert.ok(html.indexOf("Solved") < html.indexOf("Model solution"), "chip at the top");
 		assert.match(html, /The pairing came after R2\./);
-		// The verdict row renders AFTER the solution (the hero first).
-		assert.ok(html.indexOf("Pair them; each pair is even.") < html.indexOf("The pairing came after R2."));
+		// VERDICT FIRST (owner round 3): verdict under the heading row, then
+		// the divider, then the labeled model solution.
+		assert.ok(html.indexOf("The pairing came after R2.") < html.indexOf("Pair them; each pair is even."));
 		assert.doesNotMatch(html, /<button/, "nothing collapsible");
 	});
 
@@ -144,11 +147,11 @@ describe("the practice transcript cards", () => {
 
 	it("ThinkingCard: one label, collapsed arrival (legacy commit flags ignored)", () => {
 		const trace = renderToStaticMarkup(<ThinkingCard data={{ problemCallId: "c", commit: false, text: "stuck at step two" }} />);
-		assert.match(trace, /Your thinking/);
+		assert.match(trace, /YOUR THINKING/);
 		assert.match(trace, /aria-expanded="false"/);
 		assert.ok(!trace.includes("stuck at step two"), "the text is one click away");
 		const legacy = renderToStaticMarkup(<ThinkingCard data={{ problemCallId: "c", commit: true, text: "It is 42." }} />);
-		assert.match(legacy, /Your thinking/);
+		assert.match(legacy, /YOUR THINKING/);
 		assert.doesNotMatch(legacy, /Your solution/);
 	});
 });

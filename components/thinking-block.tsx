@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
  *  agent thinking = no rail. */
 
 export function ThinkingBlock({
-	label = "Your thinking",
+	label = "YOUR THINKING",
 	text,
 	testId,
 	dataCommit,

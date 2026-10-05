@@ -41,7 +41,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 		    ThinkingBlock, instead of an inset inside the answer. Same muted
 		    rail as before; the label is now plain "Your thinking". */}
 		{answer.readingThinking && (
-			<ThinkingBlock testId="reading-thinking-block" label="Your thinking" text={answer.readingThinking} />
+			<ThinkingBlock testId="reading-thinking-block" label="YOUR THINKING" text={answer.readingThinking} />
 		)}
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="answered-card">
 			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -139,7 +139,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 				    thinking is the identical collapsible ThinkingBlock — it just
 				    happens to sit inside the quiz container. Same placement, same
 				    trigger, same 50%-italic quote block on expand. */
-				<ThinkingBlock testId="your-thinking" label="Your thinking" text={answer.thinking ?? answer.note ?? ""} />
+				<ThinkingBlock testId="your-thinking" label="YOUR THINKING" text={answer.thinking ?? answer.note ?? ""} />
 			)}
 
 			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper
