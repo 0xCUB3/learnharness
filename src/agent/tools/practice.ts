@@ -16,6 +16,7 @@
 
 import { Type, type Static } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { resolveTargetId } from "../../core/chains.ts";
 import { activeProblemOf } from "../../core/native-messages.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { concludeResult, invalidInputResult, problemResult } from "../tool-execute.ts";
@@ -109,6 +110,11 @@ export function healEncodedArguments(
 export interface PracticeToolContext {
 	chatId: string;
 	chatStore: { getChat(id: string): { messages: LhMessage[]; kind?: string } | null };
+	/** The WHOLE-graph node list, read fresh per pose (owner round 9 — the
+	 *  mastery-trace contract): targets validate against every proposition,
+	 *  not just the session's picks, so pickless sessions and future
+	 *  graph-tools poses stay valid. Absent (tests) = no validation. */
+	graphNodes?: () => ReadonlyArray<Pick<import("../../core/contracts/graph.ts").GraphNode, "id" | "name">>;
 }
 
 /** TURN-SCOPED GATE STATE (the BKT incident, 2026-10-05): the gates used
@@ -143,7 +149,12 @@ export const problemInputObject = Type.Object({
 	mode: Type.Union([Type.Literal("recall"), Type.Literal("discrimination"), Type.Literal("composition")], {
 		description: 'REQUIRED — the demand mode: "recall" | "discrimination" | "composition".',
 	}),
-	target: Type.Array(Type.String(), { minItems: 1, description: "REQUIRED — the proposition id(s) or names this problem exercises." }),
+	target: Type.Array(Type.String(), {
+		minItems: 1,
+		description:
+			"REQUIRED — the proposition id(s) this problem exercises, from the session context's [id] list. " +
+			"Names are normalized to ids at the seam; an unknown proposition is rejected.",
+	}),
 	modelSolution: Type.String({
 		description: "REQUIRED — the full solution, moves in order, committed BEFORE the learner sees the problem. This IS the reveal — conclude shows it verbatim; never re-author it.",
 	}),
@@ -151,7 +162,10 @@ export const problemInputObject = Type.Object({
 
 export type ProblemInput = Static<typeof problemInputObject>;
 
-export function problemTool(gate: PracticeGate): AgentTool<typeof problemInputObject> {
+export function problemTool(
+	gate: PracticeGate,
+	graphNodes?: PracticeToolContext["graphNodes"],
+): AgentTool<typeof problemInputObject> {
 	return {
 		name: "problem",
 		label: "problem",
@@ -162,12 +176,38 @@ export function problemTool(gate: PracticeGate): AgentTool<typeof problemInputOb
 			"reveal needs no new field). Only one problem may be active — conclude it before posing the next.",
 		parameters: problemInputObject,
 		executionMode: "sequential",
-		prepareArguments: (args: unknown) => healEncodedArguments(args, problemInputObject) as never,
-		execute: async (_toolCallId, _input) => {
+		prepareArguments: (args: unknown) => {
+			const healed = healEncodedArguments(args, problemInputObject);
+			// TARGET NORMALIZATION (owner round 9): names silently become ids —
+			// the RECORD carries canonical ids (the mastery trace groups on
+			// them); unresolvable strings pass through for execute to reject.
+			if (!graphNodes) return healed as never;
+			const target = (healed as { target?: unknown }).target;
+			if (!Array.isArray(target)) return healed as never;
+			const list = graphNodes();
+			const normalized = target.map((t) =>
+				typeof t === "string" ? (resolveTargetId(t, list) ?? t) : t,
+			);
+			if (normalized.every((t, i) => t === target[i])) return healed as never;
+			return { ...(healed as Record<string, unknown>), target: normalized } as never;
+		},
+		execute: async (_toolCallId, input) => {
 			if (gate.problemActive) {
 				return invalidInputResult("problem", [
 					"a problem is already active — call conclude on it before posing the next one",
 				]);
+			}
+			// TARGET VALIDATION (owner round 9): against the WHOLE graph. A
+			// one-line rejection — the proposition list already sits in the
+			// agent's context (the [id] marker); no re-listing.
+			if (graphNodes) {
+				const list = graphNodes();
+				const unknown = input.target.filter((t) => resolveTargetId(t, list) === null);
+				if (unknown.length > 0) {
+					return invalidInputResult("problem", [
+						`target ${JSON.stringify(unknown)} is not a known proposition — targets must be proposition ids from the session context`,
+					]);
+				}
 			}
 			gate.problemActive = true;
 			return problemResult();
@@ -237,7 +277,7 @@ export function practiceTools(ctx: PracticeToolContext): Record<string, AgentToo
 	// ONE gate per turn, shared by both tools — the intra-turn truth.
 	const gate = createPracticeGate(ctx);
 	return {
-		problem: problemTool(gate),
+		problem: problemTool(gate, ctx.graphNodes),
 		conclude: concludeTool(gate),
 	};
 }

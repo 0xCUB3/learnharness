@@ -328,7 +328,18 @@ export async function handleChatInput(
 	const constructed: TeachingAgent = buildAgent
 		? buildAgent({ ...agentOpts, teaching })
 		: record.kind === "practice"
-			? createPracticeAgent({ chatId, chatStore: stores.chatStore }, agentOpts)
+			? createPracticeAgent(
+					{
+						chatId,
+						chatStore: stores.chatStore,
+						// TARGET VALIDATION (owner round 9): the practice tools read the
+						// WHOLE graph fresh per pose — targets validate against every
+						// proposition, not just the session's picks (pickless sessions
+						// and future graph-tools poses stay valid).
+						graphNodes: () => stores.graphStore.readNodes(),
+					},
+					agentOpts,
+				)
 			: teaching
 			? createTeacherAgent(
 					{
