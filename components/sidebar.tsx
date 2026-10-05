@@ -17,6 +17,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { ChatListItem } from "@/src/core";
 import { kbdEventForAction } from "@/src/core";
@@ -384,15 +385,22 @@ function SessionsSidebar() {
 		router.push("/chat/new");
 	}, [router]);
 
+	/* FUZZY (owner round 8, 2026-10-05): subsequence match ranked by
+	 * fuzzyScore — prefix beats word-boundary beats scattered. Empty query
+	 * keeps the natural list order (scores are all 0, sort is stable). */
 	const shown = useMemo(() => {
-		const q = query.trim().toLowerCase();
+		const q = query.trim();
 		let list = chats;
 		if (list && kindFilter !== "all") {
 			list = list.filter((c) => (c.kind ?? "teach") === kindFilter);
 		}
 		if (!list) return list;
 		if (!q) return list;
-		return list.filter((c) => c.title.toLowerCase().includes(q));
+		return list
+			.map((c) => ({ c, score: fuzzyScore(q, c.title) }))
+			.filter((r): r is { c: (typeof list)[number]; score: number } => r.score !== null)
+			.sort((a, b) => b.score - a.score)
+			.map((r) => r.c);
 	}, [chats, query, kindFilter]);
 
 	const refreshInFlightRef = useRef(false);
@@ -688,14 +696,16 @@ function SessionsSidebar() {
 					</Hint>
 				</div>
 
-				{/* Two doors (practice sessions, owner 2026-10-04): teaching
-				    keeps the original draft route; practice carries its mode. */}
-				<div className="mx-3 mb-1 flex gap-1.5">
+				{/* Two doors, STACKED (owner round 8, 2026-10-05 — was a
+				    half/half row): full-width rows read cleaner and give the
+				    labels room; teaching keeps the original draft route,
+				    practice carries its mode. */}
+				<div className="mx-3 mb-1 flex flex-col gap-1.5">
 					<button
 						type="button"
 						data-testid="new-session"
 						onClick={() => void newSession()}
-						className="flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
 						<PlusIcon className="size-3" />
 						Teaching
@@ -705,7 +715,7 @@ function SessionsSidebar() {
 						type="button"
 						data-testid="new-session-practice"
 						onClick={() => router.push("/chat/new?mode=practice")}
-						className="flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
 						<DumbbellIcon className="size-3" />
 						Practice
@@ -713,10 +723,12 @@ function SessionsSidebar() {
 					</button>
 				</div>
 
-				{/* The three-way filter (owner, 2026-10-04): Teaching / All /
-				    Practice, quiet segmented, persisted client-side. */}
+				{/* The three-way filter (owner, 2026-10-04; order owner round 8,
+				    2026-10-05): Teaching / Practice / All — the two real modes
+				    first, "All" as the escape hatch on the right, mirroring the
+				    stacked create-buttons above. Persisted client-side. */}
 				<div className="mx-3 mb-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="session-kind-filter">
-					{(["teach", "all", "practice"] as const).map((f) => (
+					{(["teach", "practice", "all"] as const).map((f) => (
 						<button
 							key={f}
 							type="button"

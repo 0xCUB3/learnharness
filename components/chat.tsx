@@ -50,6 +50,7 @@ import {
 	findPendingToolCall,
 	phaseAt3,
 	phaseTimeline,
+	teachStepIndex,
 	toolQuestionKind,
 	quizNeedsReveal,
 } from "@/src/core";
@@ -1238,15 +1239,26 @@ export function Chat({
 									{/* THE INFERRED TEACH SEAM (owner ruling 2026-09-26, the verdict
 									death): teaching begins where the FIRST nodeId-tagged quiz is
 									posed — the fold (phaseTimeline, the same derivation the phase chip
-									reads) flips to teach exactly AT this assistant group, so the divider
-									renders BEFORE the whole block (thinking -> prose -> the quiz call) —
-									where the explicit accept marker used to sit. The boundary check
-									(this index flips, the previous didn't) guarantees exactly ONE divider
-									per session. PREPENDED, never a replacement branch: the teach group is
-									a real message with content (the marker branches above have none) — a
-									replacement ternary swallowed the entire first lesson block (the
-									Lacan session, 2026-09-27). */}
-									{m.role === "assistant" && mi > 0 && phases[mi] === "teach" && phases[mi - 1] !== "teach" ? (
+									reads) flips to teach exactly AT this assistant group. STEP-LEVEL
+									since owner round 8 (2026-10-05 — the stacked-dividers bug): the
+									plan presentation often lives in the SAME message, an earlier
+									provider step than the quiz call, and the old message-level seam
+									drew this divider before the plan too (Planning and Teaching
+									stacked back-to-back, nothing between). teachStepIndex finds the
+									step boundary governing the flip call: -1 = the message's first
+									step → prepend before the whole block (this branch); a later
+									index → the divider renders AT that part boundary in the loop
+									below (replacing the plain step hairline — a labeled phase rule
+									supersedes it). The boundary check (this index flips, the
+									previous didn't) still guarantees exactly ONE divider per session.
+									PREPENDED, never a replacement branch: the teach group is a real
+									message with content — a replacement ternary swallowed the entire
+									first lesson block (the Lacan session, 2026-09-27). */}
+									{m.role === "assistant" &&
+									mi > 0 &&
+									phases[mi] === "teach" &&
+									phases[mi - 1] !== "teach" &&
+									teachStepIndex(m.parts) === -1 ? (
 										<PhaseDivider key={`teach-${m.id || `m-${mi}`}`} phase="teach" />
 									) : null}
 									{m.role === "user" ? (
@@ -1273,6 +1285,15 @@ export function Chat({
 									<MessageContent className="w-full">
 											{m.parts.map((part, pi) => {
 												const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
+												// The step boundary where teaching begins (round 8): when
+												// the teach flip happens in a LATER step, its PhaseDivider
+												// replaces this boundary's plain hairline.
+												const teachBoundary =
+													m.role === "assistant" &&
+													mi > 0 &&
+													phases[mi] === "teach" &&
+													phases[mi - 1] !== "teach" &&
+													teachStepIndex(m.parts) === pi;
 												// A tool call that errored BACK TO THE AGENT (validation
 												// failure, malformed args) is invisible work — the agent
 												// reads the error and retries. Owner ruling 2026-09-26:
@@ -1302,6 +1323,8 @@ export function Chat({
 															</Reasoning>
 														);
 													case "step-start":
+														if (teachBoundary)
+															return <PhaseDivider key={`teach-step-${pi}`} phase="teach" />;
 														return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
 													case "data-plan-block":
 														// The plan in the chat (wave 4): a frozen snapshot

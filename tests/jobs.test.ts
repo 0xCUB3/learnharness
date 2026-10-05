@@ -1574,13 +1574,18 @@ describe("stale-job recovery sweep (liveness-gated)", () => {
 		// alone must NOT trigger recovery anymore.
 		jobStore.updateJob(jobId, { updatedAt: new Date(Date.now() - 30 * 60_000).toISOString() });
 		registerJobAbort(jobId, new AbortController()); // a loop is executing
-		let respawned = 0;
-		setJobRespawn(() => {
-			respawned++;
+		// JURISDICTIONAL (owner round 8, 2026-10-05): the sweep scans the
+		// SHARED jobs dir — under the full suite, OTHER FILES' processes
+		// legitimately leave running records this sweep may respawn. Only
+		// THIS test's job is this test's business: collect ids, assert ours
+		// never respawns (the counter form saw foreign respawns as failures).
+		const respawnedIds: string[] = [];
+		setJobRespawn((id) => {
+			respawnedIds.push(id);
 		});
 		resetSweepThrottle();
 		recoverStaleJobs();
-		assert.equal(respawned, 0, "a live loop is provably executing — no respawn beside it");
+		assert.ok(!respawnedIds.includes(jobId), "a live loop is provably executing — no respawn beside it");
 		assert.equal(jobStore.getJob(jobId)!.activity, "starting", "the record is untouched");
 		// Hermetic teardown: settle + unregister so later sweeps in THIS suite
 		// never see this fixture as a fresh orphan.
@@ -1590,13 +1595,15 @@ describe("stale-job recovery sweep (liveness-gated)", () => {
 
 	it("a running record WITHOUT a registration is an orphan: the loop is re-spawned immediately (no age wait)", () => {
 		const { jobId } = orphanJob();
-		let respawned: string | null = null;
+		// JURISDICTIONAL (see above): foreign respawns may interleave under
+		// the full suite — ours must be among them, at once.
+		const respawnedIds: string[] = [];
 		setJobRespawn((id) => {
-			respawned = id;
+			respawnedIds.push(id);
 		});
 		resetSweepThrottle();
 		recoverStaleJobs();
-		assert.equal(respawned, jobId, "the orphan's loop is re-spawned at once");
+		assert.ok(respawnedIds.includes(jobId), "the orphan's loop is re-spawned at once");
 		assert.equal(jobStore.getJob(jobId)!.activity, "recovering: re-running");
 		// Hermetic teardown (see above) — the respawned loop is the TEST's
 		// fake seam, nothing real runs.

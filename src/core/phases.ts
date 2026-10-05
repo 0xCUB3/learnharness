@@ -97,6 +97,45 @@ function advance(
 }
 
 /**
+ * WHERE inside the flipping message teaching begins (owner round 8,
+ * 2026-10-05 — the stacked-dividers bug): plan→teach flips at the first
+ * tagged quiz/explain CALL, but the plan PRESENTATION often lives in the
+ * same assistant message — an earlier provider STEP than the quiz call.
+ * A message-level seam therefore drew the Teaching divider before the
+ * plan presentation too (Planning and Teaching stacked back-to-back).
+ * This returns the part index of the STEP BOUNDARY governing the flip
+ * call: -1 when the call sits in the message's FIRST step (the divider
+ * belongs before the whole message), else the index of the step-start
+ * part whose generation contains the call — the divider renders there,
+ * between the plan presentation and the teaching block.
+ */
+export function teachStepIndex(
+	parts: ReadonlyArray<{ type: string; state?: string; input?: unknown }>,
+): number {
+	let stepStarts = 0; // how many step-start parts seen so far
+	let latest = -1; // index of the latest step-start
+	for (let i = 0; i < parts.length; i++) {
+		const part = parts[i]!;
+		if (part.type === "step-start") {
+			stepStarts++;
+			latest = i;
+			continue;
+		}
+		if (
+			(part.type === "tool-quiz" || part.type === "tool-explain") &&
+			taggedNodeId(part.input)
+		) {
+			// The call's governing step: 0–1 step-starts seen = the message's
+			// FIRST step → -1 (the divider belongs before the whole message);
+			// a later step → that step-start's index (the divider renders at
+			// the boundary, replacing the plain hairline there).
+			return stepStarts <= 1 ? -1 : latest;
+		}
+	}
+	return -1;
+}
+
+/**
  * The phase at EVERY message index, in one forward fold — the transcript
  * dividers render one per boundary, so phaseAt3(m, i) per index would rescan
  * 0..i each time (quadratic); this is the same derivation, linear.
