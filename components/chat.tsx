@@ -1249,16 +1249,28 @@ export function Chat({
 									{m.role === "assistant" && mi > 0 && phases[mi] === "teach" && phases[mi - 1] !== "teach" ? (
 										<PhaseDivider key={`teach-${m.id || `m-${mi}`}`} phase="teach" />
 									) : null}
-									<Message from={m.role} className={m.role === "assistant" ? "max-w-full" : undefined}>
-									<MessageContent className={m.role === "assistant" ? "w-full" : undefined}>
-										{m.role === "user" ? (
-											// User text renders plain: the model's LaTeX pipeline is not
-											// applied to learner-authored text ($ stays $, no surprises).
-											<div className="lh-prose whitespace-pre-wrap">
-												{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
+									{m.role === "user" ? (
+										/* THE DOCUMENT ROW (owner round, 2026-10-05): no right-aligned
+										    bubble — the transcript reads as a document. User text is a
+										    full-width quote block: muted "You" label, muted rail,
+										    FULL-opacity text (learner words are content, not whisper).
+										    Distinguished from user thinking at a glance: thinking is
+										    collapsed + 50% italic; this is upright and present.
+										    User text renders plain — the model's LaTeX pipeline is not
+										    applied to learner-authored text ($ stays $, no surprises).
+										    Rendered WITHOUT the Message wrapper — that is the bubble. */
+										<div data-testid="user-message" className="my-1 w-full">
+											<div className="mb-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">You</div>
+											<div className="border-l-2 border-muted-foreground/30 pl-3 text-foreground">
+												<div className="lh-prose whitespace-pre-wrap">
+													{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}
+												</div>
 											</div>
-										) : (
-											m.parts.map((part, pi) => {
+										</div>
+									) : (
+									<Message from="assistant" className="max-w-full">
+									<MessageContent className="w-full">
+											{m.parts.map((part, pi) => {
 												const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
 												// A tool call that errored BACK TO THE AGENT (validation
 												// failure, malformed args) is invisible work — the agent
@@ -1329,10 +1341,10 @@ export function Chat({
 														return null;
 													}
 												}
-											})
-										)}
-									</MessageContent>
+											})}
+										</MessageContent>
 									</Message>
+									)}
 								</Fragment>
 							))}
 
@@ -1983,7 +1995,7 @@ function DockOverlay({
 		measureBlock();
 		if (p && Math.abs(p.height - h) > 1) {
 			el.animate([{ height: `${p.height}px` }, { height: `${h}px` }], {
-				duration: 180,
+				duration: 120,
 				easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
 			});
 		}

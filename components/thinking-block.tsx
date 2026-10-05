@@ -1,46 +1,52 @@
 "use client";
 
+import { useState } from "react";
+import { ChevronDownIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/** The unified user-thinking block (owner round, 2026-10-05): ONE visual
+/** The unified user-thinking row (owner round, 2026-10-05): ONE visual
  *  language for every surface where the learner's own thinking renders —
- *  practice thinking traces (nudge / commit), the reading channel lifted
- *  above the answered card. The recipe is the quiz cards' quote block
- *  verbatim (rail + uppercase label + prose), carried by a faint shell
- *  so it still reads user-side at a glance — right-aligned, message
- *  width, never collapsible (they arrive open; collapsing bought
- *  nothing and cost the chevron-on-the-right weirdness).
+ *  practice thinking traces, the reading channel lifted above the answered
+ *  card, the quiz answer's thinking inside its container. It arrives
+ *  COLLAPSED as a trigger row in the exact register of the agent's
+ *  reasoning rows (muted label + chevron + hover affordance); expanding
+ *  opens the quote block — rail, 50% opacity, italics. The italics + the
+ *  half-opacity text are the inner-voice signature; the rail marks it as
+ *  learner material. No shell, no border: document material, full width.
  *
- *  Rails reuse the existing vocabulary: primary for the committed
- *  register (the quiz answer thinking, practice commits), muted for the
- *  working register (nudges, reading thoughts). */
+ *  The glance-level law (owner): user thinking = rail + 50% italic;
+ *  agent thinking = no rail. */
 
 export function ThinkingBlock({
-	label,
+	label = "Your thinking",
 	text,
-	rail = "muted",
 	testId,
 	dataCommit,
 }: {
-	label: string;
+	label?: string;
 	text: string;
-	rail?: "primary" | "muted";
 	testId?: string;
 	/** The practice marker's register flag (commit vs nudge). */
 	dataCommit?: boolean;
 }) {
+	const [open, setOpen] = useState(false); // arrives collapsed, always
 	return (
-		<div
-			data-testid={testId}
-			data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"}
-			className="lh-card-enter ml-auto max-w-[95%] rounded-2xl border border-border/60 bg-muted/40 px-4 py-3"
-		>
-			<div className={cn("border-l-2 pl-3", rail === "primary" ? "border-primary/40" : "border-muted-foreground/30")}>
-				<span className="mb-0.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-					{label}
-				</span>
-				<span className="lh-prose block whitespace-pre-wrap text-foreground/90">{text}</span>
-			</div>
+		<div data-testid={testId} data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"} className="lh-card-enter my-1 w-full">
+			<button
+				type="button"
+				data-testid={testId ? `${testId}-trigger` : undefined}
+				onClick={() => setOpen((v) => !v)}
+				aria-expanded={open}
+				className="flex w-full items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground"
+			>
+				{label}
+				<ChevronDownIcon className={cn("size-4 transition-transform", open ? "rotate-180" : "rotate-0")} />
+			</button>
+			{open && (
+				<div className="mt-1.5 border-l-2 border-muted-foreground/30 pl-3">
+					<span className="lh-prose block whitespace-pre-wrap italic text-foreground/50">{text}</span>
+				</div>
+			)}
 		</div>
 	);
 }

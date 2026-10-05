@@ -286,7 +286,7 @@ body {
 }
 
 .dock-variant {
-	animation: dock-variant-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+	animation: dock-variant-in 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 /* ============================================================
@@ -548,7 +548,7 @@ body {
 }
 
 .lh-card-enter {
-	animation: lh-card-enter 150ms ease-out;
+	animation: lh-card-enter 120ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

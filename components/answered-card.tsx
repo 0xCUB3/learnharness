@@ -41,7 +41,7 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 		    ThinkingBlock, instead of an inset inside the answer. Same muted
 		    rail as before; the label is now plain "Your thinking". */}
 		{answer.readingThinking && (
-			<ThinkingBlock testId="reading-thinking-block" label="Your thinking" text={answer.readingThinking} rail="muted" />
+			<ThinkingBlock testId="reading-thinking-block" label="Your thinking" text={answer.readingThinking} />
 		)}
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="answered-card">
 			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -135,12 +135,11 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			)}
 
 			{(answer.thinking ?? answer.note) && (
-				<div data-testid="your-thinking" className="mt-3 border-l-2 border-primary/40 pl-3">
-					<span className="mb-0.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-						Your thinking
-					</span>
-					<span className="lh-prose block whitespace-pre-wrap text-foreground/90">{answer.thinking ?? answer.note}</span>
-				</div>
+				/* The SAME unified row (owner round, 2026-10-05): the quiz answer's
+				    thinking is the identical collapsible ThinkingBlock — it just
+				    happens to sit inside the quiz container. Same placement, same
+				    trigger, same 50%-italic quote block on expand. */
+				<ThinkingBlock testId="your-thinking" label="Your thinking" text={answer.thinking ?? answer.note ?? ""} />
 			)}
 
 			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper
@@ -160,8 +159,8 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 						{whyOpen ? "Hide why" : "Why"}
 					</button>
 					{whyOpen && (
-						<div className="mt-1.5 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
-							<span className="font-medium text-foreground">Why: </span>
+						<div className="mt-1.5 rounded-lg bg-muted py-2 text-sm text-foreground/50">
+							<span className="font-medium text-muted-foreground">Why: </span>
 							<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
 						</div>
 					)}
@@ -169,8 +168,8 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			) : (
 				isQuiz &&
 				answer.explanation && (
-					<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-muted-foreground">
-						<span className="font-medium text-foreground">Why: </span>
+					<div className="mt-3 rounded-lg bg-muted py-2 text-sm text-foreground/50">
+						<span className="font-medium text-muted-foreground">Why: </span>
 						{/* The markdown wrapper must go truly inline — a block <p> after the
 						   "Why:" label created the oversized leading gap (owner's fix list). */}
 						<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>

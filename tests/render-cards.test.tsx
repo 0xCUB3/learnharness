@@ -286,9 +286,13 @@ describe("render smoke tests", () => {
 			thinking: "I picked Venus because it looks brightest — but now I realize brightness isn't distance.",
 		});
 		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
-		assert.ok(html.includes('data-testid="your-thinking"'), "the thinking block exists");
+		assert.ok(html.includes('data-testid="your-thinking"'), "the thinking row exists");
 		assert.match(html, /Your thinking/, "labeled as the learner's voice");
-		assert.match(html, /brightness isn&#x27;t distance/, "the thinking itself renders");
+		// COLLAPSED ARRIVAL (owner round 2, 2026-10-05): the SSR output is the
+		// trigger row only — the thinking text is one click away, never loud.
+		assert.ok(html.includes('data-testid="your-thinking-trigger"'), "the trigger row");
+		assert.ok(html.includes('aria-expanded="false"'), "arrives collapsed");
+		assert.ok(!html.includes("brightness isn&#x27;t distance"), "the text is hidden until expanded");
 		assert.ok(!html.includes("Note:"), "no longer a muted 'Note:' footnote");
 		// The thinking sits ABOVE the verdict's explanation — the dialogue of
 		// thinking, not an afterthought.
@@ -580,8 +584,8 @@ describe("predict vs check rendering", () => {
 		});
 		const html = renderToStaticMarkup(<AnsweredCard answer={withReading} />);
 		// The unified ThinkingBlock (owner round, 2026-10-05): the reading
-		// thoughts render BEFORE the card, user-side (right shell), under the
-		// plain "Your thinking" label — no longer an inset inside the answer.
+		// thoughts render BEFORE the card as the collapsed user-thinking row
+		// — same trigger, same 50%-italic quote block on expand.
 		const blockAt = html.indexOf("reading-thinking-block");
 		const cardAt = html.indexOf("answered-card");
 		assert.ok(blockAt !== -1, "the lifted block renders");
@@ -589,10 +593,11 @@ describe("predict vs check rendering", () => {
 		assert.ok(html.includes("Your thinking"), "the plain label");
 		assert.ok(!html.includes("Your thinking while reading"), "the old verbose label is gone");
 		assert.ok(!html.includes("your-reading-thinking"), "the in-card inset is gone");
-		assert.ok(html.includes("answering thought"), "the answer thinking stays inside the card");
-		assert.ok(html.includes("was unsure mid-paragraph"));
+		// COLLAPSED ARRIVAL: SSR shows the triggers, not the texts.
+		assert.ok(html.includes('data-testid="your-thinking-trigger"'), "the answer thinking stays inside the card");
+		assert.ok(!html.includes("answering thought") && !html.includes("was unsure mid-paragraph"), "texts hidden until expanded");
 		const legacy = { ...buildAnswer(quizQD(), { values: ["Mercury"] }), note: "a 2026-09 answer" };
 		const legacyHtml = renderToStaticMarkup(<AnsweredCard answer={legacy} />);
-		assert.ok(legacyHtml.includes("a 2026-09 answer"), "records from before the rename still render");
+		assert.ok(legacyHtml.includes("a 2026-09 answer") || legacyHtml.includes('data-testid="your-thinking-trigger"'), "records from before the rename still render");
 	});
 });

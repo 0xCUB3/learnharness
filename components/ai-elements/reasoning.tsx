@@ -31,7 +31,6 @@ interface ReasoningContextValue {
   isStreaming: boolean;
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
-  duration: number | undefined;
 }
 
 const ReasoningContext = createContext<ReasoningContextValue | null>(null);
@@ -49,11 +48,9 @@ export type ReasoningProps = ComponentProps<typeof Collapsible> & {
   open?: boolean;
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
-  duration?: number;
 };
 
 const AUTO_CLOSE_DELAY = 1000;
-const MS_IN_S = 1000;
 
 export const Reasoning = memo(
   ({
@@ -62,7 +59,6 @@ export const Reasoning = memo(
     open,
     defaultOpen,
     onOpenChange,
-    duration: durationProp,
     children,
     ...props
   }: ReasoningProps) => {
@@ -79,27 +75,8 @@ export const Reasoning = memo(
       onChange: onOpenChange,
       prop: open,
     });
-    const [duration, setDuration] = useControllableState<number | undefined>({
-      defaultProp: undefined,
-      prop: durationProp,
-    });
-
     const hasEverStreamedRef = useRef(isStreaming);
     const [hasAutoClosed, setHasAutoClosed] = useState(false);
-    const startTimeRef = useRef<number | null>(null);
-
-    // Track when streaming starts and compute duration
-    useEffect(() => {
-      if (isStreaming) {
-        hasEverStreamedRef.current = true;
-        if (startTimeRef.current === null) {
-          startTimeRef.current = Date.now();
-        }
-      } else if (startTimeRef.current !== null) {
-        setDuration(Math.ceil((Date.now() - startTimeRef.current) / MS_IN_S));
-        startTimeRef.current = null;
-      }
-    }, [isStreaming, setDuration]);
 
     // Auto-close when streaming ends (once only, and only if it ever streamed)
     useEffect(() => {
@@ -126,8 +103,8 @@ export const Reasoning = memo(
     );
 
     const contextValue = useMemo(
-      () => ({ duration, isOpen, isStreaming, setIsOpen }),
-      [duration, isOpen, isStreaming, setIsOpen]
+      () => ({ isOpen, isStreaming, setIsOpen }),
+      [isOpen, isStreaming, setIsOpen]
     );
 
     return (
@@ -148,17 +125,19 @@ export const Reasoning = memo(
 export type ReasoningTriggerProps = ComponentProps<
   typeof CollapsibleTrigger
 > & {
-  getThinkingMessage?: (isStreaming: boolean, duration?: number) => ReactNode;
+  getThinkingMessage?: (isStreaming: boolean) => ReactNode;
 };
 
-const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number) => {
-  if (isStreaming || duration === 0) {
+/* The settled label (owner round, 2026-10-05): static "Agent's thinking" —
+   the duration was live-turn state that died on remount anyway ("thought
+   for a few seconds"), bookkeeping for information we knowingly lose. The
+   label pairs with the user's collapsed "Your thinking" rows — one
+   language; motion (spinner + shimmer) stays the working signal. */
+const defaultGetThinkingMessage = (isStreaming: boolean) => {
+  if (isStreaming) {
     return <Shimmer duration={1}>Thinking...</Shimmer>;
   }
-  if (duration === undefined) {
-    return <p>Thought for a few seconds</p>;
-  }
-  return <p>Thought for {duration} seconds</p>;
+  return <p>Agent's thinking</p>;
 };
 
 export const ReasoningTrigger = memo(
@@ -168,7 +147,7 @@ export const ReasoningTrigger = memo(
     getThinkingMessage = defaultGetThinkingMessage,
     ...props
   }: ReasoningTriggerProps) => {
-    const { isStreaming, isOpen, duration } = useReasoning();
+    const { isStreaming, isOpen } = useReasoning();
 
     return (
       <CollapsibleTrigger
@@ -188,7 +167,7 @@ export const ReasoningTrigger = memo(
                 spinner (owner, 2026-10-02): the handoff between the two
                 states must be visually seamless, one size everywhere. */}
             {isStreaming && <BrailleSpinner label="Thinking" />}
-            {getThinkingMessage(isStreaming, duration)}
+            {getThinkingMessage(isStreaming)}
             <ChevronDownIcon
               className={cn(
                 "size-4 transition-transform",

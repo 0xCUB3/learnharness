@@ -97,16 +97,16 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 }
 
 export function ThinkingCard({ data }: { data: PracticeThinkingData }) {
-	// One component, two registers (owner ruling): the committed register
-	// carries the primary rail (the quiz answer thinking's paint), the
-	// working register the muted one.
+	// The unified row (owner round, 2026-10-05): one style — collapsed
+	// arrival, 50%-italic quote block on expand. The register survives only
+	// in the label ("Your solution" when committed) and the data-commit
+	// flag for the tests.
 	return (
 		<ThinkingBlock
 			testId="thinking-card"
 			dataCommit={data.commit}
 			label={data.commit ? "Your solution" : "Your thinking"}
 			text={data.text}
-			rail={data.commit ? "primary" : "muted"}
 		/>
 	);
 }
