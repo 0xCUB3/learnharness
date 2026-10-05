@@ -700,7 +700,7 @@ function SessionsSidebar() {
 				    half/half row): full-width rows read cleaner and give the
 				    labels room; teaching keeps the original draft route,
 				    practice carries its mode. */}
-				<div className="mx-3 mb-1 flex flex-col gap-1.5">
+				<div className="mx-3 mb-2 flex flex-col gap-1.5">
 					<button
 						type="button"
 						data-testid="new-session"
@@ -723,7 +723,7 @@ function SessionsSidebar() {
 					</button>
 				</div>
 
-				<div className="mx-3 mb-1 flex items-center gap-2">
+				<div className="mx-3 mb-2 flex items-center gap-2">
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
 					<Hint label="Search sessions" action="sessions-search" side="bottom">
 					<span className="relative flex-1">
@@ -757,7 +757,7 @@ function SessionsSidebar() {
 				    Practice / All — the real modes first, "All" as the escape
 				    hatch on the right, mirroring the create-buttons above.
 				    Persisted client-side. */}
-				<div className="mx-3 mb-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="session-kind-filter">
+				<div className="mx-3 mb-2 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5" data-testid="session-kind-filter">
 					{(["teach", "practice", "all"] as const).map((f) => (
 						<button
 							key={f}
