@@ -42,6 +42,12 @@ export interface ServerEvents {
 	 *  Same notify-then-fetch contract as the turn events: open views of
 	 *  the chat refetch and adopt the durable record. */
 	"record-changed": { chatId: string };
+	/** A compaction started/finished for the chat (owner round 14,
+	 *  2026-10-05). running=true is the SEND GATE: while a compaction is
+	 *  in flight the server structurally refuses model interaction for
+	 *  the chat; the client mirrors it by disabling the composer/dock
+	 *  submit. */
+	"compaction-changed": { chatId: string; running: boolean };
 }
 
 export type ServerEventType = keyof ServerEvents;
@@ -56,6 +62,7 @@ export const SERVER_EVENT_TYPES = [
 	"activity-changed",
 	"chats-changed",
 	"record-changed",
+	"compaction-changed",
 ] as const satisfies readonly ServerEventType[];
 
 /** One notification: the type discriminates the payload. */

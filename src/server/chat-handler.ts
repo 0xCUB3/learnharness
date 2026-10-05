@@ -39,6 +39,9 @@ import { applyParkedDismissal } from "./dismissal-park.ts";
 import { registerTurn, unregisterTurn } from "./turn-runs.ts";
 import { persistTurn, triggerExtraction } from "./turn-service.ts";
 import { hasProbeDone, danglingQuestionOf } from "../core/native-messages.ts";
+import { composeInstructions } from "../agent/teacher-agent.ts";
+import { ensureCompacted, kickCompaction, effectiveThresholdTokens } from "./compaction.ts";
+import { catalogContextLimits } from "./model-catalog.ts";
 import { emit } from "../core/events.ts";
 import { settledTurnResponse } from "./turn-runs.ts";
 import { asAgentMessages } from "../core/native-messages.ts";
@@ -168,7 +171,7 @@ export async function handleChatInput(
 	input: TurnInput,
 	buildAgent?: (opts: AgentBuildOptions & { teaching: boolean }) => TeachingAgent,
 ): Promise<Response> {
-	const record = stores.chatStore.getChat(chatId);
+	let record = stores.chatStore.getChat(chatId);
 	if (!record) {
 		return Response.json({ error: "Unknown chat" }, { status: 404 });
 	}
@@ -203,6 +206,34 @@ export async function handleChatInput(
 		console.info(`[chat ${chatId}] turn refused — ${JSON.stringify(envelope)}`);
 		return Response.json(envelope, { status: 503 });
 	}
+
+	// THE COMPACTION GATE (owner round 14, 2026-10-05 — the structural
+	// ruling: NOTHING model-facing for this chat interleaves with a
+	// running compaction): await any in-flight compaction (the settle
+	// kick usually finished inside the learner's answer pause), and if
+	// the record is STILL over threshold, compact synchronously — this
+	// request waits. Skipped under tests (the extraction precedent);
+	// placement mirrors the BYOK/key gates — BEFORE appends and
+	// beginTurn, no liveness effects — and the record re-reads after
+	// because compaction appends the marker.
+	const conversationEngine = piEngineForSpec(conversation);
+	const modelIdForCompaction = `${conversationEngine.model.provider}:${conversationEngine.model.id}`;
+	await ensureCompacted(
+		{
+			chatStore: stores.chatStore,
+			engine: conversationEngine,
+			modelId: modelIdForCompaction,
+			kind: record.kind === "practice" ? "practice" : hasProbeDone(record.messages) ? "teach" : "probe",
+			thresholdTokens: effectiveThresholdTokens(
+				effective.compaction?.thresholdTokens,
+				catalogContextLimits().get(modelIdForCompaction),
+			),
+			systemPromptTokens: Math.ceil(composeInstructions(record.kind === "practice" ? "practice" : "teacher").length / 4),
+		},
+		chatId,
+	);
+	const compactedRecord = stores.chatStore.getChat(chatId);
+	if (compactedRecord) record = compactedRecord;
 
 	// The input's native appends (pure; the honest 400 for an answer with no
 	// pending question call). Computed BEFORE beginTurn so a refused input
@@ -294,7 +325,8 @@ export async function handleChatInput(
 	// BYOK (owner, 2026-09-22): the conversation chain was resolved by the
 	// turn gate above (chat.model override → strong slot → refused) — the
 	// engine build is pure from here; thinking levels clamp natively.
-	const engine = piEngineForSpec(conversation);
+	// (Built once above the compaction gate; reused verbatim.)
+	const engine = conversationEngine;
 	// Provider-qualified stamp (model slots wave): matches the price table's
 	// provider:id keys.
 	const modelId = `${engine.model.provider}:${engine.model.id}`;
@@ -475,6 +507,36 @@ export async function handleChatInput(
 				// ones stay parked for the chat's next run (the registry is the
 				// stranding safety net — the agent's undrained copy died above).
 				reconcileUserSteers(chatId, stamped);
+				// THE SETTLE KICK (owner round 14): the turn settled — if the
+				// projection is now over threshold, the summary starts in the
+				// background, INSIDE the learner's reading/answering pause
+				// (question/problem poses end runs, so this moment is always a
+				// between-runs window). The next turn's ensureCompacted gate
+				// awaits whatever this leaves running; a lost engine or a
+				// beneath-threshold record is a silent no-op. Skipped under
+				// tests (the extraction precedent — scripted chats are
+				// fixtures; the service itself is pinned directly).
+				if (process.env.NODE_ENV !== "test")
+					kickCompaction(() => {
+						const fresh = effectiveSettings();
+						const spec = resolveConversationSpec(stores.chatStore.getChat(chatId)?.settings, fresh.models.strong);
+						if (!spec) return null;
+						const kickEngine = piEngineForSpec(spec);
+						const kickModelId = `${kickEngine.model.provider}:${kickEngine.model.id}`;
+						const freshRecord = stores.chatStore.getChat(chatId);
+						if (!freshRecord) return null;
+						return {
+							chatStore: stores.chatStore,
+							engine: kickEngine,
+							modelId: kickModelId,
+							kind: freshRecord.kind === "practice" ? "practice" : hasProbeDone(freshRecord.messages) ? "teach" : "probe",
+							thresholdTokens: effectiveThresholdTokens(
+								fresh.compaction?.thresholdTokens,
+								catalogContextLimits().get(kickModelId),
+							),
+							systemPromptTokens: Math.ceil(composeInstructions(freshRecord.kind === "practice" ? "practice" : "teacher").length / 4),
+						};
+					}, chatId);
 			},
 		});
 		// The turn is now a live background object: register it so any view
