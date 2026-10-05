@@ -1,3 +1,5 @@
+import type { GraphNode } from "./contracts/graph.ts";
+
 /**
  * Selection-facing chain views — pure + browser-safe (the shell's chain
  * table consumes these; the barrel exports them). Born in the practice
@@ -55,6 +57,27 @@ export function chainsForSelection(
  *  singleton shows its "(no premises)" marker. Pure + browser-safe.
  *  Unknown ids fall back to the raw id (honest, never guessed).
  *  Premises sort by id — the same determinism law as chainsForSelection. */
+/** Resolve ONE target string to a canonical proposition id (owner round
+ *  9, 2026-10-05 — the mastery-trace contract): id first (exact), then
+ *  name (case-insensitive, trimmed — names are presentational handles,
+ *  not unique; an ambiguous name resolves to the FIRST node in store
+ *  order). Returns null when nothing matches — the caller rejects.
+ *  Validation set is the WHOLE graph, not the session's picks: pickless
+ *  sessions and future graph-tools poses stay valid. */
+export function resolveTargetId(
+	target: string,
+	nodes: ReadonlyArray<Pick<GraphNode, "id" | "name">>,
+): string | null {
+	const t = target.trim();
+	if (t.length === 0) return null;
+	if (nodes.some((n) => n.id === t)) return t;
+	const lower = t.toLowerCase();
+	for (const n of nodes) {
+		if (n.name.trim().toLowerCase() === lower) return n.id;
+	}
+	return null;
+}
+
 export function formatChainLine(
 	chain: Pick<ReasoningChain, "premises" | "conclusion">,
 	propositions: Readonly<Record<string, { name: string }>>,

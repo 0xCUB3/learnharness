@@ -203,11 +203,16 @@ export interface GraphContextPick {
  *  feeds the transcript's collapsible GraphContextCard. No more seed
  *  text glued into the first prompt. */
 export function newGraphContextMessage(picks: readonly GraphContextPick[], chains: readonly string[]): LhMarkerMessage {
+	// IDS FIRST (owner round 9, 2026-10-05 — the mastery-trace contract):
+	// each proposition is introduced ONCE with its id, name, and statement;
+	// the problem tool's `target` field takes these ids (names normalize to
+	// ids at the seam). Chains below stay NAMES — they are comprehension
+	// context, not tags; names read, ids reference.
 	const lines = [
 		"Contextualization — the learner picked these propositions from their knowledge map when starting this session:",
 		"",
-		"Propositions:",
-		...picks.map((p) => `- ${p.name}: ${p.statement}`),
+		"Propositions (id — name: statement; the problem tool's target field uses these ids):",
+		...picks.map((p) => `- [${p.id}] ${p.name}: ${p.statement}`),
 	];
 	if (chains.length > 0) {
 		lines.push("", "Reasoning chains among them (premises → conclusion):", ...chains.map((c) => `- ${c}`));

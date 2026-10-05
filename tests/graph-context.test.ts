@@ -49,7 +49,9 @@ describe("newGraphContextMessage", () => {
 		const m = newGraphContextMessage(PICKS, ["Modus ponens → Soundness"]);
 		assert.equal(m.customType, "graph-context");
 		assert.match(m.content, /Contextualization — the learner picked these propositions/);
-		assert.ok(m.content.includes("- Modus ponens: If P implies Q and P holds, Q holds."));
+		// IDS FIRST (owner round 9): every pick carries its id — the problem
+		// tool's target field references these; names alone no longer.
+		assert.ok(m.content.includes(`- [${PICKS[0]!.id}] Modus ponens: If P implies Q and P holds, Q holds.`));
 		assert.ok(m.content.includes("Reasoning chains among them"));
 		assert.ok(m.content.includes("- Modus ponens → Soundness"));
 		// the UI payload is the structured pick, not the flattened text
@@ -133,8 +135,8 @@ describe("POST /api/chats — graphContext becomes message[0]", () => {
 		const m = record.messages[0] as { role: string; customType: string; content: string };
 		assert.equal(m.role, "custom");
 		assert.equal(m.customType, "graph-context");
-		assert.ok(m.content.includes("- Modus ponens: If P implies Q and P holds, Q holds."));
-		// the chain AMONG the picks rides the marker (formatChainLine shape)
+		assert.ok(m.content.includes("- [n_a] Modus ponens: If P implies Q and P holds, Q holds."));
+		// the chain AMONG the picks rides the marker (formatChainLine shape — names)
 		assert.ok(m.content.includes("- Modus ponens → Soundness"));
 	});
 
