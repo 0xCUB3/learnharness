@@ -864,6 +864,28 @@ function SessionsSidebar() {
 						>
 							Rename
 						</button>
+						{/* Export as Markdown (owner, release polish 2026-10-06): the
+					    session-markdown engine's user-facing debut — same-origin
+						    anchor download; the route's Content-Disposition names the
+						    file. Sits with the management actions, above Delete (the
+						    destructive action stays last — the danger-fence law). */}
+						<button
+							type="button"
+							data-testid="ctx-export-md"
+							onClick={() => {
+								const chatId = ctxChatId;
+								setCtxChatId(null);
+								const a = document.createElement("a");
+								a.href = `/api/chats/${chatId}/markdown`;
+								a.download = ""; // the route's filename wins
+								document.body.appendChild(a);
+								a.click();
+								a.remove();
+							}}
+							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
+						>
+							Export as Markdown…
+						</button>
 						<button
 							type="button"
 							data-testid="ctx-delete"

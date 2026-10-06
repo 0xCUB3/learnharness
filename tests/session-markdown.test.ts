@@ -51,6 +51,22 @@ function result(
 	} as never;
 }
 
+/** An assistant message carrying one toolCall part (the practice join's
+ *  call side — args live HERE, the results are bare acks). */
+function callMsg(id: string, callId: string, name: string, args: unknown): LhMessage {
+	return {
+		id,
+		role: "assistant",
+		content: [{ type: "toolCall", id: callId, name, arguments: args }],
+		api: "openai-completions",
+		provider: "openrouter",
+		model: "test",
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		stopReason: "stop",
+		timestamp: Date.now(),
+	} as never;
+}
+
 describe("messageMarkdown", () => {
 	it("renders speaker blocks with the id anchor", () => {
 		const md = messageMarkdown(user("u1", "teach me the chain rule"), "u1");
@@ -102,6 +118,64 @@ describe("messageMarkdown", () => {
 		assert.equal(messageMarkdown(result("r1", "j1", "research", { brief: "long" }), "r1"), "### Tool · r1\n\n*research result delivered*");
 		assert.equal(messageMarkdown(result("r2", "j2", "research", {}, true), "r2"), null, "a failed call is retry context");
 		assert.equal(messageMarkdown(user("u3", "   "), "u3"), null, "empty text renders nothing");
+	});
+});
+
+describe("sessionMarkdown — the practice join (owner-approved, 2026-10-06)", () => {
+	it("a problem result renders the POSE's statement, joined off the call id", () => {
+		const messages = [
+			callMsg("a1", "call-p1", "problem", {
+				statement: "Push the prior through the learning transition.",
+				mode: "recall",
+				target: [],
+				modelSolution: "Two phases, in forced order.",
+			}),
+			result("r1", "call-p1", "problem", null),
+		];
+		const md = sessionMarkdown(messages);
+		assert.ok(md.includes("### Problem"), "the Problem heading renders");
+		assert.ok(md.includes("Push the prior through the learning transition."), "the statement renders");
+		assert.ok(!md.includes("Two phases"), "the solution does NOT leak at pose time");
+	});
+
+	it("a conclude result renders outcome + verdict + the pose's model solution as the reveal", () => {
+		const messages = [
+			callMsg("a1", "call-p1", "problem", {
+				statement: "Compute P(knows | correct).",
+				modelSolution: "Bayes, twice over.",
+			}),
+			result("r1", "call-p1", "problem", null),
+			callMsg("a2", "call-c1", "conclude", { outcome: "solvedWithHints", verdict: "Right answer, one nudge." }),
+			result("r2", "call-c1", "conclude", null),
+		];
+		const md = sessionMarkdown(messages);
+		assert.ok(md.includes("### Concluded"), "the Concluded heading renders");
+		assert.ok(md.includes("**Solved with hints.** Right answer, one nudge."), "outcome reads as prose, then the verdict");
+		assert.ok(md.includes("> **Model solution**"), "the reveal block quotes the committed solution");
+		assert.ok(md.includes("> Bayes, twice over."), "the solution text carries the blockquote prefix");
+	});
+
+	it("a dismissed problem concludes without leaking the model solution", () => {
+		const messages = [
+			callMsg("a1", "call-p1", "problem", { statement: "Derive the posterior.", modelSolution: "The answer." }),
+			result("r1", "call-p1", "problem", null),
+			callMsg("a2", "call-c1", "conclude", { outcome: "dismissed" }),
+			result("r2", "call-c1", "conclude", null),
+		];
+		const md = sessionMarkdown(messages);
+		assert.ok(md.includes("The learner skipped this problem."), "the dismissal reads as a skip");
+		assert.ok(!md.includes("The answer."), "no reveal on a skipped problem — the card's refusal law");
+		assert.ok(md.includes("### Problem"), "the statement still renders (it was on screen)");
+	});
+
+	it("an errored pose renders nothing — the failed-tool law holds for practice", () => {
+		const messages = [
+			callMsg("a1", "call-p1", "problem", { statement: "Never acked." }),
+			result("r1", "call-p1", "problem", null, true),
+		];
+		const md = sessionMarkdown(messages);
+		assert.ok(!md.includes("### Problem"), "no problem block");
+		assert.ok(!md.includes("Never acked."), "no statement either — the pose never happened");
 	});
 });
 

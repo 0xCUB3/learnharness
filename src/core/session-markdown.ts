@@ -21,6 +21,11 @@
  */
 
 import type { LhMessage } from "./native-messages.ts";
+import {
+	PRACTICE_CONCLUDE_TOOL,
+	PRACTICE_PROBLEM_TOOL,
+	problemInputForConclude,
+} from "./native-messages.ts";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 
 /** The user-facing text blocks of a native message (string or text parts). */
@@ -33,8 +38,45 @@ function textOf(content: unknown): string[] {
 		.filter((t) => t.trim().length > 0);
 }
 
+/** The practice join context (owner-approved, 2026-10-06 export round):
+ *  practice tool RESULTS are acks — the statement, outcome, and verdict
+ *  all live in the assistant's call arguments, and the model solution
+ *  commits at POSE time. The markdown blocks join them the same way the
+ *  view seam folds cards (clean-only: a refused pose's result is errored
+ *  and renders nothing before this join is ever reached). */
+export interface MarkdownContext {
+	messages: ReadonlyArray<LhMessage>;
+	/** toolCallId → the call part's name + arguments. */
+	calls: Map<string, { name: string; args: Record<string, unknown> | undefined }>;
+}
+
+function markdownContext(messages: ReadonlyArray<LhMessage>): MarkdownContext {
+	const calls: MarkdownContext["calls"] = new Map();
+	for (const message of messages) {
+		if ((message as { role?: string }).role !== "assistant") continue;
+		const content = (message as { content?: unknown }).content;
+		if (!Array.isArray(content)) continue;
+		for (const part of content) {
+			const block = part as { type?: string; id?: string; name?: string; arguments?: unknown };
+			if (block.type === "toolCall" && typeof block.id === "string") {
+				calls.set(block.id, {
+					name: typeof block.name === "string" ? block.name : "",
+					args: (block.arguments ?? undefined) as Record<string, unknown> | undefined,
+				});
+			}
+		}
+	}
+	return { messages, calls };
+}
+
+/** solvedWithHints → "Solved with hints" — the outcome enum reads as prose. */
+function outcomeLabel(outcome: string): string {
+	const spaced = outcome.replace(/([a-z])([A-Z])/g, (_, lo: string, hi: string) => `${lo} ${hi.toLowerCase()}`);
+	return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 /** One tool result's learner-visible outcome, rendered as body lines. */
-function toolResultBody(result: ToolResultMessage): { heading: string; body: string[] } {
+function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { heading: string; body: string[] } {
 	const out = result.details as
 		| Partial<{
 				questionText: string;
@@ -61,6 +103,29 @@ function toolResultBody(result: ToolResultMessage): { heading: string; body: str
 		return { heading, body };
 	}
 
+	if (ctx !== undefined && result.toolName === PRACTICE_PROBLEM_TOOL) {
+		const statement = ctx.calls.get(result.toolCallId)?.args?.statement;
+		return {
+			heading: "Problem",
+			body: [typeof statement === "string" && statement.trim() ? statement.trim() : "(no statement)"],
+		};
+	}
+
+	if (ctx !== undefined && result.toolName === PRACTICE_CONCLUDE_TOOL) {
+		const args = ctx.calls.get(result.toolCallId)?.args;
+		const outcome = typeof args?.outcome === "string" && args.outcome.trim() ? args.outcome.trim() : "";
+		const verdict = typeof args?.verdict === "string" && args.verdict.trim() ? args.verdict.trim() : undefined;
+		if (outcome === "dismissed") return { heading: "Concluded", body: ["The learner skipped this problem."] };
+		const label = outcome !== "" ? `**${outcomeLabel(outcome)}.**` : "**Concluded.**";
+		const body = [verdict !== undefined ? `${label} ${verdict}` : label];
+		// The reveal (owner round, 2026-10-05): the solution committed at
+		// pose time — the newest cleanly-posed problem before this conclude.
+		const input = problemInputForConclude(ctx.messages, result.toolCallId);
+		const solution = typeof input?.modelSolution === "string" && input.modelSolution.trim() ? input.modelSolution.trim() : undefined;
+		if (solution !== undefined) body.push(`> **Model solution**\n>\n> ${solution.replace(/\n/g, "\n> ")}`);
+		return { heading: "Concluded", body };
+	}
+
 	if (result.toolName === "ask_user_question") {
 		const question = typeof out?.questionText === "string" && out.questionText ? out.questionText : "(no question text)";
 		const body = [`**Q:** ${question}`];
@@ -84,7 +149,12 @@ function toolResultBody(result: ToolResultMessage): { heading: string; body: str
  * nothing (a failed tool call, a bare marker, an empty text part set).
  * `mid` is the provenance anchor shown when `anchors` is on.
  */
-export function messageMarkdown(message: LhMessage, mid: string, anchors = true): string | null {
+export function messageMarkdown(
+	message: LhMessage,
+	mid: string,
+	anchors = true,
+	ctx?: MarkdownContext,
+): string | null {
 	const role = (message as { role?: string }).role;
 	const anchor = anchors ? ` · ${mid}` : "";
 	const parts: string[] = [];
@@ -100,7 +170,7 @@ export function messageMarkdown(message: LhMessage, mid: string, anchors = true)
 	} else if (role === "toolResult") {
 		const result = message as ToolResultMessage;
 		if (result.isError) return null; // retry context, not learning evidence
-		const { heading, body } = toolResultBody(result);
+		const { heading, body } = toolResultBody(result, ctx);
 		parts.push(`### ${heading}${anchor}\n\n${body.join("\n\n")}`);
 	}
 
@@ -120,8 +190,9 @@ export function sessionMarkdown(
 ): string {
 	const blocks: string[] = [];
 	if (opts.title !== undefined && opts.title.length > 0) blocks.push(`# ${opts.title}`);
+	const ctx = markdownContext(messages);
 	for (const message of messages) {
-		const block = messageMarkdown(message, (message as { id?: string }).id ?? "", opts.anchors ?? true);
+		const block = messageMarkdown(message, (message as { id?: string }).id ?? "", opts.anchors ?? true, ctx);
 		if (block !== null) blocks.push(block);
 	}
 	return blocks.join("\n\n");
