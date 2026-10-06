@@ -52,12 +52,6 @@ export function Home({
 	const [setupOpen, setSetupOpen] = useState(false);
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// topic draft; the strip lives in the stats bar's middle slot.
-	// Tab navigates INTO the composer (owner, keyboard round 2026-10-06):
-	// the only text field on this surface — the cycle's whole chain.
-	const cycleComposer = useCallback((): readonly HTMLElement[] =>
-		Array.from(document.querySelectorAll<HTMLElement>('[data-testid="composer"] textarea')),
-		[]);
-	useFieldCycle(cycleComposer);
 	const dictation = useDictation({
 		// Ref-first: the join reads the mirror so the send resuming after
 		// `await finish()` sees the dictated tail.
@@ -72,6 +66,16 @@ export function Home({
 	 * the keyboard from the stop. Falling edge only; this surface's only
 	 * dictation target IS this textarea, so no case-split is needed. */
 	const topicInputRef = useRef<HTMLTextAreaElement>(null);
+	// Tab navigates INTO the topic composer (owner, keyboard round
+	// 2026-10-06): the only text field on this surface — and home's
+	// composer is its OWN textarea, not the shared Composer component,
+	// so the chain is the ref itself (the smoke caught a selector that
+	// matched nothing here).
+	const cycleTopicField = useCallback(
+		(): readonly HTMLElement[] => (topicInputRef.current ? [topicInputRef.current] : []),
+		[],
+	);
+	useFieldCycle(cycleTopicField);
 	const dictationWasActiveRef = useRef(false);
 	useEffect(() => {
 		if (dictation.active) {
