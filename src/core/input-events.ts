@@ -194,7 +194,10 @@ export function parseChatInput(input: unknown): ChatInput {
  * else 400s honestly instead of silently interrupting a question or
  * double-answering.
  */
-export function inputAppends(record: { messages: LhMessage[] }, input: ChatInput): LhMessage[] {
+export function inputAppends(
+	record: { messages: LhMessage[]; kind?: string },
+	input: ChatInput,
+): LhMessage[] {
 	switch (input.type) {
 		case "text":
 			return [...dismissalConclusion(record), newUserMessage(input.text)];
@@ -219,7 +222,7 @@ export function inputAppends(record: { messages: LhMessage[] }, input: ChatInput
 			// between-problems affordance — practice sessions only, nothing
 			// active (mid-problem input rides the dock), and the client gates
 			// make violations unreachable in practice anyway.
-			if ((record as { kind?: string }).kind !== "practice") {
+			if (record.kind !== "practice") {
 				throw new ChatInputError("next input is a practice-session affordance");
 			}
 			if (activeProblemOf(record.messages)) {

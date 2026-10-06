@@ -1,6 +1,6 @@
 "use client";
 
-import { CornerDownLeftIcon, SquareIcon } from "lucide-react";
+import { ArrowRightIcon, CornerDownLeftIcon, SquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Hint } from "@/components/ui/hint";
 
@@ -124,20 +124,39 @@ export function Composer({
 				 only an empty composer morphs it to Stop. ESC keeps its
 				 confirm-popup abort in every state, so stop is never
 				 unreachable. No tooltip — the ↵ glyph is the affordance
-				 (owner, subtlety round 2026-09-25). */}
-				<button
-					type="submit"
-					aria-label={busy && !canSend ? "Stop" : "Send"}
-					disabled={!busy && !canSend}
-					className={cn(
-						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
-						busy && !canSend
-							? "bg-secondary text-foreground hover:bg-accent"
-							: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
-					)}
-				>
-					{busy && !canSend ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
-				</button>
+				 (owner, subtlety round 2026-09-25).
+
+				 THE NEXT MORPH (owner round 16 refinement, 2026-10-06): an
+				 empty composer in the practice pause morphs the button into
+				 a wide green NEXT PROBLEM — the affordance IS the button
+				 (click and Enter share one lane), and typing anything
+				 returns the regular send. The green is the app's correct-
+				 answer register (answered-card's green-500/600). */}
+				{nextProblem && !busy && !canSend ? (
+					<button
+						type="submit"
+						data-testid="next-problem-button"
+						aria-label="Next problem"
+						className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-[10px] bg-green-600 px-4 font-ui text-xs font-medium uppercase tracking-wide text-white transition-colors hover:bg-green-500"
+					>
+						Next problem
+						<ArrowRightIcon className="size-4" />
+					</button>
+				) : (
+					<button
+						type="submit"
+						aria-label={busy && !canSend ? "Stop" : "Send"}
+						disabled={!busy && !canSend}
+						className={cn(
+							"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
+							busy && !canSend
+								? "bg-secondary text-foreground hover:bg-accent"
+								: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
+						)}
+					>
+						{busy && !canSend ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
+					</button>
+				)}
 		</form>
 	);
 }

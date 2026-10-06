@@ -1541,43 +1541,26 @@ export function Chat({
 						)
 					}
 					composer={
-						<div className="relative">
-							{/* THE NEXT CHIP (owner round 16): the practice pause's
-							    mouse path — hovering at the composer band's top-right,
-							    the pick-pill chrome register. One click = the move-on
-							    signal; gone the moment a problem is active again. */}
-							{nextReady && (
-								<button
-									type="button"
-									data-testid="next-problem-chip"
-									onClick={sendNext}
-									className="absolute -top-3.5 right-3 z-10 flex items-center gap-1 rounded-md border border-border bg-card px-2 py-0.5 font-ui text-[10px] font-medium uppercase tracking-wider text-foreground shadow-sm transition-colors hover:border-muted-foreground/50 hover:text-foreground"
-								>
-									Next problem
-									<ArrowRightIcon className="size-3" />
-								</button>
-							)}
-							<Composer
-								// Stop aborts ANY in-flight turn (stream-reattach wave): the
-								// square renders while a reattached/wake turn runs too — the
-								// abort channel kills it server-side; stop() alone would
-								// only detach our view.
-								busy={busy}
-								value={text}
-								onChange={applyText}
-								inputRef={composerInputRef}
-								onSend={onSend}
-								onStop={abortInFlightTurn}
-								canSend={canSend}
-								onEscape={dictation.active ? dictation.cancel : undefined}
-								// The pause affordance (owner round 16): the placeholder
-								// IS the hint — empty state, exactly where Enter-on-empty
-								// applies.
-								nextProblem={nextReady}
-								onNext={sendNext}
-								placeholder={nextReady ? "Ask about this problem — or press Enter for the next one…" : undefined}
-							/>
-						</div>
+						<Composer
+							// Stop aborts ANY in-flight turn (stream-reattach wave): the
+							// square renders while a reattached/wake turn runs too — the
+							// abort channel kills it server-side; stop() alone would
+							// only detach our view.
+							busy={busy}
+							value={text}
+							onChange={applyText}
+							inputRef={composerInputRef}
+							onSend={onSend}
+							onStop={abortInFlightTurn}
+							canSend={canSend}
+							onEscape={dictation.active ? dictation.cancel : undefined}
+							// The pause affordance (owner round 16): the placeholder
+							// IS the hint — empty state, exactly where Enter-on-empty
+							// applies.
+							nextProblem={nextReady}
+							onNext={sendNext}
+							placeholder={nextReady ? "Ask about this problem — or press Enter for the next one…" : undefined}
+						/>
 					}
 					onSubmitAnswer={(output) => {
 						if (!pending) return;

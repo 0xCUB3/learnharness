@@ -13,7 +13,9 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Composer, enterAction } from "../components/composer.tsx";
 
-function render(opts: { busy?: boolean; canSend?: boolean; placeholder?: string } = {}) {
+function render(
+	opts: { busy?: boolean; canSend?: boolean; placeholder?: string; nextProblem?: boolean } = {},
+) {
 	return renderToStaticMarkup(
 		<Composer
 			busy={opts.busy ?? false}
@@ -23,6 +25,7 @@ function render(opts: { busy?: boolean; canSend?: boolean; placeholder?: string 
 			onStop={() => {}}
 			canSend={opts.canSend ?? true}
 			{...(opts.placeholder ? { placeholder: opts.placeholder } : {})}
+			{...(opts.nextProblem ? { nextProblem: true, onNext: () => {} } : {})}
 		/>,
 	);
 }
@@ -57,6 +60,26 @@ describe("Composer", () => {
 	it("disabled when nothing to send", () => {
 		const html = render({ canSend: false });
 		assert.ok(/aria-label="Send"[^>]*disabled|disabled[^>]*aria-label="Send"/.test(html), "send disabled");
+	});
+
+	it("THE NEXT MORPH (owner round 16 refinement): empty composer in the pause → wide green Next problem", () => {
+		const html = render({ canSend: false, nextProblem: true });
+		assert.ok(html.includes('data-testid="next-problem-button"'), "the morphed button");
+		assert.match(html, /Next problem/, "the label");
+		assert.ok(html.includes("bg-green-600"), "green — the correct-answer register");
+		assert.ok(!html.includes('aria-label="Send"'), "the square send is gone in the pause");
+	});
+
+	it("typing anything returns the regular send button (canSend outranks the morph)", () => {
+		const html = render({ canSend: true, nextProblem: true });
+		assert.ok(html.includes('aria-label="Send"'), "regular send while there is text");
+		assert.ok(!html.includes('data-testid="next-problem-button"'), "no next morph with text typed");
+	});
+
+	it("busy outranks the morph — stop stays reachable", () => {
+		const html = render({ busy: true, canSend: false, nextProblem: true });
+		assert.ok(html.includes('aria-label="Stop"'), "stop wins the empty lane mid-turn");
+		assert.ok(!html.includes('data-testid="next-problem-button"'), "no next morph mid-turn");
 	});
 });
 
