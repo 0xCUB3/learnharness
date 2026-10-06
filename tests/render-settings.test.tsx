@@ -174,19 +174,30 @@ describe("GraphSection — master switch + chunk budget (wave 7 + 2026-10-02)", 
 	// only other control — it denominates the coverage ring and gates the
 	// auto-extraction trigger, resolved through the same core resolver the
 	// server uses (the 4096-fallback fix).
-	it("renders the master-switch row", () => {
+	it("renders the master-switch row — EXTRACTION since 2026-10-06 (the data channel, renamed when rendering split off)", () => {
 		const html = renderToStaticMarkup(<GraphSection graph={undefined} onSectionChange={() => {}} />);
 		assert.ok(html.includes('data-testid="graph-row-enabled"'));
+		assert.ok(html.includes(">Extraction<"), "the row names the DATA channel, not 'Graph'");
 		assert.ok(!html.includes("graph-row-embedding"), "the dead rungs render nothing");
 		assert.ok(!html.includes("Embedding model"), "the picker is gone");
 		assert.ok(!html.includes("graph-row-clustering"));
 		assert.ok(!html.includes("graph-row-labeling"));
-		assert.ok(tagOf(html, "toggle-graph-enabled").includes('aria-checked="true"'), "absent record = factory ON");
+		assert.ok(tagOf(html, "toggle-extraction-enabled").includes('aria-checked="true"'), "absent record = factory ON");
 	});
 
-	it("a stored off record shows the switch off", () => {
+	it("a stored off record shows the extraction switch off", () => {
 		const html = renderToStaticMarkup(<GraphSection graph={{ enabled: false }} onSectionChange={() => {}} />);
-		assert.ok(tagOf(html, "toggle-graph-enabled").includes('aria-checked="false"'));
+		assert.ok(tagOf(html, "toggle-extraction-enabled").includes('aria-checked="false"'));
+	});
+
+	it("the GRAPH RENDERING row (2026-10-06): display-only — absent record = factory ON, stored off shows off", () => {
+		const html = renderToStaticMarkup(<GraphSection graph={undefined} onSectionChange={() => {}} />);
+		assert.ok(html.includes('data-testid="graph-row-rendering"'));
+		assert.ok(html.includes(">Graph rendering<"));
+		assert.ok(tagOf(html, "toggle-graph-rendering-enabled").includes('aria-checked="true"'), "the home defaults to the canvas");
+		const off = renderToStaticMarkup(<GraphSection graph={{ rendering: false }} onSectionChange={() => {}} />);
+		assert.ok(tagOf(html, "toggle-extraction-enabled").includes('aria-checked="true"'), "rendering off does NOT touch extraction");
+		assert.ok(tagOf(off, "toggle-graph-rendering-enabled").includes('aria-checked="false"'));
 	});
 
 	it("the chunk-budget row: unset shows EMPTY with the factory placeholder + hint — one truth with the trigger", () => {

@@ -325,7 +325,9 @@ export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
  * pattern as the settings gear: outside click or Escape closes. The
  * panel is viewport-capped + scrollable like the coverage dropdown.
  */
-function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
+/** Exported for the chains home (graph rendering off, owner
+ * 2026-10-06): the same bare cumulative-dollars pill + panel. */
+export function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 	const [open, setOpen] = useState(false);
 	// Click anywhere outside (or Escape) closes the panel — the root
 	// wraps button + panel, so the toggle itself keeps working.

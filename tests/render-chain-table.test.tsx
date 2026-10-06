@@ -88,6 +88,16 @@ function render(props: Partial<typeof BASE> = {}) {
 	return renderToStaticMarkup(React.createElement(ChainTableBody, { ...BASE, ...props }));
 }
 
+describe("ChainTableBody — the HOME variant (graph rendering off, 2026-10-06)", () => {
+	it("onClose ABSENT = the page, not the overlay: no close X, everything else intact", () => {
+		const html = render({ onClose: undefined });
+		assert.ok(!html.includes('data-testid="chain-table-close"'), "nothing to close — the table IS the page");
+		assert.ok(html.includes('data-testid="chain-table-search"'), "the search row stays");
+		assert.ok(html.includes("chain"), "the counts stay");
+		assert.ok(html.includes("lh-drag"), "the window-drag band stays (same bar as every surface)");
+	});
+});
+
 describe("ChainTableBody — clusters (the outermost layer)", () => {
 	it("collapsed by default: cluster rows render, chain rows do not", () => {
 		const html = render();

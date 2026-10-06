@@ -24,7 +24,7 @@ describe("FACTORY_SETTINGS (the compiled factory layer)", () => {
 		// wave 7 collapse: the master switch ONLY + the extraction-UX
 		// redesign's chunk budget (2024-09-24); default doubled 8192 with
 		// the digest-aware redesign (owner, 2026-09-30)
-		assert.deepEqual(FACTORY_SETTINGS.graph, { enabled: true, extractionChunkTokens: 8192 });
+		assert.deepEqual(FACTORY_SETTINGS.graph, { enabled: true, rendering: true, extractionChunkTokens: 8192 });
 		const a = FACTORY_SETTINGS.appearance;
 		assert.equal(a.mode, "dark");
 		assert.equal(a.background, null); // the mode's own default, not a factory hex

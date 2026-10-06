@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
+import { ChainsHome } from "@/components/chains-home";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
@@ -17,7 +18,16 @@ import type { TurnUsage } from "@/src/core";
  * under the header and the new-session dock, both of which float over it
  * with no gradient scrims. Sessions live in the toggleable sidebar.
  */
-export function Home({ initialConfigured }: { initialConfigured: boolean }) {
+export function Home({
+	initialConfigured,
+	rendering = true,
+}: {
+	initialConfigured: boolean;
+	/** GRAPH RENDERING off (owner, 2026-10-06): the home's main view is
+	 * the chains view, not the canvas. Read server-side per navigation —
+	 * changing the setting applies on the next visit home. */
+	rendering?: boolean;
+}) {
 	const router = useRouter();
 	const [topic, setTopic] = useState("");
 	/* The topic MIRROR ("nothing gets lost" round, 2026-10-01 — same
@@ -149,16 +159,28 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 			    never needs to receive events — the mask routes the pixels. */}
 			<div className="lh-drag absolute inset-x-0 top-0 h-13" aria-hidden="true" />
 
-			{/* Graph — the main view, full-bleed (owner, graph-view round 1): no
-			    padding on any side; the canvas runs from the sidebar to the right
-			    edge and from the bottom to the top, under everything else. */}
+			{/* The main view — full-bleed (owner, graph-view round 1): no
+			    padding on any side; it runs from the sidebar to the right edge
+			    and from the bottom to the top, under everything else. With
+			    rendering OFF (graph.rendering, owner 2026-10-06) it is the
+			    CHAINS VIEW — the same table as the overlay, in flow; data,
+			    extraction, and the pick flow are untouched. */}
 			<main className="absolute inset-0">
-				<GraphView
-					chainSelectOpen={chainSelectOpen}
-					practiceSelection={pickedIds}
-					onPracticeSelectionChange={setPracticeProps}
-					onChainSelectClose={() => setChainSelectOpen(false)}
-				/>
+				{rendering ? (
+					<GraphView
+						chainSelectOpen={chainSelectOpen}
+						practiceSelection={pickedIds}
+						onPracticeSelectionChange={setPracticeProps}
+						onChainSelectClose={() => setChainSelectOpen(false)}
+					/>
+				) : (
+					<ChainsHome
+						chainSelectOpen={chainSelectOpen}
+						practiceSelection={pickedIds}
+						onPracticeSelectionChange={setPracticeProps}
+						onChainSelectClose={() => setChainSelectOpen(false)}
+					/>
+				)}
 			</main>
 
 			{/* Header floats over the graph — pointer-events-none except the
@@ -185,7 +207,10 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 					    send consumes it). Practice mode with nothing picked
 					    shows the pick HINT so the affordance is discoverable;
 					    teaching mode with nothing picked renders nothing. */}
-					{(practiceProps.length > 0 || mode === "practice") && (
+					{/* While PICKING in the chains home the chip row hides
+					    (owner, 2026-10-06): the floating bar above the composer
+					    already carries count + Clear + Done — one voice, not two. */}
+					{(practiceProps.length > 0 || mode === "practice") && !(rendering === false && chainSelectOpen) && (
 						<div className="mb-2 flex items-center justify-start gap-1.5">
 							<button
 								type="button"
@@ -201,7 +226,9 @@ export function Home({ initialConfigured }: { initialConfigured: boolean }) {
 								<DumbbellIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
 								{practiceProps.length > 0
 									? `${practiceProps.length} ${practiceProps.length === 1 ? "proposition" : "propositions"} selected`
-									: "Pick propositions from the map"}
+									: rendering
+										? "Pick propositions from the map"
+										: "Pick propositions"}
 							</button>
 							{practiceProps.length > 0 && (
 								<button

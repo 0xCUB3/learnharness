@@ -364,16 +364,33 @@ export function GraphSection({
 	const resolved = resolveSettings(graph === undefined ? null : { version: 1, graph }).graph;
 	return (
 		<>
-			<SettingsRow label="Graph" testid="graph-row-enabled">
+			{/* EXTRACTION (renamed, owner 2026-10-06): this switch is the DATA
+			    channel — the pipeline, the auditor, the prober's graph tools. It
+			    was born labeled "Graph" and that label lied once the rendering
+			    switch below arrived: off ≠ no graph, off = the graph stops
+			    growing. The testid keeps the old name's shape (row-enabled) so
+			    this stays one rename, not a test re-pin. */}
+			<SettingsRow label="Extraction" hint="Off = the graph stops growing" testid="graph-row-enabled">
 				<Toggle
 					checked={graph?.enabled ?? true}
-					label="graph enabled"
+					label="extraction enabled"
 					onChange={(on) =>
 						// Compose, never replace-whole (the section PUT is, but the
 					// row must not drop its sibling field — fixed with the budget
 					// row's arrival: the old { enabled: on } wiped a stored budget).
 						onSectionChange({ ...graph, enabled: on })
 					}
+				/>
+			</SettingsRow>
+			{/* GRAPH RENDERING (owner, 2026-10-06 — the release graph-controls
+			    round): display-only. Off = the home shows the chains view
+			    instead of the canvas. The ledgers, the pipeline, everything
+			    data keeps working — that is the extraction switch above. */}
+			<SettingsRow label="Graph rendering" hint="Off = home shows the chains view" testid="graph-row-rendering">
+				<Toggle
+					checked={graph?.rendering ?? true}
+					label="graph rendering enabled"
+					onChange={(on) => onSectionChange({ ...graph, rendering: on })}
 				/>
 			</SettingsRow>
 			<SettingsRow

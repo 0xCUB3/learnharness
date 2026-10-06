@@ -136,7 +136,10 @@ export function ChainTableBody({
 	onClear: () => void;
 	/** Opens the full-death confirm dialog (owner, 2026-09-29 night). */
 	onDelete: () => void;
-	onClose: () => void;
+	/** Dismisses the overlay (top-bar X). ABSENT = the HOME variant
+	 * (graph rendering off, owner 2026-10-06): the table is the page,
+	 * there is nothing to close, and the X does not render. */
+	onClose?: () => void;
 	/** PRACTICE SELECT (2026-10-04): the floating bar's confirm becomes
 	 *  "Practice these" — no delete fence; the caller owns what the
 	 *  selection becomes. */
@@ -260,6 +263,7 @@ export function ChainTableBody({
 						className="lh-no-drag h-8 w-56 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring"
 					/>
 				</div>
+			{onClose && (
 				<button
 					type="button"
 					data-testid="chain-table-close"
@@ -269,6 +273,7 @@ export function ChainTableBody({
 				>
 					<XIcon className="size-4" />
 				</button>
+			)}
 			</TopBar>
 
 			{/* The list: NO per-row lines (owner ruling) — the ONLY horizontal
