@@ -65,6 +65,13 @@ export function KeyboardShortcuts() {
 			if (e.key === "Tab") {
 				e.preventDefault();
 				if (e.shiftKey) window.dispatchEvent(new CustomEvent("lh:kbd-cycle-thinking"));
+				// Plain Tab cycles the active surface's text fields (owner,
+				// keyboard round 2026-10-06) — forward-only, wrapping; each
+				// composer-bearing page answers with its own chain. The quiz
+				// dock's rows↔thinking claim stops propagation at document
+				// level, so a claimed Tab never reaches this dispatch.
+				else if (!e.metaKey && !e.ctrlKey && !e.altKey)
+					window.dispatchEvent(new CustomEvent("lh:kbd-cycle-fields"));
 				return;
 			}
 

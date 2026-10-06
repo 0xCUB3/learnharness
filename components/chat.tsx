@@ -27,6 +27,7 @@ import { useEnterSubmits } from "@/components/enter-submits";
 import { dockStateKey } from "@/components/dock-state-key";
 import { QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
 import { DictationBar, finishDictation, joinDictation, useDictation } from "@/components/dictation";
+import { useFieldCycle } from "@/components/field-cycle";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useServerEvent, useServerResync } from "@/components/server-events";
@@ -591,6 +592,22 @@ export function Chat({
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of
 	// the current text (the page owns the separator, dictate-flush style);
 	// interims ghost in the stats bar's middle slot next to the meter.
+	// TAB CYCLES THE CHAT'S FIELDS (owner, keyboard round 2026-10-06):
+	// reading-thinking → the active dock's field → the composer, in
+	// visual order, forward-only with wrap; Tab from anywhere else
+	// focuses the first live field (navigate IN). Gathered from live
+	// DOM at event time — the docks mount and unmount, refs would go
+	// stale. The quiz dock's rows↔thinking claim never reaches here.
+	const cycleChatFields = useCallback((): readonly HTMLElement[] => {
+		const pick = (sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel));
+		return [
+			...pick('[data-testid="reading-thinking-field"] textarea'),
+			...pick('[data-testid="question-dock"] textarea'),
+			...pick('[data-testid="practice-dock"] textarea'),
+			...pick('[data-testid="composer"] textarea'),
+		];
+	}, []);
+	useFieldCycle(cycleChatFields);
 	const dictation = useDictation({
 		// Ref-first (see textRef): the join is computed from the mirror so a
 		// send resuming after `await finish()` reads the dictated tail.

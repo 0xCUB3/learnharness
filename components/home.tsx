@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
@@ -8,6 +8,7 @@ import { MinimalHome } from "@/components/minimal-home";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
+import { useFieldCycle } from "@/components/field-cycle";
 import { SidebarToggle } from "@/components/sidebar";
 import { StatsBar } from "@/components/stats-bar";
 import type { TurnUsage } from "@/src/core";
@@ -51,6 +52,12 @@ export function Home({
 	const [setupOpen, setSetupOpen] = useState(false);
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// topic draft; the strip lives in the stats bar's middle slot.
+	// Tab navigates INTO the composer (owner, keyboard round 2026-10-06):
+	// the only text field on this surface — the cycle's whole chain.
+	const cycleComposer = useCallback((): readonly HTMLElement[] =>
+		Array.from(document.querySelectorAll<HTMLElement>('[data-testid="composer"] textarea')),
+		[]);
+	useFieldCycle(cycleComposer);
 	const dictation = useDictation({
 		// Ref-first: the join reads the mirror so the send resuming after
 		// `await finish()` sees the dictated tail.

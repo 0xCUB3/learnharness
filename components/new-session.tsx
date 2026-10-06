@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Composer } from "@/components/composer";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
+import { useFieldCycle } from "@/components/field-cycle";
 import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
@@ -112,6 +113,12 @@ export function DraftShell({
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// draft text (via the parent's onChange — the truth lives there); the
 	// strip lives in the stats bar's middle slot.
+	// Tab navigates INTO the composer (owner, keyboard round 2026-10-06):
+	// the only text field on this surface — the cycle's whole chain.
+	const cycleComposer = useCallback((): readonly HTMLElement[] =>
+		Array.from(document.querySelectorAll<HTMLElement>('[data-testid="composer"] textarea')),
+		[]);
+	useFieldCycle(cycleComposer);
 	const dictation = useDictation({
 		append: (t) => onChange(joinDictation(text, t)),
 	});
