@@ -23,6 +23,7 @@ import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
+import { useEnterSubmits } from "@/components/enter-submits";
 import { QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
@@ -655,6 +656,16 @@ export function Chat({
 		if (!nextReady) return;
 		void send({ type: "next" });
 	}, [nextReady, send]);
+
+	/* ENTER FROM ANYWHERE (owner round 16 refinement, 2026-10-06 —
+	 * keyboard-first): the move-on must not require composer focus. The
+	 * window-level Enter (typing surfaces and buttons excluded — a
+	 * focused composer/button keeps its own lane, so no double fire)
+	 * fires the signal from body focus, a scroll, anywhere. sendNext
+	 * self-guards on nextReady, so the listener is inert outside the
+	 * pause — the dock-mounted listeners are gone by then (docks unmount
+	 * when nothing is active; the two never overlap). */
+	useEnterSubmits(sendNext);
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
