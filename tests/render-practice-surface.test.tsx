@@ -137,8 +137,8 @@ describe("the practice transcript cards", () => {
 		assert.match(html, /Pair them; each pair is even\./);
 	});
 
-	it("ConcludeCard: THE AGENT'S DATA DRAWER (owner round 17) — arrives collapsed, opens to every field both calls filled", () => {
-		const collapsed = renderToStaticMarkup(
+	it("ConcludeCard: THE METADATA POPOVER (owner round 17 refinement) — quiet trigger at the bottom, box hidden until clicked", () => {
+		const html = renderToStaticMarkup(
 			<ConcludeCard
 				part={part({
 					type: "tool-conclude",
@@ -148,22 +148,24 @@ describe("the practice transcript cards", () => {
 				})}
 			/>,
 		);
-		assert.ok(collapsed.includes('data-testid="agents-data-toggle"'), "the toggle row");
-		assert.ok(collapsed.includes("Agent"), "the label");
-		assert.ok(!collapsed.includes('data-testid="agents-data"'), "arrives COLLAPSED — no rows in the markup");
-		// The drawer is a client useState fold; the OPEN face is pinned by the
-		// rows' data shape (view join) below — static render cannot toggle.
+		assert.ok(html.includes('data-testid="metadata-toggle"'), "the trigger row");
+		assert.match(html, /Metadata/, "the label (CSS renders it mono-caps)");
+		assert.ok(!html.includes('data-testid="metadata-box"'), "the info box is CLOSED until clicked — no rows in the markup");
+		assert.ok(!html.includes("border-t \"/>"), "no separate divider — the trigger just sits at the bottom");
+		// The open face (info-box rows at the model solution's 15px) is a
+		// client useState fold — static render cannot click; the rows' data
+		// shape is pinned by the view-join test in practice-record.
 	});
 
-	it("ConcludeCard: no drawer when the calls filled nothing beyond the visible card", () => {
+	it("ConcludeCard: no metadata trigger when the calls filled nothing beyond the visible card", () => {
 		const html = renderToStaticMarkup(
 			<ConcludeCard part={part({ type: "tool-conclude", input: { outcome: "dismissed" } })} />,
 		);
-		assert.ok(!html.includes("agents-data"), "the dismissal line carries no drawer");
+		assert.ok(!html.includes("metadata-"), "the dismissal line carries no trigger");
 		const legacy = renderToStaticMarkup(
 			<ConcludeCard part={part({ type: "tool-conclude", input: { outcome: "solved" }, reveal: "s" })} />,
 		);
-		assert.ok(!legacy.includes("agents-data"), "empty problemInput + bare outcome: nothing to reveal");
+		assert.ok(!legacy.includes("metadata-"), "empty problemInput + bare outcome: nothing to reveal");
 	});
 
 	it("ConcludeCard: the dismissal synthesis is one muted line — no reveal card", () => {

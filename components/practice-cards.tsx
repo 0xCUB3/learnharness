@@ -21,9 +21,10 @@ import type { ArtifactPartProps } from "@/src/core";
  */
 
 import { ChevronDownIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ThinkingBlock } from "@/components/thinking-block";
+import { usePopoverDismiss } from "@/components/popover-dismiss";
 
 /* TARGET NAMES (owner round 17, 2026-10-06): targets are normalized to
  * opaque node ids at the record seam (owner round 9 — the mastery trace
@@ -116,7 +117,7 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 	}
 
 	return (
-		<div data-testid="conclude-card" className="lh-card-enter my-1 rounded-xl border bg-card p-4">
+		<div data-testid="conclude-card" className="lh-card-enter relative my-1 rounded-xl border bg-card p-4">
 			{/* The heading row (owner round 3, 2026-10-05): plain 'Concluded'
 			    eyebrow + the outcome in the quiz cards' EXACT chip register —
 			    no more two same-weight headings stacked. */}
@@ -148,7 +149,7 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 					</div>
 				</>
 			)}
-			<AgentsDataDrawer
+			<MetadataPopover
 				concludeInput={input}
 				problemInput={(part.problemInput ?? {}) as { mode?: unknown; target?: unknown }}
 			/>
@@ -156,13 +157,19 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 	);
 }
 
-/* THE AGENT'S DATA DRAWER (owner round 17, 2026-10-06 — full
- * transparency): a collapsible at the very bottom of the conclude card,
- * arriving collapsed, showing every field the agent filled in both the
- * problem call (mode, targets) and the conclude call (outcome, rung,
- * miss class, retest). Statement and modelSolution stay out — they are
- * the visible card above. Pure rows, the eyebrow register, mono values. */
-function AgentsDataDrawer({
+/* THE METADATA POPOVER (owner round 17 refinement, 2026-10-06 — full
+ * transparency): a quiet METADATA trigger at the very bottom of the
+ * conclude card (no divider — it just sits there); click opens the
+ * info-box register of the graph-view node cards (rounded-xl border
+ * bg-card p-4 shadow-lg, floating ABOVE the trigger); any scroll or
+ * click outside closes it (plus Esc, claimed from the layered chain
+ * per the popover law). Shows every field the agent filled in both the
+ * problem call (mode, targets — names resolved lazily) and the
+ * conclude call (outcome, rung, miss class, retest). Statement and
+ * modelSolution stay out — they are the visible card. The VALUES match
+ * the model solution's font size (text-[15px], owner-verified law);
+ * labels keep the eyebrow register. */
+function MetadataPopover({
 	concludeInput,
 	problemInput,
 }: {
@@ -170,6 +177,7 @@ function AgentsDataDrawer({
 	problemInput: { mode?: unknown; target?: unknown };
 }) {
 	const [open, setOpen] = useState(false);
+	const rootRef = useRef<HTMLDivElement | null>(null);
 	const [names, setNames] = useState<Record<string, string> | null>(null);
 	const targets = Array.isArray(problemInput.target)
 		? problemInput.target.filter((t): t is string => typeof t === "string")
@@ -186,6 +194,16 @@ function AgentsDataDrawer({
 		};
 	}, [open, targets.length, names]);
 
+	usePopoverDismiss(rootRef, open, () => setOpen(false));
+	// ANY scroll closes it (owner law): capture-phase, so every scroller
+	// in the tree counts — the transcript's own scroll included.
+	useEffect(() => {
+		if (!open) return;
+		const close = () => setOpen(false);
+		window.addEventListener("scroll", close, { capture: true, passive: true });
+		return () => window.removeEventListener("scroll", close, { capture: true });
+	}, [open]);
+
 	const mode = typeof problemInput.mode === "string" ? problemInput.mode : "";
 	const rung = typeof concludeInput.rung === "string" ? concludeInput.rung : "";
 	const miss = typeof concludeInput.missClass === "string" ? concludeInput.missClass : "";
@@ -194,25 +212,29 @@ function AgentsDataDrawer({
 	if (!mode && targets.length === 0 && !rung && !miss && retest === undefined) return null;
 
 	return (
-		<>
-			<div className="my-3 border-t" />
-			<div>
-				<button
-					type="button"
-					data-testid="agents-data-toggle"
-					onClick={() => setOpen((v) => !v)}
-					aria-expanded={open}
-					className="flex w-full items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+		<div ref={rootRef} className="relative mt-3">
+			<button
+				type="button"
+				data-testid="metadata-toggle"
+				onClick={() => setOpen((v) => !v)}
+				aria-expanded={open}
+				className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<ChevronDownIcon className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+				Metadata
+			</button>
+			{open && (
+				<div
+					data-testid="metadata-box"
+					// The node-card info-box register (graph view), floating above
+					// the trigger — never clipped by the transcript scroller.
+					className="absolute bottom-full left-0 z-20 mb-2 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
 				>
-					<ChevronDownIcon className={cn("size-3.5 transition-transform", open && "rotate-180")} />
-					Agent&rsquo;s data
-				</button>
-				{open && (
-					<dl data-testid="agents-data" className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
-						<dt className="text-muted-foreground">Mode</dt>
-						<dd className="font-mono">{mode || "—"}</dd>
-						<dt className="text-muted-foreground">Targets</dt>
-						<dd className="font-mono">
+				<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Mode</dt>
+						<dd className="text-[15px]">{mode || "—"}</dd>
+						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Targets</dt>
+						<dd className="text-[15px]">
 							{targets.length === 0 ? (
 								"untagged"
 							) : (
@@ -226,18 +248,18 @@ function AgentsDataDrawer({
 								</span>
 							)}
 						</dd>
-						<dt className="text-muted-foreground">Outcome</dt>
-						<dd className="font-mono">{outcome || "—"}</dd>
-						<dt className="text-muted-foreground">Hint rung</dt>
-						<dd className="font-mono">{rung || "none"}</dd>
-						<dt className="text-muted-foreground">Miss class</dt>
-						<dd className="font-mono">{miss || "none"}</dd>
-						<dt className="text-muted-foreground">Retest</dt>
-						<dd className="font-mono">{retest === undefined ? "—" : retest ? "yes" : "no"}</dd>
+						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outcome</dt>
+						<dd className="text-[15px]">{outcome || "—"}</dd>
+						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Hint rung</dt>
+						<dd className="text-[15px]">{rung || "none"}</dd>
+						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Miss class</dt>
+						<dd className="text-[15px]">{miss || "none"}</dd>
+						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Retest</dt>
+						<dd className="text-[15px]">{retest === undefined ? "—" : retest ? "yes" : "no"}</dd>
 					</dl>
-				)}
-			</div>
-		</>
+				</div>
+			)}
+		</div>
 	);
 }
 
