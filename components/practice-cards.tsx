@@ -21,6 +21,7 @@ import type { ArtifactPartProps } from "@/src/core";
  */
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { ThinkingBlock } from "@/components/thinking-block";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
@@ -177,7 +178,12 @@ function MetadataPopover({
 	problemInput: { mode?: unknown; target?: unknown };
 }) {
 	const [open, setOpen] = useState(false);
+	const triggerRef = useRef<HTMLButtonElement | null>(null);
 	const rootRef = useRef<HTMLDivElement | null>(null);
+	// The portal's anchor (owner fix, 2026-10-06): the box is placed from
+	// the trigger's viewport rect AT OPEN TIME — any scroll closes the
+	// box, so there is nothing to track.
+	const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
 	const [names, setNames] = useState<Record<string, string> | null>(null);
 	const targets = Array.isArray(problemInput.target)
 		? problemInput.target.filter((t): t is string => typeof t === "string")
@@ -216,19 +222,39 @@ function MetadataPopover({
 			<button
 				type="button"
 				data-testid="metadata-toggle"
-				onClick={() => setOpen((v) => !v)}
+				ref={triggerRef}
+				onClick={() => {
+					setOpen((v) => {
+						if (v) return false;
+						const r = triggerRef.current?.getBoundingClientRect();
+						if (r) {
+							// Below the trigger, always; clamped so the 320px box
+							// never leaves the viewport's right edge.
+							const left = Math.max(8, Math.min(r.left, window.innerWidth - 328));
+							setAnchor({ top: r.bottom + 8, left });
+						}
+						return true;
+					});
+				}}
 				aria-expanded={open}
 				className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
 			>
 				Metadata
 			</button>
-			{open && (
-				<div
-					data-testid="metadata-box"
-					// The node-card info-box register (graph view), floating above
-					// the trigger — never clipped by the transcript scroller.
-					className="absolute top-full left-0 z-20 mt-2 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
-				>
+			{open &&
+				anchor &&
+				createPortal(
+					<div
+						data-testid="metadata-box"
+						// PORTALED TO BODY (owner fix, 2026-10-06): the transcript's
+						// MessageContent boxes carry overflow-hidden — an absolutely
+						// positioned child clips at its own message block's edge (the
+						// cut-off bug). A fixed-position portal sits on top of
+						// EVERYTHING, the dialogs' law. Node-card info-box register;
+						// opening BELOW the trigger — always.
+						style={{ position: "fixed", top: anchor.top, left: anchor.left }}
+						className="z-50 w-80 max-w-[calc(100vw-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
+					>
 				<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
 						<dt className="text-muted-foreground">Mode</dt>
 						<dd className="font-mono">{mode || "—"}</dd>
@@ -256,8 +282,9 @@ function MetadataPopover({
 						<dt className="text-muted-foreground">Retest</dt>
 						<dd className="font-mono">{retest === undefined ? "—" : retest ? "yes" : "no"}</dd>
 					</dl>
-				</div>
-			)}
+					</div>,
+					document.body,
+				)}
 		</div>
 	);
 }
