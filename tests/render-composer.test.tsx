@@ -75,8 +75,21 @@ describe("enterAction", () => {
 		assert.equal(enterAction({ busy: true, canSend: false }), "stop");
 	});
 
-	it("idle: send when there is text, nothing when there is not", () => {
+	it("idle: send when there is the text, nothing when there is not", () => {
 		assert.equal(enterAction({ busy: false, canSend: true }), "send");
 		assert.equal(enterAction({ busy: false, canSend: false }), "none");
+	});
+
+	it("the practice pause (owner round 16): Enter on an EMPTY composer fires the move-on signal", () => {
+		assert.equal(enterAction({ busy: false, canSend: false, nextProblem: true }), "next");
+	});
+
+	it("typing anything outranks the pause — text makes Enter a send again", () => {
+		assert.equal(enterAction({ busy: false, canSend: true, nextProblem: true }), "send");
+	});
+
+	it("busy outranks the pause — steering and Stop keep their lanes", () => {
+		assert.equal(enterAction({ busy: true, canSend: false, nextProblem: true }), "stop");
+		assert.equal(enterAction({ busy: true, canSend: true, nextProblem: true }), "send");
 	});
 });

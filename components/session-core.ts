@@ -18,6 +18,7 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
 	needsContinuation,
 	newAnswerResult,
+	newNextMessage,
 	newProblemDismissedMarker,
 	newThinkingMessage,
 	newUserMessage,
@@ -532,6 +533,10 @@ export class SessionModel {
 			// optimistically — the card renders from its details the
 			// moment the button fires.
 			optimistic.push({ ...newThinkingMessage(input.problemCallId, input.text), id: localId() });
+		} else if (input.type === "next") {
+			// The move-on signal (owner round 16): the NEXT PROBLEM line
+			// renders the instant the chip/Enter fires.
+			optimistic.push({ ...newNextMessage(), id: localId() });
 		} else if (input.type === "answer") {
 			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
 			optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });

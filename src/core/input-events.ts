@@ -32,6 +32,7 @@ import {
 	concludedByDismissalPair,
 	danglingQuestionOf,
 	newAnswerResult,
+	newNextMessage,
 	newProblemDismissedMarker,
 	newThinkingMessage,
 	newUserMessage,
@@ -48,7 +49,12 @@ export type ChatInput =
 	 *  thinking on the ACTIVE problem — one lane (owner 2026-10-05):
 	 *  whether it claims an answer is read from the text. One
 	 *  problem may carry many submissions; each is its own turn. */
-	| { type: "thinking"; problemCallId: string; text: string };
+	| { type: "thinking"; problemCallId: string; text: string }
+	/** The practice move-on signal (owner round 16): the learner's
+	 *  explicit go-ahead during the between-problems pause — the Next
+	 *  chip or Enter on an empty composer. Practice sessions only, and
+	 *  only with nothing active (mid-problem input rides the dock). */
+	| { type: "next" };
 
 /** A wake-pipeline steer delivery — same turn composition, server-origin.
  *  Wave C (2026-09-26): the idle wake carries EVERY queued marker as its
@@ -172,6 +178,8 @@ export function parseChatInput(input: unknown): ChatInput {
 				throw new ChatInputError("thinking input requires non-empty text");
 			}
 			return { type: "thinking", problemCallId: i.problemCallId, text: i.text };
+		case "next":
+			return { type: "next" };
 		default:
 			throw new ChatInputError(`unknown input type: ${String(i.type)}`);
 	}
@@ -205,6 +213,19 @@ export function inputAppends(record: { messages: LhMessage[] }, input: ChatInput
 				throw new ChatInputError("thinking input targets no active problem");
 			}
 			return [...dismissalConclusion(record), newThinkingMessage(input.problemCallId, input.text)];
+		}
+		case "next": {
+			// Honest 400s, the thinking gate's discipline: the signal is a
+			// between-problems affordance — practice sessions only, nothing
+			// active (mid-problem input rides the dock), and the client gates
+			// make violations unreachable in practice anyway.
+			if ((record as { kind?: string }).kind !== "practice") {
+				throw new ChatInputError("next input is a practice-session affordance");
+			}
+			if (activeProblemOf(record.messages)) {
+				throw new ChatInputError("next input requires no active problem");
+			}
+			return [...dismissalConclusion(record), newNextMessage()];
 		}
 	}
 }

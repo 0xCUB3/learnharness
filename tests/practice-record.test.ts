@@ -16,6 +16,7 @@ import {
 	asAgentMessages,
 	concludedByDismissalPair,
 	newProblemDismissedMarker,
+	newNextMessage,
 	newThinkingMessage,
 	needsContinuation,
 	newUserMessage,
@@ -233,6 +234,37 @@ describe("the thinking input", () => {
 	});
 });
 
+// ── the move-on signal (owner round 16, 2026-10-06) ─────────────────────────
+
+describe("the next input", () => {
+	it("parses bare and appends the practice-next marker in an idle practice session", () => {
+		const input = parseChatInput({ type: "next" });
+		assert.deepEqual(input, { type: "next" });
+		const appends = inputAppends({ messages: [], kind: "practice" }, input);
+		assert.equal(appends.length, 1);
+		const marker = appends[0] as { customType: string; content: string };
+		assert.equal(marker.customType, "practice-next");
+		// The model's unambiguous go-ahead, single-sourced in contracts.
+		assert.match(marker.content, /\[NEXT PROBLEM\]/);
+	});
+
+	it("400s outside practice sessions (the affordance is practice-only)", () => {
+		assert.throws(() => inputAppends({ messages: [], kind: "teach" }, { type: "next" }), /practice-session/);
+		assert.throws(() => inputAppends({ messages: [] }, { type: "next" }), /practice-session/);
+	});
+
+	it("400s while a problem is active (mid-problem input rides the dock)", () => {
+		assert.throws(() => inputAppends({ messages: problemPose(), kind: "practice" }, { type: "next" }), /no active problem/);
+	});
+
+	it("rides AFTER a pending dismissal conclusion, exactly like text", () => {
+		const dismissed = [...problemPose(), newProblemDismissedMarker("call_p1")];
+		const appends = inputAppends({ messages: dismissed, kind: "practice" }, { type: "next" });
+		assert.equal(appends.length, 3); // conclude pair + the next marker
+		assert.equal((appends[2] as { customType: string }).customType, "practice-next");
+	});
+});
+
 describe("the dismissal's conclude synthesis rides the next input", () => {
 	it("text after a dismissal prepends the conclude pair before the user message", () => {
 		const record = { messages: [...problemPose(), newProblemDismissedMarker("call_p1")] };
@@ -372,5 +404,18 @@ describe("modelSolutionForConclude (the conclusion's hero is the pose's commitme
 		const conclude = view.flatMap((m) => m.parts).find((p) => p.type === "tool-conclude");
 		assert.ok(conclude, "the conclude part projects");
 		assert.equal(conclude!.reveal, "Show that…", "the view-seam join carries the committed solution");
+	});
+});
+
+// ── the transcript face of the signal ───────────────────────────────────────
+
+describe("projectView renders the move-on signal", () => {
+	it("the practice-next marker projects the compact part (the centered NEXT PROBLEM line)", () => {
+		const view = projectView([newNextMessage()]);
+		const parts = view[0]?.parts ?? [];
+		assert.ok(
+			parts.some((p) => p.type === "data-practice-next"),
+			"the data-practice-next part rides the view",
+		);
 	});
 });

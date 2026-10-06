@@ -193,9 +193,20 @@ export const THINKING_LABEL = "Your thinking";
 
 /** The conclude tool's ack — shared by the executed call (agent layer) and
  *  the dismissal-synthesized pair (input-events), so a concluded problem
- *  reads identically to the model however it concluded. */
+ *  reads identically to the model however it concluded. Owner round 16:
+ *  the turn ENDS after concluding (a system-prompt law, no tool-level
+ *  terminate — the model may speak its closing words first, then must
+ *  stop calling tools); the next problem waits for the learner's
+ *  explicit go-ahead. */
 export const CONCLUDE_ACK_TEXT =
-	"Problem concluded — the composer is free; pose the next problem or wrap up.";
+	"Problem concluded. Say your closing words about the learner's work if useful, then END YOUR TURN — no further tool calls. The next problem is NEVER posed here: it waits for the learner's explicit go-ahead (a *Next problem* message, or their own words asking for the next one). Between problems, answer their questions about the concluded one.";
+
+/** The learner's explicit move-on signal (owner round 16, 2026-10-06):
+ *  the model-facing text of the practice-next marker — single-sourced
+ *  like THINKING_LABEL. The button/Enter-on-empty path appends the
+ *  marker; the model reads this and poses (or wraps) per the doctrine. */
+export const NEXT_PROBLEM_TEXT =
+	"[NEXT PROBLEM] — the learner's explicit go-ahead: pose the next problem now per the selection rules, or wrap the session in text if the arc is complete.";
 
 /** The compaction marker's model-facing header (owner round 14,
  *  2026-10-05). The marker's content is this header + the summary — the

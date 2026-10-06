@@ -39,6 +39,7 @@ import { QUESTION_TOOLS } from "./pending.ts";
 import {
 	CONCLUDE_ACK_TEXT,
 	HANDOFF_TEXT,
+	NEXT_PROBLEM_TEXT,
 	THINKING_LABEL,
 } from "./contracts/chat.ts";
 import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
@@ -71,6 +72,7 @@ export interface LhMarkerMessage {
 		| "subagent-abort"
 		| "plan-block"
 		| "practice-thinking"
+		| "practice-next"
 		| "problem-dismissed"
 		| "compaction";
 	/** The model-facing text ("" for plan blocks — UI-only). */
@@ -244,6 +246,24 @@ export function newThinkingMessage(problemCallId: string, text: string): LhMarke
 		content: `${THINKING_LABEL}:\n${text}`,
 		display: true,
 		details: { problemCallId, text },
+		timestamp: Date.now(),
+	};
+}
+
+/** The learner's explicit move-on signal (owner round 16): appended by
+ *  the next input (the composer band's chip, or Enter on an empty
+ *  composer during the between-problems pause). The content is the
+ *  single-sourced NEXT_PROBLEM_TEXT — the model's unambiguous go-ahead;
+ *  the transcript renders its own compact line off the marker (never
+ *  the content). */
+export function newNextMessage(): LhMarkerMessage {
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "practice-next",
+		content: NEXT_PROBLEM_TEXT,
+		display: true,
+		details: {},
 		timestamp: Date.now(),
 	};
 }

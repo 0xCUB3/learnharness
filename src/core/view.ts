@@ -401,6 +401,18 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
+		case "practice-next": {
+			// The learner's explicit move-on signal (owner round 16): a compact
+			// centered system line — the mono-caps chrome register, not prose.
+			// The model reads the marker's content; the transcript never shows
+			// it (the label is chrome, single-sourced in the renderer).
+			out.push({
+				id: marker.id,
+				role: "user",
+				parts: [{ type: "data-practice-next", id: `pn_${marker.id}`, data: null }],
+			});
+			return;
+		}
 		case "problem-dismissed":
 			// UI-only (the ask-style dismissal): the synthesized conclude
 			// pair — which rides the NEXT input — carries the record's face.

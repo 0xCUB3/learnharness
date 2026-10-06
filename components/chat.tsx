@@ -33,7 +33,7 @@ import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
-import { DumbbellIcon, WaypointsIcon } from "lucide-react";
+import { ArrowRightIcon, DumbbellIcon, WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { PracticeDock } from "@/components/practice-dock";
@@ -633,6 +633,28 @@ export function Chat({
 	const [compactionSummary, setCompactionSummary] = useState<CompactionDividerData | null>(null);
 	const canSend =
 		(text.trim().length > 0 || dictation.active) && !pending && !activeProblem && !compacting;
+
+	/* THE PRACTICE PAUSE (owner round 16): between problems — practice
+	 * kind, nothing active, nothing in flight, and at least one problem
+	 * has ever been posed (the fresh session's opening turn is owed, not
+	 * the move-on). Enter-on-empty and the Next chip both key on it. */
+	const nextReady =
+		kind === "practice" &&
+		!pending &&
+		!activeProblem &&
+		!compacting &&
+		!busy &&
+		nativeMessages.some(
+			(m) => (m as { role?: string }).role === "assistant" &&
+				Array.isArray((m as { content?: unknown[] }).content) &&
+				(m as { content: Array<{ type?: string; name?: string }> }).content.some(
+					(b) => b.type === "toolCall" && b.name === "problem",
+				),
+		);
+	const sendNext = useCallback(() => {
+		if (!nextReady) return;
+		void send({ type: "next" });
+	}, [nextReady, send]);
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
@@ -1273,6 +1295,19 @@ export function Chat({
 												);
 											case "data-practice-thinking":
 												return <ThinkingCard key={pi} data={part.data as PracticeThinkingData} />;
+											case "data-practice-next":
+												// The learner's move-on signal (owner round 16): a compact
+												// centered mono-caps line — chrome, the dismissal register.
+												return (
+													<div
+														key={pi}
+														data-testid="practice-next-line"
+														className="my-4 flex items-center justify-center gap-1.5 font-ui text-xs font-medium uppercase tracking-wide text-muted-foreground"
+													>
+														<ArrowRightIcon className="size-3" />
+														Next problem
+													</div>
+												);
 											default:
 												return null;
 										}
@@ -1506,20 +1541,43 @@ export function Chat({
 						)
 					}
 					composer={
-						<Composer
-							// Stop aborts ANY in-flight turn (stream-reattach wave): the
-							// square renders while a reattached/wake turn runs too — the
-							// abort channel kills it server-side; stop() alone would
-							// only detach our view.
-							busy={busy}
-							value={text}
-							onChange={applyText}
-							inputRef={composerInputRef}
-							onSend={onSend}
-							onStop={abortInFlightTurn}
-							canSend={canSend}
-							onEscape={dictation.active ? dictation.cancel : undefined}
-						/>
+						<div className="relative">
+							{/* THE NEXT CHIP (owner round 16): the practice pause's
+							    mouse path — hovering at the composer band's top-right,
+							    the pick-pill chrome register. One click = the move-on
+							    signal; gone the moment a problem is active again. */}
+							{nextReady && (
+								<button
+									type="button"
+									data-testid="next-problem-chip"
+									onClick={sendNext}
+									className="absolute -top-3.5 right-3 z-10 flex items-center gap-1 rounded-md border border-border bg-card px-2 py-0.5 font-ui text-[10px] font-medium uppercase tracking-wider text-foreground shadow-sm transition-colors hover:border-muted-foreground/50 hover:text-foreground"
+								>
+									Next problem
+									<ArrowRightIcon className="size-3" />
+								</button>
+							)}
+							<Composer
+								// Stop aborts ANY in-flight turn (stream-reattach wave): the
+								// square renders while a reattached/wake turn runs too — the
+								// abort channel kills it server-side; stop() alone would
+								// only detach our view.
+								busy={busy}
+								value={text}
+								onChange={applyText}
+								inputRef={composerInputRef}
+								onSend={onSend}
+								onStop={abortInFlightTurn}
+								canSend={canSend}
+								onEscape={dictation.active ? dictation.cancel : undefined}
+								// The pause affordance (owner round 16): the placeholder
+								// IS the hint — empty state, exactly where Enter-on-empty
+								// applies.
+								nextProblem={nextReady}
+								onNext={sendNext}
+								placeholder={nextReady ? "Ask about this problem — or press Enter for the next one…" : undefined}
+							/>
+						</div>
 					}
 					onSubmitAnswer={(output) => {
 						if (!pending) return;

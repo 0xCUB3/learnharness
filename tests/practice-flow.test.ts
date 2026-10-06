@@ -152,7 +152,9 @@ describe("practice flow (scripted model)", () => {
 			(m) => (m as ToolResultMessage).role === "toolResult" && (m as ToolResultMessage).toolName === "conclude",
 		) as LhMessage & ToolResultMessage;
 		assert.ok(concludeAck, "the conclude ack persisted");
-		assert.ok((concludeAck.content[0] as { text: string }).text.includes("composer is free"));
+		// Owner round 16: the ack carries the turn-ends law (no more tools,
+		// the learner's go-ahead paces the next problem).
+		assert.ok((concludeAck.content[0] as { text: string }).text.includes("END YOUR TURN"));
 		// The turn continued past conclude to the reveal text.
 		assert.ok(afterConclude.some((m) => (m as { role?: string }).role === "assistant" && JSON.stringify((m as { content?: unknown }).content).includes("Clean proof.")));
 		assert.equal(activeProblemOf(afterConclude), null);
