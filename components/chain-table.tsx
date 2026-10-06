@@ -114,6 +114,7 @@ export function ChainTableBody({
 	onClear,
 	onDelete,
 	onClose,
+	topBarExtra,
 	selectMode,
 	onSelect,
 }: {
@@ -140,6 +141,11 @@ export function ChainTableBody({
 	 * (graph rendering off, owner 2026-10-06): the table is the page,
 	 * there is nothing to close, and the X does not render. */
 	onClose?: () => void;
+	/** HOME VARIANT (owner, 2026-10-06 polish): extra controls injected
+	 * into the shared TopBar, right cluster, LEFT of the search input —
+	 * the chains home's Import-notes + cost pill live here instead of
+	 * floating over the list (covering table content read badly). */
+	topBarExtra?: React.ReactNode;
 	/** PRACTICE SELECT (2026-10-04): the floating bar's confirm becomes
 	 *  "Practice these" — no delete fence; the caller owns what the
 	 *  selection becomes. */
@@ -245,12 +251,17 @@ export function ChainTableBody({
 			    chat surface. NO TITLE (owner round 11, 2026-10-05): the serif
 			    title register is RESERVED — it always names a session; the
 			    chain table names nothing, so its bar carries counts + search +
-			    close only. Search + close carve out with lh-no-drag (the mask
-			    law: later in the DOM). */}
+			    close only — plus, in the home variant, the injected
+			    topBarExtra (import + cost, owner 2026-10-06). Search, close,
+			    and the extra carve out with lh-no-drag (the mask law: later
+			    in the DOM). */}
 			<TopBar>
 				<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
 					{chains.length} {chains.length === 1 ? "chain" : "chains"} · {nodes.length} {nodes.length === 1 ? "node" : "nodes"}
 				</span>
+				{topBarExtra && (
+					<div className="lh-no-drag flex shrink-0 items-center gap-2">{topBarExtra}</div>
+				)}
 				<div className="relative shrink-0">
 					<SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 					<input

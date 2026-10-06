@@ -16,8 +16,9 @@
  * (owner-approved wording: "bottom clearance so content scrolls clear").
  *
  * The graph chrome's survivors: Import notes (ALWAYS — the entry point,
- * the empty-graph law) and the cost pill, floating top-right below the
- * table's top bar. Node search is canvas-scoped and the render-settings
+ * the empty-graph law) and the cost pill, riding THE TOP BAR's right
+ * cluster (owner refinement, 2026-10-06 — floating over the list covered
+ * table content). Node search is canvas-scoped and the render-settings
  * gear is canvas rendering — neither applies; the table's own search row
  * covers query.
  *
@@ -193,31 +194,33 @@ export function ChainsHome({
 					// onClose ABSENT — the home variant: no top-bar X.
 					selectMode={chainSelectOpen}
 					onSelect={onChainSelectClose}
+					// The chrome survivors ride THE TOP BAR (owner refinement,
+					// 2026-10-06): floating over the list covered table content —
+					// the bar's right cluster (left of search) is their home now,
+					// consistent with the graph view where they sit in the top
+					// band. Import ALWAYS (the entry-point law); the cost pill
+					// when any run exists. Node search + the render gear stay
+					// canvas things.
+					topBarExtra={
+						<>
+							{costs && costs.runs.length > 0 && <GraphCostControl costs={costs} />}
+							<div className="shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
+								<Hint label="Import notes into the graph" side="bottom">
+									<button
+										type="button"
+										disabled={importing}
+										onClick={() => fileInputRef.current?.click()}
+										data-testid="import-notes"
+										className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+									>
+										<UploadIcon className="size-3" />
+										{importing ? "Importing…" : "Import notes…"}
+									</button>
+								</Hint>
+							</div>
+						</>
+					}
 				/>
-			)}
-
-			{/* The chrome survivors, floating top-right BELOW the table's top
-			    bar (h-15 = 60px + breathing room — owner, 2026-10-06): Import
-			    ALWAYS — the entry point; the cost pill when any run exists. Node
-			    search + the render gear are canvas things. */}
-			{!isEmpty && (
-				<div className="absolute right-3 top-[4.5rem] z-20 flex items-center gap-2">
-					{costs && costs.runs.length > 0 && <GraphCostControl costs={costs} />}
-					<div className="shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
-						<Hint label="Import notes into the graph" side="bottom">
-							<button
-								type="button"
-								disabled={importing}
-								onClick={() => fileInputRef.current?.click()}
-								data-testid="import-notes"
-								className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
-							>
-								<UploadIcon className="size-3" />
-								{importing ? "Importing…" : "Import notes…"}
-							</button>
-						</Hint>
-					</div>
-				</div>
 			)}
 
 			{deleteOpen && (
