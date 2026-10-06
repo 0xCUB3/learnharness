@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
-import { ChainsHome } from "@/components/chains-home";
+import { MinimalHome } from "@/components/minimal-home";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
@@ -163,8 +163,9 @@ export function Home({
 			    padding on any side; it runs from the sidebar to the right edge
 			    and from the bottom to the top, under everything else. With
 			    rendering OFF (graph.rendering, owner 2026-10-06) it is the
-			    CHAINS VIEW — the same table as the overlay, in flow; data,
-			    extraction, and the pick flow are untouched. */}
+			    MINIMAL HOME — a quiet knowledge-base summary + the graph
+			    chrome's survivors; data, extraction, and the pick flow are
+			    untouched, and the chain table stays behind its button. */}
 			<main className="absolute inset-0">
 				{rendering ? (
 					<GraphView
@@ -174,7 +175,7 @@ export function Home({
 						onChainSelectClose={() => setChainSelectOpen(false)}
 					/>
 				) : (
-					<ChainsHome
+					<MinimalHome
 						chainSelectOpen={chainSelectOpen}
 						practiceSelection={pickedIds}
 						onPracticeSelectionChange={setPracticeProps}
@@ -207,10 +208,7 @@ export function Home({
 					    send consumes it). Practice mode with nothing picked
 					    shows the pick HINT so the affordance is discoverable;
 					    teaching mode with nothing picked renders nothing. */}
-					{/* While PICKING in the chains home the chip row hides
-					    (owner, 2026-10-06): the floating bar above the composer
-					    already carries count + Clear + Done — one voice, not two. */}
-					{(practiceProps.length > 0 || mode === "practice") && !(rendering === false && chainSelectOpen) && (
+					{(practiceProps.length > 0 || mode === "practice") && (
 						<div className="mb-2 flex items-center justify-start gap-1.5">
 							<button
 								type="button"

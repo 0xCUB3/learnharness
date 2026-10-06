@@ -82,30 +82,11 @@ const BASE = {
 	onGenerate: () => {},
 	onDelete: () => {},
 	onClose: () => {},
-	topBarExtra: undefined as React.ReactNode,
 };
 
 function render(props: Partial<typeof BASE> = {}) {
 	return renderToStaticMarkup(React.createElement(ChainTableBody, { ...BASE, ...props }));
 }
-
-describe("ChainTableBody — the HOME variant (graph rendering off, 2026-10-06)", () => {
-	it("onClose ABSENT = the page, not the overlay: no close X, everything else intact", () => {
-		const html = render({ onClose: undefined });
-		assert.ok(!html.includes('data-testid="chain-table-close"'), "nothing to close — the table IS the page");
-		assert.ok(html.includes('data-testid="chain-table-search"'), "the search row stays");
-		assert.ok(html.includes("chain"), "the counts stay");
-		assert.ok(html.includes("lh-drag"), "the window-drag band stays (same bar as every surface)");
-	});
-
-	it("topBarExtra injects into the bar's right cluster — import + cost ride the TOP BAR (owner, 2026-10-06)", () => {
-		const html = render({ onClose: undefined, topBarExtra: React.createElement("b", { "data-testid": "tbx" }, "X") });
-		assert.ok(html.includes('data-testid="tbx"'), "the extra renders inside the bar");
-		assert.ok(html.includes("lh-no-drag"), "the cluster carves out of the drag band");
-		const overlay = render();
-		assert.ok(!overlay.includes('data-testid="tbx"'), "absent by default — the overlay variant injects nothing");
-	});
-});
 
 describe("ChainTableBody — clusters (the outermost layer)", () => {
 	it("collapsed by default: cluster rows render, chain rows do not", () => {
