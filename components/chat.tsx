@@ -48,7 +48,6 @@ import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import {
 	CompactionCutDivider,
 	CompactionMomentDivider,
-	CompactionSummaryDialog,
 	type CompactionDividerData,
 } from "@/components/compaction-divider";
 import { CoverageRing } from "@/components/extraction-coverage";
@@ -630,9 +629,8 @@ export function Chat({
 	// Compaction (owner round 14): the RUNNING state — compaction-changed
 	// flips it; the send paths, canSend, and the docks gate on it (the
 	// server's registry mutex is the structural gate; this is the
-	// affordance). The summary dialog state rides with it.
+	// affordance).
 	const [compacting, setCompacting] = useState(initiallyCompacting);
-	const [compactionSummary, setCompactionSummary] = useState<CompactionDividerData | null>(null);
 	const canSend =
 		(text.trim().length > 0 || dictation.active) && !pending && !activeProblem && !compacting;
 
@@ -1290,21 +1288,9 @@ export function Chat({
 											case "data-graph-context":
 												return <GraphContextCard key={pi} data={part.data as GraphContextData} />;
 											case "data-compaction":
-												return (
-													<CompactionMomentDivider
-														key={pi}
-														data={part.data as CompactionDividerData}
-														onOpen={() => setCompactionSummary(part.data as CompactionDividerData)}
-													/>
-												);
+												return <CompactionMomentDivider key={pi} data={part.data as CompactionDividerData} />;
 											case "data-compaction-cut":
-												return (
-													<CompactionCutDivider
-														key={pi}
-														data={part.data as CompactionDividerData}
-														onOpen={() => setCompactionSummary(part.data as CompactionDividerData)}
-													/>
-												);
+												return <CompactionCutDivider key={pi} data={part.data as CompactionDividerData} />;
 											case "data-practice-thinking":
 												return <ThinkingCard key={pi} data={part.data as PracticeThinkingData} />;
 											case "data-practice-next":
@@ -1600,7 +1586,6 @@ export function Chat({
 				)}
 				{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
 				<AbortTurnDialog mode={abortAsk} onClose={() => setAbortAsk(null)} onConfirm={confirmAbort} busy={busy} />
-				<CompactionSummaryDialog summary={compactionSummary} onClose={() => setCompactionSummary(null)} />
 				</div>
 			</div>
 		</div>
