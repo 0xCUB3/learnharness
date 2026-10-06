@@ -82,10 +82,18 @@ export function KeyboardShortcuts() {
 					e.preventDefault();
 					return;
 				}
-				// Popovers stopPropagation on their own Esc, so reaching here
-				// means none was open. Dictation first, then abort the turn
-				// (a server-side turn has no client request to abort — the
-				// abort seam in Chat decides what's honestly stoppable).
+				// THE ONE-ESC LAW (owner, keyboard round 2026-10-06): one
+				// Esc, one action, on the topmost active layer. Field-level
+				// handlers claim at their element (focus in a field: the
+				// field's action); every SURFACED layer (popovers, plan,
+				// overlays, dialogs) claims at the DOCUMENT level, which
+				// fires before this window listener — so reaching here means
+				// NOTHING is surfaced and no field is focused. This chain is
+				// the fallback, bottom-up: dictation (a live capture, not a
+				// surface — it survives Esc that closes a plan or overlay),
+				// then abort the turn (a server-side turn has no client
+				// request to abort — the abort seam in Chat decides what's
+				// honestly stoppable, layered by escAbortTarget).
 				if (isDictationActive()) {
 					e.preventDefault();
 					window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation"));

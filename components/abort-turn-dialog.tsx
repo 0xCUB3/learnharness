@@ -124,12 +124,16 @@ export function AbortTurnDialog({
 		if (mode === null) return;
 		const onKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
+				// THE ONE-ESC LAW (keyboard round 2026-10-06): claim at the
+				// document level — a window-level stopPropagation cannot stop
+				// the earlier-registered global window listener.
+				e.preventDefault();
 				e.stopPropagation();
 				onClose();
 			}
 		};
-		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [mode, onClose]);
 
 	if (mode === null || typeof document === "undefined") return null;

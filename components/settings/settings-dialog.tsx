@@ -206,10 +206,17 @@ export function SettingsDialogBody({
 	// dialog's outer layer).
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+			if (e.key === "Escape") {
+				// THE ONE-ESC LAW (owner, keyboard round 2026-10-06): claim
+				// at the document level — the window chain (dictation →
+				// abort) must not also act. One Esc, one action.
+				e.preventDefault();
+				e.stopPropagation();
+				onClose();
+			}
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
 	}, [onClose]);
 
 	/** ONE writer for the whole dialog: PUT the whole section, keep the

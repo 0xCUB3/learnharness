@@ -640,10 +640,17 @@ export function ChainTableOverlay({
 	useEffect(() => {
 		if (!open || deleteOpen) return;
 		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+			if (e.key === "Escape") {
+				// THE ONE-ESC LAW (owner, keyboard round 2026-10-06): claim
+				// at the document level — the window chain (dictation →
+				// abort) must not also act. One Esc, one action.
+				e.preventDefault();
+				e.stopPropagation();
+				onClose();
+			}
 		};
-		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [open, deleteOpen, onClose]);
 
 	if (!open) return null;

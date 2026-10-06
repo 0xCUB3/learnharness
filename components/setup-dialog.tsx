@@ -304,6 +304,12 @@ export function SetupDialog({
 		if (!open) return;
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape") return;
+			// THE ONE-ESC LAW (owner, keyboard round 2026-10-06): claim at
+			// the document level before the layered dismissal — every branch
+			// below acts, so the window chain (dictation → abort) must
+			// never also fire. One Esc, one action.
+			e.preventDefault();
+			e.stopPropagation();
 			if (keyMenuOpen) {
 				setKeyMenuOpen(false);
 				return;
@@ -319,10 +325,10 @@ export function SetupDialog({
 			if (t.closest("[data-lh-menu]") || t.closest(`[data-testid="${triggerTestid}"]`)) return;
 			setOpenMenu(null);
 		};
-		window.addEventListener("keydown", onKey);
+		document.addEventListener("keydown", onKey);
 		document.addEventListener("pointerdown", onPointerDown);
 		return () => {
-			window.removeEventListener("keydown", onKey);
+			document.removeEventListener("keydown", onKey);
 			document.removeEventListener("pointerdown", onPointerDown);
 		};
 	}, [open, onClose, openMenu, keyMenuOpen]);

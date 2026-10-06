@@ -74,13 +74,19 @@ export function MermaidOverlay({ chart, onClose }: { chart: string; onClose: () 
 		};
 	}, [chart, attempt]);
 
-	// Esc closes.
+	// Esc closes — claimed at the document level (THE ONE-ESC LAW, owner
+	// keyboard round 2026-10-06): one Esc, one action; the window chain
+	// (dictation → abort) never fires under a surfaced layer.
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+			if (e.key === "Escape") {
+				e.preventDefault();
+				e.stopPropagation();
+				onClose();
+			}
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
 	}, [onClose]);
 
 	// ── pan/zoom viewport (same wiring as the plan popup) ──

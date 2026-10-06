@@ -158,12 +158,16 @@ export function DeleteNodeDialog({
 		if (!nodes || nodes.length === 0) return;
 		const onKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
+				// THE ONE-ESC LAW (keyboard round 2026-10-06): claim at the
+				// document level — a window-level stopPropagation cannot stop
+				// the earlier-registered global window listener.
+				e.preventDefault();
 				e.stopPropagation();
 				onClose();
 			}
 		};
-		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [nodes, onClose]);
 
 	// Sequential full deaths — never parallel (the store's revision

@@ -639,13 +639,23 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 	);
 	const statusOf = (id: string): PlanNodeStatus => (statuses ? derivedNodeStatus(statuses, id) : "upcoming");
 
-	// Esc closes.
+	// Esc closes — claimed at the DOCUMENT level (THE ONE-ESC LAW, owner
+	// keyboard round 2026-10-06): a surfaced layer's Esc is exactly one
+	// action. The window-level chain (dictation cancel → abort) is the
+	// fallback for when NOTHING is surfaced; a window listener here could
+	// never stop it — same-node listeners all fire — which was the
+	// plan-open-while-dictating double-act (Esc closed the plan AND
+	// cancelled the dictation).
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+			if (e.key === "Escape") {
+				e.preventDefault();
+				e.stopPropagation();
+				onClose();
+			}
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
 	}, [onClose]);
 
 	// ── pan/zoom viewport (harvested semantics: fit floor = the default) ──

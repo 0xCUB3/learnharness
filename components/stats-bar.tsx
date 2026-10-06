@@ -58,7 +58,13 @@ export function StatsBar({
 			if (barRef.current && !barRef.current.contains(e.target as Node)) setOpen(false);
 		};
 		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") setOpen(false);
+			if (e.key === "Escape") {
+				// THE ONE-ESC LAW (keyboard round 2026-10-06): claim — the
+				// window chain must not also act under this popover.
+				e.preventDefault();
+				e.stopPropagation();
+				setOpen(false);
+			}
 		};
 		document.addEventListener("pointerdown", onPointerDown);
 		document.addEventListener("keydown", onKeyDown);
