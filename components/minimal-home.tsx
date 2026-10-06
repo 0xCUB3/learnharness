@@ -33,39 +33,47 @@ export function KnowledgeSummary({
 	chains,
 	teachSessions,
 	practiceSessions,
-	sources,
+	importedNotes,
 }: {
 	propositions: number;
 	chains: number;
 	teachSessions: number;
 	practiceSessions: number;
-	sources: string[];
+	importedNotes: number;
 }) {
-	const empty = propositions === 0 && chains === 0 && teachSessions === 0 && practiceSessions === 0 && sources.length === 0;
+	const empty =
+		propositions === 0 && chains === 0 && teachSessions === 0 && practiceSessions === 0 && importedNotes === 0;
 	return (
-		<div data-testid="knowledge-summary" className="flex max-w-[36rem] flex-col items-center gap-3 text-center">
+		<div data-testid="knowledge-summary" className="flex flex-col items-center text-center">
+			{/* Own-line law (owner, 2026-10-06): every count sits on its own
+			    row — no dot separators; the two blocks (graph, sessions)
+			    part with one empty line; the notes COUNT (never the file
+			    list) rides after the same parting. */}
+			<div className="flex flex-col gap-1">
+				<p className="font-ui text-sm text-muted-foreground">
+					{propositions} {propositions === 1 ? "proposition" : "propositions"}
+				</p>
+				<p className="font-ui text-sm text-muted-foreground">
+					{chains} {chains === 1 ? "chain" : "chains"}
+				</p>
+			</div>
+			<div className="h-4" aria-hidden="true" />
+			<div className="flex flex-col gap-1">
+				<p className="font-ui text-sm text-muted-foreground">
+					{teachSessions} {teachSessions === 1 ? "teaching session" : "teaching sessions"}
+				</p>
+				<p className="font-ui text-sm text-muted-foreground">
+					{practiceSessions} {practiceSessions === 1 ? "practice session" : "practice sessions"}
+				</p>
+			</div>
+			<div className="h-4" aria-hidden="true" />
 			<p className="font-ui text-sm text-muted-foreground">
-				{propositions} {propositions === 1 ? "proposition" : "propositions"} · {chains}{" "}
-				{chains === 1 ? "chain" : "chains"}
+				{importedNotes} {importedNotes === 1 ? "imported note" : "imported notes"}
 			</p>
-			<p className="font-ui text-sm text-muted-foreground">
-				{teachSessions} {teachSessions === 1 ? "teaching session" : "teaching sessions"} · {practiceSessions}{" "}
-				{practiceSessions === 1 ? "practice session" : "practice sessions"}
-			</p>
-			{empty ? (
+			{empty && (
 				<p className="pt-2 font-ui text-xs text-muted-foreground/70">
 					Nothing here yet — import notes to begin building the graph.
 				</p>
-			) : (
-				sources.length > 0 && (
-					<div className="flex w-full flex-col items-center gap-0.5 pt-3">
-						{sources.map((path) => (
-							<p key={path} className="w-full truncate font-ui text-xs text-muted-foreground/70" title={path}>
-								{path}
-							</p>
-						))}
-					</div>
-				)
 			)}
 		</div>
 	);
@@ -159,17 +167,21 @@ export function MinimalHome({
 					chains={snapshot?.chains.length ?? 0}
 					teachSessions={teachSessions}
 					practiceSessions={practiceSessions}
-					sources={Object.values(snapshot?.fileSources ?? {})}
+					importedNotes={Object.keys(snapshot?.fileSources ?? {}).length}
 				/>
 			</div>
 
 			{/* The chrome survivors in the graph view's own places (owner,
 			    2026-10-06): the top-right column — actions row (Chains +
 			    Import, the same 36px band pills), the cost pill BELOW it.
-			    Node search and the render-settings gear are canvas things
-			    and stay gone; Import ALWAYS renders (the entry-point law). */}
-			<div className="pointer-events-none absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
-				<div className="pointer-events-auto flex min-w-0 items-start gap-2">
+			    The column carries lh-no-drag EXACTLY like the graph
+			    chrome's (the DOM-order mask law): without it the drag band
+			    swallows the clicks in Electron — the buttons dragged the
+			    window instead. Node search and the render-settings gear are
+			    canvas things and stay gone; Import ALWAYS renders (the
+			    entry law). */}
+			<div className="lh-no-drag absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
+				<div className="flex min-w-0 items-start gap-2">
 					<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 						<Hint label="Every reasoning chain" side="bottom">
 							<button
@@ -198,11 +210,7 @@ export function MinimalHome({
 						</Hint>
 					</div>
 				</div>
-				{costs && costs.runs.length > 0 && (
-					<div className="pointer-events-auto">
-						<GraphCostControl costs={costs} />
-					</div>
-				)}
+				{costs && costs.runs.length > 0 && <GraphCostControl costs={costs} />}
 			</div>
 
 			{/* The chain table — the STANDARD overlay, unchanged, behind its
