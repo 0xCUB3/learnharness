@@ -34,7 +34,7 @@
 
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
-import { modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL } from "./native-messages.ts";
+import { modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL, problemInputForConclude } from "./native-messages.ts";
 import { activeCompactionOf, type CompactionDetails } from "./compaction.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 import type { SubagentArtifactData, SubagentResultMeta } from "./contracts/jobs.ts";
@@ -223,6 +223,7 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 					// time — a record fold, enriched here so the card renders pure.
 					if (block.name === PRACTICE_CONCLUDE_TOOL) {
 						part.reveal = modelSolutionForConclude(messages, block.id);
+						part.problemInput = problemInputForConclude(messages, block.id);
 					}
 					rest.push(part);
 				}

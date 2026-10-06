@@ -20,7 +20,31 @@ import type { ArtifactPartProps } from "@/src/core";
  *   language in a faint user-side shell, never collapsible.
  */
 
+import { ChevronDownIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+
 import { ThinkingBlock } from "@/components/thinking-block";
+
+/* TARGET NAMES (owner round 17, 2026-10-06): targets are normalized to
+ * opaque node ids at the record seam (owner round 9 — the mastery trace
+ * groups on them), so the drawer resolves names at render time. One
+ * lazy module-cached fetch of the graph view (the id → name map is a
+ * few KB); failures degrade to raw ids — observability never breaks the
+ * card. */
+let nodeNameMapPromise: Promise<Record<string, string>> | null = null;
+function nodeNameMap(): Promise<Record<string, string>> {
+	nodeNameMapPromise ??= fetch("/api/graph")
+		.then((r) => (r.ok ? r.json() : { nodes: [] }))
+		.then((g: { nodes?: Array<{ id?: unknown; name?: unknown }> }) =>
+			Object.fromEntries(
+				(g.nodes ?? [])
+					.filter((n) => typeof n.id === "string")
+					.map((n) => [n.id as string, typeof n.name === "string" ? (n.name as string) : (n.id as string)]),
+			),
+		)
+		.catch(() => ({}));
+	return nodeNameMapPromise;
+}
 
 /** The practice-thinking marker's details (native-messages.ts). */
 export interface PracticeThinkingData {
@@ -124,7 +148,96 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
 					</div>
 				</>
 			)}
+			<AgentsDataDrawer
+				concludeInput={input}
+				problemInput={(part.problemInput ?? {}) as { mode?: unknown; target?: unknown }}
+			/>
 		</div>
+	);
+}
+
+/* THE AGENT'S DATA DRAWER (owner round 17, 2026-10-06 — full
+ * transparency): a collapsible at the very bottom of the conclude card,
+ * arriving collapsed, showing every field the agent filled in both the
+ * problem call (mode, targets) and the conclude call (outcome, rung,
+ * miss class, retest). Statement and modelSolution stay out — they are
+ * the visible card above. Pure rows, the eyebrow register, mono values. */
+function AgentsDataDrawer({
+	concludeInput,
+	problemInput,
+}: {
+	concludeInput: { outcome?: string; rung?: unknown; missClass?: unknown; retest?: unknown };
+	problemInput: { mode?: unknown; target?: unknown };
+}) {
+	const [open, setOpen] = useState(false);
+	const [names, setNames] = useState<Record<string, string> | null>(null);
+	const targets = Array.isArray(problemInput.target)
+		? problemInput.target.filter((t): t is string => typeof t === "string")
+		: [];
+	// Resolve names only when there is something to resolve.
+	useEffect(() => {
+		if (!open || targets.length === 0 || names) return;
+		let alive = true;
+		void nodeNameMap().then((m) => {
+			if (alive) setNames(m);
+		});
+		return () => {
+			alive = false;
+		};
+	}, [open, targets.length, names]);
+
+	const mode = typeof problemInput.mode === "string" ? problemInput.mode : "";
+	const rung = typeof concludeInput.rung === "string" ? concludeInput.rung : "";
+	const miss = typeof concludeInput.missClass === "string" ? concludeInput.missClass : "";
+	const retest = typeof concludeInput.retest === "boolean" ? concludeInput.retest : undefined;
+	const outcome = typeof concludeInput.outcome === "string" ? concludeInput.outcome : "";
+	if (!mode && targets.length === 0 && !rung && !miss && retest === undefined) return null;
+
+	return (
+		<>
+			<div className="my-3 border-t" />
+			<div>
+				<button
+					type="button"
+					data-testid="agents-data-toggle"
+					onClick={() => setOpen((v) => !v)}
+					aria-expanded={open}
+					className="flex w-full items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+				>
+					<ChevronDownIcon className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+					Agent&rsquo;s data
+				</button>
+				{open && (
+					<dl data-testid="agents-data" className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+						<dt className="text-muted-foreground">Mode</dt>
+						<dd className="font-mono">{mode || "—"}</dd>
+						<dt className="text-muted-foreground">Targets</dt>
+						<dd className="font-mono">
+							{targets.length === 0 ? (
+								"untagged"
+							) : (
+								<span>
+									{targets.map((t, i) => (
+										<span key={t}>
+											{i > 0 && ", "}
+											{names?.[t] ?? t}
+										</span>
+									))}
+								</span>
+							)}
+						</dd>
+						<dt className="text-muted-foreground">Outcome</dt>
+						<dd className="font-mono">{outcome || "—"}</dd>
+						<dt className="text-muted-foreground">Hint rung</dt>
+						<dd className="font-mono">{rung || "none"}</dd>
+						<dt className="text-muted-foreground">Miss class</dt>
+						<dd className="font-mono">{miss || "none"}</dd>
+						<dt className="text-muted-foreground">Retest</dt>
+						<dd className="font-mono">{retest === undefined ? "—" : retest ? "yes" : "no"}</dd>
+					</dl>
+				)}
+			</div>
+		</>
 	);
 }
 

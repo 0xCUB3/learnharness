@@ -364,6 +364,20 @@ export function modelSolutionForConclude(
 	messages: readonly LhMessage[],
 	concludeCallId: string,
 ): string | undefined {
+	const input = problemInputForConclude(messages, concludeCallId);
+	return typeof input?.modelSolution === "string" ? input.modelSolution : undefined;
+}
+
+/** The full pose-side fold (owner round 17, 2026-10-06 — observability):
+ * EVERYTHING the agent filled into the problem call — mode, target ids,
+ * statement, the committed solution — joined onto the conclude part so
+ * the card's collapsible "agent's data" drawer renders pure. Same walk
+ * and refusal law as the reveal: a pose the record never acked (a
+ * refused call) folds nothing. */
+export function problemInputForConclude(
+	messages: readonly LhMessage[],
+	concludeCallId: string,
+): { statement?: unknown; mode?: unknown; target?: unknown; modelSolution?: unknown } | undefined {
 	let mi = messages.findIndex(
 		(m) =>
 			(m as { role?: string }).role === "assistant" &&
@@ -381,8 +395,9 @@ export function modelSolutionForConclude(
 			const block = assistant.content[bi]!;
 			if (block.type !== "toolCall" || block.name !== PRACTICE_PROBLEM_TOOL) continue;
 			if (!clean.has(block.id)) continue; // a refused pose revealed nothing
-			const solution = (block.arguments as { modelSolution?: unknown } | undefined)?.modelSolution;
-			return typeof solution === "string" ? solution : undefined;
+			return (block.arguments ?? undefined) as
+				| { statement?: unknown; mode?: unknown; target?: unknown; modelSolution?: unknown }
+				| undefined;
 		}
 	}
 	return undefined;

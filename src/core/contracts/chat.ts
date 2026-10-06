@@ -298,6 +298,10 @@ export interface ArtifactPartProps {
 		toolCallId: string;
 		input?: unknown;
 		output?: unknown;
+		/** The pose-side fold (owner round 17): the whole problem-call
+		 * arguments joined onto the conclude part by projectView — the
+		 * observability drawer's data. */
+		problemInput?: unknown;
 		/** The view-seam join for conclude cards (owner round, 2026-10-05):
 		 *  the modelSolution committed at POSE time, folded onto the part by
 		 *  projectView — the reveal is never re-authored. */

@@ -137,6 +137,35 @@ describe("the practice transcript cards", () => {
 		assert.match(html, /Pair them; each pair is even\./);
 	});
 
+	it("ConcludeCard: THE AGENT'S DATA DRAWER (owner round 17) — arrives collapsed, opens to every field both calls filled", () => {
+		const collapsed = renderToStaticMarkup(
+			<ConcludeCard
+				part={part({
+					type: "tool-conclude",
+					input: { outcome: "solvedWithHints", verdict: "v", rung: "R2", missClass: "cue", retest: true },
+					problemInput: { mode: "discrimination", target: ["n_abc"] },
+					reveal: "The solution.",
+				})}
+			/>,
+		);
+		assert.ok(collapsed.includes('data-testid="agents-data-toggle"'), "the toggle row");
+		assert.ok(collapsed.includes("Agent"), "the label");
+		assert.ok(!collapsed.includes('data-testid="agents-data"'), "arrives COLLAPSED — no rows in the markup");
+		// The drawer is a client useState fold; the OPEN face is pinned by the
+		// rows' data shape (view join) below — static render cannot toggle.
+	});
+
+	it("ConcludeCard: no drawer when the calls filled nothing beyond the visible card", () => {
+		const html = renderToStaticMarkup(
+			<ConcludeCard part={part({ type: "tool-conclude", input: { outcome: "dismissed" } })} />,
+		);
+		assert.ok(!html.includes("agents-data"), "the dismissal line carries no drawer");
+		const legacy = renderToStaticMarkup(
+			<ConcludeCard part={part({ type: "tool-conclude", input: { outcome: "solved" }, reveal: "s" })} />,
+		);
+		assert.ok(!legacy.includes("agents-data"), "empty problemInput + bare outcome: nothing to reveal");
+	});
+
 	it("ConcludeCard: the dismissal synthesis is one muted line — no reveal card", () => {
 		const html = renderToStaticMarkup(
 			<ConcludeCard part={part({ type: "tool-conclude", input: { outcome: "dismissed" } })} />,

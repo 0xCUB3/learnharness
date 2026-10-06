@@ -404,6 +404,13 @@ describe("modelSolutionForConclude (the conclusion's hero is the pose's commitme
 		const conclude = view.flatMap((m) => m.parts).find((p) => p.type === "tool-conclude");
 		assert.ok(conclude, "the conclude part projects");
 		assert.equal(conclude!.reveal, "Show that…", "the view-seam join carries the committed solution");
+		// THE FULL POSE FOLD (owner round 17): the whole problem-call input
+		// rides the conclude part — the observability drawer's data.
+		assert.deepEqual(conclude!.problemInput, {
+			statement: "Show that…",
+			mode: "recall",
+			modelSolution: "Show that…",
+		}, "mode + statement + the commitment; no targets posed here");
 	});
 });
 
