@@ -20,7 +20,6 @@ import type { ArtifactPartProps } from "@/src/core";
  *   language in a faint user-side shell, never collapsible.
  */
 
-import { ChevronDownIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { ThinkingBlock } from "@/components/thinking-block";
@@ -161,14 +160,15 @@ export function ConcludeCard({ part }: ArtifactPartProps) {
  * transparency): a quiet METADATA trigger at the very bottom of the
  * conclude card (no divider — it just sits there); click opens the
  * info-box register of the graph-view node cards (rounded-xl border
- * bg-card p-4 shadow-lg, floating ABOVE the trigger); any scroll or
+ * bg-card p-4 shadow-lg, opening BELOW the trigger — always); any scroll or
  * click outside closes it (plus Esc, claimed from the layered chain
  * per the popover law). Shows every field the agent filled in both the
  * problem call (mode, targets — names resolved lazily) and the
  * conclude call (outcome, rung, miss class, retest). Statement and
- * modelSolution stay out — they are the visible card. The VALUES match
- * the model solution's font size (text-[15px], owner-verified law);
- * labels keep the eyebrow register. */
+ * modelSolution stay out — they are the visible card. The data keeps
+ * the original SMALL register (text-xs rows, mono values — owner
+ * correction: the 15px pass was way too large); the trigger matches
+ * the eyebrow size; the box opens BELOW the trigger, always. */
 function MetadataPopover({
 	concludeInput,
 	problemInput,
@@ -220,7 +220,6 @@ function MetadataPopover({
 				aria-expanded={open}
 				className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
 			>
-				<ChevronDownIcon className={cn("size-3.5 transition-transform", open && "rotate-180")} />
 				Metadata
 			</button>
 			{open && (
@@ -228,13 +227,13 @@ function MetadataPopover({
 					data-testid="metadata-box"
 					// The node-card info-box register (graph view), floating above
 					// the trigger — never clipped by the transcript scroller.
-					className="absolute bottom-full left-0 z-20 mb-2 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
+					className="absolute top-full left-0 z-20 mt-2 w-80 max-w-[calc(100%-1rem)] rounded-xl border bg-card p-4 text-left shadow-lg"
 				>
-				<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Mode</dt>
-						<dd className="text-[15px]">{mode || "—"}</dd>
-						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Targets</dt>
-						<dd className="text-[15px]">
+				<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+						<dt className="text-muted-foreground">Mode</dt>
+						<dd className="font-mono">{mode || "—"}</dd>
+						<dt className="text-muted-foreground">Targets</dt>
+						<dd className="font-mono">
 							{targets.length === 0 ? (
 								"untagged"
 							) : (
@@ -248,14 +247,14 @@ function MetadataPopover({
 								</span>
 							)}
 						</dd>
-						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outcome</dt>
-						<dd className="text-[15px]">{outcome || "—"}</dd>
-						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Hint rung</dt>
-						<dd className="text-[15px]">{rung || "none"}</dd>
-						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Miss class</dt>
-						<dd className="text-[15px]">{miss || "none"}</dd>
-						<dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Retest</dt>
-						<dd className="text-[15px]">{retest === undefined ? "—" : retest ? "yes" : "no"}</dd>
+						<dt className="text-muted-foreground">Outcome</dt>
+						<dd className="font-mono">{outcome || "—"}</dd>
+						<dt className="text-muted-foreground">Hint rung</dt>
+						<dd className="font-mono">{rung || "none"}</dd>
+						<dt className="text-muted-foreground">Miss class</dt>
+						<dd className="font-mono">{miss || "none"}</dd>
+						<dt className="text-muted-foreground">Retest</dt>
+						<dd className="font-mono">{retest === undefined ? "—" : retest ? "yes" : "no"}</dd>
 					</dl>
 				</div>
 			)}
