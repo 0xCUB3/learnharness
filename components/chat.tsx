@@ -26,7 +26,7 @@ import { Composer } from "@/components/composer";
 import { useEnterSubmits } from "@/components/enter-submits";
 import { dockStateKey } from "@/components/dock-state-key";
 import { QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
-import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
+import { DictationBar, finishDictation, joinDictation, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useServerEvent, useServerResync } from "@/components/server-events";
@@ -2027,6 +2027,39 @@ function DockOverlay({
 		setExpanded(true);
 		void suppressFoldDuringReveal();
 	};
+	const expandAndRevealRef = useRef(expandAndReveal);
+	expandAndRevealRef.current = expandAndReveal;
+	// ENTER OPENS THE WAITING CHECK (owner, keyboard round 2026-10-06):
+	// while a question waits with the dock CLOSED — behind its reveal
+	// invitation or collapsed by scroll — Enter is never dead. Any live
+	// dictation FINISHES FIRST (the flush lands in the reading-thinking
+	// field, its live claim — the nothing-gets-lost law), then the check
+	// opens. A typing surface or a focused button owns its own Enter (the
+	// reading-thinking field opens from INSIDE when the check is closed;
+	// a focused button activates natively) — this listener claims only
+	// the dead case: plain focus with Enter doing nothing.
+	useEffect(() => {
+		if (!pending || expanded) return;
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key !== "Enter" || e.altKey) return;
+			if (e.shiftKey && !e.metaKey && !e.ctrlKey) return;
+			const t = e.target as HTMLElement | null;
+			if (
+				t &&
+				((t.tagName === "INPUT" && (t as HTMLInputElement).type !== "range") ||
+				t.tagName === "TEXTAREA" ||
+				t.isContentEditable ||
+				t.closest("button"))
+			)
+				return;
+			e.preventDefault();
+			void finishDictation().then(() => {
+				expandAndRevealRef.current();
+			});
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [pending, expanded]);
 
 	useEffect(() => {
 		const el = scrollRef.current;
@@ -2149,6 +2182,15 @@ function DockOverlay({
 							value={readingThinking}
 							onChange={onReadingThinking}
 							onEscape={dictationCancel}
+							onOpen={
+								!expanded
+									? () => {
+											void finishDictation().then(() => {
+												expandAndRevealRef.current();
+											});
+										}
+									: undefined
+							}
 							claim={revealPending}
 						/>
 					)}

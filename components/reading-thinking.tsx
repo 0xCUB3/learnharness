@@ -22,12 +22,18 @@ export function ReadingThinkingField({
 	value,
 	onChange,
 	onEscape,
+	onOpen,
 	claim,
 }: {
 	value: string;
 	onChange: (v: string) => void;
 	/** Esc in the field stops dictation (threaded from the page's hook). */
 	onEscape?: () => void;
+	/** The check waits CLOSED — Enter opens it (owner, keyboard round
+	 *  2026-10-06). The caller finishes any live dictation FIRST (the
+	 *  flush lands here — the field is the live claim), then reveals.
+	 *  Absent = the check is open: Enter keeps the dumping convention. */
+	onOpen?: () => void;
 	/** Primary dictation claim — true while the check is behind its reveal. */
 	claim: boolean;
 }) {
@@ -58,6 +64,17 @@ export function ReadingThinkingField({
 						e.preventDefault();
 						e.stopPropagation();
 						onEscape?.();
+						return;
+					}
+					// ENTER OPENS THE WAITING CHECK (owner, keyboard round
+					// 2026-10-06): while the check sits closed, plain Enter
+					// (and the universal ⌘/Ctrl+Enter) opens it — the dictation
+					// flush lands HERE first via the caller's finishDictation,
+					// so spoken thoughts ride along. Shift+Enter stays a newline.
+					if (e.key === "Enter" && onOpen !== undefined && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
+						e.preventDefault();
+						e.stopPropagation();
+						onOpen();
 						return;
 					}
 					// The dock's dumping convention: plain Enter is a newline.

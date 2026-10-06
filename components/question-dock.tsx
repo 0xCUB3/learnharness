@@ -667,6 +667,17 @@ function QuestionDockForm({
 											e.currentTarget.blur();
 											setKbdIdx(optionCount);
 										}
+											// Enter submits directly (owner, keyboard round 2026-10-06):
+											// the custom answer is a single-line input — no newline
+											// to protect, and typing has already selected the row, so
+											// the payload is ready. Every Enter (shift or not — nothing
+											// else could ever happen in a one-line field) rides the
+											// same submit seam as the button, dictation finish-first
+											// included.
+											if (e.key === "Enter") {
+												e.preventDefault();
+												submit();
+											}
 									}}
 									placeholder="Type your own answer…"
 									className="lh-input w-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
