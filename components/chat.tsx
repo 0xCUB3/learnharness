@@ -24,6 +24,7 @@ import { artifactRenderers } from "@/components/artifacts";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { useEnterSubmits } from "@/components/enter-submits";
+import { dockStateKey } from "@/components/dock-state-key";
 import { QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { JobsContext } from "@/components/jobs-context";
@@ -2108,7 +2109,11 @@ function DockOverlay({
 			{ duration: 160, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
 		);
 	}, [expanded]);
-	const stateKey = `${mode}:${pending ? expanded : "-"}`;
+	// The height-morph key (components/dock-state-key.ts): the expanded
+	// term (the fold) belongs to EVERY docked variant — question AND
+	// practice (owner fix, 2026-10-06). Typing growth keeps the key and
+	// never animates; the fold/unfold morphs like teaching always has.
+	const stateKey = dockStateKey(mode, !!pending || !!practice, expanded);
 	const prevRef = useRef<{ key: string; height: number } | null>(null);
 	useIsoLayoutEffect(() => {
 		const el = shellRef.current;
