@@ -27,10 +27,14 @@ import { Hint } from "@/components/ui/hint";
  */
 
 /** The expand seam: md-blocks' mermaid hover button calls openMermaid with
- *  the chart source; the chat page (which provides this context) opens the
- *  overlay. Null when no chat page is mounted (sidebar previews etc.) — the
- *  expand button simply doesn't render there. */
-export const SessionMermaidContext = createContext<{ openMermaid: (chart: string) => void } | null>(null);
+ *  the chart source; the figure card's fullscreen button calls openFigure
+ *  with the raw svg (+ its invert state). The chat page (which provides
+ *  this context) opens the overlay. Null when no chat page is mounted
+ *  (sidebar previews etc.) — the buttons simply don't render there. */
+export const SessionMermaidContext = createContext<{
+	openMermaid: (chart: string) => void;
+	openFigure: (svg: string, inverted: boolean) => void;
+} | null>(null);
 
 export function useSessionMermaid() {
 	return useContext(SessionMermaidContext);
@@ -38,7 +42,9 @@ export function useSessionMermaid() {
 
 /** A chart svg's natural size — mermaid always emits a viewBox; this is the
  *  extent at zoom 1 (1 svg unit = 1 px), like the plan diagram's natural
- *  size. The fallback covers a degenerate no-viewBox svg. Pure. */
+ *  size. Figure svgs (2026-10-07) may declare width/height instead — that
+ *  pair is the fallback. The final fallback covers a degenerate svg with
+ *  neither. Pure. */
 export function chartSize(svg: string): { w: number; h: number } {
 	const m = /<svg[^>]*\bviewBox="([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)"/.exec(svg);
 	if (m) {
@@ -46,19 +52,48 @@ export function chartSize(svg: string): { w: number; h: number } {
 		const h = Number.parseFloat(m[4]!);
 		if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) return { w, h };
 	}
+	const attr = (name: string): number | null => {
+		const a = new RegExp(`<svg\\b[^>]*?\\b${name}\\s*=\\s*["'](\\d+(?:\\.\d+)?)(?:px)?["']`, "i").exec(svg);
+		if (!a) return null;
+		const n = Number.parseFloat(a[1]!);
+		return Number.isFinite(n) && n > 0 ? n : null;
+	};
+	const w = attr("width");
+	const h = attr("height");
+	if (w !== null && h !== null) return { w, h };
 	return { w: 600, h: 400 };
 }
 
-/** The mermaid focus: the chart at natural size inside a pan/zoom viewport
+/** The diagram focus: the chart at natural size inside a pan/zoom viewport
  *  (the plan popup's fit-floor semantics — fitGraphView/zoomedGraphView in
  *  pan-zoom.ts), Esc/X close. Renders its own copy of the chart (mermaid
- *  ids are per-render), not the injected inline svg. */
-export function MermaidOverlay({ chart, onClose }: { chart: string; onClose: () => void }) {
-	// ── chart render (own instance, own ids) ──
-	const [svg, setSvg] = useState<string | null>(null);
+ *  ids are per-render), not the injected inline svg. FIGURE MODE
+ *  (2026-10-07): pass a raw `svg` instead of a mermaid `chart` — the same
+ *  shell then focuses a figure card's svg on a white stage, with the
+ *  caller's invert state carried over (the filter rides the white stage,
+ *  exactly like the in-card holder). */
+export function MermaidOverlay({
+	chart,
+	svg: rawSvg,
+	inverted = false,
+	onClose,
+}: {
+	chart?: string;
+	svg?: string;
+	inverted?: boolean;
+	onClose: () => void;
+}) {
+	// ── chart render (own instance, own ids); figure mode uses the raw svg ──
+	const [svg, setSvg] = useState<string | null>(rawSvg ?? null);
 	const [error, setError] = useState<string | null>(null);
 	const [attempt, setAttempt] = useState(0);
 	useEffect(() => {
+		if (rawSvg !== undefined) {
+			setSvg(rawSvg);
+			setError(null);
+			return;
+		}
+		if (chart === undefined) return;
 		let cancelled = false;
 		setSvg(null);
 		setError(null);
@@ -72,7 +107,7 @@ export function MermaidOverlay({ chart, onClose }: { chart: string; onClose: () 
 		return () => {
 			cancelled = true;
 		};
-	}, [chart, attempt]);
+	}, [rawSvg, chart, attempt]);
 
 	// Esc closes — claimed at the document level (THE ONE-ESC LAW, owner
 	// keyboard round 2026-10-06): one Esc, one action; the window chain
@@ -213,7 +248,7 @@ export function MermaidOverlay({ chart, onClose }: { chart: string; onClose: () 
 			>
 				{error ? (
 					<div className="flex h-full items-center justify-center p-4">
-						<MermaidError chart={chart} error={error} retry={() => setAttempt((a) => a + 1)} />
+						<MermaidError chart={chart ?? ""} error={error} retry={() => setAttempt((a) => a + 1)} />
 					</div>
 				) : svg ? (
 					<>
@@ -237,10 +272,17 @@ export function MermaidOverlay({ chart, onClose }: { chart: string; onClose: () 
 							{/* data-lh-overlay-chart: globals.css pins the svg to the
 							    wrapper's width (kills mermaid's inline max-width cap)
 							    so the wrapper IS the natural-size box the fit math
-							    centers. */}
+							    centers. FIGURE MODE: a white stage (the figure's
+							    backing law — models draw for a white page) with the
+							    caller's invert filter riding it, exactly like the
+							    in-card holder. */}
 							<div
 								data-lh-overlay-chart
-								className="[&_svg]:h-auto [&_svg]:w-full"
+								className={cn(
+									"[&_svg]:h-auto [&_svg]:w-full",
+									rawSvg !== undefined && "bg-white",
+								)}
+								style={rawSvg !== undefined && inverted ? { filter: "invert(1) hue-rotate(180deg)" } : undefined}
 								dangerouslySetInnerHTML={{ __html: svg }}
 							/>
 						</div>

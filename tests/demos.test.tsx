@@ -39,7 +39,9 @@ import {
 	INITIAL_DEMO_BRIDGE_STATE,
 	reduceDemoBridgeState,
 } from "../components/artifacts/demo-card.tsx";
-import { sanitizeSvg, VisualCard } from "../components/artifacts/visual-card.tsx";
+import { sanitizeSvg, svgNaturalWidth, VisualCard, VisualOutputCard } from "../components/artifacts/visual-card.tsx";
+import { slugFilename } from "../components/artifacts/download.ts";
+import { chartSize } from "../components/session-overlay.tsx";
 import { SubagentSteerCard } from "../components/artifacts/steer-card.tsx";
 import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
 import { JobCard, PdfJobCard } from "../components/artifacts/job-card.tsx";
@@ -378,7 +380,10 @@ describe("steer card rendering (the delivered artifact)", () => {
 		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.ok(html.includes("circle"), "svg content rendered inline");
 		assert.match(html, /Figure/);
-		assert.match(html, /svg\]:w-full/, "svg scales to the display area's full width");
+		// Natural sizing (owner, 2026-10-07): a DECLARED width (200) means the
+		// holder hugs + centers rather than stretching full-width.
+		assert.match(html, /w-fit/, "holder hugs the declared size");
+		assert.match(html, /svg\]:max-w-full/, "svg shrinks to fit only when oversized");
 		assert.ok(!html.includes("Looking at the render"), "model-facing notes never render");
 	});
 
@@ -474,6 +479,52 @@ describe("steer card rendering (the delivered artifact)", () => {
 	});
 });
 
+
+describe("artifact chrome — scrollbar, invert toggles, downloads (release polish 2026-10-07)", () => {
+	it("demo iframe: scrolling OFF (the bridge auto-sizes; a scrollable iframe traps the wheel) and the invert + download buttons render", () => {
+		const steer = buildSubagentSteer(
+			{ id: "jd3", kind: "demo", toolCallId: "cd3" },
+			{ title: "Wave interference", html: DEMO_HTML, tested: true },
+		);
+		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
+		assert.match(html, /scrolling="no"/, "no internal scrollbar — the wheel chains to the session");
+		assert.match(html, /data-testid="demo-invert"/);
+		assert.match(html, /data-testid="demo-download"/);
+		assert.ok(!html.includes("hue-rotate"), "inversion is OFF by default — a manual toggle only");
+	});
+
+	it("figure card: invert + download buttons; NO fullscreen button without a chat page (the context is null there)", () => {
+		const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><circle cx="50" cy="50" r="20"/></svg>';
+		const html = renderToStaticMarkup(<VisualOutputCard output={{ svg }} />);
+		assert.match(html, /data-testid="visual-invert"/);
+		assert.match(html, /data-testid="visual-download"/);
+		assert.ok(!html.includes('data-testid="visual-open"'), "fullscreen needs the session overlay context");
+		assert.ok(!html.includes("hue-rotate"), "inversion OFF by default");
+	});
+
+	it("svgNaturalWidth: declared px sizes parse; %, auto, and absent fall back to null", () => {
+		assert.equal(svgNaturalWidth('<svg width="200" height="100"></svg>'), 200);
+		assert.equal(svgNaturalWidth("<svg width='320'></svg>"), 320);
+		assert.equal(svgNaturalWidth('<svg width="100%"></svg>'), null, "% is no natural size");
+		assert.equal(svgNaturalWidth('<svg width="auto"></svg>'), null);
+		assert.equal(svgNaturalWidth('<svg viewBox="0 0 10 10"></svg>'), null, "viewBox-only → full-width law");
+		assert.equal(svgNaturalWidth('<svg width="0"></svg>'), null, "degenerate zero is no size");
+	});
+
+	it("slugFilename: titles slug to filename stems; symbol-only falls back", () => {
+		assert.equal(slugFilename("Damped oscillator"), "damped-oscillator");
+		assert.equal(slugFilename("Ünïcode — Tïtle!"), "unicode-title");
+		assert.equal(slugFilename("???"), "demo");
+	});
+
+	it("chartSize: width/height attrs are the fallback when no viewBox (figure fullscreen fit math)", () => {
+		assert.deepEqual(chartSize('<svg width="320" height="240"></svg>'), { w: 320, h: 240 });
+		assert.deepEqual(chartSize('<svg xmlns="x" width="50px" height="25px" viewBox="0 0 100 50"></svg>'), {
+			w: 100,
+			h: 50,
+		}, "viewBox always wins");
+	});
+});
 
 describe("sanitizeSvg", () => {
 	it("strips script blocks, event handlers, and javascript: urls, keeps geometry", () => {

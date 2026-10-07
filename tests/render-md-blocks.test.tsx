@@ -160,7 +160,12 @@ describe("mermaid expand — the context seam", () => {
 		// owner is chat.tsx — geometry covered by the tests above.
 		const opened: string[] = [];
 		const html = renderToStaticMarkup(
-			<SessionMermaidContext.Provider value={{ openMermaid: (chart) => void opened.push(chart) }}>
+			<SessionMermaidContext.Provider
+				value={{
+					openMermaid: (chart) => void opened.push(chart),
+					openFigure: () => {},
+				}}
+			>
 				<div />
 			</SessionMermaidContext.Provider>,
 		);

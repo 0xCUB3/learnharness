@@ -1,7 +1,9 @@
 "use client";
 
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { ContrastIcon, DownloadIcon } from "lucide-react";
 import { ChatActionsContext } from "@/components/chat";
+import { downloadFile, slugFilename } from "@/components/artifacts/download";
 import { DispatchCard } from "@/components/artifacts/dispatch-card";
 import type { ArtifactPartProps, DemoResult } from "@/src/core";
 
@@ -106,6 +108,11 @@ function DemoFrame({ title, html }: { title: string; html: string }) {
 	const actions = useContext(ChatActionsContext);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 	const [state, setState] = useState<DemoBridgeState>(INITIAL_DEMO_BRIDGE_STATE);
+	// Brightness inversion (owner, 2026-10-07): a MANUAL toggle only — no
+	// detection, no theme wiring. The filter rides the iframe element, which
+	// carries the card's white backing, so one class flips page + content
+	// together while hue-rotate(180deg) undoes invert's hue flip.
+	const [inverted, setInverted] = useState(false);
 	const srcDoc = useMemo(() => buildDemoSrcDoc(html), [html]);
 
 	useEffect(() => {
@@ -123,8 +130,29 @@ function DemoFrame({ title, html }: { title: string; html: string }) {
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="demo-card">
 			<div className="flex items-baseline justify-between gap-2">
 				<div className="font-medium">{title}</div>
-				<div className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-					interactive demo
+				<div className="flex shrink-0 items-center gap-0.5">
+					<button
+						type="button"
+						aria-label="Invert brightness"
+						aria-pressed={inverted}
+						title="Invert brightness"
+						onClick={() => setInverted((v) => !v)}
+						data-testid="demo-invert"
+						className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<ContrastIcon className="size-3.5" />
+					</button>
+					<button
+						type="button"
+						aria-label="Download demo as HTML"
+						title="Download as HTML"
+						onClick={() => downloadFile(`${slugFilename(title)}.html`, html, "text/html")}
+						data-testid="demo-download"
+						className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<DownloadIcon className="size-3.5" />
+					</button>
+					<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">interactive demo</div>
 				</div>
 			</div>
 			{state.error && (
@@ -141,8 +169,21 @@ function DemoFrame({ title, html }: { title: string; html: string }) {
 				// but never touch the app's storage, cookies, or DOM.
 				sandbox="allow-scripts"
 				srcDoc={srcDoc}
+				// scrolling OFF (owner, 2026-10-07): the bridge auto-sizes the
+				// iframe to its content, so an internal scrollbar can only appear
+				// before the first resize lands — and a scrollable iframe TRAPS
+				// the wheel (session scrolling stalls over the demo). With
+				// scrolling disabled the wheel chains straight to the session.
+				scrolling="no"
 				className="mt-2 w-full rounded-lg border bg-white"
-				style={{ height: state.height ?? 360 }}
+				// content-box: the bridge reports the CONTENT height — with the
+				// preflight's border-box the 2px border would eat into it and clip
+				// the bottom of the demo (smoke finding, 2026-10-07).
+				style={{
+					height: state.height ?? 360,
+					boxSizing: "content-box",
+					filter: inverted ? "invert(1) hue-rotate(180deg)" : undefined,
+				}}
 				data-testid="demo-iframe"
 			/>
 		</div>

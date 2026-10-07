@@ -349,7 +349,7 @@ export function Chat({
 		const onAbort = () => {
 			const target = escAbortTarget({
 				abortAsk: abortAskRef.current !== null,
-				mermaidFocus: mermaidFocusRef.current !== null,
+				mermaidFocus: mermaidFocusRef.current !== null || figureFocusRef.current !== null,
 				planOpen: planOpenRef.current,
 				setupOpen: setupOpenRef.current,
 				pending: pendingRef.current !== null,
@@ -790,12 +790,21 @@ export function Chat({
 	// popup) mount INSIDE the session-area div — both are session-scoped, so
 	// the drag bar stays sharp and draggable while a focus owns the area.
 	const [mermaidFocus, setMermaidFocus] = useState<string | null>(null);
+	// Figure focus (2026-10-07): the figure card's fullscreen button — same
+	// overlay shell as mermaid, but carrying the raw svg + the card's invert
+	// state so the fullscreen view stays faithful to the toggled card.
+	const [figureFocus, setFigureFocus] = useState<{ svg: string; inverted: boolean } | null>(null);
 
 	// Overlay mirrors for the layered-Esc gate (owner 2026-10-04): the
 	// lh:kbd-abort-turn handler reads these at EVENT time — declared here
 	// beside their states, consumed below wherever the states live.
 	const mermaidFocusRef = useRef(mermaidFocus);
 	mermaidFocusRef.current = mermaidFocus;
+	// The figure focus rides the mermaid layer in the Esc gate — the same
+	// overlay class (session-scoped diagram focus, Esc claimed at the
+	// document level by the overlay itself); the window chain must stay out.
+	const figureFocusRef = useRef(figureFocus);
+	figureFocusRef.current = figureFocus;
 	const planOpenRef = useRef(planOpen);
 	planOpenRef.current = planOpen;
 	const setupOpenRef = useRef(setupOpen);
@@ -1137,7 +1146,12 @@ export function Chat({
 				openSetup: () => setSetupOpen(true),
 			}}
 		>
-		<SessionMermaidContext.Provider value={{ openMermaid: setMermaidFocus }}>
+		<SessionMermaidContext.Provider
+			value={{
+				openMermaid: setMermaidFocus,
+				openFigure: (svg, inverted) => setFigureFocus({ svg, inverted }),
+			}}
+		>
 		<JobsContext.Provider value={jobs}>
 		{/* The session surface: the transcript column (header + scroller) and
 		    the plan-tree panel as full-height SIBLINGS — the panel spans top to
@@ -1600,6 +1614,13 @@ export function Chat({
 				    the top bar stays sharp + draggable while a focus is open. */}
 				{mermaidFocus !== null && (
 					<MermaidOverlay chart={mermaidFocus} onClose={() => setMermaidFocus(null)} />
+				)}
+				{figureFocus !== null && (
+					<MermaidOverlay
+						svg={figureFocus.svg}
+						inverted={figureFocus.inverted}
+						onClose={() => setFigureFocus(null)}
+					/>
 				)}
 				{planOpen && <PlanPopup messages={messages} onClose={() => setPlanOpen(false)} />}
 				<AbortTurnDialog mode={abortAsk} onClose={() => setAbortAsk(null)} onConfirm={confirmAbort} busy={busy} />
