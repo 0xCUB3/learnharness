@@ -46,16 +46,44 @@ import { Hint } from "@/components/ui/hint";
 
 /** Text-first node sizing (owner, plan-hug round 2026-10-07): the box
  * hugs its wrapped text instead of a fixed 160px slab. Width comes from
- * the wrapped lines — a px-per-character estimate (12px system sans ≈
- * 6.8px/char, slightly generous so nothing overflows) plus symmetric
- * padding, floored at a minimum so short titles don't collapse into
- * pills. Character-count estimate, NOT canvas measurement: the layout
- * path stays deterministic, synchronous, and DOM-free (SSR + exact
- * render pins keep working). */
-export const CHAR_W = 6.8;
-export const PAD_X = 12;
+ * the wrapped lines — a per-character-CLASS width estimate (the flat
+ * px/char rate of the first cut overshot the real rendered width, and
+ * the invisible slack read as "a lot of empty space" beside the text;
+ * owner follow-up 2026-10-07) plus symmetric padding, floored at a
+ * minimum so short titles don't collapse into pills. Estimate, NOT
+ * canvas measurement: the layout path stays deterministic,
+ * synchronous, and DOM-free (SSR + exact render pins keep working). */
+
+/** Symmetric horizontal padding — EQUALS the vertical padding the
+ * single-line text gets in NODE_H (owner: "the horizontal padding
+ * should be the same as the vertical one"): (44 − 11) / 2 ≈ 16 (the
+ * prose font renders text-xs at 11px). */
+export const PAD_X = 16;
 export const NODE_W_MIN = 96;
 export const NODE_H = 44;
+
+// Width classes for the PROSE font (Source Sans 3 as shipped, text-xs
+// rendering at 11px): narrow stems and punctuation, wide m/w, caps +
+// digits, everything else. Rates least-squares-fitted against
+// getComputedTextLength() measurements of the live plan titles
+// (2026-10-07 smoke) — residuals land within ±4px per LINE, so
+// per-side padding reads as PAD_X ±2. A different reading font
+// (Appearance override) drifts the estimate slightly; accepted.
+const NARROW_CHARS = new Set(" ijltfr.,:;'!|()[]-\\");
+const WIDE_CHARS = new Set("mwMW@");
+const CAP_DIGIT = /[A-Z0-9]/;
+
+/** Estimated rendered width (px) of one line at text-xs. Pure. */
+export function estimateLineWidth(line: string): number {
+	let w = 0;
+	for (const ch of line) {
+		if (NARROW_CHARS.has(ch)) w += 3.1;
+		else if (WIDE_CHARS.has(ch)) w += 9.2;
+		else if (CAP_DIGIT.test(ch)) w += 6.0;
+		else w += 5.4;
+	}
+	return w;
+}
 /** Baseline-to-baseline distance of node titles. */
 export const LINE_H = 13;
 export const GAP_X = 24;
@@ -200,8 +228,8 @@ export function wrapTitle(title: string, maxChars = 28): string[] {
 
 /** A node's box width for its wrapped lines — the hug itself. Pure. */
 export function nodeWidth(lines: readonly string[]): number {
-	const widest = Math.max(1, ...lines.map((l) => l.length));
-	return Math.max(NODE_W_MIN, Math.ceil(widest * CHAR_W) + 2 * PAD_X);
+	const widest = Math.max(1, ...lines.map(estimateLineWidth));
+	return Math.max(NODE_W_MIN, Math.ceil(widest) + 2 * PAD_X);
 }
 
 /** SVG-unit padding around the layout extent: strokes are centered on the
@@ -376,8 +404,9 @@ const TEXT: Record<PlanNodeStatus, string> = {
 };
 // The in-chat block speaks the dock language now (owner, plan-hug
 // round 2026-10-07): boxes in the lighter background variant like
-// the composer/dock shells, not the white-on-transparent mono look.
-const MONO_BOX = "fill-card stroke-border";
+// the composer/dock shells — but the outlines STAY white (owner
+// follow-up: the gray fill is good, white box edges).
+const MONO_BOX = "fill-card stroke-white";
 const MONO_TEXT = "fill-foreground text-xs";
 
 /** The diagram itself: positioned nodes + bezier edges. Pure-ish render —

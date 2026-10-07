@@ -12,6 +12,7 @@ import {
 	NODE_H,
 	NODE_W_MIN,
 	nodeWidth,
+	estimateLineWidth,
 	type PopupMessage,
 } from "../components/plan-block.tsx";
 import type { PlanBlockData, PlanTree } from "../src/core/contracts.ts";
@@ -42,8 +43,10 @@ describe("plan block layout (pure)", () => {
 		// Text-first sizing (owner, plan-hug round 2026-10-07): these short
 		// titles hug to the minimum — no more fixed 160px slabs.
 		const W = nodeWidth(wrapTitle("Alpha node"));
-		assert.equal(W, NODE_W_MIN); // 10 chars ≈ 92px → floored at the min
-		assert.equal(layout.width, W); // widest row is the single-node rows
+		assert.equal(W, NODE_W_MIN); // est ≈ 50 → floored at the min
+		// All three short titles floor — the extent is the floor itself.
+		assert.equal(nodeWidth(wrapTitle("Gamma node")), NODE_W_MIN); // est ≈ 59.9
+		assert.equal(layout.width, NODE_W_MIN);
 		assert.equal(layout.height, 3 * NODE_H + 2 * 48);
 		assert.equal(layout.nodeW.get("a"), W);
 	});
@@ -124,10 +127,14 @@ describe("plan block layout (pure)", () => {
 
 	it("nodeWidth hugs the wrapped text (the box grows WITH its lines)", () => {
 		// Short titles floor at the min; wide ones size to the widest line.
-		assert.equal(nodeWidth(["supercalifragilistic"]), 160); // 20 chars ≈ 136 + 24 pad
-		assert.equal(nodeWidth(wrapTitle("Symmetry and orthogonal complements")), 181); // 23-char line ≈ 157 + 24
-		// The hug is symmetric padding, and never below the floor.
+		// Per-char-CLASS estimate (owner follow-up: the flat px/char rate
+		// overshot the rendered width — invisible slack beside the text).
+		assert.equal(nodeWidth(["supercalifragilistic"]), 117); // est ≈ 85 + 2×16
+		assert.equal(nodeWidth(wrapTitle("Symmetry and orthogonal complements")), 149);
+		// The hug is symmetric padding — 16 a side, the SAME as the vertical
+		// (44−12)/2 — and never below the floor.
 		assert.ok(nodeWidth(["a"]) === NODE_W_MIN);
+		assert.ok(Math.abs(estimateLineWidth("The normal-form ladder") - 106.3) < 0.5);
 	});
 });
 
@@ -165,8 +172,9 @@ describe("plan block render", () => {
 		assert.match(html, /<text[^>]*x="48"[^>]*text-anchor="middle"/); // 96/2
 		assert.ok(!/x="12"/.test(html), "no left-inset text");
 		// The in-chat block speaks the dock language (owner, 2026-10-07):
-		// lighter-background boxes like the composer shells, not white mono.
-		assert.match(html, /<rect[^>]*class="fill-card stroke-border"/);
+		// lighter-background boxes like the composer shells — with WHITE
+		// outlines (owner follow-up: gray fill good, box edges stay white).
+		assert.match(html, /<rect[^>]*class="fill-card stroke-white"/);
 		// Two stacked nodes: 2*NODE_H + GAP_Y = 136 extent + GRAPH_PAD on
 		// every side (strokes/glow never clip at the edges). The width
 		// rides the hug now: 96-min boxes, not the old 160 slabs.
