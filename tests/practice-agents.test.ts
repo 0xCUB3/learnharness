@@ -253,16 +253,29 @@ describe("practice prompt composition (own directory + the formatting appendix)"
 
 	it("the SHARED voice + accuracy compose (owner round 13): ONE law across every agent, and the stale line is dead", () => {
 		const prompt = composeInstructions("practice");
-		// accuracy: the shared chunk's research-tool reference (round 10 gave
-		// practice research — the old near-copy said "You have no research
-		// tool here", which was false)
+		// accuracy (prompt-refinement round, 2026-10-07): the felt-doubt bar —
+		// one law across every agent; the old round-10 pointer lived in the
+		// accuracy chunk, the mechanics now live in each agent's own sections
 		assert.match(prompt, /one confidently-delivered hallucination poisons that/);
-		assert.match(prompt, /you have a `research` tool/);
+		assert.match(prompt, /The bar is the doubt itself/);
+		// practice's own fact-check law (the rarely-needed framing is dead)
+		assert.match(prompt, /grades the learner against a lie/);
+		assert.ok(!prompt.includes("exceptions, not habits"), "the rarely-needed framing is gone");
 		assert.ok(!prompt.includes("no research tool here"), "the stale line is gone");
+		// the thinking-fields doctrine composes into practice too (one law)
+		assert.match(prompt, /primary data/);
 		// the teacher composes the same shared chunks (one law)
 		const teacher = composeInstructions("teacher");
 		assert.match(teacher, /one confidently-delivered hallucination poisons that/);
 		assert.match(teacher, /Everything in this section deletes a default/);
+		assert.match(teacher, /The bar is the doubt itself/);
+		assert.match(teacher, /primary data/);
+		// the no-double-plan rule (owner-reported: plan drawn twice)
+		assert.match(teacher, /Never draw the plan again in your prose/);
+		// plan rewriting is normal, not exceptional (continuous adaptation)
+		assert.match(teacher, /Rewriting is a normal, common event/);
+		// planning is the natural verification moment
+		assert.match(teacher, /planning is the natural moment for verification/);
 	});
 
 	it("the SHARED formatting guide composes (owner, 2026-10-04 late): LaTeX delimiters in every setting", () => {

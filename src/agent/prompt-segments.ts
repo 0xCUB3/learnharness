@@ -34,14 +34,13 @@ import { FRAGMENT_RE, isValidSegmentPath, type PromptAgent, type PromptSegmentIn
 
 const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
 
-/** Shared fragments the PRACTICE agent composes: the VOICE and ACCURACY
- *  chunks joined the formatting guide (owner round 13, 2026-10-05) —
- *  personality and the truth contract are ONE law across every agent;
- *  practice once carried stale near-copies ("You have no research tool
- *  here" was false the moment round 10 gave it research). The
- *  question/confidence/file mechanics stay out (practice has no such
- *  tools). */
-const PRACTICE_SHARED_FRAGMENTS = ["10-voice.md", "15-accuracy.md", "40-formatting.md"];
+/** Shared fragments the PRACTICE agent composes: the VOICE, ACCURACY,
+ *  and MENTAL-MODEL chunks joined the formatting guide (owner rounds 13
+ *  and the prompt-refinement round of 2026-10-07) — personality, the
+ *  truth contract, and the thinking-fields doctrine are ONE law across
+ *  every agent. The question/confidence/file mechanics stay out
+ *  (practice has no such tools). */
+const PRACTICE_SHARED_FRAGMENTS = ["10-voice.md", "15-accuracy.md", "16-mental-model.md", "40-formatting.md"];
 
 /** Absolute path for an override file (unchecked — validate first). */
 function overrideFileFor(segmentPath: string): string {
