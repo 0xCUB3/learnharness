@@ -271,12 +271,36 @@ export interface SubagentResultMeta {
 export interface SubagentArtifactData {
 	kind: JobKind;
 	result: ResearchResult | DemoResult | VisualResult | PdfResult;
+	/** The learner's pinned UI state (invert switch) riding the record. */
+	ui?: { inverted?: boolean };
 }
 
 /** A result steer's marker details: the UI's meta + artifact in one
  *  payload (the projection splits it into metadata + data part). */
 export interface SteerDetails extends SubagentResultMeta {
 	result: ResearchResult | DemoResult | VisualResult | PdfResult;
+	/** LEARNER UI state pinned onto the artifact (owner, 2026-10-07): the
+	 *  invert switch's position, persisted so navigating away and back (or
+	 *  restarting) keeps it. A VIEW preference — never enters the teacher's
+	 *  context, never exports (the markdown engine reads `result` only). */
+	ui?: { inverted?: boolean };
+}
+
+/** Set a steer message's ui.inverted (pure): returns a NEW message array
+ *  with the target's details updated — no-op (same array) when the message
+ *  is missing or not an invertible artifact steer. The silent route's
+ *  whole body. */
+export function setSteerUiInverted(
+	messages: readonly LhMessage[],
+	messageId: string,
+	inverted: boolean,
+): LhMessage[] {
+	return messages.map((m) => {
+		if (m.id !== messageId) return m;
+		const d = (m as LhMarkerMessage).details as Partial<SteerDetails> | undefined;
+		if (!d || (d.kind !== "demo" && d.kind !== "visual")) return m;
+		return { ...m, details: { ...d, ui: { ...d.ui, inverted } } } as LhMessage;
+	});
 }
 
 /** Anything the wake pipeline may queue and deliver — a native marker. */

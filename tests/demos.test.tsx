@@ -34,6 +34,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { PATHS } from "../config.ts";
 import {
 	buildDemoSrcDoc,
+	DEMO_BRIDGE_SCRIPT,
 	DemoCard,
 	DemoErrorChip,
 	INITIAL_DEMO_BRIDGE_STATE,
@@ -52,7 +53,7 @@ import { runDemoBuilder } from "../src/agent/subagents/demo-builder.ts";
 import { headlessOverride, type DemoRunResult, type HeadlessApi } from "../src/agent/subagents/headless.ts";
 import { createJobRunner, demoModelOverride, visualModelOverride } from "../src/agent/subagents/runner.ts";
 import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
-import { buildAbortSteer, buildSubagentSteer, isSubagentFailure, type SteerMessage } from "../src/core/contracts.ts";
+import { buildAbortSteer, buildSubagentSteer, isSubagentFailure, setSteerUiInverted, type SteerMessage } from "../src/core/contracts.ts";
 import type { JobRecord } from "../src/core/contracts.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { chatStore } from "../src/store/chats.ts";
@@ -488,15 +489,17 @@ describe("artifact chrome — scrollbar, invert toggles, downloads (release poli
 		);
 		const html = renderToStaticMarkup(<SubagentSteerCard message={projectNative([steer])[0] as never} />);
 		assert.match(html, /scrolling="no"/, "no internal scrollbar — the wheel chains to the session");
-		assert.match(html, /data-testid="demo-invert"/);
+		assert.match(html, /toggle-invert-demo-brightness/, "the invert switch (house Toggle)");
 		assert.match(html, /data-testid="demo-download"/);
 		assert.ok(!html.includes("hue-rotate"), "inversion is OFF by default — a manual toggle only");
+		assert.match(html, /interactive demo/, "the kind label lives in the caption header");
+		assert.match(html, /Wave interference/, "the title rides beside the kind label");
 	});
 
 	it("figure card: invert + download buttons; NO fullscreen button without a chat page (the context is null there)", () => {
 		const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><circle cx="50" cy="50" r="20"/></svg>';
 		const html = renderToStaticMarkup(<VisualOutputCard output={{ svg }} />);
-		assert.match(html, /data-testid="visual-invert"/);
+		assert.match(html, /toggle-invert-figure-brightness/, "the invert switch (house Toggle)");
 		assert.match(html, /data-testid="visual-download"/);
 		assert.ok(!html.includes('data-testid="visual-open"'), "fullscreen needs the session overlay context");
 		assert.ok(!html.includes("hue-rotate"), "inversion OFF by default");
@@ -523,6 +526,43 @@ describe("artifact chrome — scrollbar, invert toggles, downloads (release poli
 			w: 100,
 			h: 50,
 		}, "viewBox always wins");
+	});
+});
+
+describe("bridge height: the body-based measure (ratchet fix, 2026-10-07)", () => {
+	it("DEMO_BRIDGE_SCRIPT measures the BODY (scrollHeight + rect + margins), not the viewport-clamped documentElement", () => {
+		// documentElement.scrollHeight = max(content, viewport) latches at
+		// the parent's own height — a demo could grow but never shrink on
+		// window resize (owner-reported). The body metrics are pure content.
+		assert.ok(DEMO_BRIDGE_SCRIPT.includes("Math.max(b.scrollHeight,b.getBoundingClientRect().height)"));
+		assert.ok(DEMO_BRIDGE_SCRIPT.includes("getComputedStyle(b)"));
+		assert.ok(!/post=function\(\)\{send\(\{type:"demo-resize",height:document\.documentElement\.scrollHeight\}\)\};/.test(DEMO_BRIDGE_SCRIPT));
+	});
+});
+
+describe("setSteerUiInverted (the persisted invert switch, 2026-10-07)", () => {
+	const demoSteer = buildSubagentSteer(
+		{ id: "jx", kind: "demo", toolCallId: "cx" },
+		{ title: "T", html: "<p>x</p>", tested: true },
+	);
+	const other = { id: "other", role: "user" as const, content: "hi", timestamp: 1 };
+
+	it("writes ui.inverted on the target steer and leaves everything else untouched", () => {
+		const out = setSteerUiInverted([other, demoSteer], demoSteer.id, true);
+		assert.equal(out.length, 2);
+		assert.deepEqual(
+			(out[1] as { details: { ui?: { inverted?: boolean } } }).details.ui,
+			{ inverted: true },
+		);
+		assert.equal(out[0], other, "untouched messages pass through by identity");
+	});
+
+	it("toggles back to false; missing or non-artifact messages are no-ops (same array members)", () => {
+		const on = setSteerUiInverted([demoSteer], demoSteer.id, true);
+		const off = setSteerUiInverted(on, demoSteer.id, false);
+		assert.equal((off[0] as { details: { ui?: { inverted?: boolean } } }).details.ui?.inverted, false);
+		const missing = setSteerUiInverted([demoSteer], "nope", true);
+		assert.equal(missing[0], demoSteer, "no target → identity");
 	});
 });
 

@@ -1,7 +1,8 @@
 "use client";
 
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ContrastIcon, DownloadIcon } from "lucide-react";
+import { DownloadIcon } from "lucide-react";
+import { Toggle } from "@/components/settings/controls";
 import { ChatActionsContext } from "@/components/chat";
 import { downloadFile, slugFilename } from "@/components/artifacts/download";
 import { DispatchCard } from "@/components/artifacts/dispatch-card";
@@ -28,7 +29,14 @@ import type { ArtifactPartProps, DemoResult } from "@/src/core";
 
 export const DEMO_BRIDGE_SCRIPT = `<script>(function(){
 var send=function(m){try{parent.postMessage(m,"*")}catch(e){}};
-var post=function(){send({type:"demo-resize",height:document.documentElement.scrollHeight})};
+var post=function(){
+var b=document.body;
+if(!b){send({type:"demo-resize",height:document.documentElement.scrollHeight});return}
+var h=Math.max(b.scrollHeight,b.getBoundingClientRect().height);
+var cs=getComputedStyle(b);
+h+=(parseFloat(cs.marginTop)||0)+(parseFloat(cs.marginBottom)||0);
+send({type:"demo-resize",height:Math.ceil(h)})
+};
 if(typeof ResizeObserver!=="undefined"){new ResizeObserver(post).observe(document.documentElement)}
 window.addEventListener("resize",post);
 window.addEventListener("load",post);
@@ -79,8 +87,18 @@ export function DemoCard({ part }: ArtifactPartProps) {
 	return <DispatchCard toolCallId={part.toolCallId} kind="demo" />;
 }
 
-/** The demo artifact — exported: the steer card renders the delivered result. */
-export function DemoOutputCard({ output }: { output: unknown }) {
+/** The demo artifact — exported: the steer card renders the delivered
+ *  result. `messageId` + `initialInverted` carry the PERSISTED invert
+ *  switch (details.ui.inverted via the artifact-ui route, owner 2026-10-07). */
+export function DemoOutputCard({
+	output,
+	messageId,
+	initialInverted = false,
+}: {
+	output: unknown;
+	messageId?: string;
+	initialInverted?: boolean;
+}) {
 	const result = output as DemoResult | undefined;
 	if (!result || typeof result.html !== "string" || typeof result.title !== "string") {
 		return (
@@ -101,18 +119,42 @@ export function DemoOutputCard({ output }: { output: unknown }) {
 			</div>
 		);
 	}
-	return <DemoFrame title={result.title} html={result.html} />;
+	return (
+		<DemoFrame title={result.title} html={result.html} messageId={messageId} initialInverted={initialInverted} />
+	);
 }
 
-function DemoFrame({ title, html }: { title: string; html: string }) {
+function DemoFrame({
+	title,
+	html,
+	messageId,
+	initialInverted = false,
+}: {
+	title: string;
+	html: string;
+	messageId?: string;
+	initialInverted?: boolean;
+}) {
 	const actions = useContext(ChatActionsContext);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 	const [state, setState] = useState<DemoBridgeState>(INITIAL_DEMO_BRIDGE_STATE);
-	// Brightness inversion (owner, 2026-10-07): a MANUAL toggle only — no
-	// detection, no theme wiring. The filter rides the iframe element, which
-	// carries the card's white backing, so one class flips page + content
-	// together while hue-rotate(180deg) undoes invert's hue flip.
-	const [inverted, setInverted] = useState(false);
+	// Brightness inversion (owner, 2026-10-07): the switch state PERSISTS on
+	// the steer record (details.ui.inverted) — seeded here, written through
+	// the silent artifact-ui route on toggle. Without a chat page (tests,
+	// previews) the toggle stays local-only. The filter rides the iframe
+	// element, which carries the card's white backing, so one filter flips
+	// page + content together while hue-rotate(180deg) undoes invert's hue
+	// flip.
+	const [inverted, setInverted] = useState(initialInverted);
+	const toggleInverted = (next: boolean) => {
+		setInverted(next);
+		if (!actions?.chatId || !messageId) return;
+		void fetch(`/api/chats/${actions.chatId}/artifact-ui`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ input: { messageId, inverted: next } }),
+		}).catch(() => {});
+	};
 	const srcDoc = useMemo(() => buildDemoSrcDoc(html), [html]);
 
 	useEffect(() => {
@@ -128,20 +170,18 @@ function DemoFrame({ title, html }: { title: string; html: string }) {
 
 	return (
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="demo-card">
-			<div className="flex items-baseline justify-between gap-2">
-				<div className="font-medium">{title}</div>
-				<div className="flex shrink-0 items-center gap-0.5">
-					<button
-						type="button"
-						aria-label="Invert brightness"
-						aria-pressed={inverted}
-						title="Invert brightness"
-						onClick={() => setInverted((v) => !v)}
-						data-testid="demo-invert"
-						className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-					>
-						<ContrastIcon className="size-3.5" />
-					</button>
+			{/* Caption header (owner, 2026-10-07): kind label + title in the
+			   label's size/tracking (title normal-case, foreground) — the
+			   figure card's grammar plus a name. Switch + download far right. */}
+			<div className="flex items-center justify-between gap-2">
+				<div className="flex min-w-0 items-baseline gap-2">
+					<span className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+						interactive demo
+					</span>
+					<span className="truncate text-xs font-medium tracking-wide text-foreground">{title}</span>
+				</div>
+				<div className="flex shrink-0 items-center gap-1.5">
+					<Toggle checked={inverted} onChange={toggleInverted} label="Invert demo brightness" />
 					<button
 						type="button"
 						aria-label="Download demo as HTML"
@@ -152,7 +192,6 @@ function DemoFrame({ title, html }: { title: string; html: string }) {
 					>
 						<DownloadIcon className="size-3.5" />
 					</button>
-					<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">interactive demo</div>
 				</div>
 			</div>
 			{state.error && (

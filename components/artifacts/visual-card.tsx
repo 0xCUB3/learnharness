@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { ContrastIcon, DownloadIcon, MaximizeIcon } from "lucide-react";
+import { useContext, useState } from "react";
+import { ChatActionsContext } from "@/components/chat";
+import { DownloadIcon, MaximizeIcon } from "lucide-react";
+import { Toggle } from "@/components/settings/controls";
 import { useSessionMermaid } from "@/components/session-overlay";
 import { downloadFile } from "@/components/artifacts/download";
 import { DispatchCard } from "@/components/artifacts/dispatch-card";
@@ -49,13 +51,33 @@ export function VisualCard({ part }: ArtifactPartProps) {
 }
 
 /** The figure itself — exported: the steer card renders the delivered artifact. */
-export function VisualOutputCard({ output }: { output: unknown }) {
+export function VisualOutputCard({
+	output,
+	messageId,
+	initialInverted = false,
+}: {
+	output: unknown;
+	messageId?: string;
+	initialInverted?: boolean;
+}) {
 	const result = output as VisualResult | undefined;
 	const overlay = useSessionMermaid();
-	// Brightness inversion (owner, 2026-10-07): a MANUAL toggle only — no
-	// detection, no theme wiring. Default off; a toggled figure passes its
-	// state into the fullscreen overlay (openFigure).
-	const [inverted, setInverted] = useState(false);
+	const actions = useContext(ChatActionsContext);
+	// Brightness inversion (owner, 2026-10-07): the switch state PERSISTS on
+	// the steer record (details.ui.inverted) — seeded here, written through
+	// the silent artifact-ui route on toggle; without a chat page (tests,
+	// previews) it stays local-only. The toggled state also feeds the
+	// fullscreen overlay (openFigure).
+	const [inverted, setInverted] = useState(initialInverted);
+	const toggleInverted = (next: boolean) => {
+		setInverted(next);
+		if (!actions?.chatId || !messageId) return;
+		void fetch(`/api/chats/${actions.chatId}/artifact-ui`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ input: { messageId, inverted: next } }),
+		}).catch(() => {});
+	};
 	const natural = result && typeof result.svg === "string" ? svgNaturalWidth(result.svg) : null;
 	if (!result || typeof result.svg !== "string") {
 		return (
@@ -80,7 +102,18 @@ export function VisualOutputCard({ output }: { output: unknown }) {
 		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="visual-card">
 			<div className="flex items-center justify-between gap-2">
 				<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Figure</div>
-				<div className="flex items-center gap-0.5">
+				<div className="flex items-center gap-1.5">
+					<Toggle checked={inverted} onChange={toggleInverted} label="Invert figure brightness" />
+					<button
+						type="button"
+						aria-label="Download figure as SVG"
+						title="Download as SVG"
+						onClick={() => downloadFile("figure.svg", result.svg, "image/svg+xml")}
+						data-testid="visual-download"
+						className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<DownloadIcon className="size-3.5" />
+					</button>
 					{overlay && (
 						<button
 							type="button"
@@ -93,27 +126,6 @@ export function VisualOutputCard({ output }: { output: unknown }) {
 							<MaximizeIcon className="size-3.5" />
 						</button>
 					)}
-					<button
-						type="button"
-						aria-label="Invert brightness"
-						aria-pressed={inverted}
-						title="Invert brightness"
-						onClick={() => setInverted((v) => !v)}
-						data-testid="visual-invert"
-						className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-					>
-						<ContrastIcon className="size-3.5" />
-					</button>
-					<button
-						type="button"
-						aria-label="Download figure as SVG"
-						title="Download as SVG"
-						onClick={() => downloadFile("figure.svg", result.svg, "image/svg+xml")}
-						data-testid="visual-download"
-						className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-					>
-						<DownloadIcon className="size-3.5" />
-					</button>
 				</div>
 			</div>
 			{/* Natural sizing (owner, 2026-10-07): a declared-width svg sits at
