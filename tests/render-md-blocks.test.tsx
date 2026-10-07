@@ -173,3 +173,59 @@ describe("mermaid expand — the context seam", () => {
 		assert.deepEqual(opened, [], "nothing opened by rendering alone");
 	});
 });
+
+describe("md-blocks — key-idea callouts (GitHub alerts, owner round 2026-10-07)", () => {
+	it("an [!IMPORTANT] callout renders as the sharp white-outline box, marker never leaks", () => {
+		const html = render("> [!IMPORTANT]\n> ALL X is done through Y.");
+		assert.ok(html.includes('data-testid="md-callout"'), "the callout box mounts");
+		assert.ok(html.includes('data-alert-kind="important"'), "the kind is recorded");
+		assert.match(html, /ALL X is done through Y\./, "the prose survives");
+		assert.ok(!html.includes("[!IMPORTANT]"), "the marker line never leaks as text");
+		// The owner's minimal law: sharp corners (no rounded), white stroke,
+		// no background, no label, no icon — and the box hugs its text.
+		assert.match(html, /border-white/, "white stroke");
+		assert.match(html, /w-fit/, "width: fit-content — the hug");
+		assert.ok(!html.includes("rounded"), "sharp corners — no rounding anywhere");
+		assert.ok(!html.includes("bg-card") && !html.includes("bg-background"), "transparent — no background");
+	});
+
+	it("all five GitHub markers box identically — one device, one meaning", () => {
+		for (const kind of ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"]) {
+			const html = render(`> [!${kind}]\n> Load-bearing words.`);
+			assert.ok(html.includes('data-testid="md-callout"'), `${kind} boxes`);
+			assert.ok(html.includes(`data-alert-kind="${kind.toLowerCase()}"`), `${kind} kind recorded`);
+			assert.ok(!html.includes(`[!${kind}]`), `${kind} marker never leaks`);
+		}
+	});
+
+	it("a standalone-marker callout (blank quote line) drops the empty paragraph", () => {
+		const html = render("> [!IMPORTANT]\n>\n> The payoff lands here.");
+		assert.ok(html.includes('data-testid="md-callout"'));
+		assert.match(html, /The payoff lands here\./);
+		assert.ok(!html.includes("[!IMPORTANT]"));
+	});
+
+	it("multi-paragraph callouts keep their structure", () => {
+		const html = render("> [!IMPORTANT]\n> First the truth.\n>\n> Then the payoff.");
+		assert.match(html, /First the truth\./);
+		assert.match(html, /Then the payoff\./);
+		assert.ok((html.match(/<p>/g) ?? []).length >= 2, "both paragraphs render inside the box");
+	});
+
+	it("plain blockquotes pass through untouched — no box for ordinary quotes", () => {
+		const html = render("> Just an ordinary quote.");
+		assert.ok(!html.includes('data-testid="md-callout"'), "no callout box");
+		assert.match(html, /Just an ordinary quote\./);
+	});
+});
+
+describe("parseAlertMarker (pure)", () => {
+	it("non-paragraph openers and marker-less text return null", async () => {
+		const { parseAlertMarker } = await import("../components/md-blocks.tsx");
+		assert.equal(parseAlertMarker("just text"), null);
+		assert.equal(parseAlertMarker(null), null);
+		// a leading <em> node, not a paragraph: no crash, no alert
+		const em = { type: "em", props: { children: "x" } } as never;
+		assert.equal(parseAlertMarker(em), null);
+	});
+});

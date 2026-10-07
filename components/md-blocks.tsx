@@ -27,7 +27,7 @@
  * EXPAND icon (opens the session overlay) when a chat page is mounted.
  */
 
-import { isValidElement, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { cloneElement, isValidElement, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, MaximizeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -265,6 +265,88 @@ export function MarkdownCode(props: ComponentProps<"code"> & ExtraProps) {
 	);
 }
 
+// ─── Key-idea callouts (the Streamdown `blockquote` override) ────────────────
+
+/** GitHub-style alert markers — the syntax the models already know from a
+ *  million READMEs. The PROMPT teaches only [!IMPORTANT] (one emphasis
+ *  device, one meaning: load-bearing); the renderer accepts all five and
+ *  boxes them identically — a stray [!NOTE] still meant "this deserves
+ *  emphasis", and a literal marker line must never leak as text (owner
+ *  design, callout round 2026-10-07). */
+const ALERT_MARKER_RE = /^\[!(note|tip|important|warning|caution)\][ \t]*(?:\n|$)/i;
+
+export interface ParsedAlert {
+	kind: string;
+	/** The blockquote children with the marker line stripped — prose intact. */
+	children: ReactNode;
+}
+
+const significant = (c: ReactNode) => c !== null && c !== undefined && c !== "" && !(typeof c === "string" && c.trim() === "");
+
+/** The element's markdown tag — Streamdown wraps every block in its own
+ *  styled component (MarkdownParagraph, …), so the React type is rarely
+ *  the raw "p": the hast node carried in props tells the truth. */
+function markdownTag(el: React.ReactElement): string | null {
+	if (typeof el.type === "string") return el.type;
+	const node = (el.props as { node?: { tagName?: string } }).node;
+	return node?.tagName ?? null;
+}
+
+/** Pure: does this blockquote open with a GitHub alert marker? Returns the
+ *  kind and the children with the marker line removed (the marker's own
+ *  paragraph dropped entirely when it stands alone — `> [!IMPORTANT]` then
+ *  a blank quote line then content; a standalone marker also drops the
+ *  <br> hard-break artifact that carried its line break). Non-alert
+ *  blockquotes pass through untouched. Exported for hermetic tests. */
+export function parseAlertMarker(children: ReactNode): ParsedAlert | null {
+	const list = Array.isArray(children) ? children : [children];
+	const para = list.find(significant);
+	if (!isValidElement(para) || markdownTag(para) !== "p") return null;
+	const inner = (para.props as { children?: ReactNode }).children;
+	const innerList = Array.isArray(inner) ? inner : [inner];
+	const lead = innerList.find(significant);
+	if (typeof lead !== "string") return null;
+	const match = ALERT_MARKER_RE.exec(lead);
+	if (!match) return null;
+	const kind = match[1]!.toLowerCase();
+	const stripped = lead.slice(match[0].length);
+	// Rebuild the paragraph without the marker line; drop it entirely when
+	// the marker stood alone (nothing but the marker text in the paragraph).
+	const leadIdxInner = innerList.indexOf(lead);
+	const hasFollowing = innerList.some((c, i) => i > leadIdxInner && significant(c));
+	let rebuiltPara: ReactNode = null;
+	if (stripped.trim() !== "" || hasFollowing) {
+		let rest = innerList.map((c) => (c === lead ? (stripped === "" ? null : stripped) : c));
+		if (stripped === "") {
+			// the hard-break <br> that ended the marker line is now leading junk
+			while (rest.length && (rest[0] === null || (isValidElement(rest[0]) && markdownTag(rest[0]) === "br"))) rest = rest.slice(1);
+		}
+		rebuiltPara = cloneElement(para, {}, ...rest);
+	}
+	const leadIdx = list.indexOf(para);
+	const restChildren = [...list.slice(0, leadIdx), ...(rebuiltPara ? [rebuiltPara] : []), ...list.slice(leadIdx + 1)];
+	return { kind, children: restChildren };
+}
+
+/** The key-idea callout (owner rulings, 2026-10-07): SHARP corners, a white
+ *  stroke, NO background, NO label, NO icon — just the outline. The box
+ *  hugs its text (width: fit-content, capped at the column) instead of
+ *  stretching full-width into empty space. */
+export function MarkdownBlockquote(props: ComponentProps<"blockquote"> & ExtraProps) {
+	const { children, node, ...rest } = props;
+	const alert = parseAlertMarker(children);
+	if (!alert) return <blockquote {...rest}>{children}</blockquote>;
+	return (
+		<div
+			data-testid="md-callout"
+			data-alert-kind={alert.kind}
+			className="my-4 w-fit max-w-full border border-white px-4 py-3 [&> :first-child]:mt-0 [&> :last-child]:mb-0"
+		>
+			{alert.children}
+		</div>
+	);
+}
+
 // ─── Tables (the Streamdown `table` override) ────────────────────────────────
 
 /** A plain PROSE table: no wrapper box, no button rows — just the table
@@ -367,4 +449,5 @@ export const mdComponents = {
 	table: MarkdownTable,
 	span: MathDisplay,
 	strong: MarkdownStrong,
+	blockquote: MarkdownBlockquote,
 };
