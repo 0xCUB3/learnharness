@@ -157,7 +157,8 @@ export interface RegionTuning {
 export const REGION_BITMAP_OPTIONS = [128, 192, 256, 384, 512] as const;
 export const DEFAULT_REGION_TUNING: RegionTuning = {
 	dilation: 20,
-	blur: 20,
+	// New default 40 (owner, 2026-10-07): softer, wider region tints.
+	blur: 40,
 	bitmap: 256,
 	edgeAlpha: 0.2,
 	enabled: true,
@@ -260,7 +261,9 @@ export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 	nodeSize: 2,
 	edgeWidth: 1,
 	arrowLength: 2,
-	labelZoom: 4,
+	// New default 1 (owner, 2026-10-07): labels hidden at the overview,
+	// shown once the camera reaches fit zoom or closer.
+	labelZoom: 1,
 	labelSize: 3,
 	clusterLabels: true,
 	clusterLabelSize: 14,

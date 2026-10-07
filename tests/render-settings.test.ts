@@ -190,9 +190,9 @@ describe("sanitizeRenderSettings", () => {
 		assert.equal(DEFAULT_RENDER_SETTINGS.edgeWidth, 1);
 		assert.equal(DEFAULT_RENDER_SETTINGS.arrowLength, 2);
 		assert.equal(DEFAULT_RENDER_SETTINGS.labelSize, 3);
-		assert.equal(DEFAULT_RENDER_SETTINGS.labelZoom, 4);
+		assert.equal(DEFAULT_RENDER_SETTINGS.labelZoom, 1); // labels only at fit zoom or closer (owner, 2026-10-07)
 		assert.equal(DEFAULT_REGION_TUNING.dilation, 20);
-		assert.equal(DEFAULT_REGION_TUNING.blur, 20);
+		assert.equal(DEFAULT_REGION_TUNING.blur, 40); // new default (owner, 2026-10-07)
 		assert.equal(DEFAULT_REGION_TUNING.edgeAlpha, 0.2);
 		assert.equal(DEFAULT_REGION_TUNING.bitmap, 256);
 	});
@@ -237,10 +237,17 @@ describe("ladder mapping (11 stops, default-centered)", () => {
 		["regions.edgeAlpha", REGION_EDGE_ALPHA_LADDER, DEFAULT_REGION_TUNING.edgeAlpha],
 	];
 
-	test("every ladder has 11 stops; every default is stop #5 (dead-center)", () => {
+	// The dead-center law held until the owner moved two defaults
+	// off-center by ruling (2026-10-07): labelZoom 1 (index 1 — labels
+	// only at fit zoom or closer) and regions.blur 40 (index 7 — softer,
+	// wider tints). Every other default stays dead-center.
+	const OFF_CENTER: Record<string, number> = { labelZoom: 1, "regions.blur": 7 };
+
+	test("every ladder has 11 stops; defaults dead-center except the two owner-moved", () => {
 		for (const [name, ladder, dflt] of LADDERS) {
 			assert.equal(ladder.length, 11, name);
-			assert.equal(ladder[5], dflt, name); // default at index 5 → position 50
+			const idx = OFF_CENTER[name] ?? 5;
+			assert.equal(ladder[idx], dflt, name); // default at index 5 → position 50
 		}
 	});
 
@@ -334,7 +341,7 @@ describe("physics sliders (fine-grained log, unchanged 2026-09-17)", () => {
 		// span, so a value tuned on a big graph read far too sharp on a
 		// small one. It's a canonical world reach now — any stored value
 		// snaps to the nearest stop.
-		assert.equal(DEFAULT_REGION_TUNING.blur, 20);
+		assert.equal(DEFAULT_REGION_TUNING.blur, 40); // new default (owner, 2026-10-07)
 		assert.equal(sanitizeRegionTuning({ blur: 3.7 }).blur, 4); // nearest stop
 		assert.equal(sanitizeRegionTuning({ blur: 7.2 }).blur, 7.5);
 		assert.equal(sanitizeRegionTuning({ blur: -5 }).blur, REGION_BLUR_LADDER[0]);
