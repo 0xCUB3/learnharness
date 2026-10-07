@@ -80,6 +80,34 @@ describe("web_search on the injected port (web.ts)", () => {
 		const out = await web_fetch!.execute!("c1", { url: "not a url" });
 		assert.match(String(out.details), /web_fetch failed: invalid URL/);
 	});
+
+	it("web_fetch ACCEPTS a valid http(s) URL — the protocol gate must not reject everything (the colon bug, 2026-10-07)", async () => {
+		// URL.protocol is \"https:\" WITH the colon; the colon-less comparison
+		// ported from the py harness (urlparse().scheme has none) made the
+		// gate throw for every valid URL — the tool never fetched a page in
+		// its life (owner-reported via OpenRouter logs). This pin stubs fetch
+		// so the happy path runs hermetically: a VALID url must REACH the
+		// fetch stage.
+		const { web_fetch } = createWebTools(() => null);
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response("A plain text page with enough content to matter for the test.", {
+				headers: { "content-type": "text/plain" },
+			})) as typeof fetch;
+		try {
+			const ok = await web_fetch!.execute!("c-ok", { url: "https://example.com/page" });
+			assert.ok(
+				!String(ok.details).includes("invalid URL"),
+				"a valid https URL passes the protocol gate and reaches fetch",
+			);
+			assert.match(String(ok.details), /plain text page/);
+
+			const ftp = await web_fetch!.execute!("c-ftp", { url: "ftp://example.com/file" });
+			assert.match(String(ftp.details), /invalid URL/, "non-http(s) schemes still rejected");
+		} finally {
+			globalThis.fetch = realFetch;
+		}
+	});
 });
 
 /** Minimal in-memory JobStore — the drop tests never touch the fs. */

@@ -160,7 +160,12 @@ export function createWebTools(search: () => SearchProvider | null): Record<stri
 			execute: serverExecute("web_fetch", webFetchInput, async ({ url }): Promise<string> => {
 				try {
 					const parsed = new URL(url);
-					if (parsed.protocol !== "http" && parsed.protocol !== "https") throw new Error("Only http(s) URLs are supported");
+					// URL.protocol carries a TRAILING COLON ("https:", WHATWG) — the
+					// colon-less comparison born from the py-harness port (urlparse's
+					// scheme has NO colon) rejected every valid URL ever fetched
+					// (owner-reported via OpenRouter logs, 2026-10-07).
+					if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+						throw new Error("Only http(s) URLs are supported");
 				} catch {
 					return `web_fetch failed: invalid URL "${url}"`;
 				}
