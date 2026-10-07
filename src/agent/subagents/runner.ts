@@ -19,6 +19,9 @@ import {
 	type VisualToolInput,
 } from "../../core/contracts.ts";
 import { registerJobAbort, unregisterJobAbort } from "./aborts.ts";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ModelRole } from "../../../config.ts";
 import { ROLE_SLOT, modelsNotConfigured, type ModelSlotName, type ProviderKeyMissing } from "../../core/settings.ts";
 import type { ChatStore, JobStore } from "../../core/ports.ts";
@@ -353,20 +356,25 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			.join("\n\n");
 
 		const fetchedUrls: string[] = [];
+		// Per-job PDF dir (researcher PDF wave, 2026-10-07): web_fetch_pdf
+		// downloads land here; every pdf tool is scoped to it; it dies with
+		// the job (never enters the record).
+		const pdfDir = await fs.mkdtemp(path.join(os.tmpdir(), "lh-research-"));
 
 		try {
 			jobStore.updateJob(jobId, { activity: "researching" });
 			const brief = await runResearcherAgent(prompt, {
 				engine: model,
 				search: deps.searchProvider,
+				pdfDir,
 				abortSignal: loop.abortSignal,
 				chatId: loop.chatId,
 				// Money channel: each agent step is one model call — fold its
 				// usage into the record as it completes (progress write).
 				onUsage: (usage) => loop.onUsage(piUsageToStep(usage)),
-				onToolStart: (toolName, args) => {
+					onToolStart: (toolName, args) => {
 					const input = args as { query?: string; url?: string } | undefined;
-					if (toolName === "web_fetch" && typeof input?.url === "string") {
+					if (typeof input?.url === "string" && (toolName === "web_fetch" || toolName === "web_fetch_pdf")) {
 						fetchedUrls.push(input.url);
 					}
 					jobStore.updateJob(jobId, { activity: activityLine(toolName, input) });
@@ -383,6 +391,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			const reason = err instanceof Error ? err.message : String(err);
 			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 			await finishJob(jobId, { brief: `Research failed: ${reason}`, sources: [] });
+		} finally {
+			await fs.rm(pdfDir, { recursive: true, force: true });
 		}
 	}
 

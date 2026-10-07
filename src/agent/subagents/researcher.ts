@@ -1,6 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createWebTools } from "../tools/web.ts";
+import { createPdfReadTools } from "../tools/pdf-read.ts";
 import type { SearchProvider } from "../../core/search.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
@@ -32,7 +33,11 @@ Process:
 3. Read the results. Identify what's well-covered and what has gaps. If the first round
    doesn't fully answer the question, search again with refined queries targeting the gaps.
 4. For the 2-3 most promising source URLs, use web_fetch to get the full page content.
-5. Synthesize everything into a brief that directly answers the question.
+5. PDF sources: when web_fetch says a URL is a PDF, call web_fetch_pdf on it — it downloads
+   and triages the document (page count, size class, flagged pages). Then read it with
+   pdf_extract — for long ones, pdf_search first and extract only the pages that hit.
+   Cite claims from a PDF as (p. N).
+6. Synthesize everything into a brief that directly answers the question.
 
 Evaluation — what to keep vs drop:
 - Official docs and primary sources outweigh blog posts and forum threads.
@@ -68,6 +73,11 @@ export interface ResearcherRunOptions {
 	 *  seam reads as unavailable: the server wiring always injects one; the
 	 *  dispatch-level drop (jobTools) keeps doomed jobs from even starting. */
 	search?: () => SearchProvider | null;
+	/** The researcher's PDF dir (PDF wave, 2026-10-07): when present, the
+	 *  toolset gains web_fetch_pdf + pdf_info/pdf_extract/pdf_search scoped
+	 *  to this per-job temp dir — PDFs from the web, read page-level. The
+	 *  runner owns its lifecycle (mkdtemp before, rm after). */
+	pdfDir?: string;
 	abortSignal?: AbortSignal;
 	onUsage?: (usage: Usage) => void;
 	onToolStart?: (toolName: string, args: unknown) => void;
@@ -81,7 +91,9 @@ export interface ResearcherRunOptions {
  * the loop scripted.
  */
 export async function runResearcherAgent(prompt: string, opts: ResearcherRunOptions = {}): Promise<string> {
-	const { text } = await runSubagent(Object.values(createWebTools(opts.search ?? (() => null))), {
+	const tools = Object.values(createWebTools(opts.search ?? (() => null)));
+	if (opts.pdfDir) tools.push(...Object.values(createPdfReadTools(opts.pdfDir)));
+	const { text } = await runSubagent(tools, {
 		role: "researcher",
 		prompt,
 		engine: opts.engine,

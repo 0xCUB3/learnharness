@@ -91,8 +91,17 @@ async function fetchAndExtract(url: string): Promise<string> {
 	});
 	if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
 
+	// Final URL after redirects + status — the researcher's only way to
+	// tell a real page from a 200-served error body (owner-reported
+	// "ill-formed request" case: the SITE answered, we just relayed it).
+	const sourceLine = `Source: ${resp.url || url} (HTTP ${resp.status})`;
+
 	const contentType = resp.headers.get("content-type") ?? "";
-	if (contentType.includes("application/pdf")) throw new Error("PDF documents are not supported");
+	if (contentType.includes("application/pdf")) {
+		// Pointer, not dead-end (researcher PDF wave, 2026-10-07): the
+		// researcher's web_fetch_pdf tool downloads + triages PDFs.
+		return `web_fetch: this URL is a PDF document — call web_fetch_pdf on it to download and read it.`;
+	}
 	if (/image\/|audio\/|video\/|zip|octet-stream/.test(contentType)) {
 		throw new Error(`Unsupported content type: ${contentType.split(";")[0]}`);
 	}
@@ -100,11 +109,11 @@ async function fetchAndExtract(url: string): Promise<string> {
 	if (length > MAX_RESPONSE_BYTES) throw new Error("Response too large");
 
 	const text = await resp.text();
-	if (!contentType.includes("html")) return truncate(text); // plain text / markdown / code
+	if (!contentType.includes("html")) return `${sourceLine}\n\n${truncate(text)}`; // plain text / markdown / code
 
 	const extracted = htmlToMarkdown(text);
 	if (extracted) {
-		const header = extracted.title ? `# ${extracted.title}\n\nSource: ${url}\n\n---\n\n` : "";
+		const header = extracted.title ? `# ${extracted.title}\n\n${sourceLine}\n\n---\n\n` : `${sourceLine}\n\n---\n\n`;
 		return header + truncate(extracted.content);
 	}
 	// Readability failed — likely JS-rendered. Try Jina Reader.
