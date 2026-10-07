@@ -525,7 +525,7 @@ function GraphSettingsControl({
 								onChange={(p) =>
 									changeSettings((cur) => ({ ...cur, labelSize: fromLadderPosition(p, LABEL_SIZE_LADDER) }))}
 							/>
-							{/* Display is absolute (ratio / 0.5): "8×" is the tuned default, dead-center. */}
+							{/* Display is absolute (ratio / 0.5): "1×" is the default, dead-center (owner, 2026-10-07). */}
 							<SettingSlider
 								label="Labels until zoom"
 								min={0}

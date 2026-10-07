@@ -261,9 +261,10 @@ export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 	nodeSize: 2,
 	edgeWidth: 1,
 	arrowLength: 2,
-	// New default 1 (owner, 2026-10-07): labels hidden at the overview,
-	// shown once the camera reaches fit zoom or closer.
-	labelZoom: 1,
+	// New default 0.5 — displays as 1× on the slider (owner, 2026-10-07:
+	// "labels until zoom default one" — the owner speaks in display
+	// values, and the display is ratio/0.5). Labels once zoomed past fit.
+	labelZoom: 0.5,
 	labelSize: 3,
 	clusterLabels: true,
 	clusterLabelSize: 14,
@@ -293,7 +294,11 @@ export const CLUSTER_LABEL_SIZE_LADDER = [7, 8, 9, 10, 12, 14, 16, 18, 20, 24, 2
 // Camera-ratio gates; the DISPLAY ladder reads 1.5×, 2×, 3×, 4×, 6×, 8×,
 // 12×, 16×, 24×, 32×, 48× (labelZoomDisplay) with the user's tuned 8×
 // (ratio 4) dead-center — it used to sit at the very end of the axis.
-export const LABEL_ZOOM_LADDER = [0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24] as const;
+// Re-centered on the new default (owner, 2026-10-07): display 1× (ratio
+// 0.5) sits dead-center; the upper stops keep the old familiar run, the
+// lower stops go finer where the default now lives. Old stored values
+// snap to the nearest stop (4 → 3, 24 → 3, 0.75 → 0.75).
+export const LABEL_ZOOM_LADDER = [0.125, 0.175, 0.25, 0.35, 0.45, 0.5, 0.75, 1, 1.5, 2, 3] as const;
 
 // ─── Region + physics slider ranges ──────────────────────────────────────────
 //
@@ -306,7 +311,10 @@ export const LABEL_ZOOM_LADDER = [0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24] as co
 //   have one too; it's a dropdown since 2026-09-13 (non-integers broke).
 
 export const REGION_DILATION_LADDER = [4, 5, 7.5, 10, 15, 20, 30, 40, 60, 80, 120] as const; // world units
-export const REGION_BLUR_LADDER = [4, 5, 7.5, 10, 15, 20, 30, 40, 60, 80, 120] as const; // world units
+// Re-centered on the new default 40 (owner, 2026-10-07): min 10 per the
+// owner's suggestion, the old ceiling 120 kept, and every old stop from
+// 15 up survives (4/5/7.5 snap to 10).
+export const REGION_BLUR_LADDER = [10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120] as const; // world units
 export const REGION_EDGE_ALPHA_LADDER = [0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8, 1] as const;
 
 export const CHARGE_RANGE = { min: -480, max: -120 } as const; // |gm| = 240 (2026-09-17: default −240, dead-center; a subrange of the sweep-validated [30, 480])

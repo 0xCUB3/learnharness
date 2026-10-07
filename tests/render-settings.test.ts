@@ -145,7 +145,7 @@ describe("sanitizeRenderSettings", () => {
 		assert.deepEqual(s.physics, DEFAULT_PHYSICS_TUNING);
 		assert.equal(s.nodeSize, DEFAULT_RENDER_SETTINGS.nodeSize); // legacy sizes reset
 		assert.equal(s.edgeWidth, 1);
-		assert.equal(s.labelZoom, 0.75); // 0.5 isn't a stop — snaps to 0.75
+		assert.equal(s.labelZoom, 0.5); // 0.5 IS the dead-center stop now (owner, 2026-10-07)
 	});
 
 	test("the 2026-09-15 world-unit pivot: legacy files reset ONLY the size fields", () => {
@@ -168,7 +168,7 @@ describe("sanitizeRenderSettings", () => {
 		assert.equal(s.edgeWidth, 3);
 		assert.equal(s.labelZoom, 0.75);
 		assert.equal(s.clusterLabelSize, 20); // 21 snaps to 20
-		assert.equal(s.regions.blur, 7.5); // 8.1 snaps to 7.5
+		assert.equal(s.regions.blur, 10); // 8.1 snaps to the new floor (owner, 2026-10-07)
 		assert.equal(s.regions.bitmap, 512);
 		assert.equal(s.regions.edgeAlpha, 0.6);
 		assert.equal(s.regions.enabled, false);
@@ -183,14 +183,14 @@ describe("sanitizeRenderSettings", () => {
 	});
 
 	test("the 2026-09-17 defaults are the user's live-tuned bake", () => {
-		// nodeSize 2, edgeWidth 1, arrowLength 2, labelSize 3, labelZoom 4
-		// (displays 8×), dilation 20, blur 20, edgeAlpha 0.2, bitmap 256 —
-		// tuned live against the real graph, each dead-center on its ladder.
+		// nodeSize 2, edgeWidth 1, arrowLength 2, labelSize 3, labelZoom
+		// 0.5 (displays 1×), dilation 20, blur 40, edgeAlpha 0.2, bitmap
+		// 256 — each dead-center on its re-centered ladder (owner, 2026-10-07).
 		assert.equal(DEFAULT_RENDER_SETTINGS.nodeSize, 2);
 		assert.equal(DEFAULT_RENDER_SETTINGS.edgeWidth, 1);
 		assert.equal(DEFAULT_RENDER_SETTINGS.arrowLength, 2);
 		assert.equal(DEFAULT_RENDER_SETTINGS.labelSize, 3);
-		assert.equal(DEFAULT_RENDER_SETTINGS.labelZoom, 1); // labels only at fit zoom or closer (owner, 2026-10-07)
+		assert.equal(DEFAULT_RENDER_SETTINGS.labelZoom, 0.5); // displays 1× (owner, 2026-10-07)
 		assert.equal(DEFAULT_REGION_TUNING.dilation, 20);
 		assert.equal(DEFAULT_REGION_TUNING.blur, 40); // new default (owner, 2026-10-07)
 		assert.equal(DEFAULT_REGION_TUNING.edgeAlpha, 0.2);
@@ -220,7 +220,7 @@ describe("sanitizeRenderSettings", () => {
 		const s = sanitizeRenderSettings({ sizeUnits: "world", nodeSize: 4, edgeWidth: 1, arrowLength: 5, labelZoom: 0.5, clusterLabels: true });
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize);
 		assert.equal(s.nodeSize, 4);
-		assert.equal(s.labelZoom, 0.75); // non-member snaps
+		assert.equal(s.labelZoom, 0.5); // 0.5 IS the dead-center stop now
 	});
 });
 
@@ -237,17 +237,13 @@ describe("ladder mapping (11 stops, default-centered)", () => {
 		["regions.edgeAlpha", REGION_EDGE_ALPHA_LADDER, DEFAULT_REGION_TUNING.edgeAlpha],
 	];
 
-	// The dead-center law held until the owner moved two defaults
-	// off-center by ruling (2026-10-07): labelZoom 1 (index 1 — labels
-	// only at fit zoom or closer) and regions.blur 40 (index 7 — softer,
-	// wider tints). Every other default stays dead-center.
-	const OFF_CENTER: Record<string, number> = { labelZoom: 1, "regions.blur": 7 };
-
-	test("every ladder has 11 stops; defaults dead-center except the two owner-moved", () => {
+	// The dead-center law is restored (owner, 2026-10-07 round 2): the
+	// ladders themselves were re-centered so the new defaults — labelZoom
+	// 0.5 (displays 1×) and regions.blur 40 — sit at stop #5 again.
+	test("every ladder has 11 stops; every default is stop #5 (dead-center)", () => {
 		for (const [name, ladder, dflt] of LADDERS) {
 			assert.equal(ladder.length, 11, name);
-			const idx = OFF_CENTER[name] ?? 5;
-			assert.equal(ladder[idx], dflt, name); // default at index 5 → position 50
+			assert.equal(ladder[5], dflt, name); // default at index 5 → position 50
 		}
 	});
 
@@ -287,7 +283,7 @@ describe("ladder mapping (11 stops, default-centered)", () => {
 
 	test("display units are absolute (ratio / 0.5): 8× is the tuned default", () => {
 		assert.equal(labelZoomDisplay(0.5), "1×");
-		assert.equal(labelZoomDisplay(4), "8×"); // the default, not "1×" — pre-2026-09-17 displays divided by the default, which would have relabeled the bake
+		assert.equal(labelZoomDisplay(4), "8×"); // plain math (ratio/0.5) — 4 was the old default, 0.5 is the new one
 		assert.equal(labelZoomDisplay(0.75), "1.5×");
 		assert.equal(labelZoomDisplay(24), "48×");
 		assert.equal(labelZoomDisplay(0.25), "0.5×");
@@ -342,11 +338,11 @@ describe("physics sliders (fine-grained log, unchanged 2026-09-17)", () => {
 		// small one. It's a canonical world reach now — any stored value
 		// snaps to the nearest stop.
 		assert.equal(DEFAULT_REGION_TUNING.blur, 40); // new default (owner, 2026-10-07)
-		assert.equal(sanitizeRegionTuning({ blur: 3.7 }).blur, 4); // nearest stop
-		assert.equal(sanitizeRegionTuning({ blur: 7.2 }).blur, 7.5);
+		assert.equal(sanitizeRegionTuning({ blur: 3.7 }).blur, 10); // the new floor
+		assert.equal(sanitizeRegionTuning({ blur: 7.2 }).blur, 10);
 		assert.equal(sanitizeRegionTuning({ blur: -5 }).blur, REGION_BLUR_LADDER[0]);
 		assert.equal(sanitizeRegionTuning({ blur: 999 }).blur, REGION_BLUR_LADDER[REGION_BLUR_LADDER.length - 1]);
-		assert.equal(sanitizeRegionTuning({ blur: 99 }).blur, 80); // inside the span → nearest stop, not the top
+		assert.equal(sanitizeRegionTuning({ blur: 99 }).blur, 100); // inside the span → nearest stop, not the top
 		// Stored blur 0 (the old off zone) snaps back into the ladder.
 		assert.equal(sanitizeRegionTuning({ blur: 0 }).blur, REGION_BLUR_LADDER[0]);
 	});

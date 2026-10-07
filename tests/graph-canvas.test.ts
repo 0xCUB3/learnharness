@@ -210,7 +210,7 @@ describe("sanitizeRegionTuning (dev number inputs)", () => {
 		const t = sanitizeRegionTuning(undefined);
 		assert.deepEqual(t, DEFAULT_REGION_TUNING);
 		const half = sanitizeRegionTuning({ blur: 7.2 });
-		assert.equal(half.blur, 7.5); // snapped to the ladder (2026-09-17)
+		assert.equal(half.blur, 10); // snapped to the new ladder floor (owner, 2026-10-07)
 		assert.equal(half.dilation, DEFAULT_REGION_TUNING.dilation);
 	});
 
