@@ -1309,7 +1309,10 @@ describe("prompt composition", () => {
 		// the prober's doctrine: the "no rush" framing is gone, quick measurement in
 		const prober = composeInstructions("prober");
 		assert.ok(!prober.includes("There is no rush"), "the old no-rush framing is retired");
-		assert.ok(prober.includes("measurement should be efficient"), "the quick-measurement directive is in");
+		assert.ok(
+			prober.includes("every wasted question is resolution the final map doesn't get"),
+			"the efficiency-is-resolution directive is in",
+		);
 		assert.ok(!prober.includes("Question principles"), "the teach-phase fragment never composes into the prober");
 	});
 

@@ -18,14 +18,17 @@ From the goal, what will the lesson depend on? To teach him this, where would th
 
 ## 4. Binary-search every strand — the quizzing tool
 
-The edge of a strand is found by bracketing: something he reliably gets **right** (a floor) and something he gets **wrong** or doesn't know (a ceiling). Narrow the bracket one question at a time:
+The edge of a strand is found by bracketing: something he reliably gets **right** (a floor) and something he gets **wrong** or doesn't know (a ceiling). Choose every next question from the evidence — the verdict, his confidence, and his thinking field together set where the next question should sit. Narrow the bracket one question at a time:
 
-- Correct → the floor rises; jump the difficulty up sharply.
+- **Enter near the top, not the bottom.** His goal and how he talks calibrate the strand: an adult reaching for advanced material almost always holds the school-level basics — open near the hardest thing the goal needs and let a miss walk you down. Opening a strand at textbook basics to "warm up" wastes the question that could have moved an edge.
+- **Strands inform each other.** A strand crushed at height says its neighbors start high too — never open below what the session has already demonstrated.
+- Correct + confident → jump the difficulty up sharply — the bigger the jump, the fewer the questions.
+- Correct but hesitant (low confidence, thin thinking) → fragile: step up gently and characterize the shakiness.
 - Wrong → the ceiling drops; narrow back in to pin exactly where it sits.
 - A miss is one coordinate, not a verdict — slip, gap, or misconception look identical. Probe around it. Misconceptions matter most: dig into their extent before moving on.
 - A strand that never breaks is not done — escalate until it does.
 
-Every question should move an edge somewhere — no filler, no re-asking what his last answer showed; measurement should be efficient: each question brackets a strand, narrows a bracket, or characterizes a miss.
+Every question should move an edge somewhere — no filler, no re-asking what his last answer showed, never descending into already-bracketed territory. Efficiency is not just speed: every wasted question is resolution the final map doesn't get — the questions you save are what let you ask the specific, nuanced ones that actually locate the edge.
 
 ## 5. Conclude — `probe_done`
 

@@ -276,6 +276,21 @@ describe("practice prompt composition (own directory + the formatting appendix)"
 		assert.match(teacher, /Rewriting is a normal, common event/);
 		// planning is the natural verification moment
 		assert.match(teacher, /planning is the natural moment for verification/);
+		// no size ceilings, and the detour keeps the pace (owner round, 2026-10-07)
+		assert.ok(!teacher.includes("Typically 5–15 nodes"), "the node-count cap is dead");
+		assert.match(teacher, /No size ceiling/);
+		assert.match(teacher, /never rush the repair/);
+		assert.match(teacher, /one and only pace/);
+		assert.match(teacher, /nothing to rush/, "the goal reiteration composes");
+	});
+
+	it("the prober doctrine steers difficulty by evidence (owner round, 2026-10-07)", () => {
+		const prober = composeInstructions("prober");
+		assert.match(prober, /Enter near the top, not the bottom/);
+		assert.match(prober, /Strands inform each other/);
+		assert.match(prober, /never descending into already-bracketed territory/);
+		// the confidence + thinking signals are wired into question selection
+		assert.match(prober, /the verdict, his confidence, and his thinking field together set where the next question should sit/);
 	});
 
 	it("the SHARED formatting guide composes (owner, 2026-10-04 late): LaTeX delimiters in every setting", () => {
