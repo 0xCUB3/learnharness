@@ -335,7 +335,21 @@ export function parseAlertMarker(children: ReactNode): ParsedAlert | null {
 export function MarkdownBlockquote(props: ComponentProps<"blockquote"> & ExtraProps) {
 	const { children, node, ...rest } = props;
 	const alert = parseAlertMarker(children);
-	if (!alert) return <blockquote {...rest}>{children}</blockquote>;
+	if (!alert) {
+		// Plain quote — Streamdown's own styling, restored by hand: overriding
+		// `blockquote` displaced its styled component (the classes below are
+		// its verbatim defaults), and bare <blockquote> rendered unstyled
+		// (owner report, 2026-10-07).
+		return (
+			<blockquote
+				{...rest}
+				className="my-4 border-l-4 border-muted-foreground/30 pl-4 text-muted-foreground italic"
+				data-streamdown="blockquote"
+			>
+				{children}
+			</blockquote>
+		);
+	}
 	return (
 		<div
 			data-testid="md-callout"

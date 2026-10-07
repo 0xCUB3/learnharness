@@ -241,7 +241,10 @@ describe("render smoke tests", () => {
 		const answer = buildAnswer(quizQD(), { values: ["Venus"] });
 		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
 		assert.match(html, /incorrect/);
-		assert.match(html, /innermost/, "explanation renders post-answer");
+		// Tucked for ALL questions (owner, 2026-10-07): the explanation sits
+		// behind the Why toggle — never center stage.
+		assert.ok(html.includes("tucked-explanation"), "the Why toggle mounts");
+		assert.ok(!html.includes("innermost"), "explanation hidden until opened");
 		// Glyph-shaped SVG marks (owner preference) — pinned via data-mark.
 		assert.ok(html.includes('data-mark="check"') && html.includes('data-mark="x"'));
 	});
@@ -302,8 +305,8 @@ describe("render smoke tests", () => {
 		// The thinking sits ABOVE the verdict's explanation — the dialogue of
 		// thinking, not an afterthought.
 		assert.ok(
-			html.indexOf("your-thinking") < html.indexOf("innermost"),
-			"thinking before the explanation",
+			html.indexOf("your-thinking") < html.indexOf("tucked-explanation"),
+			"thinking before the explanation toggle",
 		);
 	});
 
@@ -574,11 +577,11 @@ describe("predict vs check rendering", () => {
 		assert.ok(html.includes("tucked-explanation"), "it sits behind the toggle");
 	});
 
-	it("a check answer keeps the inline explanation", () => {
+	it("a check answer tucks the explanation like every question (owner, 2026-10-07)", () => {
 		const answer = buildAnswer(quizQD(), { values: ["Venus"] });
 		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
-		assert.ok(html.includes("Why:"), "checks explain inline (current behavior)");
-		assert.ok(!html.includes("tucked-explanation"));
+		assert.ok(html.includes("tucked-explanation"), "the prediction tuck is now universal");
+		assert.ok(!html.includes("Why:"), "no inline explanation — behind the toggle");
 	});
 
 	it("the reading-thinking channel is LIFTED above the card as its own user-side block", () => {

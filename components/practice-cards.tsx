@@ -291,7 +291,10 @@ function MetadataPopover({
 
 export function ThinkingCard({ data }: { data: PracticeThinkingData }) {
 	// The unified row (owner rounds, 2026-10-05): one style, one label —
-	// collapsed arrival, "Your thinking", 50%-italic quote block on expand.
-	// Legacy records' commit flag is deliberately unread (one lane now).
-	return <ThinkingBlock testId="thinking-card" label="YOUR THINKING" text={data.text} />;
+	// 50%-italic quote block on expand. Legacy records' commit flag is
+	// deliberately unread (one lane now). A TRANSCRIPT row (owner round,
+	// 2026-10-07): mirrored to the right side, arriving expanded.
+	return (
+		<ThinkingBlock testId="thinking-card" label="YOUR THINKING" text={data.text} mirror defaultOpen />
+	);
 }

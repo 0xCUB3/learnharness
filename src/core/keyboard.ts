@@ -40,7 +40,8 @@ export type KeyAction =
 	| "question-prev-row"
 	| "question-pick-row"
 	| "question-submit"
-	| "open-settings";
+	| "open-settings"
+	| "toggle-user-thinking";
 
 /** Where the cheat sheet groups an action (display only — dispatch is
  *  global; a seam that isn't mounted simply no-ops). */
@@ -71,6 +72,7 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "jump-graph", label: "Graph view", scope: "global", binding: "mod+g" },
 	{ id: "new-session", label: "New session", scope: "global", binding: "mod+n" },
 	{ id: "rename-session", label: "Rename session", scope: "chat", binding: "f2" },
+	{ id: "toggle-user-thinking", label: "Toggle all your thinking", scope: "chat", binding: "mod+t" },
 	// ⌘F is surface-scoped (owner key map): the graph focuses node search; a
 	// chat-scoped transcript search rides the same event when it lands (the
 	// graph's listener simply isn't mounted on chat pages).

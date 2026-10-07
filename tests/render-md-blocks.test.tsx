@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
+import { ThinkingBlock, setAllUserThinkingOpen } from "@/components/thinking-block";
 import { MermaidOverlay, SessionMermaidContext, chartSize } from "../components/session-overlay.tsx";
 import { PlanPopup } from "../components/plan-block.tsx";
 import { MarkdownCode, codeSource } from "../components/md-blocks.tsx";
@@ -227,5 +228,45 @@ describe("parseAlertMarker (pure)", () => {
 		// a leading <em> node, not a paragraph: no crash, no alert
 		const em = { type: "em", props: { children: "x" } } as never;
 		assert.equal(parseAlertMarker(em), null);
+	});
+});
+
+describe("md-blocks — the restored plain blockquote (owner round, 2026-10-07)", () => {
+	it("a plain quote carries Streamdown's own styling (the override displaced it)", () => {
+		const html = renderToStaticMarkup(
+			<MessageResponse mode="static">{"Before.\n\n> An ordinary quote.\n\nAfter."}</MessageResponse>,
+		);
+		assert.ok(html.includes("border-l-4"), "the left border is back");
+		assert.ok(html.includes("text-muted-foreground italic"), "muted italic — the quote register");
+		assert.ok(!html.includes("md-callout"), "a plain quote is not a callout box");
+	});
+});
+
+describe("ThinkingBlock — side-based authorship + ⌘T sync (owner round, 2026-10-07)", () => {
+	it("the default row stays left with the my-3 rhythm", () => {
+		const html = renderToStaticMarkup(<ThinkingBlock text="left side" />);
+		assert.ok(html.includes("border-l-2"), "left rail");
+		assert.ok(html.includes("my-3"), "the 12px rhythm (was my-1)");
+	});
+
+	it("mirrored rows hug the right edge, rail flipped, arriving open", () => {
+		const html = renderToStaticMarkup(<ThinkingBlock text="right side" mirror defaultOpen />);
+		assert.ok(html.includes('data-side="right"'));
+		assert.ok(html.includes("ml-auto"), "pushed to the right edge");
+		assert.ok(html.includes("border-r-2") && !html.includes("border-l-2"), "rail on the right");
+		assert.match(html, /aria-expanded="true"/);
+		assert.ok(html.includes("right side"), "text visible on arrival");
+	});
+
+	it("⌘T sets every row — explicit sets stomp individual state, late mounts honor the last set", () => {
+		setAllUserThinkingOpen(false);
+		const collapsed = renderToStaticMarkup(<ThinkingBlock text="synced" defaultOpen />);
+		assert.match(collapsed, /aria-expanded="false"/);
+		assert.ok(!collapsed.includes(">synced<"), "the open default was stomped");
+		setAllUserThinkingOpen(true);
+		const reopened = renderToStaticMarkup(<ThinkingBlock text="synced" />);
+		assert.match(reopened, /aria-expanded="true"/);
+		// restore the null default for other tests in this file
+		setAllUserThinkingOpen(true);
 	});
 });

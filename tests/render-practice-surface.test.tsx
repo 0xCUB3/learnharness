@@ -176,11 +176,15 @@ describe("the practice transcript cards", () => {
 		assert.doesNotMatch(html, /The solution/);
 	});
 
-	it("ThinkingCard: one label, collapsed arrival (legacy commit flags ignored)", () => {
+	it("ThinkingCard: one label, right side, expanded arrival (owner round, 2026-10-07)", () => {
 		const trace = renderToStaticMarkup(<ThinkingCard data={{ problemCallId: "c", commit: false, text: "stuck at step two" }} />);
 		assert.match(trace, /YOUR THINKING/);
-		assert.match(trace, /aria-expanded="false"/);
-		assert.ok(!trace.includes("stuck at step two"), "the text is one click away");
+		// Transcript rows arrive EXPANDED (clearly conveyed as sent) and
+		// MIRRORED right (side-based authorship).
+		assert.match(trace, /aria-expanded="true"/);
+		assert.ok(trace.includes("stuck at step two"), "the text is visible on arrival");
+		assert.ok(trace.includes('data-side="right"'), "mirrored to the right side");
+		assert.ok(trace.includes("border-r-2"), "the rail is on the right");
 		const legacy = renderToStaticMarkup(<ThinkingCard data={{ problemCallId: "c", commit: true, text: "It is 42." }} />);
 		assert.match(legacy, /YOUR THINKING/);
 		assert.doesNotMatch(legacy, /Your solution/);

@@ -145,11 +145,11 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper
 			    than the option box edges (owner, round 3). Sides flush with everything
 			    else; py-2 stays for vertical air. */}
-			{isQuiz && answer.explanation && answer.questionType === "predict" ? (
-				/* The TUCKED explanation (owner 2026-10-03): a prediction's
-				   verdict shows, but the explanation sits collapsed — viewable,
-				   never center stage. The teaching that follows resolves the
-				   prediction; THAT is the real explanation. */
+			{isQuiz && answer.explanation && (
+				/* The TUCKED explanation — ALL questions (owner, 2026-10-07): the
+				   verdict shows, the explanation sits collapsed behind the Why
+				   toggle — viewable, never center stage. Identical to the
+				   prediction pattern it generalizes (owner, 2026-10-03). */
 				<div className="mt-2" data-testid="tucked-explanation">
 					<button
 						type="button"
@@ -161,20 +161,12 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 					{whyOpen && (
 						<div className="mt-1.5 rounded-lg bg-muted py-2 text-sm text-foreground/50">
 							<span className="font-medium text-muted-foreground">Why: </span>
+							{/* The markdown wrapper must go truly inline — a block <p> after the
+							   "Why:" label created the oversized leading gap (owner's fix list). */}
 							<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
 						</div>
 					)}
 				</div>
-			) : (
-				isQuiz &&
-				answer.explanation && (
-					<div className="mt-2 rounded-lg bg-muted py-2 text-sm text-foreground/50">
-						<span className="font-medium text-muted-foreground">Why: </span>
-						{/* The markdown wrapper must go truly inline — a block <p> after the
-						   "Why:" label created the oversized leading gap (owner's fix list). */}
-						<MessageResponse className="inline [&_p]:inline [&_p]:m-0">{answer.explanation}</MessageResponse>
-					</div>
-				)
 			)}
 
 			{/* The explain reveal (owner ruling 2026-09-27): the committed answer

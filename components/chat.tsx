@@ -31,7 +31,15 @@ import { useFieldCycle } from "@/components/field-cycle";
 import { JobsContext } from "@/components/jobs-context";
 import { StatsBar } from "@/components/stats-bar";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { isProviderKeyRefusal, needsContinuation, type ChatInput, type ChatSettings, type LhMessage, type ModelSlotName } from "@/src/core";
+import {
+	isProviderKeyRefusal,
+	kbdEventForAction as kbdEventForChat,
+	needsContinuation,
+	type ChatInput,
+	type ChatSettings,
+	type LhMessage,
+	type ModelSlotName,
+} from "@/src/core";
 import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
@@ -63,6 +71,7 @@ import {
 	quizNeedsReveal,
 } from "@/src/core";
 import { ReadingThinkingField } from "@/components/reading-thinking";
+import { currentUserThinkingOpen, setAllUserThinkingOpen } from "@/components/thinking-block";
 import { slotsConfigured, type ModelsSettings } from "@/src/core";
 import { useSettingsSaved } from "@/components/settings-signal";
 
@@ -493,6 +502,15 @@ export function Chat({
 	 * separate `readingThinking` field. Reset per pending question. */
 	const [readingThinking, setReadingThinking] = useState("");
 	const readingThinkingRef = useRef("");
+
+	// ⌘T (toggle-user-thinking, owner round 2026-10-07): set EVERY user
+	// thinking row to one state — transcript rows default open, so the
+	// first press collapses everything, the second re-expands.
+	useEffect(() => {
+		const onToggle = () => setAllUserThinkingOpen(!currentUserThinkingOpen());
+		window.addEventListener(kbdEventForChat("toggle-user-thinking"), onToggle);
+		return () => window.removeEventListener(kbdEventForChat("toggle-user-thinking"), onToggle);
+	}, []);
 	const applyReadingThinking = useCallback((v: string) => {
 		readingThinkingRef.current = v;
 		setReadingThinking(v);
@@ -1379,7 +1397,15 @@ export function Chat({
 										    User text renders plain — the model's LaTeX pipeline is not
 										    applied to learner-authored text ($ stays $, no surprises).
 										    Rendered WITHOUT the Message wrapper — that is the bubble. */
-											<div data-testid="user-message" className="my-1 w-full border-l-2 border-muted-foreground/30 pl-[calc(3ch-2px)] font-ui text-xs">
+											<div
+										data-testid="user-message"
+										/* SIDE-BASED AUTHORSHIP (owner round, 2026-10-07): the
+										    document shape blurred user into agent — three left-rail
+										    idioms (user text, user thinking, quoted prose) collided.
+										    User rows go RIGHT: mirrored rail, ~85% width, text still
+										    reading left-to-right (the chat convention). */
+										className="my-1 ml-auto w-[85%] border-r-2 border-muted-foreground/30 pr-[calc(3ch-2px)] font-ui text-xs"
+									>
 												{/* The rail GROUPS (owner round 4, 2026-10-05): the YOU heading
 												    sits INSIDE the rail, same mono-xs register and same 1ch
 												    rail as the thinking rows — one quote geometry. */}
