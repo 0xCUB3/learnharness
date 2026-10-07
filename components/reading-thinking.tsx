@@ -85,7 +85,7 @@ export function ReadingThinkingField({
 						e.currentTarget.blur();
 					}
 				}}
-				placeholder="What are you thinking as you read? Say as much as you like — it rides your next check answer to the teacher."
+				placeholder="Whatever comes to mind as you read."
 				rows={1}
 				className="field-sizing-content lh-input max-h-40 w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/70"
 			/>

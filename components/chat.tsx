@@ -1574,7 +1574,7 @@ export function Chat({
 							// applies.
 							nextProblem={nextReady}
 							onNext={sendNext}
-							placeholder={nextReady ? "Ask about this problem — or press Enter for the next one…" : undefined}
+							placeholder={nextReady ? "Ask anything, or press Enter for the next one." : undefined}
 						/>
 					}
 					onSubmitAnswer={(output) => {

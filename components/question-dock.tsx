@@ -853,7 +853,7 @@ function QuestionDockForm({
 									submit();
 								}
 							}}
-							placeholder="Why this answer? What are you unsure about? Say as much as you like — the teacher reads all of this."
+							placeholder="Why this answer? Whatever comes to mind."
 							rows={1}
 							className={cn(
 								"field-sizing-content lh-input max-h-48 w-full resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground/70",
