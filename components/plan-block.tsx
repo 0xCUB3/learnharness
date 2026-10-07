@@ -44,7 +44,17 @@ import { Hint } from "@/components/ui/hint";
 
 // ─── Layout constants + pure helpers (exported for tests) ────────────────────
 
-export const NODE_W = 160;
+/** Text-first node sizing (owner, plan-hug round 2026-10-07): the box
+ * hugs its wrapped text instead of a fixed 160px slab. Width comes from
+ * the wrapped lines — a px-per-character estimate (12px system sans ≈
+ * 6.8px/char, slightly generous so nothing overflows) plus symmetric
+ * padding, floored at a minimum so short titles don't collapse into
+ * pills. Character-count estimate, NOT canvas measurement: the layout
+ * path stays deterministic, synchronous, and DOM-free (SSR + exact
+ * render pins keep working). */
+export const CHAR_W = 6.8;
+export const PAD_X = 12;
+export const NODE_W_MIN = 96;
 export const NODE_H = 44;
 /** Baseline-to-baseline distance of node titles. */
 export const LINE_H = 13;
@@ -99,7 +109,8 @@ export function topoFor(nodes: readonly LayoutNode[], edges: ReadonlyArray<{ fro
 }
 
 /** Placement — dagre (mermaid's engine, owner round 8): Sugiyama-style
- *  layered layout, TB, with our geometry (NODE_W boxes, GAP_X/GAP_Y
+ *  layered layout, TB, with our geometry (text-first sized boxes,
+ *  GAP_X/GAP_Y
  *  separations, zero margin — the caller adds GRAPH_PAD/POPUP_PAD).
  *  Node sizes are fed in (boxes grow with their wrapped content, round
  *  7); dagre returns node CENTERS, we hand back top-lefts like before,
@@ -111,20 +122,23 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 	const x = new Map<string, number>();
 	const y = new Map<string, number>();
 	const nodeH = new Map<string, number>();
+	const nodeW = new Map<string, number>();
 	/** Dagre's per-edge waypoint routes — each starts/ends at the node
 	 *  border intersection on whatever SIDE the edge leaves/enters
 	 *  (round 11: the mermaid line drawing, no more fixed bottom-center →
 	 *  top-center). Keyed `${from}->${to}`. */
 	const edgePts = new Map<string, Array<{ x: number; y: number }>>();
-	if (nodes.length === 0) return { x, y, nodeH, edgePts, width: 0, height: 0 };
+	if (nodes.length === 0) return { x, y, nodeH, nodeW, edgePts, width: 0, height: 0 };
 	const ids = new Set(nodes.map((n) => n.id));
 	const routed: Array<{ from: string; to: string }> = [];
 	const g = new graphlib.Graph({ compound: false, multigraph: true });
 	g.setGraph({ rankdir: "TB", nodesep: GAP_X, ranksep: GAP_Y, marginx: 0, marginy: 0 });
 	for (const n of nodes) {
-		const h = NODE_H + Math.max(0, wrapTitle(n.title).length - 2) * LINE_H;
+		const lines = wrapTitle(n.title);
+		const h = NODE_H + Math.max(0, lines.length - 2) * LINE_H;
 		nodeH.set(n.id, h);
-		g.setNode(n.id, { width: NODE_W, height: h });
+		nodeW.set(n.id, nodeWidth(lines));
+		g.setNode(n.id, { width: nodeW.get(n.id)!, height: h });
 	}
 	for (const e of edges) {
 		if (ids.has(e.from) && ids.has(e.to)) {
@@ -137,8 +151,9 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 	for (const n of nodes) {
 		const pos = g.node(n.id);
 		const h = nodeH.get(n.id) ?? NODE_H;
+		const w = nodeW.get(n.id) ?? NODE_W_MIN;
 		if (pos) {
-			x.set(n.id, pos.x - NODE_W / 2);
+			x.set(n.id, pos.x - w / 2);
 			y.set(n.id, pos.y - h / 2);
 		}
 	}
@@ -150,6 +165,7 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 		x,
 		y,
 		nodeH,
+		nodeW,
 		edgePts,
 		width: Math.max(g.graph().width ?? 0, 1),
 		height: Math.max(g.graph().height ?? 0, 1),
@@ -160,7 +176,7 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
  *  node's box grows to fit every line (owner: show the full content of
  *  each node). A single oversized word is hard-chunked across lines at
  *  maxChars. Pure. */
-export function wrapTitle(title: string, maxChars = 20): string[] {
+export function wrapTitle(title: string, maxChars = 28): string[] {
 	const words = title.trim().split(/\s+/).filter(Boolean);
 	if (words.length === 0) return [""];
 	// Oversized words can never fit a line — chunk them so no content is lost.
@@ -181,6 +197,12 @@ export function wrapTitle(title: string, maxChars = 20): string[] {
 }
 
 // ─── Geometry caps (owner, plan-graph refinement round 1) ─────────────────────
+
+/** A node's box width for its wrapped lines — the hug itself. Pure. */
+export function nodeWidth(lines: readonly string[]): number {
+	const widest = Math.max(1, ...lines.map((l) => l.length));
+	return Math.max(NODE_W_MIN, Math.ceil(widest * CHAR_W) + 2 * PAD_X);
+}
 
 /** SVG-unit padding around the layout extent: strokes are centered on the
  *  geometry (half bleeds outside the extent) and the glow halo reaches −4 —
@@ -352,8 +374,11 @@ const TEXT: Record<PlanNodeStatus, string> = {
 	current: "fill-white text-xs font-medium",
 	upcoming: "fill-muted-foreground/80 text-xs",
 };
-const MONO_BOX = "fill-background/50 stroke-white";
-const MONO_TEXT = "fill-white text-xs";
+// The in-chat block speaks the dock language now (owner, plan-hug
+// round 2026-10-07): boxes in the lighter background variant like
+// the composer/dock shells, not the white-on-transparent mono look.
+const MONO_BOX = "fill-card stroke-border";
+const MONO_TEXT = "fill-foreground text-xs";
 
 /** The diagram itself: positioned nodes + bezier edges. Pure-ish render —
  *  every input is data, so SSR render tests pin the whole thing. The root
@@ -476,7 +501,7 @@ export function PlanDiagram({
 				const ty = layout.y.get(e.to);
 				const target =
 					tx !== undefined && ty !== undefined
-						? { x: tx, y: ty, w: NODE_W, h: layout.nodeH.get(e.to) ?? NODE_H }
+						? { x: tx, y: ty, w: layout.nodeW.get(e.to) ?? NODE_W_MIN, h: layout.nodeH.get(e.to) ?? NODE_H }
 						: undefined;
 				// An arrow is white only when BOTH its ends are white (owner,
 				// 2026-09-26): origin AND terminal covered — a gray box's outgoing
@@ -500,8 +525,10 @@ export function PlanDiagram({
 				const status = statusOf(n.id);
 				const glow = n.id === glowId && !monochrome;
 				const lines = wrapTitle(n.title);
-				// The box grows with its wrapped content; text centers in it.
+				// The box hugs its wrapped content; text centers in it —
+				// horizontally too now (text-first sizing round, 2026-10-07).
 				const h = layout.nodeH.get(n.id) ?? NODE_H;
+				const w = layout.nodeW.get(n.id) ?? NODE_W_MIN;
 				const y0 = (h - lines.length * LINE_H) / 2 + 10;
 				return (
 					<g
@@ -512,7 +539,7 @@ export function PlanDiagram({
 					>
 						{/* Rectangular — no corner rounding (owner). */}
 						<rect
-							width={NODE_W}
+							width={w}
 							height={h}
 							className={monochrome ? MONO_BOX : BOX[status]}
 							strokeWidth={STROKE_W}
@@ -526,7 +553,7 @@ export function PlanDiagram({
 							<rect
 								x={-GLOW_MARGIN}
 								y={-GLOW_MARGIN}
-								width={NODE_W + 2 * GLOW_MARGIN}
+								width={w + 2 * GLOW_MARGIN}
 								height={h + 2 * GLOW_MARGIN}
 								className="fill-yellow-400/25"
 								filter={`url(#${markerId}-glow)`}
@@ -535,8 +562,9 @@ export function PlanDiagram({
 						{lines.map((line, i) => (
 							<text
 								key={i}
-								x={12}
+								x={w / 2}
 								y={y0 + i * LINE_H}
+								textAnchor="middle"
 								className={monochrome ? MONO_TEXT : TEXT[status]}
 							>
 								{line}

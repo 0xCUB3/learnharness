@@ -10,7 +10,8 @@ import {
 	wrapTitle,
 	GAP_X,
 	NODE_H,
-	NODE_W,
+	NODE_W_MIN,
+	nodeWidth,
 	type PopupMessage,
 } from "../components/plan-block.tsx";
 import type { PlanBlockData, PlanTree } from "../src/core/contracts.ts";
@@ -38,8 +39,13 @@ describe("plan block layout (pure)", () => {
 		assert.deepEqual(order.map((n) => n.id), ["a", "b", "c"]);
 		assert.equal(depth.get("c"), 2);
 		const layout = blockLayout(CHAIN.nodes, CHAIN.edges);
-		assert.equal(layout.width, NODE_W); // widest row is the single-node rows
+		// Text-first sizing (owner, plan-hug round 2026-10-07): these short
+		// titles hug to the minimum — no more fixed 160px slabs.
+		const W = nodeWidth(wrapTitle("Alpha node"));
+		assert.equal(W, NODE_W_MIN); // 10 chars ≈ 92px → floored at the min
+		assert.equal(layout.width, W); // widest row is the single-node rows
 		assert.equal(layout.height, 3 * NODE_H + 2 * 48);
+		assert.equal(layout.nodeW.get("a"), W);
 	});
 
 	it("centers same-depth nodes over the widest row; tolerates dangling edges", () => {
@@ -53,10 +59,11 @@ describe("plan block layout (pure)", () => {
 			{ from: "r", to: "y" },
 			{ from: "ghost", to: "r" }, // dangling: ignored defensively
 		]);
-		assert.equal(layout.width, 2 * NODE_W + GAP_X);
+		const W = nodeWidth(wrapTitle("Root"));
+		assert.equal(layout.width, 2 * W + GAP_X);
 		// Root centered over its two children: (2*W+GAP - W)/2
-		assert.equal(layout.x.get("r"), (2 * NODE_W + GAP_X - NODE_W) / 2);
-		assert.ok(layout.x.get("x") === 0 && layout.x.get("y") === NODE_W + GAP_X);
+		assert.equal(layout.x.get("r"), (2 * W + GAP_X - W) / 2);
+		assert.ok(layout.x.get("x") === 0 && layout.x.get("y") === W + GAP_X);
 	});
 
 	it("edgePathD draws dagre's route through curveBasis — mouth pulled back from the border", () => {
@@ -102,14 +109,25 @@ describe("plan block layout (pure)", () => {
 	});
 
 	it("wrapTitle wraps greedily and NEVER drops content (boxes grow instead)", () => {
-		assert.deepEqual(wrapTitle("Chain rule intuition"), ["Chain rule intuition"]); // exactly 20 chars — fits one line
-		assert.deepEqual(wrapTitle("Chain rule intuition and fluency"), ["Chain rule intuition", "and fluency"]);
+		assert.deepEqual(wrapTitle("Chain rule intuition"), ["Chain rule intuition"]); // well under — one line
+		assert.deepEqual(wrapTitle("Chain rule intuition and fluency"), [
+			"Chain rule intuition and", // 24 — appending "fluency" would pass 28
+			"fluency",
+		]);
 		// Oversized word hard-chunked, nothing lost (owner, round 7).
 		assert.deepEqual(wrapTitle("supercalifragilisticexpialidocious word"), [
-			"supercalifragilistic",
-			"expialidocious word",
+			"supercalifragilisticexpialid", // the chunker cuts AT maxChars
+			"ocious word",
 		]);
-		assert.deepEqual(wrapTitle("supercalifragilistic"), ["supercalifragilistic"]); // exactly maxChars — fits
+		assert.deepEqual(wrapTitle("supercalifragilistic"), ["supercalifragilistic"]); // exactly 20 — fits
+	});
+
+	it("nodeWidth hugs the wrapped text (the box grows WITH its lines)", () => {
+		// Short titles floor at the min; wide ones size to the widest line.
+		assert.equal(nodeWidth(["supercalifragilistic"]), 160); // 20 chars ≈ 136 + 24 pad
+		assert.equal(nodeWidth(wrapTitle("Symmetry and orthogonal complements")), 181); // 23-char line ≈ 157 + 24
+		// The hug is symmetric padding, and never below the floor.
+		assert.ok(nodeWidth(["a"]) === NODE_W_MIN);
 	});
 });
 
@@ -141,10 +159,18 @@ describe("plan block render", () => {
 		// Lines + outlines at the app's standard 1px border weight (owner,
 		// 2026-09-26; was 1.5).
 		assert.match(html, /<rect[^>]*stroke-width="1"/);
-		assert.match(html, /max-width:225\.28px/); // (160+16) × 1.28
+		assert.match(html, /max-width:143\.36px/); // (96+16) × 1.28 — boxes hug now
+		// Centered text (owner, plan-hug round 2026-10-07): every title line
+		// anchors to its box's midline — the old x=12 left inset is gone.
+		assert.match(html, /<text[^>]*x="48"[^>]*text-anchor="middle"/); // 96/2
+		assert.ok(!/x="12"/.test(html), "no left-inset text");
+		// The in-chat block speaks the dock language (owner, 2026-10-07):
+		// lighter-background boxes like the composer shells, not white mono.
+		assert.match(html, /<rect[^>]*class="fill-card stroke-border"/);
 		// Two stacked nodes: 2*NODE_H + GAP_Y = 136 extent + GRAPH_PAD on
-		// every side (strokes/glow never clip at the edges).
-		assert.match(html, /viewBox="-8 -8 176 152"/);
+		// every side (strokes/glow never clip at the edges). The width
+		// rides the hug now: 96-min boxes, not the old 160 slabs.
+		assert.match(html, /viewBox="-8 -8 112 152"/);
 		// Snapshot statuses render as carried.
 		assert.match(html, /data-testid="plan-node-a" data-status="visited"/);
 		assert.match(html, /data-testid="plan-node-b" data-status="upcoming"/);
