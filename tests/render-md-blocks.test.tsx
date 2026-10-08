@@ -243,14 +243,21 @@ describe("md-blocks — the restored plain blockquote (owner round, 2026-10-07)"
 });
 
 describe("ThinkingBlock — the document band + ⌘T sync (owner rounds, 2026-10-07)", () => {
-	it("the row is the document band — one geometry, cards included (owner round three)", () => {
+	it("the row is the document band — round four geometry (owner, 2026-10-07)", () => {
 		const html = renderToStaticMarkup(<ThinkingBlock text="banded" defaultOpen />);
 		assert.ok(html.includes("bg-card"), "the card-color band");
-		assert.ok(html.includes("border-l-[calc(3ch-5px)]"), "the rail fills the 3ch inset");
-		assert.ok(html.includes("py-[5px]") && html.includes("pl-[5px]"), "tight 5px padding, gap matches it");
+		assert.ok(html.includes("border-l-[calc(3ch-8px)]"), "thinner rail — 8px gap inside the 3ch inset");
+		assert.ok(html.includes("py-1") && html.includes("pl-[8px]"), "4px band padding");
+		assert.ok(html.includes("pr-4"), "the text wraps early — air at the band's right edge");
 		assert.ok(html.includes("w-full"), "full width — no chat side");
 		assert.match(html, /aria-expanded="true"/);
 		assert.ok(html.includes("banded"), "text visible on arrival");
+	});
+
+	it("in-card rows step the band to accent — the same one-step lift (owner round four)", () => {
+		const html = renderToStaticMarkup(<ThinkingBlock text="in card" inCard />);
+		assert.ok(html.includes("bg-accent"), "accent on the card's surface");
+		assert.ok(!html.includes("bg-card"), "card-color would vanish on the card");
 	});
 
 	it("⌘T sets every row — explicit sets stomp individual state, late mounts honor the last set", () => {

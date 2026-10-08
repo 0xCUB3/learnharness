@@ -1406,7 +1406,7 @@ export function Chat({
 										    inset (the band is the authorship mark against the agent's
 										    transparent prose). The "You" label stays — one register
 										    with the thinking labels. */
-										className="my-2 w-full border-l-[calc(3ch-5px)] border-muted-foreground/30 bg-card py-[5px] pl-[5px] pr-2 font-ui text-xs"
+										className="my-2 w-full border-l-[calc(3ch-8px)] border-muted-foreground/30 bg-card py-1 pl-[8px] pr-4 font-ui text-xs"
 									>
 												{/* The rail GROUPS (owner round 4, 2026-10-05): the YOU heading
 												    sits INSIDE the rail, same mono-xs register and same 1ch

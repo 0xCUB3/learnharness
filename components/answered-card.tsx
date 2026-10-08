@@ -143,11 +143,16 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 
 			{(answer.thinking ?? answer.note) && (
 				/* The SAME unified row (owner round, 2026-10-05): the quiz answer's
-				    thinking is the identical collapsible ThinkingBlock — and since
-				    owner round three (2026-10-07) IDENTICALLY styled, band and all:
-				    collapsed thinking matches in height everywhere, card or chat
-				    (card-on-card is quiet by design; too light → revert). */
-				<ThinkingBlock testId="your-thinking" label="YOUR THINKING" text={answer.thinking ?? answer.note ?? ""} />
+				    thinking is the identical collapsible ThinkingBlock — one
+				    geometry, and since owner round four (2026-10-07) the band steps
+				    to accent on the card's surface (the same one-step lift the chat
+				    band gets). Collapsed thinking matches in height everywhere. */
+				<ThinkingBlock
+					testId="your-thinking"
+					label="YOUR THINKING"
+					text={answer.thinking ?? answer.note ?? ""}
+					inCard
+				/>
 			)}
 
 			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper

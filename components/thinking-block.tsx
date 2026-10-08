@@ -23,13 +23,15 @@ import { cn } from "@/lib/utils";
  *  along the left edge. ONE geometry everywhere, in cards and out: the
  *  band padding is a tight 5px (round three: halved — subtle, not tall),
  *  and the left gap MATCHES it, so the rail fills the rest of the 3ch
- *  inset — border-l-[calc(3ch-5px)] pl-[5px]. Total inset stays 3ch (the
- *  chevron-alignment law with the agent's flush rows survives); the rail
- *  grows as the padding shrinks. In-card rows carry the identical
- *  styling (owner round three: same band, same heights — card-on-card is
- *  quiet by design; if it reads too light we revert). `defaultOpen`
- *  marks transcript rows, which arrive EXPANDED (clearly conveyed that
- *  the thinking was sent).
+ *  inset — total inset stays 3ch (the chevron-alignment law with the
+ *  agent's flush rows survives). Round four tunes the split: rail
+ *  thinner (gap 8px, rail calc(3ch-8px)), band padding down to 4px, and
+ *  pr-4 so the expanded text wraps EARLY — the band has a clear right
+ *  edge and text hugging it looks odd. In-card rows (on the card's own
+ *  background) take bg-accent — the same ONE-STEP lift the chat band
+ *  gets (background→card); card→accent (`inCard`). `defaultOpen` marks
+ *  transcript rows, which arrive EXPANDED (clearly conveyed that the
+ *  thinking was sent).
  *
  *  ⌘T (toggle-user-thinking) sets EVERY row to one state via the module
  *  store below — one source of truth, no provider tree: rows subscribe on
@@ -69,6 +71,7 @@ export function ThinkingBlock({
 	testId,
 	dataCommit,
 	defaultOpen = false,
+	inCard = false,
 }: {
 	label?: string;
 	text: string;
@@ -77,6 +80,8 @@ export function ThinkingBlock({
 	dataCommit?: boolean;
 	/** Transcript rows arrive expanded (owner, 2026-10-07). */
 	defaultOpen?: boolean;
+	/** On the card's own background: the band steps to accent (one lift). */
+	inCard?: boolean;
 }) {
 	const [open, setOpen] = useState(() => resolveUserThinkingOpen(defaultOpen));
 	// ⌘T: an explicit global set overrides every row (once set, rows re-sync).
@@ -100,12 +105,13 @@ export function ThinkingBlock({
 			data-testid={testId}
 			data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"}
 			className={cn(
-				// The rail geometry (owner round three, 2026-10-07): total inset
-				// STAYS 3ch (the chevron-alignment law with the agent's flush
-				// rows). The band padding is a tight 5px (halved from 10px) and
-				// the left gap MATCHES it — the rail fills the rest:
-				// calc(3ch-5px) wide. One geometry everywhere, cards included.
-				"lh-card-enter my-2 w-full border-l-[calc(3ch-5px)] border-muted-foreground/30 bg-card py-[5px] pl-[5px] font-ui text-xs",
+				// Round four (owner, 2026-10-07): total inset still 3ch (the
+				// chevron law); rail thinner (8px gap), padding 4px, and pr-4 —
+				// the text wraps EARLY, never hugging the band's right edge.
+				// In-card rows step the band to accent: the same one-step lift
+				// the chat band gets (background→card → card→accent).
+				"lh-card-enter my-2 w-full border-l-[calc(3ch-8px)] border-muted-foreground/30 py-1 pl-[8px] pr-4 font-ui text-xs",
+				inCard ? "bg-accent" : "bg-card",
 			)}
 		>
 			<button
@@ -113,7 +119,7 @@ export function ThinkingBlock({
 				data-testid={testId ? `${testId}-trigger` : undefined}
 				onClick={() => setOpen((v) => !v)}
 				aria-expanded={open}
-				className="flex w-full items-center gap-2 pr-2 font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+				className="flex w-full items-center gap-2 font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
 			>
 				{label}
 				<ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open ? "rotate-180" : "rotate-0")} />
