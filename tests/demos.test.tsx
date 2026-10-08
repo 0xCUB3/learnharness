@@ -505,6 +505,23 @@ describe("artifact chrome — scrollbar, invert toggles, downloads (release poli
 		assert.ok(!html.includes("hue-rotate"), "inversion OFF by default");
 	});
 
+	it("figure card: NO card chrome, image first, caption row BELOW (owner round, 2026-10-07)", () => {
+		const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><circle cx="50" cy="50" r="20"/></svg>';
+		const html = renderToStaticMarkup(<VisualOutputCard output={{ svg }} />);
+		// Document material: the outer box carries no card styling.
+		const rootAt = html.indexOf('data-testid="visual-card"');
+		const root = html.slice(rootAt - 200, rootAt);
+		assert.ok(!root.includes("rounded-xl border"), "no card container");
+		// Image BEFORE the caption row; the caption label and the controls follow it.
+		const svgAt = html.indexOf('data-testid="visual-svg"');
+		const captionAt = html.indexOf(">Figure<");
+		assert.ok(svgAt !== -1 && captionAt !== -1 && svgAt < captionAt, "the caption row sits below the image");
+		assert.ok(captionAt < html.indexOf("visual-download"), "the controls ride the caption row");
+		// The invert affordance: the contrast-circle disc + the tooltip.
+		assert.ok(html.includes("size-3"), "the icon disc");
+		assert.ok(html.includes('title="Invert colors"'), "the tooltip names the toggle");
+	});
+
 	it("svgNaturalWidth: declared px sizes parse; %, auto, and absent fall back to null", () => {
 		assert.equal(svgNaturalWidth('<svg width="200" height="100"></svg>'), 200);
 		assert.equal(svgNaturalWidth("<svg width='320'></svg>"), 320);

@@ -2,7 +2,7 @@
 
 import { useContext, useState } from "react";
 import { ChatActionsContext } from "@/components/chat";
-import { DownloadIcon, MaximizeIcon } from "lucide-react";
+import { ContrastIcon, DownloadIcon, MaximizeIcon } from "lucide-react";
 import { Toggle } from "@/components/settings/controls";
 import { useSessionMermaid } from "@/components/session-overlay";
 import { downloadFile } from "@/components/artifacts/download";
@@ -99,11 +99,47 @@ export function VisualOutputCard({
 		);
 	}
 	return (
-		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="visual-card">
-			<div className="flex items-center justify-between gap-2">
+		/* NO CARD CHROME (owner round, 2026-10-07): the figure is document
+		   material — no border, no padding box. Image first, then the CAPTION
+		   ROW below: "Figure" left, the controls right, both edges following
+		   the IMAGE's own width (the wrapper carries the natural-sizing law,
+		   so the row hugs a centered narrow figure, not the column). */
+		<div
+			className={
+				natural !== null
+					? "my-4 mx-auto w-fit max-w-full"
+					: "my-4 w-full"
+			}
+			data-testid="visual-card"
+		>
+			{/* Natural sizing (owner, 2026-10-07): a declared-width svg sits at
+			   ITS size; max-w-full still shrinks oversized ones to fit. No
+			   declared size (viewBox-only, %-width) keeps the full-width law.
+			   The invert filter rides the bg-white holder, so the backing flips
+			   white→black together with the strokes; transparent areas ARE the
+			   backing. */}
+			<div
+				className={
+					natural !== null
+						? "w-fit max-w-full overflow-hidden rounded-lg bg-white [&_svg]:h-auto [&_svg]:max-w-full"
+						: "w-full overflow-hidden rounded-lg bg-white [&_svg]:h-auto [&_svg]:w-full"
+				}
+				style={{ filter: inverted ? "invert(1) hue-rotate(180deg)" : undefined }}
+				dangerouslySetInnerHTML={{ __html: sanitizeSvg(result.svg) }}
+				data-testid="visual-svg"
+			/>
+			<div className="mt-2 flex items-center justify-between gap-2">
 				<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Figure</div>
 				<div className="flex items-center gap-1.5">
-					<Toggle checked={inverted} onChange={toggleInverted} label="Invert figure brightness" />
+					{/* The invert affordance (owner round, 2026-10-07): the disc IS
+					    the half-filled contrast circle; the tooltip names it. */}
+					<Toggle
+						checked={inverted}
+						onChange={toggleInverted}
+						label="Invert figure brightness"
+						title="Invert colors"
+						discIcon={<ContrastIcon className="size-3" />}
+					/>
 					<button
 						type="button"
 						aria-label="Download figure as SVG"
@@ -128,23 +164,6 @@ export function VisualOutputCard({
 					)}
 				</div>
 			</div>
-			{/* Natural sizing (owner, 2026-10-07): a declared-width svg sits at
-			   ITS size — the white figure area hugs it and centers (mx-auto),
-			   max-w-full still shrinks oversized ones to fit the card. No
-			   declared size (viewBox-only, %-width) keeps the old full-width
-			   law. The invert filter rides the bg-white holder, so the backing
-			   flips white→black together with the strokes; transparent areas
-			   ARE the backing. */}
-			<div
-				className={
-					natural !== null
-						? "mx-auto mt-2 w-fit max-w-full overflow-hidden rounded-lg bg-white [&_svg]:h-auto [&_svg]:max-w-full"
-						: "mt-2 w-full overflow-hidden rounded-lg bg-white [&_svg]:h-auto [&_svg]:w-full"
-				}
-				style={{ filter: inverted ? "invert(1) hue-rotate(180deg)" : undefined }}
-				dangerouslySetInnerHTML={{ __html: sanitizeSvg(result.svg) }}
-				data-testid="visual-svg"
-			/>
 		</div>
 	);
 }

@@ -9,7 +9,7 @@
  * control together) and the control itself locks — the row owns the dim.
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /** A section block: pronounced mono heading + content. */
@@ -87,12 +87,20 @@ export function Toggle({
 	disabled,
 	onChange,
 	label,
+	discIcon,
+	title,
 }: {
 	checked: boolean;
 	disabled?: boolean;
 	onChange: (next: boolean) => void;
 	/** Accessible name for the switch role. */
 	label: string;
+	/** Optional icon disc (owner round, 2026-10-07): the figure cards' invert
+	 *  toggle renders the half-filled contrast circle AS the disc — the icon
+	 *  carries the meaning; plain toggles keep the plain disc. */
+	discIcon?: ReactNode;
+	/** Optional native tooltip on the switch. */
+	title?: string;
 }) {
 	return (
 		<button
@@ -100,6 +108,7 @@ export function Toggle({
 			role="switch"
 			aria-checked={checked}
 			aria-label={label}
+			{...(title ? { title } : {})}
 			disabled={disabled}
 			data-testid={`toggle-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
 			onClick={() => onChange(!checked)}
@@ -111,14 +120,27 @@ export function Toggle({
 				disabled && "cursor-not-allowed",
 			)}
 		>
-			<span
-				className={cn(
-					"absolute left-0 top-0.5 size-3 rounded-full transition-transform",
-					// 2px inset from each inner edge, both states (owner round: the on
-					// disc used to touch the pill's right edge).
-					checked ? "translate-x-4 bg-foreground" : "translate-x-0.5 bg-muted-foreground",
-				)}
-			/>
+			{discIcon ? (
+				// The icon IS the disc: same size, same slide, same state colors —
+				// only the knob's face changes (the invert affordance).
+				<span
+					className={cn(
+						"absolute left-0 top-0.5 flex size-3 items-center justify-center rounded-full transition-transform",
+						checked ? "translate-x-4 text-foreground" : "translate-x-0.5 text-muted-foreground",
+					)}
+				>
+					{discIcon}
+				</span>
+			) : (
+				<span
+					className={cn(
+						"absolute left-0 top-0.5 size-3 rounded-full transition-transform",
+						// 2px inset from each inner edge, both states (owner round: the on
+						// disc used to touch the pill's right edge).
+						checked ? "translate-x-4 bg-foreground" : "translate-x-0.5 bg-muted-foreground",
+					)}
+				/>
+			)}
 		</button>
 	);
 }
