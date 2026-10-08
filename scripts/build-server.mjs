@@ -45,6 +45,19 @@ if (exists(leakedData)) {
 	process.exit(1);
 }
 
+// 2b) Safety: the repo's dev SECRETS must never ride along either — the
+// same trace sweep that catches data/ shipped the repo-root auth.json
+// (the DEV BYOK key store, 0600) byte-identical into the DMG (caught in
+// the 2026-10-08 payload audit; excluded in next.config.ts — this guard
+// makes a regression loud instead of silent).
+for (const secret of ["auth.json", ".env", ".env.local"]) {
+	if (exists(path.join(STANDALONE, secret))) {
+		console.error(`[build-server] REFUSING: standalone contains ${secret} — dev secrets would ship in the app.`);
+		console.error("             Check outputFileTracingExcludes in next.config.ts.");
+		process.exit(1);
+	}
+}
+
 // 3) Sanity: the runtime-read prompt assets must be present (the teacher
 //    agent reads them from disk at request time).
 for (const asset of [

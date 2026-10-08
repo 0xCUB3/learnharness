@@ -14,11 +14,11 @@
 		"typecheck": "tsc --noEmit",
 		"desktop:dev": "concurrently -k \"next dev\" \"LH_DEV_URL=http://localhost:3000 electron .\"",
 		"dev:fresh": "bash scripts/dev-fresh.sh",
-		"desktop:dist": "next build && node scripts/build-server.mjs && electron-builder --mac --arm64"
+		"desktop:dist": "rm -rf dist .next/standalone && next build && node scripts/build-server.mjs && node scripts/smoke-server.mjs && electron-builder --mac --arm64"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "^1.0.2",
-		"@earendil-works/pi-ai": "^1.0.2",
+		"@earendil-works/pi-agent-core": "1.0.2",
+		"@earendil-works/pi-ai": "1.0.2",
 		"@mozilla/readability": "^0.6.0",
 		"@radix-ui/react-use-controllable-state": "^1.2.6",
 		"@rive-app/react-webgl2": "^4.32.1",

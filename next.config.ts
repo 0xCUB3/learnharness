@@ -11,9 +11,33 @@ const nextConfig: NextConfig = {
 	// tracing sweeps the repo's real data/ — chat records, graph ledgers —
 	// INTO the standalone bundle. A shipped desktop app would carry the
 	// developer's session data inside it.
+	//
+	// SECRETS (2026-10-08, caught in the payload audit): the same sweep
+	// ships the repo-root auth.json — the DEV BYOK key store — byte-identical
+	// into the DMG (the packaged app never reads it: the shell passes
+	// LH_AUTH_FILE → userData). Excluded here; build-server.mjs also REFUSES
+	// to package any standalone still containing it. .env* belt-and-braces
+	// the same class (not observed swept, same seam).
+	//
+	// ⚠ EXCLUDE PATTERNS ARE LOAD-BEARING IN WAYS THE DOCS DON'T DESCRIBE
+	// (empirically established 2026-10-08): adding dir excludes like
+	// "dist/**/*" / "./dist/**/*" for repo-root output dirs STRIPPED THE
+	// server-external packages (pi-ai / pi-agent-core lost everything
+	// under their dist/ — the traced copy collapsed to a bare package.json
+	// and the packaged server died on ERR_MODULE_NOT_FOUND; openai/
+	// @anthropic-ai — pi-ai's deps — vanished from the trace entirely).
+	// Anchored "./"-prefixed forms behave the same. Only the three entries
+	// below are verified safe (complete externals trace + clean payload).
+	// The 7.4 GB recursive-DMG payload (repo dist/ swept into the bundle,
+	// shipping the previous build inside the next) is instead prevented by
+	// the `rm -rf dist .next/standalone` clean step in desktop:dist —
+	// verified sufficient, since the sweep can only copy what exists at
+	// trace time. scripts/build-server.mjs guards the rest.
 	outputFileTracingExcludes: {
 		"*": [
 			"data/**/*",
+			"auth.json",
+			".env*",
 		],
 	},
 	// Empirically verified gaps (2026-09-17 standalone smoke): the tracer
