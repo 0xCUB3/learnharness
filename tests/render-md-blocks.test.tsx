@@ -243,19 +243,21 @@ describe("md-blocks — the restored plain blockquote (owner round, 2026-10-07)"
 });
 
 describe("ThinkingBlock — side-based authorship + ⌘T sync (owner round, 2026-10-07)", () => {
-	it("the default row stays left with the my-3 rhythm", () => {
-		const html = renderToStaticMarkup(<ThinkingBlock text="left side" />);
-		assert.ok(html.includes("border-l-2"), "left rail");
-		assert.ok(html.includes("my-3"), "the 12px rhythm (was my-1)");
+	it("the banded row is the document band — full-width card color, 6px rail", () => {
+		const html = renderToStaticMarkup(<ThinkingBlock text="banded" defaultOpen />);
+		assert.ok(html.includes("bg-card"), "the card-color band");
+		assert.ok(html.includes("border-l-[6px]"), "the 6px rail");
+		assert.ok(html.includes("pl-[calc(3ch-6px)]"), "natural gap, 3ch total inset preserved");
+		assert.ok(html.includes("w-full"), "full width — no chat side");
+		assert.match(html, /aria-expanded="true"/);
+		assert.ok(html.includes("banded"), "text visible on arrival");
 	});
 
-	it("mirrored rows hug the right edge, rail flipped, arriving open", () => {
-		const html = renderToStaticMarkup(<ThinkingBlock text="right side" mirror defaultOpen />);
-		assert.ok(html.includes('data-side="right"'));
-		assert.ok(html.includes("ml-auto"), "pushed to the right edge");
-		assert.ok(html.includes("border-r-2") && !html.includes("border-l-2"), "rail on the right");
-		assert.match(html, /aria-expanded="true"/);
-		assert.ok(html.includes("right side"), "text visible on arrival");
+	it("in-card rows take the rail but no band", () => {
+		const html = renderToStaticMarkup(<ThinkingBlock text="in card" banded={false} />);
+		assert.ok(!html.includes("bg-card"), "no band on the card's own background");
+		assert.ok(html.includes("border-l-[6px]"), "the rail stays");
+		assert.ok(html.includes("my-3"), "the 12px in-card rhythm");
 	});
 
 	it("⌘T sets every row — explicit sets stomp individual state, late mounts honor the last set", () => {

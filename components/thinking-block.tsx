@@ -17,12 +17,17 @@ import { cn } from "@/lib/utils";
  *  The glance-level law (owner): user thinking = rail + 50% italic;
  *  agent thinking = no rail.
  *
- *  SIDE-BASED AUTHORSHIP (owner round, 2026-10-07): transcript-level rows
- *  go RIGHT — mirrored rail (border-right), block hugging the right edge
- *  at ~85% width, text still reading left-to-right. In-card rows (inside
- *  the answered card, the agent's context) stay left. `mirror` selects
- *  the side; `defaultOpen` marks the transcript rows, which arrive
- *  EXPANDED (owner: clearly conveyed that the thinking was sent).
+ *  THE DOCUMENT, ALL-IN (owner round two, 2026-10-07): no chat sides —
+ *  transcript-level user rows (this block, the "You" message) are
+ *  full-width CARD-COLOR BANDS: the band is the authorship mark against
+ *  the agent's transparent prose, and the rail runs along the band's left
+ *  edge. The rail keeps its muted color but is now 6px wide, eating the
+ *  artificial air of the old 3ch inset — the total inset STAYS 3ch so the
+ *  chevron-alignment law with the agent's flush rows survives; the gap
+ *  between rail and text drops to natural (3ch - 6px). In-card rows
+ *  (inside the answered card, on the card's own background) take the rail
+ *  but NO band (`banded: false`). `defaultOpen` marks transcript rows,
+ *  which arrive EXPANDED (clearly conveyed that the thinking was sent).
  *
  *  ⌘T (toggle-user-thinking) sets EVERY row to one state via the module
  *  store below — one source of truth, no provider tree: rows subscribe on
@@ -61,7 +66,7 @@ export function ThinkingBlock({
 	text,
 	testId,
 	dataCommit,
-	mirror = false,
+	banded = true,
 	defaultOpen = false,
 }: {
 	label?: string;
@@ -69,8 +74,8 @@ export function ThinkingBlock({
 	testId?: string;
 	/** The practice marker's register flag (commit vs nudge). */
 	dataCommit?: boolean;
-	/** Right-side placement (transcript rows): mirrored rail, right edge. */
-	mirror?: boolean;
+	/** Transcript rows carry the card-color band; in-card rows rail only. */
+	banded?: boolean;
 	/** Transcript rows arrive expanded (owner, 2026-10-07). */
 	defaultOpen?: boolean;
 }) {
@@ -95,15 +100,14 @@ export function ThinkingBlock({
 		<div
 			data-testid={testId}
 			data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"}
-			data-side={mirror ? "right" : "left"}
 			className={cn(
-				// my-3 (owner, 2026-10-07): the row's own rhythm — 4px hugged the
-				// options on non-graded answered cards; 12px matches the card's
-				// mt-2/mt-3 spacing grammar.
-				"lh-card-enter my-3 font-ui text-xs",
-				mirror
-					? "ml-auto w-[85%] border-r-2 border-muted-foreground/30 pr-[calc(3ch-2px)]"
-					: "w-full border-l-2 border-muted-foreground/30 pl-[calc(3ch-2px)]",
+				// The rail geometry (owner round two, 2026-10-07): total inset
+				// STAYS 3ch (the chevron-alignment law with the agent's flush
+				// rows), re-split — 6px rail (was 2px) + a natural 3ch-6px gap
+				// (was the too-wide 3ch-2px). In-card rows keep the 12px my-3
+				// rhythm; banded rows sit my-2 apart (the band's own air).
+				"lh-card-enter w-full border-l-[6px] border-muted-foreground/30 pl-[calc(3ch-6px)] font-ui text-xs",
+				banded ? "my-2 bg-card py-2.5" : "my-3",
 			)}
 		>
 			<button
@@ -111,7 +115,7 @@ export function ThinkingBlock({
 				data-testid={testId ? `${testId}-trigger` : undefined}
 				onClick={() => setOpen((v) => !v)}
 				aria-expanded={open}
-				className="flex w-full items-center gap-2 font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+				className="flex w-full items-center gap-2 pr-2 font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
 			>
 				{label}
 				<ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open ? "rotate-180" : "rotate-0")} />

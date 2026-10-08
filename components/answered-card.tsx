@@ -41,9 +41,16 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 		    ThinkingBlock, instead of an inset inside the answer. Same muted
 		    rail as before; the label is now plain "Your thinking". */}
 		{answer.readingThinking && (
-			<ThinkingBlock testId="reading-thinking-block" label="YOUR THINKING" text={answer.readingThinking} />
+			<ThinkingBlock testId="reading-thinking-block" label="YOUR THINKING" text={answer.readingThinking} defaultOpen />
 		)}
-		<div className="rounded-xl border bg-card p-4 text-card-foreground" data-testid="answered-card">
+		{/* [&>*:last-child]:mb-0 (owner round, 2026-10-07): on ask cards the
+		    thinking row is the last child — its my-3 stacked with the card's
+		    p-4 into a 28px void below (12px above); the card's own padding is
+		    the bottom rhythm when a row ends the card. */}
+		<div
+			className="rounded-xl border bg-card p-4 text-card-foreground [&>*:last-child]:mb-0"
+			data-testid="answered-card"
+		>
 			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{isQuiz ? (answer.questionType === "predict" ? "Prediction" : "Quiz") : isExplain ? "Explain" : "Question"}
 				{isQuiz &&
@@ -137,9 +144,15 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			{(answer.thinking ?? answer.note) && (
 				/* The SAME unified row (owner round, 2026-10-05): the quiz answer's
 				    thinking is the identical collapsible ThinkingBlock — it just
-				    happens to sit inside the quiz container. Same placement, same
-				    trigger, same 50%-italic quote block on expand. */
-				<ThinkingBlock testId="your-thinking" label="YOUR THINKING" text={answer.thinking ?? answer.note ?? ""} />
+				    happens to sit INSIDE the card, so it takes the rail but no band
+				    (owner round two, 2026-10-07: card-color on card-color would be
+				    invisible; geometry alone carries it there). */
+				<ThinkingBlock
+					testId="your-thinking"
+					label="YOUR THINKING"
+					text={answer.thinking ?? answer.note ?? ""}
+					banded={false}
+				/>
 			)}
 
 			{/* px-3→removed: card p-4 + box px-3 double-inset sat the "Why" label deeper

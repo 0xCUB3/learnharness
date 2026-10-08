@@ -1399,12 +1399,13 @@ export function Chat({
 										    Rendered WITHOUT the Message wrapper — that is the bubble. */
 											<div
 										data-testid="user-message"
-										/* SIDE-BASED AUTHORSHIP (owner round, 2026-10-07): the
-										    document shape blurred user into agent — three left-rail
-										    idioms (user text, user thinking, quoted prose) collided.
-										    User rows go RIGHT: mirrored rail, ~85% width, text still
-										    reading left-to-right (the chat convention). */
-										className="my-1 ml-auto w-[85%] border-r-2 border-muted-foreground/30 pr-[calc(3ch-2px)] font-ui text-xs"
+										/* THE DOCUMENT, ALL-IN (owner round two, 2026-10-07): no
+										    chat side — the user message is a full-width card-color
+										    BAND with the 6px rail, the same geometry as the thinking
+										    rows (the band is the authorship mark against the agent's
+										    transparent prose). The "You" label stays — one register
+										    with the thinking labels. */
+										className="my-2 w-full border-l-[6px] border-muted-foreground/30 bg-card py-2.5 pl-[calc(3ch-6px)] pr-2 font-ui text-xs"
 									>
 												{/* The rail GROUPS (owner round 4, 2026-10-05): the YOU heading
 												    sits INSIDE the rail, same mono-xs register and same 1ch
