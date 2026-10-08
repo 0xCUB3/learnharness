@@ -57,6 +57,15 @@ export function ReadingThinkingField({
 			<textarea
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
+				/* py-0.5 (owner round, 2026-10-07): the scrollbar fix. Source
+				   Sans 3's font box is 22px at 16px; lh-input's 1.25 leading
+				   gives a 20px line box — the content area sticks 1px below the
+				   line, Chromium counts it in scrollHeight, and a zero-padding
+				   textarea turns that into a permanent 1px scroll (the bar shows
+				   empty and at every size below max-h). 2px of vertical padding
+				   absorbs it — the same absorption the composer and dock fields
+				   get implicitly from their py-2. Line-height stays 1.25 (the
+				   caret law, typography round 2). */
 				onKeyDown={(e) => {
 					if (e.key === "Escape") {
 						// Esc stops dictation (the strip's rule) — claimed so the
@@ -87,7 +96,7 @@ export function ReadingThinkingField({
 				}}
 				placeholder="Whatever comes to mind as you read."
 				rows={1}
-				className="field-sizing-content lh-input max-h-40 w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/70"
+				className="field-sizing-content lh-input max-h-40 w-full resize-none bg-transparent py-0.5 outline-none placeholder:text-muted-foreground/70"
 			/>
 		</div>
 	);
