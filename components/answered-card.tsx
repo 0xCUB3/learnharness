@@ -144,9 +144,8 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			{(answer.thinking ?? answer.note) && (
 				/* The SAME unified row (owner round, 2026-10-05): the quiz answer's
 				    thinking is the identical collapsible ThinkingBlock — one
-				    geometry, and since owner round four (2026-10-07) the band steps
-				    to accent on the card's surface (the same one-step lift the chat
-				    band gets). Collapsed thinking matches in height everywhere. */
+				    geometry, but NO band on the card (owner round five, 2026-10-07:
+				    the accent lift read too light); rail only, heights identical. */
 				<ThinkingBlock
 					testId="your-thinking"
 					label="YOUR THINKING"

@@ -24,14 +24,13 @@ import { cn } from "@/lib/utils";
  *  band padding is a tight 5px (round three: halved — subtle, not tall),
  *  and the left gap MATCHES it, so the rail fills the rest of the 3ch
  *  inset — total inset stays 3ch (the chevron-alignment law with the
- *  agent's flush rows survives). Round four tunes the split: rail
- *  thinner (gap 8px, rail calc(3ch-8px)), band padding down to 4px, and
- *  pr-4 so the expanded text wraps EARLY — the band has a clear right
- *  edge and text hugging it looks odd. In-card rows (on the card's own
- *  background) take bg-accent — the same ONE-STEP lift the chat band
- *  gets (background→card); card→accent (`inCard`). `defaultOpen` marks
- *  transcript rows, which arrive EXPANDED (clearly conveyed that the
- *  thinking was sent).
+ *  agent's flush rows survives). Round five (owner, 2026-10-07): the
+ *  rail narrows again (gap 14px, rail calc(3ch-14px) — the wide rail
+ *  was distracting); band padding 4px; pr-4 so the expanded text wraps
+ *  EARLY. In-card rows (on the card's own background) take NO band —
+ *  the accent step read too light (owner verdict); rail only, identical
+ *  heights (`inCard`). `defaultOpen` marks transcript rows, which
+ *  arrive EXPANDED (clearly conveyed that the thinking was sent).
  *
  *  ⌘T (toggle-user-thinking) sets EVERY row to one state via the module
  *  store below — one source of truth, no provider tree: rows subscribe on
@@ -80,7 +79,7 @@ export function ThinkingBlock({
 	dataCommit?: boolean;
 	/** Transcript rows arrive expanded (owner, 2026-10-07). */
 	defaultOpen?: boolean;
-	/** On the card's own background: the band steps to accent (one lift). */
+	/** On the card's own background: no band (the accent read too light). */
 	inCard?: boolean;
 }) {
 	const [open, setOpen] = useState(() => resolveUserThinkingOpen(defaultOpen));
@@ -105,13 +104,12 @@ export function ThinkingBlock({
 			data-testid={testId}
 			data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"}
 			className={cn(
-				// Round four (owner, 2026-10-07): total inset still 3ch (the
-				// chevron law); rail thinner (8px gap), padding 4px, and pr-4 —
-				// the text wraps EARLY, never hugging the band's right edge.
-				// In-card rows step the band to accent: the same one-step lift
-				// the chat band gets (background→card → card→accent).
-				"lh-card-enter my-2 w-full border-l-[calc(3ch-8px)] border-muted-foreground/30 py-1 pl-[8px] pr-4 font-ui text-xs",
-				inCard ? "bg-accent" : "bg-card",
+				// Round five (owner, 2026-10-07): total inset still 3ch (the
+				// chevron law); the rail narrows (14px gap), padding 4px, pr-4
+				// keeps the text off the band's right edge. In-card rows take
+				// NO band — the accent lift read too light; rail only.
+				"lh-card-enter my-2 w-full border-l-[calc(3ch-14px)] border-muted-foreground/30 py-1 pl-[14px] pr-4 font-ui text-xs",
+				inCard ? "" : "bg-card",
 			)}
 		>
 			<button
