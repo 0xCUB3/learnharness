@@ -520,6 +520,12 @@ describe("artifact chrome — scrollbar, invert toggles, downloads (release poli
 		// The invert affordance: the contrast-circle disc + the tooltip.
 		assert.ok(html.includes("size-3"), "the icon disc");
 		assert.ok(html.includes('title="Invert colors"'), "the tooltip names the toggle");
+		// The half-moon is ACTUALLY filled (owner catch: lucide's Contrast
+		// renders it hollow — fill="none" default; ours fills currentColor).
+		assert.ok(
+			html.includes('fill="currentColor" stroke="none"'),
+			"the filled half of the invert disc",
+		);
 	});
 
 	it("svgNaturalWidth: declared px sizes parse; %, auto, and absent fall back to null", () => {

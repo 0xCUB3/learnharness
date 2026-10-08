@@ -3,6 +3,7 @@
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { DownloadIcon } from "lucide-react";
 import { Toggle } from "@/components/settings/controls";
+import { InvertDiscIcon } from "@/components/artifacts/invert-disc";
 import { ChatActionsContext } from "@/components/chat";
 import { downloadFile, slugFilename } from "@/components/artifacts/download";
 import { DispatchCard } from "@/components/artifacts/dispatch-card";
@@ -181,7 +182,13 @@ function DemoFrame({
 					<span className="truncate text-xs font-medium tracking-wide text-foreground">{title}</span>
 				</div>
 				<div className="flex shrink-0 items-center gap-1.5">
-					<Toggle checked={inverted} onChange={toggleInverted} label="Invert demo brightness" />
+					<Toggle
+						checked={inverted}
+						onChange={toggleInverted}
+						label="Invert demo brightness"
+						title="Invert colors"
+						discIcon={<InvertDiscIcon className="size-3" />}
+					/>
 					<button
 						type="button"
 						aria-label="Download demo as HTML"

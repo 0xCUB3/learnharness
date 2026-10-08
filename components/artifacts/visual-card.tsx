@@ -2,7 +2,8 @@
 
 import { useContext, useState } from "react";
 import { ChatActionsContext } from "@/components/chat";
-import { ContrastIcon, DownloadIcon, MaximizeIcon } from "lucide-react";
+import { DownloadIcon, MaximizeIcon } from "lucide-react";
+import { InvertDiscIcon } from "@/components/artifacts/invert-disc";
 import { Toggle } from "@/components/settings/controls";
 import { useSessionMermaid } from "@/components/session-overlay";
 import { downloadFile } from "@/components/artifacts/download";
@@ -138,7 +139,7 @@ export function VisualOutputCard({
 						onChange={toggleInverted}
 						label="Invert figure brightness"
 						title="Invert colors"
-						discIcon={<ContrastIcon className="size-3" />}
+						discIcon={<InvertDiscIcon className="size-3" />}
 					/>
 					<button
 						type="button"
