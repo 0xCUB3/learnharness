@@ -295,13 +295,14 @@ describe("render smoke tests", () => {
 		// trigger row only — the thinking text is one click away, never loud.
 		assert.ok(html.includes('data-testid="your-thinking-trigger"'), "the trigger row");
 		assert.ok(html.includes('aria-expanded="false"'), "arrives collapsed");
-		// IN-CARD = RAIL ONLY (owner round two, 2026-10-07): no band on the
-		// card's own background; geometry alone carries it there.
+		// IDENTICAL GEOMETRY (owner round three, 2026-10-07): the in-card row
+		// carries the band too — collapsed thinking matches in height
+		// everywhere, card or chat.
 		const yourRow = html.slice(html.indexOf('data-testid="your-thinking"'));
-		assert.ok(!yourRow.slice(0, 400).includes("bg-card"), "no band inside the card");
+		assert.ok(yourRow.slice(0, 400).includes("bg-card"), "the band inside the card as well");
 		// THE RAIL GROUPS (owner correction): the label sits INSIDE the rail —
 		// ownership readable from the rail alone, collapsed or expanded.
-		const railAt = html.indexOf("border-l-[6px]");
+		const railAt = html.indexOf("border-l-[calc(3ch-5px)]");
 		const trigAt = html.indexOf("your-thinking-trigger");
 		assert.ok(railAt !== -1 && railAt < trigAt, "the rail opens before the label (same quote)");
 		assert.ok(!html.includes("brightness isn&#x27;t distance"), "the text is hidden until expanded");

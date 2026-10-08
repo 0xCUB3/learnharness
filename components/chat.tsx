@@ -1399,13 +1399,14 @@ export function Chat({
 										    Rendered WITHOUT the Message wrapper — that is the bubble. */
 											<div
 										data-testid="user-message"
-										/* THE DOCUMENT, ALL-IN (owner round two, 2026-10-07): no
-										    chat side — the user message is a full-width card-color
-										    BAND with the 6px rail, the same geometry as the thinking
-										    rows (the band is the authorship mark against the agent's
+										/* THE DOCUMENT, ALL-IN (owner rounds two+three, 2026-10-07):
+										    no chat side — the user message is a full-width card-color
+										    BAND, the IDENTICAL geometry as the thinking rows: 5px band
+										    padding, the left gap matches it, the rail fills the 3ch
+										    inset (the band is the authorship mark against the agent's
 										    transparent prose). The "You" label stays — one register
 										    with the thinking labels. */
-										className="my-2 w-full border-l-[6px] border-muted-foreground/30 bg-card py-2.5 pl-[calc(3ch-6px)] pr-2 font-ui text-xs"
+										className="my-2 w-full border-l-[calc(3ch-5px)] border-muted-foreground/30 bg-card py-[5px] pl-[5px] pr-2 font-ui text-xs"
 									>
 												{/* The rail GROUPS (owner round 4, 2026-10-05): the YOU heading
 												    sits INSIDE the rail, same mono-xs register and same 1ch

@@ -17,17 +17,19 @@ import { cn } from "@/lib/utils";
  *  The glance-level law (owner): user thinking = rail + 50% italic;
  *  agent thinking = no rail.
  *
- *  THE DOCUMENT, ALL-IN (owner round two, 2026-10-07): no chat sides —
- *  transcript-level user rows (this block, the "You" message) are
- *  full-width CARD-COLOR BANDS: the band is the authorship mark against
- *  the agent's transparent prose, and the rail runs along the band's left
- *  edge. The rail keeps its muted color but is now 6px wide, eating the
- *  artificial air of the old 3ch inset — the total inset STAYS 3ch so the
- *  chevron-alignment law with the agent's flush rows survives; the gap
- *  between rail and text drops to natural (3ch - 6px). In-card rows
- *  (inside the answered card, on the card's own background) take the rail
- *  but NO band (`banded: false`). `defaultOpen` marks transcript rows,
- *  which arrive EXPANDED (clearly conveyed that the thinking was sent).
+ *  THE DOCUMENT, ALL-IN (owner rounds two+three, 2026-10-07): no chat
+ *  sides — user rows are full-width CARD-COLOR BANDS (the band is the
+ *  authorship mark against the agent's transparent prose) with the rail
+ *  along the left edge. ONE geometry everywhere, in cards and out: the
+ *  band padding is a tight 5px (round three: halved — subtle, not tall),
+ *  and the left gap MATCHES it, so the rail fills the rest of the 3ch
+ *  inset — border-l-[calc(3ch-5px)] pl-[5px]. Total inset stays 3ch (the
+ *  chevron-alignment law with the agent's flush rows survives); the rail
+ *  grows as the padding shrinks. In-card rows carry the identical
+ *  styling (owner round three: same band, same heights — card-on-card is
+ *  quiet by design; if it reads too light we revert). `defaultOpen`
+ *  marks transcript rows, which arrive EXPANDED (clearly conveyed that
+ *  the thinking was sent).
  *
  *  ⌘T (toggle-user-thinking) sets EVERY row to one state via the module
  *  store below — one source of truth, no provider tree: rows subscribe on
@@ -66,7 +68,6 @@ export function ThinkingBlock({
 	text,
 	testId,
 	dataCommit,
-	banded = true,
 	defaultOpen = false,
 }: {
 	label?: string;
@@ -74,8 +75,6 @@ export function ThinkingBlock({
 	testId?: string;
 	/** The practice marker's register flag (commit vs nudge). */
 	dataCommit?: boolean;
-	/** Transcript rows carry the card-color band; in-card rows rail only. */
-	banded?: boolean;
 	/** Transcript rows arrive expanded (owner, 2026-10-07). */
 	defaultOpen?: boolean;
 }) {
@@ -101,13 +100,12 @@ export function ThinkingBlock({
 			data-testid={testId}
 			data-commit={dataCommit === undefined ? undefined : dataCommit ? "true" : "false"}
 			className={cn(
-				// The rail geometry (owner round two, 2026-10-07): total inset
+				// The rail geometry (owner round three, 2026-10-07): total inset
 				// STAYS 3ch (the chevron-alignment law with the agent's flush
-				// rows), re-split — 6px rail (was 2px) + a natural 3ch-6px gap
-				// (was the too-wide 3ch-2px). In-card rows keep the 12px my-3
-				// rhythm; banded rows sit my-2 apart (the band's own air).
-				"lh-card-enter w-full border-l-[6px] border-muted-foreground/30 pl-[calc(3ch-6px)] font-ui text-xs",
-				banded ? "my-2 bg-card py-2.5" : "my-3",
+				// rows). The band padding is a tight 5px (halved from 10px) and
+				// the left gap MATCHES it — the rail fills the rest:
+				// calc(3ch-5px) wide. One geometry everywhere, cards included.
+				"lh-card-enter my-2 w-full border-l-[calc(3ch-5px)] border-muted-foreground/30 bg-card py-[5px] pl-[5px] font-ui text-xs",
 			)}
 		>
 			<button

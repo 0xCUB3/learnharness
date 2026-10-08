@@ -185,7 +185,7 @@ describe("the practice transcript cards", () => {
 		assert.match(trace, /aria-expanded="true"/);
 		assert.ok(trace.includes("stuck at step two"), "the text is visible on arrival");
 		assert.ok(trace.includes("bg-card"), "the card-color band");
-		assert.ok(trace.includes("border-l-[6px]"), "the 6px rail, left side");
+		assert.ok(trace.includes("border-l-[calc(3ch-5px)]"), "the rail fills the 3ch inset");
 		const legacy = renderToStaticMarkup(<ThinkingCard data={{ problemCallId: "c", commit: true, text: "It is 42." }} />);
 		assert.match(legacy, /YOUR THINKING/);
 		assert.doesNotMatch(legacy, /Your solution/);
