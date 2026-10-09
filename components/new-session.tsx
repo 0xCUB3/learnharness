@@ -301,7 +301,8 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 	// First-run gate (model-slots wave, owner 2026-09-20): the send
 	// INTERCEPTS into the setup flow while unconfigured — no defaults for
 	// 33 providers, chats cannot start. The draft stays in the textarea;
-	// Save completes and the send replays.
+	// Save stores the slots and never sends (owner ruling 2026-10-09) —
+	// the learner sends the draft themselves.
 	const [configured, setConfigured] = useState(initialConfigured);
 	// The zero-keys truth (zero-keys wave): no provider key = the pill
 	// takes precedence over the models CTA (keys come first in the chain).
@@ -312,22 +313,19 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 	const strongKeyless = useStrongKeyless();
 	const [setupOpen, setSetupOpen] = useState(false);
 
-	const send = useCallback((force = false) => {
+	const send = useCallback(() => {
 		const draft = textRef.current.trim();
 		if (!draft || busy) return;
-		// `force` is the onDone path — the captured `configured` is still
-		// the pre-save value; the state update hasn't landed yet.
-		if (!configured && !force) {
+		if (!configured) {
 			setSetupOpen(true);
 			return;
 		}
 		// The pre-send KEY guards (owner interlude, no-orphan-chats): guard
 		// BEFORE startDraftSession creates the record — a refused first
 		// send would otherwise leave an orphan error-shell chat in the
-		// sidebar. Same skip-everything-and-open-setup treatment; `force`
-		// (setup's onDone replay) bypasses, and the server's 503 gate
-		// remains the belt for /chat/[id] sessions.
-		if (!force && (zeroKeys || strongKeyless)) {
+		// sidebar. Same skip-everything-and-open-setup treatment; the
+		// server's 503 gate remains the belt for /chat/[id] sessions.
+		if (zeroKeys || strongKeyless) {
 			setSetupOpen(true);
 			return;
 		}
@@ -386,7 +384,7 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 								type="button"
 								data-testid="setup-cta"
 								onClick={() => setSetupOpen(true)}
-								className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+								className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 hover:bg-accent cursor-pointer"
 							>
 								Set up your models — chats start after the three picks
 							</button>
@@ -403,7 +401,8 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 				onDone={() => {
 					setConfigured(true);
 					setSetupOpen(false);
-					send(true); // the queued draft sends
+					// Save only saves (owner ruling 2026-10-09): the draft
+					// waits in the composer; the learner sends it.
 				}}
 				/>
 		</>

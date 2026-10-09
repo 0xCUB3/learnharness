@@ -6,8 +6,9 @@
  * providers. The graph view's new-session dock (the app's home, where
  * chats start) shows a "Set up your models" CTA while unconfigured;
  * submitting a topic — or sending on /chat/new — opens THIS dialog with
- * the draft preserved; Save stores the slots and the queued message
- * sends.
+ * the draft preserved; Save stores the slots — the draft WAITS in the
+ * composer, the learner sends it themselves (owner ruling 2026-10-09:
+ * saving models must never send the message).
  *
  * STAGED BY DEPENDENCY (owner, 2026-09-20: "first keys, then models —
  * there's no point presenting the model picker before the user has set a
@@ -216,8 +217,8 @@ export function SetupKeysBody({
 export function SetupDialog({
 	open,
 	onClose,
-	/** Saved: the models section landed; the caller marks configured and
-	 *  replays the intercepted draft. */
+	/** Saved: the models section landed; the caller marks configured (the
+	 *  draft stays put — save never sends). */
 	onDone,
 }: {
 	open: boolean;
@@ -243,14 +244,10 @@ export function SetupDialog({
 	const [keySaving, setKeySaving] = useState(false);
 	const [keyError, setKeyError] = useState<string | null>(null);
 	const [keyMenuOpen, setKeyMenuOpen] = useState(false);
-	/** The open menu's trigger wrapper — the shared shell's anchor (fix
-	 *  wave chunk B): one menu open at a time, so one ref suffices, and
-	 *  the menu PORTALS out of this dialog's overflow-hidden frame — it
-	 *  extends beyond the dialog exactly like the settings menus do. */
-	const triggerRef = useRef<HTMLDivElement>(null);
-	// Stage 1's provider-picker trigger wrapper — the shared shell's anchor
-	// (the slot menus use the same single-ref pattern). Declared with the
-	// other hooks: the early `if (!open) return null` sits below them all.
+	// Stage 1's provider-picker trigger wrapper — the shared shell's anchor.
+	// Declared with the other hooks: the early `if (!open) return null` sits
+	// below them all. (Stage 2's slot menus anchor by anchorTestid instead —
+	// see the slot MenuShell below for why a ref cannot work there.)
 	const keyTriggerRef = useRef<HTMLDivElement>(null);
 
 	// The keys signal (zero-keys wave): keys-section saves/deletes AND
@@ -469,7 +466,7 @@ export function SetupDialog({
 									</span>
 									<span className="text-xs text-muted-foreground/70">{SLOT_META[slot].roster}</span>
 									<div className="flex items-center gap-2">
-										<div ref={openMenu?.slot === slot && openMenu.kind === "model" ? triggerRef : undefined} className="relative flex-1">
+										<div className="relative flex-1">
 											<button
 												type="button"
 												aria-label={`${SLOT_META[slot].label} model`}
@@ -483,9 +480,18 @@ export function SetupDialog({
 													▾
 												</span>
 											</button>
+											{/* Anchor by TESTID, not a ref (the settings-section pattern):
+											    React attaches a host element's ref AFTER its descendants'
+											    layout effects run, so a ref freshly attached in this same
+											    commit (menu opening = the ref condition turning true) is
+											    still null when MenuShell measures — place() gives up, the
+											    menu stays invisible, and only a window resize (which re-runs
+											    place()) shows it. querySelector at place time has no such
+											    ordering hazard. Live-caught by the owner 2026-10-09: every
+											    setup picker opened dead until a window resize. */}
 											{openMenu?.slot === slot && openMenu.kind === "model" && (
 												<MenuShell
-													anchorRef={triggerRef}
+													anchorTestid={`setup-trigger-${slot}`}
 													testid={`setup-menu-${slot}`}
 													preferredSide="down"
 													align="left"
@@ -514,10 +520,7 @@ export function SetupDialog({
 										</div>
 										{/* Thinking selector (chunk 2): editable, pre-populated from
 										    the ordering per picked model — no model, no levels. */}
-										<div
-											ref={openMenu?.slot === slot && openMenu.kind === "thinking" ? triggerRef : undefined}
-											className="relative"
-										>
+										<div className="relative">
 											<button
 												type="button"
 												aria-label={`${SLOT_META[slot].label} thinking`}
@@ -536,7 +539,7 @@ export function SetupDialog({
 											</button>
 											{openMenu?.slot === slot && openMenu.kind === "thinking" && (
 												<MenuShell
-													anchorRef={triggerRef}
+													anchorTestid={`setup-thinking-${slot}`}
 													testid={`setup-thinking-menu-${slot}`}
 													preferredSide="down"
 													align="left"

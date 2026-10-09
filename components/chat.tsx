@@ -561,7 +561,8 @@ export function Chat({
 	});
 	const [setupOpen, setSetupOpen] = useState(false);
 	/** The last explicitly-sent draft (composer send): the
-	 *  refusal flow restores it into the composer and Save replays it.
+	 *  refusal flow restores it into the composer, where it waits for the
+	 *  learner to re-send (Save never auto-sends, owner 2026-10-09).
 	 *  Auto-continuations (probe answers) never set it — their refusal
 	 *  opens the dialog with no replay. */
 	const draftRef = useRef<string | null>(null);
@@ -573,7 +574,8 @@ export function Chat({
 	// optimistic message is an orphan that goes HOME: refetch the record,
 	// drop the orphan, put the draft back in the composer, open the
 	// dialog (the prefilled tiers carry their picks, the unpinned ones the
-	// "needed" marks). Esc keeps the draft; Save replays it.
+	// "needed" marks). The draft stays in the composer until the learner
+	// re-sends it (owner ruling 2026-10-09).
 	useEffect(() => {
 		if (!error) return;
 		const missing = parseModelsRefusal(error.message);
@@ -1589,7 +1591,7 @@ export function Chat({
 										type="button"
 										data-testid="setup-cta"
 										onClick={() => setSetupOpen(true)}
-										className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+										className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 hover:bg-accent cursor-pointer"
 									>
 										Set up your models
 									</button>
@@ -1659,23 +1661,18 @@ export function Chat({
 		</SessionMermaidContext.Provider>
 		{/* The BYOK setup flow (owner, 2026-09-22): one mount serves the
 		    persistent CTA, the refused-send interception, and the job cards'
-		    deep-link. Save replays the preserved draft automatically; Esc
-		    keeps it in the composer (the dialog is closable by design — the
-		    gate is the server, not this modal). */}
+		    deep-link. Save keeps the draft in the composer — it never sends
+		    (owner ruling 2026-10-09); Esc also keeps it (the dialog is
+		    closable by design — the gate is the server, not this modal). */}
 		<SetupDialog
 			open={setupOpen}
 			onClose={() => setSetupOpen(false)}
 			onDone={() => {
 				setSetupOpen(false);
 				setConfigured(true);
-				// Draft-preserving replay (owner ruling): the draft went home
-				// into the composer at refusal time; Save sends it onward.
-				const t = text.trim();
-				if (t) {
-					applyText("");
-					draftRef.current = t;
-					void send({ type: "text", text: t });
-				}
+				// Save only saves (owner ruling 2026-10-09): the draft went
+				// home into the composer at refusal time and STAYS there —
+				// the learner sends it themselves.
 			}}
 		/>
 		</ChatActionsContext.Provider>

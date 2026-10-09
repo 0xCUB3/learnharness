@@ -102,21 +102,19 @@ export function Home({
 	 * the run, let the last finals land, THEN read the REF mirror (not the
 	 * state closure) and run. Applies before the setup/key guards too, so
 	 * an intercepted draft is the complete one. */
-	const start = (force = false) => {
+	const start = () => {
 		if (!dictation.active) {
-			void begin(force);
+			void begin();
 			return;
 		}
-		void dictation.finish().then(() => begin(force));
+		void dictation.finish().then(() => begin());
 	};
-	const begin = async (force = false) => {
+	const begin = async () => {
 		const t = topicRef.current.trim();
 		if (!t || busy) return;
 		// Unconfigured: the send INTERCEPTS into the setup flow (the draft
-		// stays in the textarea; Save completes and this re-runs). `force`
-		// is the onDone path — the state this closure captured is still
-		// the pre-save `configured`, the state update hasn't landed yet.
-		if (!configured && !force) {
+		// stays in the textarea; the learner sends it after Save).
+		if (!configured) {
 			setSetupOpen(true);
 			return;
 		}
@@ -125,9 +123,9 @@ export function Home({
 		// refused first send would otherwise leave an orphan error-shell
 		// chat in the sidebar (the 503 lands only after POST /api/chats
 		// already created the record). Same skip-everything-and-open-setup
-		// treatment; `force` (setup's onDone replay) bypasses, and the
-		// server's 503 gate remains the belt for /chat/[id] sessions.
-		if (!force && (zeroKeys || strongKeyless)) {
+		// treatment; the server's 503 gate remains the belt for /chat/[id]
+		// sessions.
+		if (zeroKeys || strongKeyless) {
 			setSetupOpen(true);
 			return;
 		}
@@ -260,7 +258,7 @@ export function Home({
 									type="button"
 									data-testid="setup-cta"
 									onClick={() => setSetupOpen(true)}
-									className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50"
+									className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 hover:bg-accent cursor-pointer"
 								>
 									Set up your models — chats start after the three picks
 								</button>
@@ -346,15 +344,15 @@ export function Home({
 
 			{/* First-run setup (unconfigured): the CTA's target and the send
 			    interception's landing surface — stage 1 is the self-contained
-			    first-key screen (zero-keys wave); onDone replays the
-			    intercepted draft. */}
+			    first-key screen (zero-keys wave); Save never sends — the
+			    draft stays for the learner to send (owner 2026-10-09). */}
 			<SetupDialog
 				open={setupOpen}
 				onClose={() => setSetupOpen(false)}
 				onDone={() => {
 					setConfigured(true);
 					setSetupOpen(false);
-					void start(true); // the queued draft sends
+					// Save only saves: the draft waits in the composer.
 				}}
 				/>
 		</div>
