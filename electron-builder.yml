@@ -6,9 +6,9 @@
 #     because native .node/dylib can't dlopen from a read-only archive and
 #     server.js process.chdir()s into its own dir;
 #   - the asar holds only the shell (electron/main.cjs + package.json);
-#   - signing/notarization config is laid now but inert until a Developer
-#     ID certificate exists (identity: null = unsigned local build, which
-#     runs fine for personal use — Gatekeeper only gates quarantined apps).
+#   - signed + notarized since 2026-10-08 (Developer ID Application cert in
+#     the login keychain; notary credentials in the LH_NOTARY keychain
+#     profile; the profile + team env vars are baked into desktop:dist).
 appId: com.learnharness.LearnHarness
 productName: LearnHarness
 directories:
@@ -55,8 +55,14 @@ extraResources:
     filter:
       - "standalone/**/*"
 mac:
+  # zip rides next to dmg (flipped 2026-10-08): Squirrel.Mac — Electron's
+  # macOS auto-updater — installs from ZIP and cannot read DMGs. DMG is
+  # for humans; ZIP + blockmap are the updater's payload.
   target:
     - target: dmg
+      arch:
+        - arm64
+    - target: zip
       arch:
         - arm64
   # Locale trim (payload wave, 2026-09-24): English-only app — cuts
@@ -71,8 +77,23 @@ mac:
     NSMicrophoneUsageDescription: "LearnHarness uses the microphone only for speech-to-text input into your sessions."
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
-  # Unsigned until a Developer ID certificate exists (research-confirmed:
-  # local builds run fine; distribution needs signing + notarization).
-  identity: null
+  # Signing + notarization (flipped 2026-10-08): identity auto-detects the
+  # Developer ID Application certificate from the login keychain;
+  # notarize: true makes electron-builder sign → submit to Apple's notary
+  # service → staple the ticket, all inside this one build (credentials
+  # via the LH_NOTARY keychain profile, env baked into desktop:dist).
+  # Adds minutes per build (Apple's scan queue). Verification battery:
+  # codesign --verify --deep / spctl --assess / stapler validate.
+  notarize: true
 dmg:
   title: "${productName} ${version}"
+publish:
+  # Update feed = GitHub Releases (decided 2026-10-08): latest-mac.yml +
+  # zip/blockmap live on releases; electron-updater reads them anonymously.
+  # REQUIRES THE REPO TO BE PUBLIC before 0.3.0 ships — anonymous downloads
+  # from a private repo are impossible, and a token baked into the app
+  # would be a leak. desktop:dist passes no --publish flag, so builds never
+  # upload; publishing happens at release time (GH_TOKEN + --publish).
+  - provider: github
+    owner: amosblomqvist
+    repo: learnharness
