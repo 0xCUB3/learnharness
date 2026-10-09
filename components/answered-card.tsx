@@ -52,7 +52,20 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			data-testid="answered-card"
 		>
 			<div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{isQuiz ? (answer.questionType === "predict" ? "Prediction" : "Quiz") : isExplain ? "Explain" : "Question"}
+				{/* The tool's OWN name first (owner 2026-10-09): probe-phase
+			    cards label Probe/Recall — the phase boundary visible in the
+			    transcript. No `tool` on old records: kind labels as before. */}
+				{answer.tool === "probe"
+					? "Probe"
+					: answer.tool === "recall"
+						? "Recall"
+						: isQuiz
+								? answer.questionType === "predict"
+									? "Prediction"
+									: "Check"
+									: isExplain
+										? "Explain"
+											: "Question"}
 				{isQuiz &&
 					(answer.dontKnow ? (
 						<span className="rounded bg-muted px-1.5 py-0.5">didn't know</span>

@@ -220,26 +220,41 @@ export function normalizeQuizType(raw: unknown): QuizQuestionType | undefined {
 	return v === "predict" ? "predict" : v === "check" ? "check" : undefined;
 }
 
-/** The reveal law as a pure predicate (owner 2026-10-03): a teach-phase
- *  CHECK collapses behind the "Check your understanding" reveal — a
- *  prediction NEVER does (it precedes the teaching and gates it;
- *  collapsing it would invert the cycle), and neither do probe/plan
- *  questions, ask, or explain. chat.tsx calls this for its pending
- *  question; the reading-thinking field mounts on the same truth. */
-export function quizNeedsReveal(tool: string, rawInput: unknown, phase: string): boolean {
-	if (tool !== "quiz" || phase !== "teach") return false;
+/** The reveal law as a pure predicate (owner 2026-10-03; explain joined
+ *  2026-10-09): a teach-phase CHECK collapses behind the "Check your
+ *  understanding" reveal — a prediction NEVER does (it precedes the
+ *  teaching and gates it; collapsing it would invert the cycle), and
+ *  neither do probe/plan questions or ask. Both teach quizzing tools
+ *  (quiz and explain) obey the same law. chat.tsx calls this for its
+ *  pending question; the reading-thinking field mounts on the same
+ *  truth. Records that predate the `type` field carry none — they render
+ *  as checks, the standing default. */
+export function questionNeedsReveal(tool: string, rawInput: unknown, phase: string): boolean {
+	if ((tool !== "quiz" && tool !== "explain") || phase !== "teach") return false;
 	return normalizeQuizType((rawInput as { type?: unknown } | null)?.type) !== "predict";
 }
 
+/** The teaching-cycle role field, shared VERBATIM by both teach quizzing
+ *  tools (owner, 2026-10-09: explain gains the cycle's types — a
+ *  free-recall check collapses behind the reveal exactly like a quiz
+ *  check; a prediction never does). Bare words, never quoted (the
+ *  quote-copy wobble — see the whitehead pins, tests/tool-heal.test.ts). */
+const predictCheckType = Type.Union([Type.Literal("predict"), Type.Literal("check")], {
+	description:
+		"REQUIRED — the question's role in the teaching cycle, as a bare word (no quotes): predict = posed BEFORE " +
+		"you teach the step (its own turn; the learner answers, then your teaching resolves it — arrives open, never " +
+		"collapsed); check = posed AFTER the step's teaching is complete (arrives collapsed behind the Check your " +
+		"understanding reveal). ONE question per turn either way.",
+});
+
+
+/** The TEACH-side quiz object. The required pair leads the property
+ *  order (owner, 2026-10-09): glm-5.3 dropped `type`/`nodeId` on long
+ *  calls BECAUSE they trailed every content field — fields generated
+ *  first get dropped least. The order is also the authoring order:
+ *  commit to the node and the question's role, then write the question. */
 export const quizInputObject = Type.Object({
-	...quizInputBase.properties,
-	type: Type.Union([Type.Literal("predict"), Type.Literal("check")], {
-		description:
-			"REQUIRED — the question's role in the teaching cycle, as a bare word (no quotes): predict = posed BEFORE " +
-			"you teach the step (its own turn; the learner answers, then your teaching resolves it — arrives open, never " +
-			"collapsed); check = posed AFTER the step's teaching is complete (arrives collapsed behind the Check your " +
-			"understanding reveal). ONE question per turn either way.",
-	}),
+	type: predictCheckType,
 	nodeId: Type.String({
 		description:
 			"REQUIRED plan-tree node id this question is about — must EXACTLY match one of this session's " +
@@ -249,6 +264,7 @@ export const quizInputObject = Type.Object({
 			"one node for as many turns as the understanding needs — one reasoning step at a time, never rush forward. " +
 			"For off-map checks use ask_user_question.",
 	}),
+	...quizInputBase.properties,
 });
 
 /** The PROBE-side quiz declaration: the shared authoring contract, no
@@ -303,8 +319,12 @@ export const explainInputBase = Type.Object({
 
 /** The TEACH-side explain object: base + the plan-position field (same
  *  semantics as the quiz's nodeId — the seam recognizes BOTH tools). */
+/** The TEACH-side explain object: base + the teaching-cycle role field
+ *  and the plan-position field (same semantics as the quiz's — the seam
+ *  recognizes BOTH tools). The required pair leads the property order,
+ *  exactly as the teach quiz's (owner, 2026-10-09). */
 export const explainInputObject = Type.Object({
-	...explainInputBase.properties,
+	type: predictCheckType,
 	nodeId: Type.String({
 		description:
 			"REQUIRED plan-tree node id this question is about — must EXACTLY match one of this session's " +
@@ -314,6 +334,17 @@ export const explainInputObject = Type.Object({
 			"one node for as many turns as the understanding needs — one reasoning step at a time, never rush forward. " +
 			"For off-map checks use ask_user_question.",
 	}),
+	...explainInputBase.properties,
+});
+
+/** The DISPLAY parse for persisted explain calls (tool-parts.ts): the
+ *  base + `type` as an OPTIONAL plain string — exactly the quiz display
+ *  pattern. Old records carry none; questionNeedsReveal treats them as
+ *  checks (the standing default). nodeId stays stripped (unknown key).
+ *  The PROBE recall parses against the bare base. */
+export const explainDisplayInputSchema = Type.Object({
+	...explainInputBase.properties,
+	type: Type.Optional(Type.String()),
 });
 
 /** The explain authoring contract: the commitment must exist. Empty
@@ -404,6 +435,12 @@ export interface QuestionData {
  *  toolCallId restated — the toolResult message already carries it. */
 export interface QuestionAnswerData {
 	kind: QuestionKind;
+	/** The persisted call's tool NAME (owner, 2026-10-09): probe-phase
+	 *  calls are `probe`/`recall`, teach calls `quiz`/`explain` — the
+	 *  cards label by it ("Probe"/"Recall"), so the phase boundary is
+	 *  visible in the transcript. Absent on pre-rename records: they
+	 *  keep the kind-based labels. */
+	tool?: string;
 	/** quiz only (teach phase): the role snapshot for rendering (a
 	 *  prediction tucks its explanation) and later calibration splits.
 	 *  Absent on old records and probe answers. */
@@ -644,9 +681,10 @@ function formatOptionRef(options: QuizOption[], index: number): string {
  * Turn an AnswerRequest into the full answer record + the user message the
  * agent will see. Quiz answers are graded here; ask answers are not.
  */
-export function buildAnswer(qd: QuestionData, req: AnswerRequest): QuestionAnswerData {
+export function buildAnswer(qd: QuestionData, req: AnswerRequest, tool?: string): QuestionAnswerData {
 	const base: QuestionAnswerData = {
 		kind: qd.kind,
+		...(tool ? { tool } : {}),
 		questionType: qd.questionType,
 		questionText: qd.question,
 		options: qd.options.map((o, i) => ({ index: i + 1, label: o.label })),

@@ -3,8 +3,16 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
 import type { PlanToolResult, PlanTree } from "../../core/contracts.ts";
 import type { ChatStore } from "../../core/ports.ts";
-import { createTree, emptyTree, PlanTreeError } from "../../core/plan-tree.ts";
+import { createTree, PlanTreeError } from "../../core/plan-tree.ts";
 import { parseMermaidPlan } from "./mermaid-plan.ts";
+
+/** The binding-id reminder riding plan_init's slim content (owner,
+ *  2026-10-09): plan_init is the exact moment the node ids become
+ *  load-bearing — every later quiz/explain call must reference one. The
+ *  field-drop incidents (tools_fails_2) showed the turn's tail is where
+ *  discipline slips; the reminder lands right there. */
+const PLAN_NODE_IDS_REMINDER =
+	"These are the plan's node ids — the only valid nodeId values for every quiz and explain call from here on. Reference them exactly.";
 
 /** What the plan tools close over (the plan-tree half of the tool context). */
 export interface PlanToolContext {
@@ -33,10 +41,13 @@ export interface PlanToolContext {
  *
  * The former mutation tools (add/update/remove node/edge, set_current,
  * mark_done) are gone by design: restructuring is a rewrite, tracking is
- * derived. SERVER-SIDE with execute: parse → validate → persist → return
- * the FULL canonicalized tree (PlanToolResult), so the tree panel renders the
- * latest state straight from the transcript's tool outputs (the plan
- * window and the plan blocks).
+ * derived. SERVER-SIDE with execute: parse → validate → persist. The
+ * result is CONTEXT-SLIM (owner, context diet 2026-10-09): the model
+ * WROTE the mermaid one message ago, so content never echoes the tree —
+ * it carries the validated nodeIds + the binding-nodeId reminder (the
+ * exact moment the ids become load-bearing); `details` keeps the full
+ * tree for the record and the plan popup (latestTree reads it — the
+ * agent-invisible channel, serializer-verified).
  */
 const planInitInput = Type.Object({
 	mermaid: Type.String({
@@ -60,25 +71,37 @@ export function planTools(ctx: PlanToolContext): Record<string, AgentTool<any>> 
 				"`-->` edges meaning 'from must be understood before to' (chains fine). 5–15 nodes: a map, not a syllabus — one reasoning step per node, compress. " +
 				"Every check you fire names the node it assesses via `nodeId`; where the lesson stands derives from those tags.",
 			parameters: planInitInput,
-			execute: serverExecute("plan_init", planInitInput, async ({ mermaid }): Promise<PlanToolResult> => {
+			execute: serverExecute("plan_init", planInitInput, async ({ mermaid }) => {
 				const { chatId, chatStore } = ctx;
 				const record = chatStore.getChat(chatId);
-				if (!record) return { ok: false, error: `Chat not found: ${chatId}`, tree: emptyTree() };
-				const current = record.tree ?? emptyTree();
+				if (!record) return { ok: false, error: `Chat not found: ${chatId}` };
 
 				const parsed = parseMermaidPlan(mermaid);
 				if (!parsed.ok || !parsed.plan) {
 					// The parser collects every problem; the teacher fixes and retries.
-					return { ok: false, error: parsed.problems.join("\n"), tree: current };
+					// No tree echo — the model needs the problems, not a restatement of
+					// the map it is rewriting (owner, context diet 2026-10-09).
+					return { ok: false, error: parsed.problems.join("\n") };
 				}
 				try {
 					// createTree validates the structure (duplicate ids, missing
 					// edge endpoints, self-loops, cycles → PlanTreeError).
 					const next = createTree(parsed.plan.nodes, parsed.plan.edges);
 					chatStore.saveTree(chatId, next);
-					return { ok: true, tree: next };
+					// Context diet: content = the validated nodeIds + the reminder (the
+				// ids just became binding for every quiz/explain call); details =
+					// the full tree for the record/UI — the plan popup's latestTree
+					// seam, agent-invisible (the serializer sends content only).
+					return {
+						text: JSON.stringify({
+							ok: true,
+							nodeIds: next.nodes.map((n) => n.id),
+							reminder: PLAN_NODE_IDS_REMINDER,
+						}),
+						details: { ok: true, tree: next },
+					};
 				} catch (err) {
-					if (err instanceof PlanTreeError) return { ok: false, error: err.message, tree: current };
+					if (err instanceof PlanTreeError) return { ok: false, error: err.message };
 					throw err;
 				}
 			}),

@@ -68,7 +68,7 @@ import {
 	phaseTimeline,
 	teachStepIndex,
 	toolQuestionKind,
-	quizNeedsReveal,
+	questionNeedsReveal,
 } from "@/src/core";
 import { ReadingThinkingField } from "@/components/reading-thinking";
 import { currentUserThinkingOpen, setAllUserThinkingOpen } from "@/components/thinking-block";
@@ -489,12 +489,13 @@ export function Chat({
 	// Teach-phase check (W5, vision §2): a pending QUIZ that lands once a
 	// plan node is OCCUPIED (phaseAt3 "teach") starts collapsed behind a
 	// "Check your understanding" reveal button; probe- and plan-phase
-	// questions auto-open as today. Graded quizzes only (owner, 2026-10-02)
-	// — ask/explain questions always arrive open. A pending question can
-	// never precede its phase's seam in the transcript (the teacher's turn
+	// questions auto-open as today. Both teach quizzing tools obey the
+	// law (owner, 2026-10-09: explain checks join quiz checks behind the
+	// reveal); predictions of either mechanic and ask always arrive open.
+	// A pending question can never precede its phase's seam in the transcript (the teacher's turn
 	// ends at the question call), so the session's current phase IS the
 	// question's phase.
-	const requiresReveal = pending !== null && quizNeedsReveal(pending.tool, pending.input, phaseAt3(messages));
+	const requiresReveal = pending !== null && questionNeedsReveal(pending.tool, pending.input, phaseAt3(messages));
 
 	/* The READING-THINKING channel (owner 2026-10-03): a draft field for
 	 * thinking while reading the teaching prose, mounted while a check waits
@@ -1475,8 +1476,10 @@ export function Chat({
 															/>
 														);
 													case "tool-quiz":
+													case "tool-probe":
 													case "tool-ask_user_question":
-													case "tool-explain": {
+													case "tool-explain":
+													case "tool-recall": {
 														// Pending/streaming questions live in the dock, not the
 														// transcript; answered ones render as graded records.
 														if (part.state === "output-available") {
@@ -2265,7 +2268,7 @@ function DockOverlay({
 					>
 							{pending ? (
 								<QuestionDock
-									toolName={pending.tool as "quiz" | "ask_user_question" | "explain"}
+									toolName={pending.tool as "quiz" | "probe" | "ask_user_question" | "explain" | "recall"}
 									toolCallId={pending.toolCallId}
 									input={pending.input as never}
 									expanded={expanded}

@@ -100,6 +100,19 @@ describe("messageMarkdown", () => {
 		assert.match(md, /The learner answered in his own words: it never strays far/);
 	});
 
+	it("probe-phase questions export under their own names (owner, 2026-10-09)", () => {
+		const probe = messageMarkdown(
+			result("r1", "p1", "probe", { questionText: "What is a derivative?", correct: true, dontKnow: false }),
+			"r1",
+		)!;
+		assert.match(probe, /^### Probe · r1$/m);
+		const recall = messageMarkdown(
+			result("r2", "rr1", "recall", { questionText: "Why does Mercury stay near the Sun?", text: "it never strays far" }),
+			"r2",
+		)!;
+		assert.match(recall, /^### Recall · r2$/m);
+	});
+
 	it("ask blocks: question + chosen options + free text", () => {
 		const chosen = messageMarkdown(
 			result("r1", "a1", "ask_user_question", { questionText: "Which way?", answers: ["second"], other: "also the third" }),

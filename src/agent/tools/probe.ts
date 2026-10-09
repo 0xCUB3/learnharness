@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
-import { probeDoneInputSchema, type ProbeDoneResult } from "../../core/contracts.ts";
+import { probeDoneInputSchema, PROBE_DONE_ACK_TEXT } from "../../core/contracts.ts";
 import { danglingQuestionOf, hasProbeDone, type LhMessage } from "../../core/native-messages.ts";
 import type { ChatStore } from "../../core/ports.ts";
 import { buildProbeHandoffSteer, type SteerMessage } from "../../core/contracts.ts";
@@ -37,7 +37,10 @@ function probeConcluded(messages: readonly LhMessage[]): boolean {
  *     steer through the wake pipeline that fires the teacher's first turn
  *     (plan authoring) the moment the prober's turn ends. Auto-wake is the
  *     user-decided trigger — the learner experiences assessment → plan as
- *     one continuous flow.
+ *     one continuous flow. CONTEXT-SLIM (owner, context diet 2026-10-09):
+ *     the call's arguments already carry the assessment (durable, streamed
+ *     live), so the agent sees the fixed PROBE_DONE_ACK_TEXT — never an
+ *     echo. details = {ok:true} only.
  *
  * The first probe_done in the transcript is also the construction seam:
  * from that message on, every request builds the TEACHER agent.
@@ -58,7 +61,7 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, AgentTool<a
 			// The core-owned schema (contracts/probe.ts) — the SAME schema the UI
 			// parse seam (tool-parts.ts) runs, so boundary-valid ⇔ consumer-parseable.
 			parameters: probeDoneInputSchema,
-			execute: serverExecute("probe_done", probeDoneInputSchema, async (input): Promise<ProbeDoneResult> => {
+			execute: serverExecute("probe_done", probeDoneInputSchema, async (input) => {
 				const record = ctx.chatStore.getChat(ctx.chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
 
@@ -81,7 +84,14 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, AgentTool<a
 					// constructs the teacher off the transcript seam) — record the
 					// assessment anyway; the wake is an optimization, not a gate.
 				}
-				return { ok: true, assessment: input.assessment };
+				// Context diet (owner, 2026-10-09): the assessment lives ONCE — as
+				// this call's arguments. content is the fixed ack (the agent never
+				// sees an echo); details = {ok:true} for the record/UI — the
+				// probe-done card reads the call's input, which it always preferred.
+				return {
+					text: PROBE_DONE_ACK_TEXT,
+					details: { ok: true },
+				};
 			}),
 		},
 	};

@@ -90,8 +90,20 @@ function toolResultBody(result: ToolResultMessage, ctx?: MarkdownContext): { hea
 		  }>
 		| undefined;
 
-	if (result.toolName === "quiz" || result.toolName === "explain") {
-		const heading = result.toolName === "quiz" ? "Quiz" : "Recall check";
+	if (
+		result.toolName === "quiz" ||
+		result.toolName === "probe" ||
+		result.toolName === "explain" ||
+		result.toolName === "recall"
+	) {
+		const heading =
+			result.toolName === "quiz"
+				? "Quiz"
+				: result.toolName === "probe"
+					? "Probe"
+					: result.toolName === "recall"
+						? "Recall"
+						: "Recall check"; // explain — the teach free-recall name
 		const question = typeof out?.questionText === "string" && out.questionText ? out.questionText : "(no question text)";
 		const body = [`**Q:** ${question}`];
 		if (out?.dismissed === true) body.push("The learner skipped this check.");

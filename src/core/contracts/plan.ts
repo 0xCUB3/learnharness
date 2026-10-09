@@ -114,7 +114,12 @@ export function derivePlanStatuses(tree: PlanTree, messages: readonly PartsCarri
 export interface PlanToolResult {
 	ok: boolean;
 	error?: string;
-	tree: PlanTree;
+	/** The saved tree — SUCCESS results only (owner, context diet
+	 *  2026-10-09): this is the record/UI-facing `details` value. The
+	 *  agent-facing content never carries it — content is the validated
+	 *  nodeIds + reminder; failures carry just the error. The plan
+	 *  popup's latestTree seam reads this field. */
+	tree?: PlanTree;
 }
 
 

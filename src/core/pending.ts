@@ -38,13 +38,23 @@ export interface PendingToolCall {
 	input: unknown;
 }
 
-/** Tools that render in the question dock and gate the composer. */
-export const QUESTION_TOOLS = ["quiz", "ask_user_question", "explain"] as const;
+/** Tools that render in the question dock and gate the composer. The
+ *  probe-phase names (probe/recall, owner 2026-10-09) join their teach
+ *  twins — old records keep the teach names; new probe-phase calls carry
+ *  the phase names. */
+export const QUESTION_TOOLS = [
+	"quiz",
+	"probe",
+	"ask_user_question",
+	"explain",
+	"recall",
+] as const;
 
 /** The tool→kind map (the dock's own fold, named once — the dismissal
- *  path and the dock must never disagree on what a tool is). */
+ *  path and the dock must never disagree on what a tool is). The probe
+ *  names fold onto their teach kinds — the dock is kind-driven. */
 export function toolQuestionKind(tool: string): "quiz" | "ask" | "explain" {
-	return tool === "quiz" ? "quiz" : tool === "explain" ? "explain" : "ask";
+	return tool === "quiz" || tool === "probe" ? "quiz" : tool === "explain" || tool === "recall" ? "explain" : "ask";
 }
 
 /** Tools fulfilled by background sub-agent jobs (W2/W6). */

@@ -29,7 +29,7 @@
 
 import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
-import { quizInputBase, quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputBase, explainInputProblems, type AskToolInput, type QuizToolInput, type ExplainToolInput } from "./question-core.ts";
+import { quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputProblems, explainDisplayInputSchema, type AskToolInput, type QuizToolInput, type ExplainToolInput } from "./question-core.ts";
 import { restoreMathEscapes } from "./math-delims.ts";
 import { healEncodedArguments } from "./argument-heal.ts";
 import { probeDoneInputSchema, type ProbeDoneInput } from "./contracts/probe.ts";
@@ -115,12 +115,14 @@ export function parseAskInput(input: unknown): AskToolInput | undefined {
 	return cleaned;
 }
 
-/** Explain parse for DISPLAY: the shared authoring base (the teacher's
- *  nodeId is an unknown key Value.Clean strips, same as the quiz seam) —
- *  both explain variants share the same fields, and the commitment
- *  refinement (explainInputProblems) mirrors the boundary chain. */
+/** Explain parse for DISPLAY: the display schema (base + OPTIONAL
+ *  lenient `type`, exactly the quiz pattern — teach explain calls carry
+ *  the role since 2026-10-09; the commitment refinement
+ *  (explainInputProblems) mirrors the boundary chain). Both explain
+ *  variants share the same fields; the teacher's nodeId is an unknown
+ *  key Value.Clean strips, same as the quiz seam. */
 export function parseExplainInput(input: unknown): ExplainToolInput | undefined {
-	const cleaned = boundaryParse<ExplainToolInput>(explainInputBase, restoreMathEscapesDeep(input));
+	const cleaned = boundaryParse<ExplainToolInput>(explainDisplayInputSchema, restoreMathEscapesDeep(input));
 	if (!cleaned) return undefined;
 	if (explainInputProblems(cleaned).length > 0) return undefined;
 	return cleaned;

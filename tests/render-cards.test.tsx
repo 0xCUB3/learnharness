@@ -28,7 +28,7 @@ import {
 	coerceCorrectAnswer,
 	normalizeOptions,
 	resolveCorrect,
-	quizNeedsReveal,
+	questionNeedsReveal,
 	type QuestionData,
 } from "../src/core/question-core.ts";
 
@@ -65,7 +65,12 @@ function askQD(): QuestionData {
 	};
 }
 
-function renderDock(props: { toolName: "quiz" | "ask_user_question"; toolCallId: string; input: never; onSubmit?: () => void }) {
+function renderDock(props: {
+	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall";
+	toolCallId: string;
+	input: never;
+	onSubmit?: () => void;
+}) {
 	// expanded=true renders the full form (the collapsed bar is covered by the
 	// QuestionDockBar test below). No scroll context needed — the DockOverlay
 	// in the chat view owns that.
@@ -458,16 +463,23 @@ describe("probe-done card", () => {
 		summary: "Bracketed: teach the symbols on the intuition he has.",
 	};
 
-	it("renders the strand-by-strand assessment from the seam ack", () => {
+	it("renders the strand-by-strand assessment — the CALL is its home (context diet 2026-10-09)", () => {
 		const html = renderToStaticMarkup(
 			<ProbeDoneCard
-				part={{ state: "output-available", output: { ok: true, assessment: validAssessment } } as never}
+				part={{ state: "output-available", input: { assessment: validAssessment }, output: { ok: true } } as never}
 			/>,
 		);
 		assert.ok(html.includes('data-testid="probe-done-card"'));
 		assert.match(html, /modal logic basics/);
 		assert.match(html, /indexical &#x27;actual&#x27;|indexical 'actual'/);
 		assert.match(html, /Bracketed/);
+		// An ok output alone (the pre-diet echo shape) renders the quiet
+		// fallback, never strands: the assessment no longer rides the result.
+		const echoless = renderToStaticMarkup(
+			<ProbeDoneCard part={{ state: "output-available", output: { ok: true } } as never} />,
+		);
+		assert.match(echoless, /Writing the assessment…/);
+		assert.ok(!echoless.includes("modal logic basics"), "no assessment echo in the result");
 	});
 
 	it("previews the assessment from a PENDING (validated) input", () => {
@@ -533,6 +545,70 @@ describe("AnsweredCard: the explain variant", () => {
 
 });
 
+// ─── probe-phase naming (owner, 2026-10-09): the probe/recall rename —
+//     both surfaces carry the tool's OWN name ────────────────────────────
+
+describe("probe-phase naming: Probe/Recall labels", () => {
+	it("the dock labels a probe quiz as Probe (composer surface)", () => {
+		const html = renderDock({ toolName: "probe", toolCallId: "p1", input: quizInput as never });
+		assert.match(html, /Probe/, "the chip carries the tool's own name");
+		assert.ok(!html.includes(">Quiz<"), "not the teach label");
+		assert.match(html, /Which planet is closest to the sun\?/, "still a quiz-shaped card");
+	});
+
+	it("the dock labels a recall question as Recall", () => {
+		const html = renderDock({ toolName: "recall", toolCallId: "r1", input: { question: "Explain the chain rule.", correctAnswer: "Outer function times the derivative of the inner." } as never });
+		assert.match(html, /Recall/);
+		assert.ok(!html.includes(">Explain<"), "not the teach label");
+	});
+
+	it("an answered probe labels Probe — the phase boundary visible in the transcript", () => {
+		const qd: QuestionData = {
+			id: "p2",
+			kind: "quiz",
+			question: "Which planet is closest to the sun?",
+			mode: "single-select",
+			options: [{ label: "Mercury", value: "mercury" }, { label: "Venus", value: "venus" }],
+			correctIndices: [1],
+			committedAnswer: "Mercury — closest orbit.",
+			explanation: "Mercury, always Mercury.",
+			createdAt: new Date().toISOString(),
+		};
+		const html = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(qd, { values: ["mercury"] }, "probe")} />);
+		assert.match(html, /Probe/);
+		assert.ok(!html.includes(">Quiz<"), "not the teach label");
+	});
+
+	it("an answered recall labels Recall", () => {
+		const recallQD: QuestionData = {
+			id: "r2",
+			kind: "explain",
+			question: "Explain why the null result matters.",
+			mode: "text",
+			options: [],
+			committedAnswer: "It ruled out the luminiferous aether.",
+			createdAt: new Date().toISOString(),
+		};
+		const html = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(recallQD, { text: "A hand-wave." }, "recall")} />);
+		assert.match(html, /Recall/);
+		assert.ok(!html.includes(">Explain<"), "not the teach label");
+	});
+
+	it("old records (no tool) keep the kind labels", () => {
+		const oldQD: QuestionData = {
+			id: "o2",
+			kind: "explain",
+			question: "Explain why the null result matters.",
+			mode: "text",
+			options: [],
+			committedAnswer: "It ruled out the luminiferous aether.",
+			createdAt: new Date().toISOString(),
+		};
+		const html = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(oldQD, { text: "A hand-wave." })} />);
+		assert.match(html, /Explain/, "no tool field → the standing kind label");
+	});
+});
+
 // ─── the two roles in the UI (predict vs check, owner 2026-10-03) ─────────
 // Predictions arrive OPEN before the teaching; checks arrive collapsed after
 // it. The answered card tells them apart (eyebrow) and tucks a prediction's
@@ -555,7 +631,7 @@ describe("predict vs check rendering", () => {
 		assert.ok(html.includes("Prediction"), `eyebrow missing: ${html.slice(0, 200)}`);
 	});
 
-	it("a check quiz keeps the 'Quiz' eyebrow (old records unchanged)", () => {
+	it("a check quiz reads the 'Check' eyebrow — the type name IS the label (owner, 2026-10-09)", () => {
 		const html = renderToStaticMarkup(
 			<QuestionDock
 				{...{
@@ -568,7 +644,8 @@ describe("predict vs check rendering", () => {
 				onSubmit={() => {}}
 			/>,
 		);
-		assert.ok(html.includes("Quiz"));
+		assert.ok(html.includes("Check"), "the chip carries the question's type");
+		assert.ok(!html.includes(">Quiz<"), "the generic label is retired");
 	});
 
 	it("a prediction answer SHOWS the verdict but TUCKS the explanation behind a toggle", () => {

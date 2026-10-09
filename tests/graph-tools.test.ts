@@ -98,8 +98,8 @@ describe("prober graph tools — registration", () => {
 			"list_sessions",
 			"ls",
 			"pdf",
+			"probe",
 			"probe_done",
-			"quiz",
 			"read",
 			"research",
 		]);

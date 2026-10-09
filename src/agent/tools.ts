@@ -108,11 +108,14 @@ export const askUserQuestionTool: AgentTool<typeof askInputSchema> = {
 // mechanical delta.
 
 /** The quiz mechanics every variant shares; `delta` appends the variant's
- *  own fields. All mechanics, zero doctrine. */
-function quizDescription(delta: { nodeId: boolean; types: boolean }): string {
+ *  own fields (its NAME among them — the probe-phase tools self-reference
+ *  as probe/recall, owner 2026-10-09). All mechanics, zero doctrine. */
+function quizDescription(delta: { name: "quiz" | "probe"; nodeId: boolean; types: boolean }): string {
 	return (
 		"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
-		"Unlike ask_user_question (which collects preferences/decisions with no right answer), quiz always has a " +
+		"Unlike ask_user_question (which collects preferences/decisions with no right answer), " +
+		delta.name +
+		" always has a " +
 		"correct answer supplied by you, marks the learner's selection right/wrong, reveals the correct answer, and " +
 		"can show an explanation. Options-only: single-select or multi-select, plus an automatic 'I don't know' " +
 		"choice so the learner can signal a genuine gap instead of guessing. An always-present optional thinking " +
@@ -124,37 +127,51 @@ function quizDescription(delta: { nodeId: boolean; types: boolean }): string {
 		(delta.nodeId
 			? "Set `nodeId` (required) to the plan node this question is about — validated at call time against the session's plan map. For off-map checks use ask_user_question. "
 			: "") +
-		"ONE question per turn: call a single quiz, then end your turn — his answer determines the next."
+		"ONE question per turn: call a single " +
+		delta.name +
+		", then end your turn — his answer determines the next."
 	);
 }
 
 /** The explain mechanics (free-recall quizzing): the commitment rule is
  *  the GRADING CONTRACT — mechanics, not doctrine. The softer doctrine
- *  (near-miss reading, genuine gaps) lives in the shared prompt chunk. */
-function explainDescription(nodeId: boolean): string {
+ *  (near-miss reading, genuine gaps) lives in the shared prompt chunk.
+ *  `name`: the teach tool self-references as explain, the probe variant
+ *  as recall (owner 2026-10-09). */
+function explainDescription(name: "explain" | "recall", nodeId: boolean): string {
 	return (
 		"Ask the learner to EXPLAIN something in his own words — a graded check with NO options: he types a free-text " +
-		"answer. Unlike ask_user_question (no right answer), explain always has one. THE COMMITMENT RULE: " +
+		"answer. Unlike ask_user_question (no right answer), " +
+		name +
+		" always has one. THE COMMITMENT RULE: " +
 		"correctAnswer is the FULL correct answer in your own words, reasoning included, COMMITTED before he ever " +
 		"sees the question. When his answer returns, grade it strictly against the commitment — never revise it " +
 		"after seeing his words. He sees the committed answer on submit. " +
 		(nodeId
 			? "Set `nodeId` (required) to the plan node this question is about — validated at call time against the session's plan map. "
 			: "") +
-		"ONE question per turn: call a single explain, then end your turn — his answer determines the next."
+		"ONE question per turn: call a single " + name + ", then end your turn — his answer determines the next."
 	);
 }
 
+/** The prober's multiple-choice quizzing tool — named `probe`, not
+ *  `quiz` (owner, 2026-10-09): the probe and teach schemas differ
+ *  (neither `type` nor `nodeId` exists while probing), and a shared name
+ *  invited the model to carry its probe-phase call shape into teaching
+ *  — the first teach quiz after plan_init dropped `nodeId` on exactly
+ *  that habit (the tools_fails_2 incident). Distinct names make the
+ *  phase boundary visible in the transcript itself: history written by
+ *  `probe` never lies about what `quiz` requires. */
 export const probeQuizTool: AgentTool<typeof probeQuizInputSchema> = {
-	name: "quiz",
-	label: "quiz",
-	description: quizDescription({ nodeId: false, types: false }),
+	name: "probe",
+	label: "probe",
+	description: quizDescription({ name: "probe", nodeId: false, types: false }),
 	parameters: probeQuizInputSchema,
 	prepareArguments: prepareQuestionArguments,
 	executionMode: "sequential",
 	execute: async (_toolCallId, input) => {
 		const problems = quizInputProblems(input);
-		if (problems.length > 0) return invalidInputResult("quiz", problems);
+		if (problems.length > 0) return invalidInputResult("probe", problems);
 		return questionResult();
 	},
 };
@@ -167,7 +184,7 @@ export function teachExplainToolFor(
 	return {
 		name: "explain",
 		label: "explain",
-		description: explainDescription(true),
+		description: explainDescription("explain", true),
 		parameters: explainInputObject,
 		prepareArguments: prepareQuestionArguments,
 		executionMode: "sequential",
@@ -183,16 +200,22 @@ export function teachExplainToolFor(
 
 /** The prober's free-recall variant (no nodeId — same pattern as the
  *  probe quiz). */
+/** The prober's free-recall variant — named `recall`, not `explain`
+ *  (owner, 2026-10-09), for the same phase-boundary reason as `probe`:
+ *  the teach explain adds `type` and `nodeId`; a shared name carried the
+ *  probe call shape into teaching. Old probe-phase records keep the
+ *  `explain` name and parse identically (the display seam accepts
+ *  both). */
 export const probeExplainTool: AgentTool<typeof explainInputBase> = {
-	name: "explain",
-	label: "explain",
-	description: explainDescription(false),
+	name: "recall",
+	label: "recall",
+	description: explainDescription("recall", false),
 	parameters: explainInputBase,
 	prepareArguments: prepareQuestionArguments,
 	executionMode: "sequential",
 	execute: async (_toolCallId, input) => {
 		const problems = explainInputProblems(input);
-		if (problems.length > 0) return invalidInputResult("explain", problems);
+		if (problems.length > 0) return invalidInputResult("recall", problems);
 		return questionResult();
 	},
 };
@@ -239,14 +262,16 @@ export function createProberTools(
 	});
 	// Quizzing mechanics (owner 2026-09-27): free-recall swaps the probe
 	// quiz for the probe explain — one quizzing tool at a time, whichever
-	// the settings arm. ask stays always-on.
+	// the settings arm. ask stays always-on. The registry keys are the
+	// PHASE names (probe/recall, owner 2026-10-09) — distinct from the
+	// teach tools so the schema boundary is visible to the model.
 	const mechanics = quizMechanics(enabled);
 	// The armed quizzing tool, widened to the registry's heterogeneous
 	// AgentTool record BEFORE the filter (a conditional spread of two
 	// differently-typed literals makes the whole object's type a union —
 	// unusable as Record<string, AgentTool<any>> downstream).
 	const quizzing: Record<string, AgentTool<any>> =
-		mechanics === "free" ? { explain: probeExplainTool } : { quiz: probeQuizTool };
+		mechanics === "free" ? { recall: probeExplainTool } : { probe: probeQuizTool };
 	// healToolRecord (owner, 2026-10-09 — the whitehead generalization):
 	// the standard argument heal over the WHOLE registry — every tool,
 	// not just the one the latest wobble incident landed on.
@@ -313,7 +338,7 @@ export function teachQuizToolFor(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 	return {
 		name: "quiz",
 		label: "quiz",
-		description: quizDescription({ nodeId: true, types: true }),
+		description: quizDescription({ name: "quiz", nodeId: true, types: true }),
 		parameters: quizInputObject,
 		prepareArguments: prepareQuestionArguments,
 		executionMode: "sequential",

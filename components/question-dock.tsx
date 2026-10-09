@@ -58,7 +58,7 @@ import { CONFIDENCE_COLORS, confidenceRailStyle } from "@/components/confidence-
  */
 
 export interface QuestionDockProps {
-	toolName: "quiz" | "ask_user_question" | "explain";
+	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall";
 	toolCallId: string;
 	input: QuizToolInput | AskToolInput | ExplainToolInput;
 	/** Collapse state, owned by the DockOverlay (it drives the shell's height morph). */
@@ -106,6 +106,16 @@ export function QuestionDock({
 	dictationClaim = true,
 	compactionRunning = false,
 }: QuestionDockProps) {
+	// The probe-phase names (owner, 2026-10-09) canonicalize onto their
+	// teach twins for every dock concern — parse dispatch, labels, kinds:
+	// the probe quiz ("probe") is quiz-shaped, the probe free-recall
+	// ("recall") is explain-shaped. Old records keep the teach names.
+	const canonical =
+		toolName === "probe" ? "quiz" : toolName === "recall" ? "explain" : toolName;
+	// The chip's display name carries the tool's OWN name (owner
+	// 2026-10-09): probe-phase questions label Probe/Recall in the
+	// composer; teach tools keep the standing labels.
+	const toolLabel = toolName === "probe" ? "Probe" : toolName === "recall" ? "Recall" : undefined;
 	// Parse, don't cast (src/core/tool-parts.ts): the model authored this
 	// input, and only the schema the tool declared vouches for its shape.
 	// The dock mounts on input-available parts (already validated at the
@@ -113,7 +123,7 @@ export function QuestionDock({
 	// anything that slips through renders the quiet fallback, never a
 	// crash on `.map` over model-authored bytes.
 	const parsed =
-		toolName === "quiz" ? parseQuizInput(input) : toolName === "explain" ? parseExplainInput(input) : parseAskInput(input);
+		canonical === "quiz" ? parseQuizInput(input) : canonical === "explain" ? parseExplainInput(input) : parseAskInput(input);
 	if (!parsed) {
 		return (
 			<div data-testid="malformed-question" className="rounded-xl border border-dashed bg-card/60 p-3 text-sm text-muted-foreground">
@@ -125,12 +135,14 @@ export function QuestionDock({
 		<>
 			{!expanded && (
 				<QuestionDockBar
-					toolName={toolName}
+					toolName={canonical}
 					question={parsed.question}
 					onExpand={onExpand}
 					variant={reveal ? "reveal" : "collapsed"}
+					toolLabel={toolLabel}
 					label={
-						toolName === "quiz" && normalizeQuizType((parsed as { type?: unknown }).type) === "predict"
+						(canonical === "quiz" || canonical === "explain") &&
+						normalizeQuizType((parsed as { type?: unknown }).type) === "predict"
 							? "Prediction"
 							: undefined
 					}
@@ -176,6 +188,7 @@ export function QuestionDockBar({
 	onExpand,
 	variant = "collapsed",
 	label,
+	toolLabel,
 }: {
 	toolName: "quiz" | "ask_user_question" | "explain";
 	question: string;
@@ -185,6 +198,9 @@ export function QuestionDockBar({
 	 *  predict-type quiz minimizes by scroll — predictions never use the
 	 *  reveal variant, but the scroll-collapse strip can still hide them. */
 	label?: string;
+	/** The chip's TOOL display name (owner 2026-10-09): probe-phase calls
+	 *  label Probe/Recall — the phase boundary visible in the composer. */
+	toolLabel?: string;
 }) {
 	if (variant === "reveal") {
 		return (
@@ -215,7 +231,9 @@ export function QuestionDockBar({
 			className="dock-variant flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/40"
 		>
 			<span className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{label ?? (toolName === "quiz" ? "Quiz" : toolName === "explain" ? "Explain" : "Question")}
+				{label ??
+							toolLabel ??
+							(toolName === "quiz" ? "Check" : toolName === "explain" ? "Explain" : "Question")}
 			</span>
 			<span className="min-w-0 flex-1 truncate text-muted-foreground">{teaserText(question)}</span>
 			<span className="flex shrink-0 items-center gap-1 text-xs font-medium">
@@ -373,7 +391,7 @@ function QuestionDockForm({
 			// "untouched"); buildAnswer drops it on "I don't know".
 			confidence: kind === "quiz" ? CONFIDENCE_STOPS[confIdx] : undefined,
 		};
-		onSubmit(buildAnswer(qd, req));
+		onSubmit(buildAnswer(qd, req, toolName));
 	};
 
 	/* ENTER SUBMITS FROM ANYWHERE (owner round 6, 2026-10-05): the same
@@ -529,7 +547,17 @@ function QuestionDockForm({
 			    long questions short — owner round, 2026-10-05). */}
 			<div className="max-h-[var(--dock-max-h,55dvh)] overflow-y-auto px-4 pt-3">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-					{kind === "quiz" ? (qd.questionType === "predict" ? "Prediction" : "Quiz") : kind === "explain" ? "Explain" : "Question"}
+					{toolName === "probe"
+						? "Probe"
+						: toolName === "recall"
+							? "Recall"
+							: kind === "quiz"
+								? qd.questionType === "predict"
+									? "Prediction"
+									: "Check"
+									: kind === "explain"
+										? "Explain"
+											: "Question"}
 					{qd.mode === "multi-select" && " · select all that apply"}
 				</div>
 				<div className="mb-3 font-medium">

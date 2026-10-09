@@ -120,19 +120,20 @@ describe("plan_init — the author-once mermaid tool (execute against the real s
 		});
 		assert.equal(res.ok, true);
 		assert.equal(res.error, undefined);
-		assert.equal(res.tree.version, 1);
+		const tree = res.tree!;
+		assert.equal(tree.version, 1);
 		assert.deepEqual(
-			res.tree.nodes.map((n) => n.id),
+			tree.nodes.map((n) => n.id),
 			["primitives", "operators", "expressions", "detour"],
 		);
-		assert.deepEqual(res.tree.edges, [
+		assert.deepEqual(tree.edges, [
 			{ from: "primitives", to: "operators" },
 			{ from: "operators", to: "expressions" },
 		]);
 
 		const saved = chatStore.getChat(chatId)!.tree;
 		assert.ok(saved, "tree persisted to the chat record");
-		assert.deepEqual(saved, res.tree);
+		assert.deepEqual(saved, tree);
 	});
 
 	it("RE-CALLABLE: a rewrite replaces the tree wholesale (the mutation tools are gone)", async () => {
@@ -147,7 +148,7 @@ describe("plan_init — the author-once mermaid tool (execute against the real s
 		});
 		assert.equal(res.ok, true, "re-init is the sanctioned rewrite path now");
 		assert.deepEqual(
-			res.tree.nodes.map((n) => n.id),
+			res.tree!.nodes.map((n) => n.id),
 			["truth", "goal"],
 		);
 		assert.deepEqual(
@@ -169,7 +170,8 @@ describe("plan_init — the author-once mermaid tool (execute against the real s
 		assert.match(err, /line 2/);
 		assert.match(err, /line 3/);
 		assert.match(err, /line 4/);
-		assert.deepEqual(res.tree, emptyTree());
+		// Context diet (2026-10-09): failures carry just the error — no tree echo.
+		assert.equal(res.tree, undefined);
 		assert.equal(chatStore.getChat(chatId)!.tree, undefined, "nothing persisted on failure");
 	});
 
@@ -181,7 +183,7 @@ describe("plan_init — the author-once mermaid tool (execute against the real s
 		});
 		assert.equal(res.ok, false);
 		assert.match(res.error!, /cycle/);
-		assert.deepEqual(res.tree, emptyTree());
+		assert.equal(res.tree, undefined, "no tree echo on failure (context diet, 2026-10-09)");
 	});
 
 	it("only plan_init exists — the seven mutation/tracking tools are gone by design", () => {
@@ -194,7 +196,7 @@ describe("plan_init — the author-once mermaid tool (execute against the real s
 		const res = await exec(tools, "plan_init", { mermaid: "graph TD\n  a[A]\n" });
 		assert.equal(res.ok, false);
 		assert.match(res.error!, /Chat not found/);
-		assert.deepEqual(res.tree, emptyTree());
+		assert.equal(res.tree, undefined);
 	});
 });
 

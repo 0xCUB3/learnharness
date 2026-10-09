@@ -26,7 +26,7 @@ import {
 	probeQuizInputSchema,
 	quizDisplayInputSchema,
 	normalizeQuizType,
-	quizNeedsReveal,
+	questionNeedsReveal,
 	resolveCorrect,
 	toggleOption,
 	toggleOther,
@@ -54,22 +54,22 @@ describe("the schema's argument order (reasoning before the pick)", () => {
 	// Schema property order, so this pin guards the emission end to end.
 	// All consumers read by key — the order is authoring guidance.
 	it("emits explanation immediately before correctAnswer (both agents' schemas)", () => {
+		// The 2026-09-25 ruling stands for the CONTENT fields (reasoning
+		// before the pick); the 2026-10-09 reorder adds its mirror for the
+		// teach schema — the required pair (`type`, `nodeId`) LEADS the
+		// object, because glm-5.3 dropped exactly those fields when they
+		// trailed every long content field (the tools_fails_2 drops).
+		// Models emit tool args in schema order: commit to the role and the
+		// target first, reason, then pick.
 		for (const schema of [quizInputSchema, probeQuizInputSchema]) {
 			const keys = Object.keys((schema as { properties: Record<string, unknown> }).properties);
 			assert.ok(
 				keys.indexOf("explanation") < keys.indexOf("correctAnswer"),
 				`explanation must precede correctAnswer in the emitted schema (got: ${keys.join(", ")})`,
 			);
-			assert.deepEqual(keys, [
-				"question",
-				"options",
-				"multiSelect",
-				"explanation",
-				"correctAnswer",
-				"details",
-				...(keys.includes("type") ? ["type"] : []),
-				...(keys.includes("nodeId") ? ["nodeId"] : []),
-			]);
+			assert.deepEqual(keys, schema === quizInputSchema
+				? ["type", "nodeId", "question", "options", "multiSelect", "explanation", "correctAnswer", "details"]
+				: ["question", "options", "multiSelect", "explanation", "correctAnswer", "details"]);
 		}
 	});
 });
@@ -567,9 +567,13 @@ describe("explainInputBase / explainInputProblems (the commitment contract)", ()
 		assert.deepEqual(keys, ["question", "correctAnswer", "details"]);
 	});
 
-	it("the teach object adds the required nodeId AFTER the base fields", () => {
+	it("the teach object LEADS with the required pair (type, nodeId) — base fields follow", () => {
+		// Owner, 2026-10-09: glm-5.3 dropped `type`/`nodeId` when they trailed
+		// the content fields — required fields generated FIRST get dropped
+		// least, and the order doubles as the authoring order (role, target,
+		// then the question). Mirrors the quiz reorder (see above).
 		const keys = Object.keys(explainInputObject.properties);
-		assert.deepEqual(keys, [...Object.keys(explainInputBase.properties), "nodeId"]);
+		assert.deepEqual(keys, ["type", "nodeId", ...Object.keys(explainInputBase.properties)]);
 	});
 
 	it("an empty commitment is the one authoring problem", () => {
@@ -661,18 +665,23 @@ describe("the quiz role field (predict | check)", () => {
 		assert.equal(normalizeQuizType(42), undefined);
 	});
 
-	it("quizNeedsReveal: checks collapse, predictions never do", () => {
-		assert.equal(quizNeedsReveal("quiz", { type: "check" }, "teach"), true);
-		assert.equal(quizNeedsReveal("quiz", { type: "predict" }, "teach"), false, "predictions arrive OPEN");
+	it("questionNeedsReveal: checks collapse, predictions never do — both teach tools", () => {
+		assert.equal(questionNeedsReveal("quiz", { type: "check" }, "teach"), true);
+		assert.equal(questionNeedsReveal("quiz", { type: "predict" }, "teach"), false, "predictions arrive OPEN");
 		assert.equal(
-			quizNeedsReveal("quiz", undefined, "teach"),
+			questionNeedsReveal("quiz", undefined, "teach"),
 			true,
 			"old records (no type) render check-style",
 		);
-		assert.equal(quizNeedsReveal("quiz", { type: "predict" }, "probe"), false);
-		assert.equal(quizNeedsReveal("quiz", { type: "check" }, "probe"), false);
-		assert.equal(quizNeedsReveal("ask_user_question", {}, "teach"), false);
-		assert.equal(quizNeedsReveal("explain", {}, "teach"), false);
+		assert.equal(questionNeedsReveal("quiz", { type: "predict" }, "probe"), false);
+		assert.equal(questionNeedsReveal("quiz", { type: "check" }, "probe"), false);
+		assert.equal(questionNeedsReveal("ask_user_question", {}, "teach"), false);
+		// Explain joined the law 2026-10-09: teach checks collapse, predictions
+		// don't, old no-type records render check-style — mirroring quiz exactly.
+		assert.equal(questionNeedsReveal("explain", { type: "check" }, "teach"), true);
+		assert.equal(questionNeedsReveal("explain", { type: "predict" }, "teach"), false);
+		assert.equal(questionNeedsReveal("explain", undefined, "teach"), true, "pre-type explain records render check-style");
+		assert.equal(questionNeedsReveal("explain", { type: "check" }, "probe"), false);
 	});
 
 	function quizQd(): QuestionData {

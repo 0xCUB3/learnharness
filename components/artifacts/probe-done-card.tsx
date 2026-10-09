@@ -33,7 +33,10 @@ export function ProbeDoneCard({ part }: { part: { input?: unknown; output?: unkn
 	// fallback branch. Output stays a cast: OUR execute authored it.
 	const input = parseProbeDoneInput(part.input);
 
-	const assessment = output?.ok ? output.assessment : input?.assessment;
+	// The assessment is the CALL's input (owner, context diet 2026-10-09):
+	// the result's echo is gone — details is {ok:true} only, and the refusal
+	// branch below still reads output.error.
+	const assessment = input?.assessment;
 	const strands = assessment && Array.isArray(assessment.strands) ? assessment.strands : null;
 
 	return (

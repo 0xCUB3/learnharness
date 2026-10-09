@@ -1107,6 +1107,7 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 		question: "Explain why Mercury is hard to observe.",
 		correctAnswer: "Its small angular separation from the Sun — it never strays far from the Sun in our sky.",
 		nodeId: "planet-order",
+		type: "check", // the teach explain's role field (owner, 2026-10-09)
 	};
 	const { engine, calls } = scriptedTeacher((cs) => [
 		(context) => {
