@@ -26,91 +26,8 @@ import { proberGraphTools, type GraphToolContext } from "./graph.ts";
 import { activeProblemOf } from "../../core/native-messages.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { concludeResult, invalidInputResult, problemResult } from "../tool-execute.ts";
+import { healEncodedArguments, healToolRecord } from "./heal.ts";
 
-// ─── the weak-model argument heal ─────────────────────────────────────────────────
-
-/** One property schema of a TypeBox object (the shapes this fork emits:
- * literal unions carry anyOf[{const}], scalars carry type). */
-type PropSchema = {
-	type?: string;
-	const?: unknown;
-	anyOf?: PropSchema[];
-};
-
-/** The literal values a property accepts ([] when it is not a literal
- *  union / bare literal). */
-function literalsOf(prop: PropSchema): unknown[] {
-	if (prop.anyOf) return prop.anyOf.flatMap((m) => literalsOf(m));
-	return "const" in prop ? [prop.const] : [];
-}
-
-/** Does the property accept null (Type.Null standalone or as a union
- *  member)? */
-function acceptsNull(prop: PropSchema): boolean {
-	if (prop.type === "null") return true;
-	return (prop.anyOf ?? []).some((m) => m.type === "null");
-}
-
-/** JSON.parse that never throws (undefined for malformed input). */
-function tryParse(raw: string): unknown {
-	try {
-		return JSON.parse(raw) as unknown;
-	} catch {
-		return undefined;
-	}
-}
-
-/** THE WEAK-MODEL ARGUMENT HEAL (owner, 2026-10-04 — the GLM incident:
- *  19 consecutive rejected `problem` calls, every one carrying
- *  `"mode": "\"recall\""` — a JSON-string-encoded enum — while the
- *  TypeBox error text `must be equal to constant` never named the expected
- *  values, so the model re-emitted the identical payload each time). At
- *  pi's prepareArguments seam — BEFORE validation — the same discipline as
- *  healStringifiedArrays (extraction) and parseOptionsIfString (questions):
- *  a STRING value where the schema expects a literal union / boolean /
- *  null / number / array is JSON.parse-d and kept when the parsed value
- *  satisfies the expectation. Well-formed args pass through UNTOUCHED
- *  (same reference); unhealable values stay for validation to reject
- *  honestly. */
-export function healEncodedArguments(
-	args: unknown,
-	schema: { properties?: Record<string, PropSchema> },
-): unknown {
-	if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
-	const properties = schema.properties;
-	if (!properties) return args;
-	let healed: Record<string, unknown> | null = null;
-	for (const [key, prop] of Object.entries(properties)) {
-		const raw = (args as Record<string, unknown>)[key];
-		if (typeof raw !== "string") continue;
-		const parsed = tryParse(raw);
-		let fixed: unknown;
-		const literals = literalsOf(prop);
-		if (literals.length > 0) {
-			if (literals.includes(raw)) continue; // already a valid member
-			if (literals.includes(parsed)) fixed = parsed;
-		}
-		// The literal branch does not cover null (Type.Null carries no
-		// const) — a union of literals ∪ null must also accept "null".
-		if (fixed === undefined && acceptsNull(prop) && parsed === null) fixed = null;
-		if (fixed === undefined && prop.type === "boolean" && typeof parsed === "boolean") {
-			fixed = parsed;
-		}
-		if (
-			fixed === undefined &&
-			(prop.type === "number" || prop.type === "integer") &&
-			typeof parsed === "number"
-		) {
-			fixed = parsed;
-		}
-		if (fixed === undefined && prop.type === "array" && Array.isArray(parsed)) fixed = parsed;
-		if (fixed !== undefined) {
-			healed ??= { ...(args as Record<string, unknown>) };
-			healed[key] = fixed;
-		}
-	}
-	return healed ?? args;
-}
 
 /** The record-reading context the gates need (the plan-tools idiom). */
 export interface PracticeToolContext {
@@ -159,7 +76,7 @@ export const problemInputObject = Type.Object({
 			"solvable from the session's material. NEVER announces the target proposition.",
 	}),
 	mode: Type.Union([Type.Literal("recall"), Type.Literal("discrimination"), Type.Literal("composition")], {
-		description: 'REQUIRED — the demand mode: "recall" | "discrimination" | "composition".',
+		description: "REQUIRED — the demand mode: recall, discrimination, or composition (bare words, no quotes).",
 	}),
 	target: Type.Optional(
 		Type.Array(Type.String(), {
@@ -254,14 +171,14 @@ export const concludeInputObject = Type.Object({
 			Type.Literal("surrendered"),
 			Type.Literal("dismissed"),
 		],
-		{ description: 'REQUIRED — "solved" | "solvedWithHints" | "movedOn" | "surrendered" ("dismissed" is synthesized, never yours).' },
+		{ description: "REQUIRED — the outcome: solved, solvedWithHints, movedOn, or surrendered — bare words, no quotes (dismissed is synthesized, never yours)." },
 	),
 	verdict: Type.String({
 		description: "REQUIRED — the plain-language verdict: what was credited, where it broke. On a wrong answer: localize the break, do NOT give the correction.",
 	}),
 	rung: Type.Union(
 		[Type.Literal("R0"), Type.Literal("R1"), Type.Literal("R2"), Type.Literal("R3"), Type.Literal("R4"), Type.Literal("R5"), Type.Null()],
-		{ description: "REQUIRED — the hint-ladder rung the problem needed (null = no hint was given)." },
+		{ description: "REQUIRED — the hint-ladder rung the problem needed: R0 through R5, or null = no hint was given (bare, no quotes)." },
 	),
 	missClass: Type.Union(
 		[
@@ -272,7 +189,7 @@ export const concludeInputObject = Type.Object({
 			Type.Literal("structural"),
 			Type.Null(),
 		],
-		{ description: "REQUIRED — the miss classification (null = no miss)." },
+		{ description: "REQUIRED — the miss classification: cue, discrimination, execution, careless, or structural — or null = no miss (bare, no quotes)." },
 	),
 	retest: Type.Boolean({ description: "REQUIRED — true marks the problem for a fresh-surface retest before the session ends." }),
 });
@@ -312,7 +229,11 @@ export function practiceTools(ctx: PracticeToolContext): Record<string, AgentToo
 	// toggle-filtered: problem/conclude are the session; these are
 	// exceptions the doctrine says to reach for rarely.
 	const jobs = ctx.jobs ? jobTools(ctx.jobs) : null;
-	return {
+	// healToolRecord (owner, 2026-10-09 — the whitehead generalization):
+	// the standard argument heal over the WHOLE registry. problem/conclude
+	// keep their own (target-normalizing) prepareArguments as the composed
+	// inner pass; the double heal is idempotent by construction.
+	return healToolRecord({
 		problem: problemTool(gate, ctx.graphNodes),
 		conclude: concludeTool(gate),
 		read: readTool,
@@ -322,5 +243,5 @@ export function practiceTools(ctx: PracticeToolContext): Record<string, AgentToo
 		...(jobs?.research ? { research: jobs.research } : {}),
 		...(jobs ? { pdf: jobs.pdf! } : {}),
 		...(ctx.graph ? proberGraphTools(ctx.graph) : {}),
-	};
+	});
 }

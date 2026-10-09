@@ -14,6 +14,8 @@ import { invalidInputResult, toToolResult } from "../tool-execute.ts";
 import type { ModelRole } from "../../../config.ts";
 import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
+import { healToolRecord } from "../tools/heal.ts";
+import { healEncodedArguments } from "../../core/argument-heal.ts";
 
 // ── the weak-model string-heal (owner, 2026-09-28; moved here from
 // extraction.ts with the digest-aware redesign, 2026-09-30 — the heal
@@ -78,14 +80,23 @@ export async function runSubmitAgent<T>(opts: {
 	let submitted: T | undefined;
 	const result = await runSubagent(
 		[
-			...(opts.extraTools ? Object.values(opts.extraTools) : []),
+			// healToolRecord (owner, 2026-10-09): the standard argument heal
+		// over the extra tools (the auditor's graph set) — same as every
+		// registry.
+		...(opts.extraTools ? Object.values(healToolRecord(opts.extraTools)) : []),
 			{
 				name: opts.toolName,
 				label: opts.toolName,
 				description: opts.toolDescription,
 				parameters: opts.parameters,
 				prepareArguments: (args) =>
-					(opts.prepareArguments ? opts.prepareArguments(args) : args) as never,
+					// The standard heal composes AFTER the caller's shim (the
+					// whitehead generalization, 2026-10-09) — extraction's
+					// healStringifiedArrays stays the inner pass.
+					healEncodedArguments(
+						opts.prepareArguments ? opts.prepareArguments(args) : args,
+						opts.parameters,
+					) as never,
 				execute: async (_toolCallId, input) => {
 					const value = opts.fill(input);
 					const problem = opts.validate?.(value) ?? null;

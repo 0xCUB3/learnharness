@@ -16,11 +16,8 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
-	concludeInputObject,
-	healEncodedArguments,
-	problemInputObject,
-} from "../src/agent/tools/practice.ts";
+import { concludeInputObject, problemInputObject } from "../src/agent/tools/practice.ts";
+import { healEncodedArguments } from "../src/core/argument-heal.ts";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 
 /** The incident's exact mode spelling: the string  "recall"  INCLUDING

@@ -23,6 +23,7 @@ import { readTool } from "./tools/read.ts";
 import { lsTool } from "./tools/ls.ts";
 import { findTool } from "./tools/find.ts";
 import { grepTool } from "./tools/grep.ts";
+import { healToolRecord } from "./tools/heal.ts";
 import type { GraphStore } from "../core/ports.ts";
 
 export { jobTools };
@@ -246,7 +247,10 @@ export function createProberTools(
 	// unusable as Record<string, AgentTool<any>> downstream).
 	const quizzing: Record<string, AgentTool<any>> =
 		mechanics === "free" ? { explain: probeExplainTool } : { quiz: probeQuizTool };
-	return {
+	// healToolRecord (owner, 2026-10-09 — the whitehead generalization):
+	// the standard argument heal over the WHOLE registry — every tool,
+	// not just the one the latest wobble incident landed on.
+	return healToolRecord({
 		...filterEnabledTools(
 			{
 				...quizzing,
@@ -274,10 +278,10 @@ export function createProberTools(
 					: {}),
 				...done,
 			},
-			withoutMechanics(enabled),
-		),
-		...done,
-	};
+				withoutMechanics(enabled),
+			),
+			...done,
+		});
 }
 
 // ─── the teacher's question tools (quiz carries the position field) ──────────
@@ -378,8 +382,10 @@ export function createTeacherTools(
 	// two differently-typed literals collapses into an unusable union type.
 	const quizzing: Record<string, AgentTool<any>> =
 		mechanics === "free" ? { explain: teachExplainToolFor(ctx) } : { quiz: teachQuizToolFor(ctx) };
-	return filterEnabledTools(
-		{
+	// healToolRecord — same standard as the prober's registry (above).
+	return healToolRecord(
+		filterEnabledTools(
+			{
 			...quizzing,
 			ask_user_question: askUserQuestionTool,
 			// The learner-filesystem set is always-on (user-decided 2026-09,
@@ -398,5 +404,6 @@ export function createTeacherTools(
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
 		},
 		withoutMechanics(enabled),
+		),
 	);
 }

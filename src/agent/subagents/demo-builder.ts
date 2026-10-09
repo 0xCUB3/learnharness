@@ -6,6 +6,7 @@ import type { PiEngine } from "../models.ts";
 import { runSubagent } from "./pi-run.ts";
 import type { DemoResult } from "../../core/contracts.ts";
 import { getHeadless, type DemoRunResult, type HeadlessApi } from "./headless.ts";
+import { healToolRecord } from "../tools/heal.ts";
 
 /**
  * The demo-builder sub-agent (vision §2 interactive demos + §2.5 "sub-agents
@@ -99,7 +100,7 @@ export function createDemoBuilderTools(
 	headless: HeadlessApi,
 	onActivity?: (line: string) => void,
 ): Record<string, AgentTool<any>> {
-	return {
+	return healToolRecord({
 		write_demo: {
 			name: "write_demo",
 			label: "write_demo",
@@ -141,7 +142,7 @@ export function createDemoBuilderTools(
 				return formatRunResult(result);
 			}),
 		},
-	};
+	});
 }
 
 function summarizeCounts(result: DemoRunResult): string {

@@ -73,9 +73,18 @@ describe("parseQuizInput", () => {
 		assert.ok(parseQuizInput(PROBER_QUIZ));
 	});
 
-	it("the live crash shape — options as a JSON string — does not parse", () => {
+	it("boundary parity: the 2026-09-26 string-options shape heals on read (universal-heal mirror, 2026-10-09)", () => {
+		// The boundary now heals a JSON-encoded options string at EVERY
+		// registry (healToolRecord, owner 2026-10-09 — the bare-quiz sets
+		// carried no prepareArguments at all), and the record keeps the RAW
+		// args — so the display parse heals the same shape, per this file's
+		// own parity law: anything the boundary accepts, the display parse
+		// accepts, or the posed quiz renders nowhere while the turn has
+		// ended = learner lockout.
 		const stringified = { ...PROBER_QUIZ, options: JSON.stringify(PROBER_QUIZ.options) };
-		assert.equal(parseQuizInput(stringified), undefined);
+		const parsed = parseQuizInput(stringified);
+		assert.ok(parsed, "the healed-at-boundary record must parse on read");
+		assert.deepEqual(parsed.options, PROBER_QUIZ.options);
 	});
 
 	it("boundary parity under Value.Convert: a NUMERIC correctAnswer parses (live-smoke lockout fix, 2026-09-26)", () => {

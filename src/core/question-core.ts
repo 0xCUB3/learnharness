@@ -18,6 +18,7 @@
  */
 
 import { Type, type Static } from "typebox";
+import { stripModelValueDebris } from "./value-debris.ts";
 
 // ─── shared types ───────────────────────────────────────────────────────────
 
@@ -115,7 +116,9 @@ export function quizInputProblems(input: {
 }): string[] {
 	const { problems, keys } = optionProblems(input.options);
 
-	const entries = coerceCorrectAnswer(input.correctAnswer).map((v) => v.trim());
+	// Debris (colons/quotes/whitespace) strips inside coerceCorrectAnswer —
+	// the shared membership seam (boundary, display, grading).
+	const entries = coerceCorrectAnswer(input.correctAnswer);
 	const unique = [...new Set(entries)];
 	if (unique.length === 0 || unique.some((v) => v.length === 0)) {
 		problems.push("correctAnswer is required — provide the value (or label) of the correct option(s).");
@@ -207,10 +210,14 @@ export const QUIZ_QUESTION_TYPES = ["predict", "check"] as const;
 export type QuizQuestionType = (typeof QUIZ_QUESTION_TYPES)[number];
 
 /** Normalize a persisted quiz `type` (display seam): old records carry
- *  none, and model wobble degrades to undefined — callers render "Quiz"
- *  and the check-style card. Only exact literals count. */
+ *  none, and unhealable wobble degrades to undefined — callers render
+ *  "Quiz" and the check-style card. The debris strip (whitehead,
+ *  2026-10-09) heals the recorded `"\"predict\""` wobble — a raw
+ *  persisted record displays its intended role. */
 export function normalizeQuizType(raw: unknown): QuizQuestionType | undefined {
-	return raw === "predict" ? "predict" : raw === "check" ? "check" : undefined;
+	if (typeof raw !== "string") return undefined;
+	const v = stripModelValueDebris(raw);
+	return v === "predict" ? "predict" : v === "check" ? "check" : undefined;
 }
 
 /** The reveal law as a pure predicate (owner 2026-10-03): a teach-phase
@@ -228,10 +235,10 @@ export const quizInputObject = Type.Object({
 	...quizInputBase.properties,
 	type: Type.Union([Type.Literal("predict"), Type.Literal("check")], {
 		description:
-			"REQUIRED — the question's role in the teaching cycle. \"predict\": posed BEFORE you teach the step " +
-			"(its own turn; the learner answers, then your teaching resolves it — arrives open, never collapsed). " +
-			"\"check\": posed AFTER the step's teaching is complete (arrives collapsed behind the \"Check your " +
-			"understanding\" reveal). ONE question per turn either way.",
+			"REQUIRED — the question's role in the teaching cycle, as a bare word (no quotes): predict = posed BEFORE " +
+			"you teach the step (its own turn; the learner answers, then your teaching resolves it — arrives open, never " +
+			"collapsed); check = posed AFTER the step's teaching is complete (arrives collapsed behind the Check your " +
+			"understanding reveal). ONE question per turn either way.",
 	}),
 	nodeId: Type.String({
 		description:
@@ -563,19 +570,24 @@ export function shuffleOptions(options: QuizOption[], rand: () => number = Math.
 // ─── quiz grading ───────────────────────────────────────────────────────────
 
 /** The harness sometimes delivers a multi-select correctAnswer array as a
- *  JSON-stringified string because the schema union lists String first. */
+ *  JSON-stringified string because the schema union lists String first.
+ *  Every entry carries the MODEL-VALUE DEBRIS STRIP (whitehead,
+ *  2026-10-09): glm-5.3 copied option values with the JSON key-value
+ *  colon glued on (`[":parmenides"]`); membership comparisons on ALL
+ *  three seams (boundary check, display parse, grading) route through
+ *  here, so the strip heals new calls AND already-poisoned records. */
 export function coerceCorrectAnswer(correctAnswer: string | string[]): string[] {
-	if (Array.isArray(correctAnswer)) return correctAnswer;
+	if (Array.isArray(correctAnswer)) return correctAnswer.map(stripModelValueDebris);
 	const trimmed = correctAnswer.trim();
 	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
 		try {
 			const parsed = JSON.parse(trimmed);
-			if (Array.isArray(parsed)) return parsed.map((v) => String(v));
+			if (Array.isArray(parsed)) return parsed.map((v) => stripModelValueDebris(String(v)));
 		} catch {
 			// not valid JSON — treat as a single literal value
 		}
 	}
-	return [correctAnswer];
+	return [stripModelValueDebris(correctAnswer)];
 }
 
 /** Resolve author-supplied value(s) to 1-based display indices. Keying by

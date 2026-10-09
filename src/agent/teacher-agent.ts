@@ -15,6 +15,7 @@ import {
 	type TeacherToolContext,
 } from "./tools.ts";
 import { practiceTools, type PracticeToolContext } from "./tools/practice.ts";
+import { healToolRecord } from "./tools/heal.ts";
 import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
 import { QUESTION_TOOLS, type EnabledTools } from "../core/pending.ts";
 import { toLlmMessages } from "../core/native-messages.ts";
@@ -270,10 +271,13 @@ export function bareQuestionTools(): Record<string, AgentTool<any>> {
 			return questionResult();
 		},
 	};
-	return {
+	// healToolRecord (owner, 2026-10-09 — the whitehead generalization):
+	// the bare quiz carried NO prepareArguments at all — not even the
+	// options-unwrap; now it gets the full standard heal like every tool.
+	return healToolRecord({
 		quiz,
 		ask_user_question: askUserQuestionTool,
-	};
+	});
 }
 
 /**

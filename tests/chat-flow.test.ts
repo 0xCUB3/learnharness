@@ -689,20 +689,20 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.deepEqual(pending?.input, QUIZ_INPUT);
 	});
 
-	it("a structurally invalid quiz (the live double-encoded options string) never reaches the dock and retries clean", async () => {
-		// The exact live modal-realism crash shape: GLM occasionally serializes
-		// a nested array as a JSON STRING inside the arguments. The structural
-		// layer (JSON Schema: options must be array) rejects the call at the
-		// boundary — it must surface as tool-input-error, never as a pending
-		// question, and the model's retry must become the pending quiz.
+	it("structurally invalid quiz input (unhealable garbage) never reaches the dock and retries clean", async () => {
+		// The two-tier world (owner, 2026-10-09 — the universal argument
+		// heal): a JSON-ENCODED stand-in for the schema shape (the live
+		// string-options habit) now heals at EVERY registry — see
+		// tests/tool-heal.test.ts for that pin — so the structural reject
+		// this test holds is the OTHER tier: garbage no mechanical rule
+		// could rescue (not JSON, not an array) rejects honestly at the
+		// boundary — tool-input-error, never a pending question — and the
+		// model's clean retry becomes the pending quiz.
 		const STRINGY_QUIZ_INPUT = {
 			question: "Lewis's indexical analysis of 'actual' — which is it?",
 			type: "check",
 			nodeId: "indexicals",
-			options: JSON.stringify([
-				{ label: "Like 'I'", value: "indexical" },
-			{ label: "Like a title", value: "unique" },
-			]), // ← the bug: a string, not an array
+			options: "definitely not a JSON array — denim all the way down", // ← unhealable garbage
 			correctAnswer: "indexical",
 			explanation: "Indexical: every world is actual to its own inhabitants.",
 		};

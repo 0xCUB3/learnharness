@@ -31,6 +31,7 @@ import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
 import { quizInputBase, quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputBase, explainInputProblems, type AskToolInput, type QuizToolInput, type ExplainToolInput } from "./question-core.ts";
 import { restoreMathEscapes } from "./math-delims.ts";
+import { healEncodedArguments } from "./argument-heal.ts";
 import { probeDoneInputSchema, type ProbeDoneInput } from "./contracts/probe.ts";
 
 /** The pi-boundary parse step, mirrored here (live-smoke fix, 2026-09-26):
@@ -89,7 +90,13 @@ export function parseQuizInput(input: unknown): QuizToolInput | undefined {
 	// dock renders/gates by it (normalizeQuizType at the read seam); old and
 	// probe records carry none. nodeId stays an unknown key Value.Clean
 	// strips, exactly as before.
-	const cleaned = boundaryParse<QuizToolInput>(quizDisplayInputSchema, restoreMathEscapesDeep(input));
+	// The display mirror of the boundary heal (whitehead, 2026-10-09): the
+	// record keeps RAW arguments, so the recorded `type: "\"predict\""`
+	// wobble must heal HERE too or a posed quiz renders invisible (the
+	// tool-parts law). healEncodedArguments is the same pure pass the
+	// boundary's withArgumentHeal runs.
+	const healedInput = healEncodedArguments(restoreMathEscapesDeep(input), quizDisplayInputSchema);
+	const cleaned = boundaryParse<QuizToolInput>(quizDisplayInputSchema, healedInput);
 	if (!cleaned) return undefined;
 	if (quizInputProblems(cleaned).length > 0) return undefined;
 	return cleaned;
