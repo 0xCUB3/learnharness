@@ -25,16 +25,11 @@ export type KeyAction =
 	| "cycle-thinking"
 	| "toggle-sidebar"
 	| "sessions-search"
-	| "cycle-session-prev"
-	| "cycle-session-next"
-	| "open-session"
 	| "jump-graph"
 	| "new-session"
 	| "rename-session"
 	| "cheat-sheet"
 	| "find"
-	| "model-menu-walk"
-	| "model-menu-pick"
 	| "question-focus"
 	| "question-next-row"
 	| "question-prev-row"
@@ -66,9 +61,10 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "cycle-thinking", label: "Cycle thinking level", scope: "global", binding: "shift+tab" },
 	{ id: "toggle-sidebar", label: "Toggle sessions sidebar", scope: "global", binding: "mod+b" },
 	{ id: "sessions-search", label: "Search sessions", scope: "global", binding: "mod+shift+f" },
-	{ id: "cycle-session-prev", label: "Previous session", scope: "global", binding: "alt+arrowup" },
-	{ id: "cycle-session-next", label: "Next session", scope: "global", binding: "alt+arrowdown" },
-	{ id: "open-session", label: "Open selected session", scope: "global", binding: "alt+enter" },
+	// (The Alt+↑/↓/↵ session cycle was RETIRED, owner 2026-10-10: barely
+	// used, felt laggy. Session navigation lives IN the search now — ↑/↓
+	// walk the filtered list, Enter opens (first match when nothing
+	// walked) — see sidebar.tsx's search input.)
 	{ id: "jump-graph", label: "Graph view", scope: "global", binding: "mod+g" },
 	{ id: "new-session", label: "New session", scope: "global", binding: "mod+n" },
 	{ id: "rename-session", label: "Rename session", scope: "chat", binding: "f2" },
@@ -82,8 +78,10 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	// the keys while a question is expanded; the registry never dispatches
 	// them, so bare arrows stay free everywhere else.
 	{ id: "question-focus", label: "Question · focus thinking ↔ rows", scope: "chat", binding: "tab", displayOnly: true },
-	{ id: "model-menu-walk", label: "Model menu · walk results", scope: "global", binding: "arrowup", displayOnly: true },
-	{ id: "model-menu-pick", label: "Model menu · pick result", scope: "global", binding: "enter", displayOnly: true },
+	// (The model-menu entries — "walk results" ↑/↓, "pick result" ↵ — were
+	// REMOVED, owner 2026-10-10: obvious in-field menu navigation, never
+	// dispatched, never rebindable — not settings material. The menu's own
+	// arrow machine (menu-shell.tsx) is unchanged.)
 	{ id: "question-next-row", label: "Question · next row", scope: "chat", binding: "arrowdown", displayOnly: true },
 	{ id: "question-prev-row", label: "Question · previous row", scope: "chat", binding: "arrowup", displayOnly: true },
 	{ id: "question-pick-row", label: "Question · pick row", scope: "chat", binding: "space", displayOnly: true },

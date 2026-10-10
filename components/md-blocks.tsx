@@ -39,6 +39,7 @@ import {
 import type { ExtraProps } from "streamdown";
 import { MERMAID_FONT_SIZE, renderMermaid } from "@/components/mermaid-render";
 import { MermaidError } from "@/components/mermaid-error";
+import { blurAfterPointerClick } from "@/components/focus-hygiene";
 import { chartSize, useSessionMermaid } from "@/components/session-overlay";
 import { Hint } from "@/components/ui/hint";
 
@@ -101,7 +102,8 @@ export function CopyCorner({
 				aria-label={label}
 				data-testid="md-copy"
 				className="flex size-6 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/md:opacity-100"
-				onClick={() => {
+				onClick={(e) => {
+					blurAfterPointerClick(e);
 					void copyText(getText()).then((ok) => {
 						if (!ok) return;
 						setCopied(true);
@@ -210,7 +212,10 @@ function MermaidInline({ chart }: { chart: string }) {
 						aria-label="Expand diagram"
 						data-testid="md-mermaid-expand"
 												className="flex size-6 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/md:opacity-100"
-						onClick={() => overlay.openMermaid(chart)}
+						onClick={(e) => {
+							blurAfterPointerClick(e);
+							overlay.openMermaid(chart);
+						}}
 					>
 						<MaximizeIcon className="size-3.5" />
 					</button>

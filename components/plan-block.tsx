@@ -189,14 +189,69 @@ export function blockLayout(nodes: readonly LayoutNode[], edges: ReadonlyArray<{
 		const pts: Array<{ x: number; y: number }> | undefined = g.edge(e.from, e.to)?.points;
 		if (pts) edgePts.set(`${e.from}->${e.to}`, pts.map((pt) => ({ x: pt.x, y: pt.y })));
 	}
+	// THE CANVAS MUST COVER THE ARROWS (owner, 2026-10-10): dagre's
+	// graph extent is the NODE bounding box — the edge curves drawn on
+	// top can bow past it (cross-column edges' bezier control points;
+	// measured 14–20px cut on the right in the owner's plans) and the
+	// viewBox clipped them. The ink extent unions the node boxes with
+	// every edge path's control-point hull: a bezier never leaves the
+	// hull of its control points, and parsing the d-string edgePathD
+	// builds (the SAME call the renderer makes, same inputs) bounds every
+	// segment — M, L and C pairs alternate strictly, so even/odd matches
+	// are x/y. Dagre's extent stays the FLOOR: plans whose arrows stay
+	// inside keep byte-identical viewBoxes (no reflow of every pinned
+	// render), and the origin only moves when ink bulges past zero.
+	let inkMinX = Infinity;
+	let inkMinY = Infinity;
+	let inkMaxX = -Infinity;
+	let inkMaxY = -Infinity;
+	const stretch = (px: number, py: number) => {
+		if (px < inkMinX) inkMinX = px;
+		if (py < inkMinY) inkMinY = py;
+		if (px > inkMaxX) inkMaxX = px;
+		if (py > inkMaxY) inkMaxY = py;
+	};
+	for (const n of nodes) {
+		const nx = x.get(n.id);
+		const ny = y.get(n.id);
+		if (nx === undefined || ny === undefined) continue;
+		stretch(nx, ny);
+		stretch(nx + (nodeW.get(n.id) ?? NODE_W_MIN), ny + (nodeH.get(n.id) ?? NODE_H));
+	}
+	for (const e of routed) {
+		const pts = edgePts.get(`${e.from}->${e.to}`);
+		if (!pts) continue;
+		const tx = x.get(e.to);
+		const ty = y.get(e.to);
+		const target =
+			tx !== undefined && ty !== undefined
+				? {
+						x: tx,
+					y: ty,
+					w: nodeW.get(e.to) ?? NODE_W_MIN,
+						h: nodeH.get(e.to) ?? NODE_H,
+					}
+				: undefined;
+		const nums = edgePathD(pts, target).match(/-?\d+(?:\.\d+)?/g);
+		if (!nums) continue;
+		for (let i = 0; i + 1 < nums.length; i += 2) {
+			stretch(parseFloat(nums[i]!), parseFloat(nums[i + 1]!));
+		}
+	}
+	// Dagre coordinates start at 0; only ink past zero on the negative
+	// side moves the origin (viewBox x/y shift with it).
+	const originX = Math.min(0, inkMinX === Infinity ? 0 : inkMinX);
+	const originY = Math.min(0, inkMinY === Infinity ? 0 : inkMinY);
 	return {
 		x,
 		y,
 		nodeH,
 		nodeW,
 		edgePts,
-		width: Math.max(g.graph().width ?? 0, 1),
-		height: Math.max(g.graph().height ?? 0, 1),
+		originX,
+		originY,
+		width: Math.max((g.graph().width ?? 0) - originX, inkMaxX === -Infinity ? 0 : inkMaxX - originX, 1),
+		height: Math.max((g.graph().height ?? 0) - originY, inkMaxY === -Infinity ? 0 : inkMaxY - originY, 1),
 	};
 }
 
@@ -462,9 +517,14 @@ export function PlanDiagram({
 	const h = Math.max(layout.height, 1);
 	const vbW = w + 2 * pad;
 	const vbH = h + 2 * pad;
+	// The origin rides the ink extent (owner, 2026-10-10): an arrow
+	// bulging past zero shifts the viewBox with it instead of clipping.
+	// Zero-origin plans (the ordinary case) render exactly as before.
+	const ox = viewBoxOverride ? 0 : (layout.originX ?? 0);
+	const oy = viewBoxOverride ? 0 : (layout.originY ?? 0);
 	return (
 		<svg
-			viewBox={viewBoxOverride ?? `${-pad} ${-pad} ${vbW} ${vbH}`}
+			viewBox={viewBoxOverride ?? `${ox - pad} ${oy - pad} ${vbW} ${vbH}`}
 			className={`block ${fill ? "h-full w-full" : `h-auto${naturalSize ? "" : " w-full"}`}${textCapScale ? " mx-auto" : ""}`}
 			style={{
 				// The READING font (owner, 2026-09-26) — via the runtime var, NOT

@@ -47,8 +47,10 @@ second pillar of input).
 | Cycle thinking level | Shift+Tab | `lh:kbd-cycle-thinking` (model-picker.tsx) |
 | Toggle sidebar | ⌘B | `lh:toggle-sidebar` (sidebar.tsx) |
 | Sessions search | ⌘⇧F | `lh:kbd-sessions-search` (sidebar.tsx) |
-| Cycle session | ⌥↑ / ⌥↓ | `lh:kbd-cycle-session-prev/next` (sidebar.tsx) |
-| Open selected session | ⌥Enter | `lh:kbd-open-session` (sidebar.tsx) |
+| Walk search results | ↑ / ↓ *in the search field* | sidebar.tsx (cycles the filtered rows, wraps) |
+| Open search result | Enter *in the search field* | sidebar.tsx (walked row, else the first match) |
+| ~~Cycle session~~ | ~~⌥↑ / ⌥↓~~ | RETIRED (owner, 2026-10-10) — the search walk above replaces it |
+| ~~Open selected session~~ | ~~⌥Enter~~ | RETIRED (owner, 2026-10-10) — the search Enter above replaces it |
 | Jump to graph (home) | ⌘G | router.push in keyboard-shortcuts.tsx |
 | New session | ⌘N | router.push in keyboard-shortcuts.tsx |
 | Rename session | F2 | `lh:kbd-rename-session` (chat.tsx) |
@@ -56,6 +58,9 @@ second pillar of input).
 | Find (graph: node search) | ⌘F | `lh:kbd-find` (graph-view.tsx; chat transcript search rides the same event when that feature lands) |
 
 ## Model menu keyboard machine (owner polish, 2026-09-17)
+
+(Removed from the settings/cheat-sheet registry 2026-10-10 — obvious
+in-field navigation; the behavior below is unchanged.)
 
 While the model menu is open, focus stays in the search field and the
 menu owns ↑/↓/Enter inside the input's own handler:

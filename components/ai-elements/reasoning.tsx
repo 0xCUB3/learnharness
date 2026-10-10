@@ -1,6 +1,7 @@
 "use client";
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
+import { blurAfterPointerClick } from "@/components/focus-hygiene";
 import {
   Collapsible,
   CollapsibleContent,
@@ -159,6 +160,11 @@ export const ReasoningTrigger = memo(
           className
         )}
         {...props}
+        /* FOCUS HYGIENE (owner, keyboard round 2026-10-10): a pointer click
+           on the thinking toggle must not leave focus here — the learner's
+           next Enter submits, it must not re-toggle. Radix composes this
+           with its own toggle handler. */
+        onClick={(e) => blurAfterPointerClick(e)}
       >
         {children ?? (
           <>

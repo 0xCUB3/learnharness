@@ -24,6 +24,7 @@ import { artifactRenderers } from "@/components/artifacts";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { useEnterSubmits } from "@/components/enter-submits";
+import { blurAfterPointerClick } from "@/components/focus-hygiene";
 import { dockStateKey } from "@/components/dock-state-key";
 import { QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
 import { DictationBar, finishDictation, joinDictation, useDictation } from "@/components/dictation";
@@ -1264,7 +1265,10 @@ export function Chat({
 <button
 							type="button"
 							data-testid="plan-chip"
-							onClick={() => setPlanOpen(true)}
+							onClick={(e) => {
+								blurAfterPointerClick(e);
+								setPlanOpen(true);
+							}}
 							className="lh-no-drag flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:border-border hover:text-foreground"
 						>
 							<WaypointsIcon className="size-3.5 text-primary" aria-hidden />

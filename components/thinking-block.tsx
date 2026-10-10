@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
+import { blurAfterPointerClick } from "@/components/focus-hygiene";
 import { cn } from "@/lib/utils";
 
 /** The unified user-thinking row (owner round, 2026-10-05): ONE visual
@@ -115,7 +116,10 @@ export function ThinkingBlock({
 			<button
 				type="button"
 				data-testid={testId ? `${testId}-trigger` : undefined}
-				onClick={() => setOpen((v) => !v)}
+				onClick={(e) => {
+					setOpen((v) => !v);
+					blurAfterPointerClick(e);
+				}}
 				aria-expanded={open}
 				className="flex w-full items-center gap-2 font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
 			>

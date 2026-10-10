@@ -496,14 +496,16 @@ function SessionsSidebar() {
 		[],
 	);
 
-	/* ── Keyboard seams (shortcut wave A, 2026-09-17) ── The sidebar owns
-	   every session-list interaction, so the shortcuts land here: ⌘⇧F
-	   focuses the search field; Alt+↑/↓ cycle the list (opening the sidebar
-	   if it's closed — the keys work from anywhere, like the toggle does);
-	   Alt+Enter opens the selected session. The selection is a row index
-	   into `shown`, so a typed query narrows the cycle to the matches.
-	   Mouse and keyboard coexist: hovering doesn't claim, a click or an
-	   open clears the selection. */
+	/* ── Keyboard seams (shortcut wave A, 2026-09-17; search-walk round
+	   2026-10-10) ── ⌘⇧F focuses the search field — and THE SEARCH OWNS THE
+	   WALK: ↑/↓ cycle the filtered list (wrap — "cycle"), Enter opens the
+	   walked row, or the FIRST match when nothing is walked (owner,
+	   2026-10-10 — the quick-open pattern: ⌘⇧F, type, Enter, done). The
+	   Alt+↑/↓/↵ global cycle was RETIRED the same round: barely used,
+	   felt laggy. The selection is a row index into `shown`, so the walk
+	   follows whatever the query + kind filter leave. Mouse and keyboard
+	   coexist: hovering doesn't claim, a click or an open clears the
+	   selection. */
 	const [kbdIndex, setKbdIndex] = useState<number | null>(null);
 	const searchRef = useRef<HTMLInputElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
@@ -601,42 +603,6 @@ function SessionsSidebar() {
 		return () => window.removeEventListener("lh:kbd-sessions-search", onFocusSearch);
 	}, [open, toggle]);
 
-	useEffect(() => {
-		const cycle = (dir: 1 | -1) => {
-			setKbdIndex((i) => {
-				const n = shown?.length ?? 0;
-				if (n === 0) return null;
-				if (i === null) return dir === 1 ? 0 : n - 1;
-				return (i + dir + n) % n;
-			});
-		};
-		const onPrev = () => {
-			if (!open) toggle();
-			cycle(-1);
-		};
-		const onNext = () => {
-			if (!open) toggle();
-			cycle(1);
-		};
-		const onOpenSelected = () => {
-			const target = kbdIndex !== null ? shown?.[kbdIndex] : undefined;
-			if (target) {
-				router.push(`/chat/${target.id}`);
-				setKbdIndex(null);
-			}
-		};
-		window.addEventListener("lh:kbd-cycle-session-prev", onPrev);
-		window.addEventListener("lh:kbd-cycle-session-next", onNext);
-		window.addEventListener("lh:kbd-open-session", onOpenSelected);
-		return () => {
-			window.removeEventListener("lh:kbd-cycle-session-prev", onPrev);
-			window.removeEventListener("lh:kbd-cycle-session-next", onNext);
-			window.removeEventListener("lh:kbd-open-session", onOpenSelected);
-		};
-		// kbdIndex is read (not upserted) so Alt+Enter pushes OUTSIDE any
-		// state updater — a router.push inside one is setState-in-render.
-	}, [open, toggle, shown, router, kbdIndex]);
-
 	// Keep the kbd-selected row in view (the rows are the container's only
 	// buttons, so the index matches).
 	useEffect(() => {
@@ -733,13 +699,47 @@ function SessionsSidebar() {
 							ref={searchRef}
 							data-testid="session-search"
 							value={query}
-							onChange={(e) => setQuery(e.target.value)}
-							// Esc leaves the search (owner, keyboard wave): blur back
-							// to normal, and claim the key so the window Esc chain
-							// (dictation / abort) doesn't also fire.
+							onChange={(e) => {
+								setQuery(e.target.value);
+								// The list reorders under the query every keystroke —
+								// a stale walk index would point at the wrong row.
+								setKbdIndex(null);
+							}}
+							// THE SEARCH OWNS THE WALK (owner, 2026-10-10 — the
+							// retired Alt+↑/↓/↵ cycle's successor): ↑/↓ cycle the
+							// filtered rows (wrap), Enter opens the walked row —
+							// or the FIRST match when nothing is walked (the
+							// quick-open pattern) — then blurs (focus returns to
+							// the app per the Enter law; the query stays for
+							// re-searching). Esc leaves the search (owner,
+							// keyboard wave): blur back to normal, and claim the
+							// key so the window Esc chain (dictation / abort)
+							// doesn't also fire.
 							onKeyDown={(e) => {
 								if (e.key === "Escape") {
 									e.stopPropagation();
+									e.currentTarget.blur();
+									return;
+								}
+								// Modified keys belong to the surface (⇧↵ etc.).
+								if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+								const n = shown?.length ?? 0;
+								if (n === 0) return;
+								if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+									// The rows move, not the caret.
+									e.preventDefault();
+									const dir = e.key === "ArrowDown" ? 1 : -1;
+									setKbdIndex((i) =>
+										i === null || i >= n ? (dir === 1 ? 0 : n - 1) : (i + dir + n) % n,
+										);
+									return;
+								}
+								if (e.key === "Enter") {
+									const target = shown![kbdIndex !== null && kbdIndex < n ? kbdIndex : 0];
+									if (!target) return;
+									e.preventDefault();
+									router.push(`/chat/${target.id}`);
+									setKbdIndex(null);
 									e.currentTarget.blur();
 								}
 							}}
