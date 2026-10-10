@@ -80,6 +80,17 @@ if (!app.requestSingleInstanceLock()) {
 
 let serverProcess = null;
 
+// A GUI shell must never die to a stray exception (EPIPE dialogs, a race
+// in an event handler): the window + child server are the product, and
+// anything main-side is recoverable by logging it. Log-and-continue.
+process.on("uncaughtException", (err) => {
+	try {
+		log(`uncaught: ${err?.stack ?? err}`);
+	} catch {
+		/* nothing left to write to */
+	}
+});
+
 /** A free TCP port (listen(0) → the kernel assigns one). The close→spawn
  *  race is theoretical; localhost ports are rarely contended, and a failed
  *  spawn surfaces in the health check with the child's stderr in the log. */
@@ -103,7 +114,15 @@ function freePort() {
 
 function log(line) {
 	const stamp = new Date().toISOString();
-	console.log(`[lh ${stamp}] ${line}`);
+	// The stdout write is guarded (EPIPE hardening, 2026-10-10): a packaged
+	// app launched with a consumer-owned pipe (a launcher that exits, a
+	// piped run) must not die on its next log line when the pipe breaks.
+	// The file below stays the durable channel.
+	try {
+		console.log(`[lh ${stamp}] ${line}`);
+	} catch {
+		/* stdout gone — userData/logs/main.log still carries it */
+	}
 	// Belt and braces: also append to userData/logs so a misbehaving child
 	// can be diagnosed after the window is gone. Best effort only.
 	try {
