@@ -1,6 +1,7 @@
 {
-	"name": "learning-harness",
+	"name": "learnharness",
 	"version": "0.2.0",
+	"license": "AGPL-3.0-only",
 	"description": "A standalone learning harness: a teacher agent (AI SDK) with quiz/ask interactions, session artifacts, and a derived knowledge graph of what the learner knows.",
 	"type": "module",
 	"private": true,
