@@ -47,6 +47,7 @@ import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-ag
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { webTools } from "../src/agent/tools/web.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
+import { runningTurn } from "../src/server/turn-runs.ts";
 import {
 	abortJob,
 	deliverJobResult,
@@ -199,6 +200,20 @@ async function drain(res: Response): Promise<string> {
 		assert.fail(`expected 200, got ${res.status}: ${await res.text()}`);
 	}
 	return res.text();
+}
+
+/** CONNECTION DIET B (owner, 2026-10-10): the POST acks and closes; drain
+ *  the turn's wire through the reattach stream instead. */
+async function drainTurn(req: Request, factory: Parameters<typeof handleChatRequest>[1]): Promise<string> {
+	const cloned = req.clone();
+	const ack = await handleChatRequest(req, factory);
+	if (ack.status !== 200) {
+		assert.fail(`expected 200 ack, got ${ack.status}: ${await ack.text()}`);
+	}
+	const { chatId } = (await cloned.json()) as { chatId: string };
+	const handle = runningTurn(chatId);
+	if (!handle) return ""; // the turn settled inside the handler — completion already happened
+	return new Response(handle.subscribe()).text();
 }
 
 function post(chatId: string, input: unknown): Request {
@@ -486,9 +501,7 @@ describe("dispatch (async protocol §2)", () => {
 			createTeacherAgent(undefined, { engine, tools, messages: opts.messages });
 
 		researchModelOverride.current = researcherModel();
-		const body = await drain(
-			await handleChatRequest(post(chat.id, { type: "text", text: "teach me graph rendering" }), agent),
-		);
+		const body = await drainTurn(post(chat.id, { type: "text", text: "teach me graph rendering" }), agent);
 
 		// The teacher's SAME turn carried on past the tool call.
 		assert.ok(body.includes("Back with the brief."), "the turn continued after the dispatch");

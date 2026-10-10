@@ -12,7 +12,7 @@ import { ToolCallIdUniquifier } from "./call-ids.ts";
  * The SSE body is the agent's own event stream:
  *
  *   data: {"type":"agent_start"}\n\n
- *   data: {"type":"message_update","message":{…},"assistantMessageEvent":{…}}\n\n
+ *   data: {"type":"message_update","message":{…}}\n\n
  *   …
  *   data: {"type":"agent_end","messages":[…]}\n\n
  *   data: [DONE]\n\n
@@ -21,6 +21,11 @@ import { ToolCallIdUniquifier } from "./call-ids.ts";
  * - Every `message_update` carries the FULL partial assistant message (each
  *   AssistantMessageEvent ships `partial`) — a view REPLACES its streaming
  *   assistant with `event.message`; no delta assembly exists anywhere.
+ * - WIRE DIET (owner, 2026-10-09 — the streaming-freeze postmortem): our
+ *   boundary emits the SLIM message_update (`message` only). pi's event also
+ *   carries the same full partial a SECOND time as `assistantMessageEvent`
+ *   — nothing in this app ever reads it, and re-serializing it per chunk
+ *   doubled every stream frame. Client reads `event.message`, always.
  * - Question tools (quiz / ask_user_question): NO suppression (owner ruling,
  *   Wave D fork 2) — the closing `tool_execution_end` with the in-memory
  *   "Question posed" placeholder flows to the client, which ignores it
@@ -38,16 +43,31 @@ import { ToolCallIdUniquifier } from "./call-ids.ts";
  *
  * BACKGROUND-TURN RUNNER (owner ruling, 2026-09-25): a turn executes as a
  * server-side background object decoupled from any single HTTP response —
- * clients are VIEWS. runPiTurn returns the handle (event log + subscriber
- * set); piTurnResponse wraps a subscriber stream as the SSE response, and
- * the POST /api/chat response and GET /api/chats/[id]/stream are BOTH
- * exactly that. Cancelling a view detaches it ONLY — never aborts the turn;
- * the handle's abort() is the one remote kill.
+ * clients are VIEWS. runPiTurn returns the handle (compacted state +
+ * subscriber set); piTurnResponse wraps a subscriber stream as the SSE
+ * response, and the POST /api/chat response and GET /api/chats/[id]/stream
+ * are BOTH exactly that. Cancelling a view detaches it ONLY — never aborts
+ * the turn; the handle's abort() is the one remote kill.
+ *
+ * THE COMPACTION LAW (owner, 2026-10-09 — supersedes the unbounded-log ruling
+ * of 2026-09-25): the turn log stores STATE, not chunks. pi's native events
+ * are full snapshots — one per provider chunk — so retaining every one made
+ * memory and replay cost quadratic in message length (a single
+ * high-thinking message retained hundreds of MB and every reattach
+ * re-serialized the whole history in one blocking stretch — the parallel-
+ * session navigation freeze). The log now keeps settled events verbatim plus
+ * the LATEST update per in-flight message/tool call, replaced in place;
+ * live update fan-out is coalesced to at most one frame per flush window
+ * (latest wins — views replace by slot, and message_end carries the full
+ * final message, so dropped intermediates are lossless). Replay therefore
+ * costs the content once, never the chunk count.
  */
 
-/** The wire event: a verbatim pi AgentEvent, or one of the two app events. */
+/** The wire event: a pi AgentEvent (with our slim message_update — see the
+ * WIRE DIET note above), or one of the two app events. */
 export type TurnWireEvent =
 	| AgentEvent
+	| { type: "message_update"; message: AgentMessage }
 	| { type: "error"; errorText: string };
 
 export interface PiTurnSpec {
@@ -69,6 +89,9 @@ export interface PiTurnSpec {
 	 *  routing, and the next turn's provider context all agree. Absent →
 	 *  verbatim passthrough (the protocol law below still holds). */
 	usedToolCallIds?: ReadonlySet<string>;
+	/** The coalescing window for update fan-out (COMPACTION LAW above).
+	 *  Defaults to 100ms; tests tighten it. */
+	updateFlushMs?: number;
 }
 
 /** One view onto a running turn: push() replays/streams an event, done()
@@ -94,33 +117,93 @@ export interface PiTurnHandle {
 }
 
 export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
-	const { agent, onError, onFinish, usedToolCallIds } = spec;
+	const { agent, onError, onFinish, usedToolCallIds, updateFlushMs = 100 } = spec;
 	const uniquifier = usedToolCallIds ? new ToolCallIdUniquifier(usedToolCallIds) : undefined;
 
 	let settled = false;
 	let sawAbort = false;
 
-	// THE PER-TURN EVENT LOG (memory-only — the settle-only disk writes
-	// are unchanged): every forwarded event, in order, so any late
-	// subscriber gets a FULL replay. Unbounded BY HONEST DESIGN (owner
-	// ruling 2026-09-25): a turn's event log is finite by construction —
-	// the agent loop ends (or the 30-minute liveness TTL bounds the
-	// pathological never-settling case), and concurrency is human-scale
-	// (one turn per chat, a few chats). No cap, no truncation: replay must
-	// never silently drop history. The log dies with the turn at settle.
+	// THE PER-TURN STATE LOG (memory-only — the settle-only disk writes
+	// are unchanged). COMPACTION LAW (owner, 2026-10-09, supersedes the
+	// 2026-09-25 unbounded-log ruling): settled events append verbatim;
+	// in-flight `message_update` / `tool_execution_update` runs are reduced
+	// to their LATEST member, replaced in place. Retention is bounded by
+	// CONTENT (settled messages + one snapshot per streaming message), not
+	// by chunk count — the quadratic blowup that froze parallel sessions is
+	// structurally impossible now. The log dies with the turn at settle.
 	const log: TurnWireEvent[] = [];
+	// Live-update slots: coalesce key → log index of the retained update.
+	// One assistant message streams at a time (pi's strict per-step
+	// start → updates → end ordering), so messages share one slot; parallel
+	// tool executions each own theirs (toolCallId). End events free the slot
+	// — a later update for the same key starts a fresh run.
+	const updateSlots = new Map<string, number>();
+	// The coalescing queue for LIVE fan-out: key → latest event, flushed at
+	// most once per flush window (Map preserves first-insertion order, so the
+	// relative order of concurrent keys stays chronological).
+	const pending = new Map<string, TurnWireEvent>();
 	const subscribers = new Set<PiTurnSubscriber>();
 
-	// Send = append to the log + fan out to every live view. A view's own
+	const coalesceKey = (event: TurnWireEvent): string | null => {
+		if (event.type === "message_update") return "message";
+		if (event.type === "tool_execution_update") return `tool:${event.toolCallId}`;
+		return null;
+	};
+
+	// Send = compact the log + fan out to every live view. A view's own
 	// enqueue failure (a cancelled reader) is swallowed by the view — the
 	// turn must still settle; onFinish persists regardless of who watches.
 	const send = (event: TurnWireEvent) => {
 		if (settled) return;
+		const key = coalesceKey(event);
+		if (key !== null) {
+			// Retention: replace-in-place the run's latest snapshot.
+			const idx = updateSlots.get(key);
+			if (idx !== undefined) log[idx] = event;
+			else {
+				updateSlots.set(key, log.length);
+				log.push(event);
+			}
+			// Fan-out: coalesced — latest wins, flushed at ≤1/window.
+			pending.set(key, event);
+			armFlush();
+			return;
+		}
+		// A boundary event ends its update run (end supersedes the partial;
+		// the slot frees for any future run of the same key).
+		if (event.type === "message_end") updateSlots.delete("message");
+		if (event.type === "tool_execution_end") updateSlots.delete(`tool:${event.toolCallId}`);
+		// Strict per-subscriber ordering: anything still pending precedes
+		// this boundary event on the wire, never after it.
+		flushPending();
 		log.push(event);
 		for (const sub of subscribers) sub.push(event);
 	};
+
+	let flushTimer: ReturnType<typeof setTimeout> | undefined;
+	const flushPending = () => {
+		if (flushTimer !== undefined) {
+			clearTimeout(flushTimer);
+			flushTimer = undefined;
+		}
+		if (pending.size === 0) return;
+		const batch = [...pending.values()];
+		pending.clear();
+		for (const sub of subscribers) for (const event of batch) sub.push(event);
+	};
+	const armFlush = () => {
+		if (flushTimer !== undefined) return;
+		flushTimer = setTimeout(() => {
+			flushTimer = undefined;
+			flushPending();
+		}, updateFlushMs);
+		// Never holds the process (or the test runner) open for a straggler.
+		(flushTimer as { unref?: () => void }).unref?.();
+	};
 	const closeAll = () => {
 		if (settled) return;
+		// Order to the very end: the last pending snapshot precedes [DONE].
+		flushPending();
 		settled = true;
 		for (const sub of subscribers) sub.done();
 		subscribers.clear();
@@ -143,7 +226,14 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 	const handle = (event: AgentEvent) => {
 		// THE LACAN FIX: ids uniquify HERE, before any view — the one seam
 		// every consumer downstream shares. No uniquifier → verbatim.
-		send(uniquifier ? uniquifier.event(event) : event);
+		const uniqued = uniquifier ? uniquifier.event(event) : event;
+		// WIRE DIET: slim the one event pi double-stuffs — our views read
+		// `message`, never `assistantMessageEvent` (same full partial twice).
+		const wire: TurnWireEvent =
+			uniqued.type === "message_update"
+				? { type: "message_update", message: uniqued.message }
+				: uniqued;
+		send(wire);
 		if (event.type === "message_end") {
 			const m = event.message as { role?: string; stopReason?: string } | undefined;
 			if (m?.role === "assistant" && m.stopReason === "aborted") sawAbort = true;
@@ -206,7 +296,10 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 					};
 					// Attach THEN replay — synchronous, so no event can fall
 					// between replay and live (single-threaded: the agent's
-					// handle() only runs after this stack returns).
+					// handle() only runs after this stack returns). The compacted
+					// log replays settled events + the latest snapshot per
+					// in-flight message — the full content, once, never the chunk
+					// history (COMPACTION LAW).
 					subscribers.add(sub);
 					for (const event of log) sub.push(event);
 					// A subscriber that attached after settle (the unregister
@@ -216,7 +309,7 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 				cancel() {
 					// THE OWNER RULING (2026-09-25): a view leaving NEVER kills
 					// the turn — only the explicit abort channel does. The turn
-					// runs on; the log keeps everything for the next view.
+					// runs on; the compacted log keeps the state for the next view.
 					if (sub) subscribers.delete(sub);
 				},
 			});

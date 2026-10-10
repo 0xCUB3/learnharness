@@ -54,8 +54,21 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight }: U
 	// latency before the instant replay, so a fresh mount attaches
 	// directly. This hook's effect is the SINGLE mount-reattach owner
 	// (chat.tsx's duplicate was deleted with the same round).
+	//
+	// CONNECTION DIET A (owner, 2026-10-10 — parallel-session freeze
+	// postmortem): unmount RELEASES the stream connection. The turn is a
+	// server-side process — it runs on with zero views; this page's open
+	// GET stream (or, pre-diet-B, its POST stream) used to survive
+	// navigation, silently pinning one of the browser's 6-per-origin
+	// connection slots until the turn settled, streaming into a dead
+	// component. Enough leaked views starved every NEW request (navigation
+	// RSC fetches included) — the multi-session navigation freeze. Aborting
+	// costs nothing: navigating back replays the compacted log + live tail.
 	useEffect(() => {
 		if (initiallyInFlight) void model.resumeStream(false);
+		return () => {
+			model.stop();
+		};
 	}, [initiallyInFlight, model]);
 
 	// The view + state, derived per model change from the model.

@@ -474,14 +474,23 @@ export class SessionModel {
 		// aborted earlier attempt (React StrictMode's simulated remount)
 		// must not leave partials the replay would DOUBLE onto. The old
 		// record refetch provided this reset accidentally; attach-first
-		// made it explicit. Safe on both paths: a fresh mount's tail is
-		// empty or aborted-replay leftovers; the mid-session handoff path
-		// still refetches first (its reset is redundant, not harmful —
-		// the settle sync has already canonized the view).
-		this.mutate(() => {
-			this.tail = [];
-			this.streamingMessageId = null;
-		});
+		// made it explicit.
+		//
+		// THE FLICKER FIX (owner, 2026-10-10 — connection-diet B follow-up):
+		// on the REFETCH path the clear must NOT precede the fetch — send()
+		// just landed the optimistic answer/note cards in the tail, and any
+		// refetch latency (dev-compile stalls measured at 1.7s) re-showed
+		// the answered-away question for the whole window: card vanished,
+		// dock returned, both snapped back only when the record landed.
+		// The refetch block below swaps base+tail ATOMICALLY when the record
+		// arrives (and clears on failure — the clean-slate guard holds on
+		// every path that actually replays onto a stale tail).
+		if (!refetchRecordFirst) {
+			this.mutate(() => {
+				this.tail = [];
+				this.streamingMessageId = null;
+			});
+		}
 		this.setStatus("submitted");
 		try {
 			if (refetchRecordFirst) {
@@ -496,6 +505,13 @@ export class SessionModel {
 							this.tail = [];
 						});
 					}
+				} else {
+					// The record did not land — restore the clean-slate guard
+					// before the replay (no atomic swap is coming).
+					this.mutate(() => {
+						this.tail = [];
+						this.streamingMessageId = null;
+					});
 				}
 			}
 			const res = await this.fetch(`/api/chats/${encodeURIComponent(this.chatId)}/stream`, {
@@ -558,7 +574,15 @@ export class SessionModel {
 				// page's refusal flow JSON-parses the envelope out of it.
 				throw new Error((await res.text()) || `The send failed (${res.status}).`);
 			}
-			await this.consumeStream(res);
+			// CONNECTION DIET B (owner, 2026-10-10 — parallel-session freeze
+			// postmortem): the POST acknowledges and closes; there is no stream
+			// on this response to consume. Attach through the SAME reattach wire
+			// a returning visitor uses (refetch-first: the record refetch absorbs
+			// the server's write-ahead copy of our optimistic messages, then the
+			// replay lands on top). One live view connection per page, always —
+			// the browser's 6-per-origin pool is the scarce resource.
+			await res.text().catch(() => {}); // drain the tiny ack; release the socket
+			await this.resumeStream(true);
 		} catch (err) {
 			if ((err as Error).name === "AbortError") return; // stop() or a newer consume won
 			this.setError((err as Error).message);

@@ -58,6 +58,36 @@ function sseResponse(...events: unknown[]): Response {
 	return new Response(sse(...events), { status: 200 });
 }
 
+/** CONNECTION DIET B mock (owner, 2026-10-10 — parallel-session freeze
+ *  postmortem): send() no longer consumes the POST response — it acks,
+ *  closes, and reattaches. The wire sequence a send drives: POST /api/chat
+ *  (tiny JSON ack) → GET /api/chats/chat_x (record refetch — the
+ *  write-ahead absorbs the optimistic bubble) → GET .../stream (the SSE
+ *  wire). `userText` seeds the record's write-ahead user message; `post`
+ *  overrides the ack (409/error-path tests keep their own scripts);
+ *  `onPost` observes the POST body. */
+function dietFetch(opts: {
+	stream: () => Response;
+	userText?: string;
+	post?: () => Response;
+	onPost?: (body: string) => void;
+}): typeof globalThis.fetch {
+	return (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = String(input);
+		if (url === "/api/chat") {
+			if (opts.onPost && typeof init?.body === "string") opts.onPost(init.body);
+			return opts.post?.() ?? Response.json({ ok: true });
+		}
+		if (url === "/api/chats/chat_x") {
+			const messages =
+				opts.userText === undefined ? [] : [{ id: "u1", role: "user", content: opts.userText, timestamp: 1 }];
+			return Response.json({ messages });
+		}
+		if (url === "/api/chats/chat_x/stream") return opts.stream();
+		throw new Error(`unexpected fetch: ${url}`);
+	}) as typeof globalThis.fetch;
+}
+
 function assistantMsg(id: string, text: string): LhMessage {
 	return {
 		id,
@@ -203,21 +233,19 @@ describe("postInputEvent (the 409 identity-retry)", { skip: process.env.NO_SLOW 
 describe("send (one input event, verbatim consumption)", () => {
 	it("optimistically appends the text, POSTs {chatId, input}, consumes to [DONE]", async () => {
 		const posts: string[] = [];
-		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-			const url = String(input);
-			if (url === "/api/chat" && init?.method === "POST") {
-				posts.push(init.body as string);
-				return sseResponse(
+		globalThis.fetch = dietFetch({
+			onPost: (b) => posts.push(b),
+			userText: "my topic", // the write-ahead the record refetch absorbs
+			stream: () =>
+				sseResponse(
 					{ type: "agent_start" },
 					{ type: "message_start", message: { role: "assistant", content: [] } },
 					partial([{ type: "text", text: "hello there" }]),
 					{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hello there" }], stopReason: "stop" } },
 					{ type: "agent_end", messages: [] },
 					"[DONE]",
-				);
-			}
-			throw new Error(`unexpected fetch: ${url}`);
-		}) as typeof globalThis.fetch;
+				),
+		});
 
 		const m = model();
 		const pending = m.send({ type: "text", text: "my topic" });
@@ -249,7 +277,7 @@ describe("send (one input event, verbatim consumption)", () => {
 				push = (e) => controller.enqueue(enc.encode(e === "[DONE]" ? "data: [DONE]\n\n" : `data: ${JSON.stringify(e)}\n\n`));
 			},
 		});
-		globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof globalThis.fetch;
+		globalThis.fetch = dietFetch({ userText: "go", stream: () => new Response(body, { status: 200 }) });
 		const m = model();
 		const done = m.send({ type: "text", text: "go" });
 		const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -346,7 +374,7 @@ describe("send (one input event, verbatim consumption)", () => {
 				push = (e) => controller.enqueue(enc.encode(e === "[DONE]" ? "data: [DONE]\n\n" : `data: ${JSON.stringify(e)}\n\n`));
 			},
 		});
-		globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof globalThis.fetch;
+		globalThis.fetch = dietFetch({ userText: "q", stream: () => new Response(body, { status: 200 }) });
 		const m = model();
 		const done = m.send({ type: "text", text: "q" });
 		const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -438,13 +466,16 @@ it("Wave C: markers injected mid-run (custom role, follow-up delivery) append to
 });
 
 	it("a provider error rides VERBATIM (owner ruling) — no masking anywhere", async () => {
-		globalThis.fetch = (async () =>
-			sseResponse(
-				partial([{ type: "text", text: "" }]),
-				{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "" }], stopReason: "error", errorMessage: "OpenRouter 429: rate limited" } },
-				{ type: "agent_end", messages: [] },
-				"[DONE]",
-			)) as typeof globalThis.fetch;
+		globalThis.fetch = dietFetch({
+			userText: "q",
+			stream: () =>
+				sseResponse(
+					partial([{ type: "text", text: "" }]),
+					{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "" }], stopReason: "error", errorMessage: "OpenRouter 429: rate limited" } },
+					{ type: "agent_end", messages: [] },
+					"[DONE]",
+				),
+		});
 		const m = model();
 		await m.send({ type: "text", text: "q" });
 		assert.equal(m.getState().status, "ready");
@@ -544,8 +575,7 @@ describe("resumeStream (the reattach path)", () => {
 				c.close();
 			},
 		});
-		globalThis.fetch = (async () =>
-			new Response(body, { headers: { "Content-Type": "text/event-stream" } })) as typeof globalThis.fetch;
+		globalThis.fetch = dietFetch({ userText: "q", stream: () => new Response(body) });
 		const m = model();
 		const p = m.send({ type: "text", text: "q" });
 		assert.equal(m.getState().status, "submitted", "the action is optimistic: placeholder up pre-everything");

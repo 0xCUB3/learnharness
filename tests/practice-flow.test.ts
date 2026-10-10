@@ -28,6 +28,7 @@ import {
 import type { PiEngine } from "../src/agent/models.ts";
 import { createPracticeAgent } from "../src/agent/teacher-agent.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
+import { runningTurn } from "../src/server/turn-runs.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { activeProblemOf, needsContinuation } from "../src/core/index.ts";
 import { PATHS } from "../config.ts";
@@ -89,6 +90,22 @@ async function drain(res: Response): Promise<string> {
 	return res.text();
 }
 
+/** CONNECTION DIET B (owner, 2026-10-10): POST acks and closes; the turn's
+ *  wire is the reattach stream. Mirrors drain(): 200-ack assert + the fully
+ *  drained SSE body via runningTurn + subscribe (subscribe immediately —
+ *  faux turns settle in microtask rounds). */
+async function drainTurn(req: Request, factory: Parameters<typeof handleChatRequest>[1]): Promise<string> {
+	const cloned = req.clone();
+	const ack = await handleChatRequest(req, factory);
+	if (ack.status !== 200) {
+		assert.fail(`expected 200 ack, got ${ack.status}: ${await ack.text()}`);
+	}
+	const { chatId } = (await cloned.json()) as { chatId: string };
+	const handle = runningTurn(chatId);
+	if (!handle) return ""; // the turn settled inside the handler — completion already happened
+	return new Response(handle.subscribe()).text();
+}
+
 /** The practice agent factory (the handler's kind branch, test-shaped). */
 function practiceFactory(chatId: string, engine: PiEngine): Parameters<typeof handleChatRequest>[1] {
 	return (opts) => createPracticeAgent({ chatId, chatStore }, { engine, messages: opts.messages });
@@ -128,7 +145,7 @@ describe("practice flow (scripted model)", () => {
 		const factory = practiceFactory(chat.id, engine);
 
 		// ── Turn 1: the opening text; the agent poses ──
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "practice group theory" }), factory));
+		await drainTurn(post(chat.id, { type: "text", text: "practice group theory" }), factory);
 		const afterPose = chatStore.getChat(chat.id)!.messages;
 		const ack = afterPose[afterPose.length - 1] as LhMessage & ToolResultMessage;
 		assert.equal(ack.role, "toolResult");
@@ -138,12 +155,7 @@ describe("practice flow (scripted model)", () => {
 		assert.equal(activeProblemOf(afterPose)?.toolCallId, "call-p1");
 
 		// ── Turn 2: the submission arrives as a single-lane thinking message ──
-		await drain(
-			await handleChatRequest(
-				post(chat.id, { type: "thinking", problemCallId: "call-p1", text: "|G|=p; ⟨x⟩ has order dividing p" }),
-				factory,
-			),
-		);
+		await drainTurn(post(chat.id, { type: "thinking", problemCallId: "call-p1", text: "|G|=p; ⟨x⟩ has order dividing p" }), factory);
 		// The model saw the one label (owner round 2, 2026-10-05): the
 		// register is read from the text, not declared by a button.
 		assert.ok(lastSaw(calls, "Your thinking:"), "the conclude turn's prompt carries the thinking");
@@ -167,13 +179,8 @@ describe("practice flow (scripted model)", () => {
 			() => fauxAssistantMessage([fauxText("R0: reread the subgroup constraint.")]),
 		]);
 		const factory = practiceFactory(chat.id, engine);
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "go" }), factory));
-		await drain(
-			await handleChatRequest(
-				post(chat.id, { type: "thinking", problemCallId: "call-p2", text: "stuck at the second step" }),
-				factory,
-			),
-		);
+		await drainTurn(post(chat.id, { type: "text", text: "go" }), factory);
+		await drainTurn(post(chat.id, { type: "thinking", problemCallId: "call-p2", text: "stuck at the second step" }), factory);
 		assert.ok(lastSaw(calls, "Your thinking:"), "the turn's prompt carries the thinking");
 		// The problem is still active — a trace never concludes.
 		assert.equal(activeProblemOf(chatStore.getChat(chat.id)!.messages)?.toolCallId, "call-p2");
@@ -186,7 +193,7 @@ describe("practice flow (scripted model)", () => {
 			() => fauxAssistantMessage([fauxText("Dropped. Something else, then.")]),
 		]);
 		const factory = practiceFactory(chat.id, engine);
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "go" }), factory));
+		await drainTurn(post(chat.id, { type: "text", text: "go" }), factory);
 
 		// The silent dismissal route (the same POST the client's Esc takes).
 		const dismissRoute = await import("../app/api/chats/[id]/dismiss/route.ts");
@@ -203,7 +210,7 @@ describe("practice flow (scripted model)", () => {
 		assert.equal(activeProblemOf(marked), null, "the marker deactivates at Esc time");
 
 		// The next plain input synthesizes the conclude pair ahead of itself.
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "something easier" }), factory));
+		await drainTurn(post(chat.id, { type: "text", text: "something easier" }), factory);
 		const msgs = chatStore.getChat(chat.id)!.messages;
 		const synth = msgs.find(
 			(m) => (m as ToolResultMessage).role === "toolResult" && (m as ToolResultMessage).toolName === "conclude",

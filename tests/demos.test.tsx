@@ -59,6 +59,7 @@ import { createTeacherTools } from "../src/agent/tools.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
+import { runningTurn } from "../src/server/turn-runs.ts";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
 import { projectView as projectNative } from "../src/core/view.ts";
 import type { PiEngine } from "../src/agent/models.ts";
@@ -786,6 +787,15 @@ async function drain(res: Response): Promise<string> {
 	return res.text();
 }
 
+/** CONNECTION DIET B (owner, 2026-10-10): the POST acks and closes; drain
+ *  the turn's wire through the reattach stream instead (settle-tolerant:
+ *  a short turn may finish inside the handler). */
+async function drainRunning(chatId: string): Promise<string> {
+	const handle = runningTurn(chatId);
+	if (!handle) return ""; // the turn already settled — completion happened
+	return new Response(handle.subscribe()).text();
+}
+
 
 describe("demo/visual job runners", () => {
 	it("runJob completes a demo: result on the job, steer via deliver, ack stays on the part", async () => {
@@ -931,34 +941,34 @@ describe("demo/visual job runners", () => {
 		const { steers, runner } = testRunner();
 
 		try {
-			await drain(
-				await handleChatRequest(
-					new Request("http://test/api/chat", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
+			const ack = await handleChatRequest(
+				new Request("http://test/api/chat", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						chatId: chat.id,
+						// Wave B: the input-events contract — one event,
+						// never a client transcript.
+						input: { type: "text", text: "teach me compounding" },
+					}),
+				}),
+				// The handler hands the factory the native build options
+				// (messages are the merged record; the record IS the agent
+				// state — no adapter conversion).
+				(opts) =>
+					createTeacherAgent(undefined, {
+						engine: teacher,
+						messages: opts.messages,
+						tools: createTeacherTools({
 							chatId: chat.id,
-							// Wave B: the input-events contract — one event,
-							// never a client transcript.
-							input: { type: "text", text: "teach me compounding" },
+							chatStore,
+							jobStore,
+							spawn: (job, input) => void runner.runJob(job.id, input),
 						}),
 					}),
-					// The handler hands the factory the native build options
-					// (messages are the merged record; the record IS the agent
-					// state — no adapter conversion).
-					(opts) =>
-						createTeacherAgent(undefined, {
-							engine: teacher,
-							messages: opts.messages,
-							tools: createTeacherTools({
-								chatId: chat.id,
-								chatStore,
-								jobStore,
-								spawn: (job, input) => void runner.runJob(job.id, input),
-							}),
-						}),
-				),
 			);
+			if (ack.status !== 200) assert.fail(`expected 200 ack, got ${ack.status}: ${await ack.text()}`);
+			await drainRunning(chat.id);
 
 			const job = jobStore.findJobByToolCallId(chat.id, "call-d2");
 			assert.ok(job, "dispatch created a job at tool-execute time");

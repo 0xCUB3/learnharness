@@ -139,6 +139,40 @@ async function drain(res: Response): Promise<string> {
 	return res.text(); // consumes the SSE stream to completion (fires onFinish)
 }
 
+/** CONNECTION DIET B (owner, 2026-10-10 — parallel-session freeze postmortem):
+ *  POST /api/chat no longer streams the turn — it acks and closes, and the
+ *  submitter (like every view) attaches via the reattach stream. This
+ *  mirrors drain(): assert the 200 ack, then drain the turn's SSE body to
+ *  completion through runningTurn + subscribe — the same wire the GET
+ *  route serves. Subscribe IMMEDIATELY after the ack: faux turns settle in
+ *  microtask rounds, and the handle leaves the registry at settle. */
+async function drainTurn(req: Request, factory: Parameters<typeof handleChatRequest>[1]): Promise<string> {
+	const cloned = req.clone();
+	const ack = await handleChatRequest(req, factory);
+	if (ack.status !== 200) {
+		assert.fail(`expected 200 ack, got ${ack.status}: ${await ack.text()}`);
+	}
+	const { chatId } = (await cloned.json()) as { chatId: string };
+	const handle = runningTurn(chatId);
+	if (!handle)
+		// A short turn (a quick answer reaction) can settle INSIDE the
+		// handler's trailing awaits — the registry is already clear. There is
+		// nothing to drain: completion happened. (Body-reading callers get "" —
+		// their eventsOf asserts then fail loudly if this ever bites a long
+		// turn, which is the honest outcome for a lost wire.)
+		return "";
+	return new Response(handle.subscribe()).text();
+}
+
+/** Drain a RUNNING turn's wire when the POST already happened (the ack
+ *  path left nothing to consume — CONNECTION DIET B). Subscribe immediately:
+ *  faux turns settle in microtask rounds. */
+async function drainRunning(chatId: string): Promise<string> {
+	const handle = runningTurn(chatId);
+	if (!handle) assert.fail(`no running turn to drain: ${chatId}`);
+	return new Response(handle.subscribe()).text();
+}
+
 function waitFor(cond: () => boolean, timeoutMs = 8000, what = "condition"): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const started = Date.now();
@@ -244,7 +278,7 @@ describe("teacher chat flow (scripted model)", () => {
 		createdChats.push(chat.id);
 
 		// ── Turn 1: learner opens with a topic; teacher probes with a quiz ──
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine));
 
 		const saved1 = chatStore.getChat(chat.id)!;
 		// Native record: user + assistant (fork 1 — the clean question's
@@ -282,7 +316,7 @@ describe("teacher chat flow (scripted model)", () => {
 		// EVENT — the answer lands as the call's real tool result. ──
 		const answer = gradedAnswer(QUIZ_INPUT, ["Mercury"]);
 		assert.equal(answer.correct, true);
-		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), agentFactory(engine));
 
 		// ── The teacher reacts — the projection groups the reaction into the
 		// SAME assistant view message as the answered quiz (the native
@@ -359,7 +393,7 @@ describe("teacher chat flow (scripted model)", () => {
 		const { engine } = scriptedTeacher(defaultLesson);
 		const chat = createConfiguredChat("Test: protocol pin");
 		createdChats.push(chat.id);
-		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
+		const body = await drainTurn(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine));
 		const events = eventsOf(body);
 		const callSeen = events.findIndex(
 			(e) => e.type === "message_update" && JSON.stringify(e.message?.content ?? []).includes('"type":"toolCall"'),
@@ -385,7 +419,7 @@ describe("teacher chat flow (scripted model)", () => {
 		createdChats.push(chat.id);
 		// Seed a plain-text turn (no dangling question — waitForIdle must pass).
 		const seed = scriptedTeacher(() => [() => fauxAssistantMessage([fauxText("On it — dispatched the researcher.")])]);
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "research it" }), agentFactory(seed.engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "research it" }), agentFactory(seed.engine));
 
 		// The pump's turn runner, faithfully shaped but scripted (the real one
 		// is chat-handler's module-level wiring; this file's import already set
@@ -595,8 +629,11 @@ describe("teacher chat flow (scripted model)", () => {
 
 		const res = await handleChatRequest(post(chat.id, { type: "text", text: "hold my turn" }), agentFactory(engine));
 		assert.equal(res.status, 200);
-		// Read one chunk then cancel — the browser view leaves mid-stream.
-		const reader = res.body!.getReader();
+		// CONNECTION DIET B (2026-10-10): the POST is a closed ack — the view
+		// wire is the reattach stream. Attach, read one chunk, then cancel —
+		// the browser view leaves mid-stream.
+		const view = new Response(runningTurn(chat.id)!.subscribe());
+		const reader = view.body!.getReader();
 		await reader.read();
 		await reader.cancel();
 		// The turn is STILL a running background object — no view killed it.
@@ -647,7 +684,7 @@ describe("teacher chat flow (scripted model)", () => {
 
 		const chat = createConfiguredChat("Test: bad quiz retry");
 		createdChats.push(chat.id);
-		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
+		const body = await drainTurn(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine));
 
 		// WIRE pin (the live modal-realism crash): the invalid call's execution
 		// end is an ERROR — the dock only mounts on a CLEAN tool_execution_end,
@@ -715,7 +752,7 @@ describe("teacher chat flow (scripted model)", () => {
 
 		const chat = createConfiguredChat("Test: string options");
 		createdChats.push(chat.id);
-		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
+		const body = await drainTurn(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine));
 
 		const events = eventsOf(body);
 		const stringyEnd = events.find((e) => e.type === "tool_execution_end" && e.toolCallId === "call-stringy");
@@ -754,7 +791,7 @@ describe("teacher chat flow (scripted model)", () => {
 
 		const chat = createConfiguredChat("Test: parallel quizzes");
 		createdChats.push(chat.id);
-		const body = await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me twice" }), agentFactory(engine)));
+		const body = await drainTurn(post(chat.id, { type: "text", text: "quiz me twice" }), agentFactory(engine));
 
 		// (B) wire determinism: question tools execute sequentially, so the
 		// quizzes' CLEAN execution ends arrive in call order (the dock mounts
@@ -814,19 +851,20 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		const chat = createConfiguredChat("Test: turn guard");
 		createdChats.push(chat.id);
 
-		const res1 = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)); // NOT drained → in flight
+		const res1 = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)); // acked; the turn runs as a background object (Diet B: no stream to hold)
 		assert.equal(isTurnRunning(chat.id), true, "turn registered as in flight");
+		const view1 = drainRunning(chat.id); // a live view — the turn would run on with none
 
 		// A stale client (remount racing a live turn) tries to start a second turn.
 		const res2 = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine));
 		assert.equal(res2.status, 409, "concurrent turn rejected — last-writer-wins persist would clobber it");
 
-		await drain(res1); // finish → onFinish → endTurn
+		await view1; // finish → onFinish → endTurn
 		assert.equal(isTurnRunning(chat.id), false, "registry cleared at finish");
 
 		const res3 = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine));
 		assert.equal(res3.status, 200, "the next turn is accepted after the previous finished");
-		await drain(res3);
+		await drainRunning(chat.id);
 	});
 
 	it("write-ahead: the learner's answer is durable BEFORE the turn finishes", async () => {
@@ -835,7 +873,7 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		createdChats.push(chat.id);
 
 		// Turn 1: the teacher asks the quiz (dangling call in the record).
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine));
 
 		// The learner answers; the client posts the ANSWER EVENT.
 		const answer = gradedAnswer(QUIZ_INPUT, ["Mercury"]);
@@ -844,14 +882,13 @@ describe("mid-turn navigation (turn liveness + write-ahead)", () => {
 		// on disk — a remount (or crash) mid-turn sees the answered quiz, never
 		// the stale pre-answer question.
 		const res = await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), agentFactory(engine));
-		const midTurn = chatStore.getChat(chat.id)!;
-		assert.equal(midTurn.messages.length, 3, "write-ahead appended the answer tool result before finish");
+		const midTurn = chatStore.getChat(chat.id)!;		assert.equal(midTurn.messages.length, 3, "write-ahead appended the answer tool result before finish");
 		assert.equal((midTurn.messages[2] as { role?: string }).role, "toolResult");
 		const midQuiz = projectView(midTurn.messages)[1]!.parts.find((p) => p.type === "tool-quiz");
 		assert.ok(midQuiz && midQuiz.type === "tool-quiz");
 		assert.equal((midQuiz as { state?: string }).state, "output-available", "write-ahead persisted the answer before finish");
 
-		await drain(res); // finish → persist the full turn → endTurn
+		await drainRunning(chat.id); // finish → persist the full turn → endTurn
 		const saved2 = chatStore.getChat(chat.id)!;
 		// Native: user, assistant, answer result, reaction — one append-only
 		// history; the projection still renders ONE assistant group.
@@ -910,7 +947,7 @@ describe("the BYOK turn gate (no factory floor — owner, 2026-09-22)", () => {
 			assert.match(body.error, /No model configured/);
 		} else {
 			assert.equal(res.status, 200, "the record's strong slot satisfies the conversation chain");
-			await drain(res);
+			await drainRunning(chat.id);
 		}
 
 		// Either way: no phantom liveness, nothing durable from a refused turn.
@@ -926,7 +963,7 @@ describe("the BYOK turn gate (no factory floor — owner, 2026-09-22)", () => {
 		createdChats.push(chat.id);
 		const res = await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(scriptedTeacher(defaultLesson).engine));
 		assert.equal(res.status, 200, "chat.settings.model satisfies the chain without any record slot");
-		await drain(res);
+		await drainRunning(chat.id);
 	});
 });
 
@@ -973,7 +1010,7 @@ describe("the key-presence turn gate (provider-key interlude, 2026-09-25)", () =
 			const res = await handleChatRequest(post(chat.id, { type: "text", text: "teach me something" }), agentFactory(scriptedTeacher(defaultLesson).engine));
 
 			assert.equal(res.status, 200, "the env-shadowed key counts as present — the turn runs");
-			await drain(res);
+			await drainRunning(chat.id);
 		} finally {
 			if (saved !== undefined) process.env.OPENAI_API_KEY = saved;
 			else delete process.env.OPENAI_API_KEY;
@@ -982,6 +1019,27 @@ describe("the key-presence turn gate (provider-key interlude, 2026-09-25)", () =
 });
 
 describe("background-turn runner (owner ruling 2026-09-25: every turn is a server-side process, clients are views)", () => {
+	it("CONNECTION DIET B (owner, 2026-10-10): the POST acks and closes — the response never holds the turn's stream", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const engine = gatedTeacher(gate);
+		const chat = createConfiguredChat("Test: ack-and-close");
+		createdChats.push(chat.id);
+
+		const res = await handleChatRequest(post(chat.id, { type: "text", text: "hold it" }), agentFactory(engine));
+		assert.equal(res.status, 200);
+		// The body must be FULLY readable while the turn is still gated
+		// mid-run — a closed JSON ack, not an open stream. (The freeze
+		// postmortem: each held-open POST response pinned one of the
+		// browser's 6-per-origin connections for the turn's whole life.)
+		const body = JSON.parse(await res.text());
+		assert.deepEqual(body, { ok: true }, "the ack is a tiny JSON envelope");
+		assert.equal(isTurnRunning(chat.id), true, "the turn runs on with its response closed");
+
+		release();
+		await waitFor(() => !isTurnRunning(chat.id), 8000, "turn settle");
+	});
+
 	it("subscribe mid-turn: a second view gets the FULL replay, then live, same dialect", async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));
@@ -989,10 +1047,13 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 		const chat = createConfiguredChat("Test: reattach replay");
 		createdChats.push(chat.id);
 
-		const first = await handleChatRequest(post(chat.id, { type: "text", text: "hold my turn" }), agentFactory(engine));
-		assert.equal(first.status, 200);
-		// Consume the first view a little (the start chunk is out).
-		const reader = first.body!.getReader();
+		const ack = await handleChatRequest(post(chat.id, { type: "text", text: "hold my turn" }), agentFactory(engine));
+		assert.equal(ack.status, 200);
+		// CONNECTION DIET B (2026-10-10): the POST acks and closes; the first
+		// view consumes a little of the reattach wire (the start chunk is out).
+		const firstHandle = runningTurn(chat.id)!;
+		const firstView = new Response(firstHandle.subscribe());
+		const reader = firstView.body!.getReader();
 		await reader.read();
 
 		// A SECOND view attaches mid-turn — a remount, another device.
@@ -1024,6 +1085,39 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 		assert.ok(firstTail.endsWith("data: [DONE]\n\n"), "first view closes cleanly at settle, unaffected by the reattach");
 	});
 
+	it("COMPACTION LAW (owner 2026-10-09): the log stores state, not chunks — a chunk burst coalesces to ONE update, slim wire, full content", async () => {
+		// The parallel-session freeze postmortem: pi's message_update is a FULL
+		// snapshot per provider chunk; retaining and re-serializing every one
+		// made memory and replay quadratic in message length (one high-thinking
+		// message = hundreds of MB retained; every reattach re-stringified the
+		// whole history in one blocking stretch). Pins the fix end-to-end: faux
+		// streams a long text as many immediate chunks (microtask pacing — all
+		// inside one flush window), yet the wire carries exactly ONE
+		// message_update for the run, it is the LATEST snapshot, and the wire
+		// never carries pi's duplicate partial.
+		const long = "quadratic blowup ".repeat(40); // ~40 faux chunks
+		const faux = createFauxCore({});
+		faux.setResponses([fauxAssistantMessage([fauxText(long)])]);
+		const engine: PiEngine = { model: faux.getModel(), streamFn: faux.streamSimple };
+		const chat = createConfiguredChat("Test: compaction law");
+		createdChats.push(chat.id);
+		const body = await drainTurn(post(chat.id, { type: "text", text: "go" }), agentFactory(engine));
+		const events = eventsOf(body);
+		const updates = events.filter((e) => e.type === "message_update");
+		assert.equal(updates.length, 1, "a burst of chunks coalesces to exactly one update on the wire");
+		assert.ok(
+			JSON.stringify(updates[0]!.message?.content ?? []).includes(long),
+			"the one update is the LATEST snapshot — the full streamed text",
+		);
+		assert.ok(!body.includes("assistantMessageEvent"), "WIRE DIET: the duplicate partial never crosses the boundary");
+		const end = events.find((e) => e.type === "message_end" && (e as { message?: { role?: string } }).message?.role === "assistant");
+		assert.ok(end, "message_end present");
+		assert.ok(JSON.stringify((end as { message?: { content?: unknown[] } }).message?.content ?? []).includes(long), "message_end carries the full final message (authoritative, lossless)");
+		// And the persisted record never knew about chunks at all.
+		const record = chatStore.getChat(chat.id)!;
+		assert.ok(JSON.stringify(record.messages).includes(long), "persistTurn wrote the settled message in full");
+	});
+
 	it("remote abort: any client can stop a running turn; the partial persists; subscribers close cleanly", async () => {
 		const engine = abortableTeacher();
 		const chat = createConfiguredChat("Test: remote abort");
@@ -1032,7 +1126,7 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 		const res = await handleChatRequest(post(chat.id, { type: "text", text: "wait forever" }), agentFactory(engine));
 		assert.equal(res.status, 200);
 		assert.ok(runningTurn(chat.id), "turn registered while in flight");
-		const viewText = res.text(); // the first view, reading to settle
+		const viewText = new Response(runningTurn(chat.id)!.subscribe()).text(); // the first view, reading to settle
 
 		// The remote kill from a DIFFERENT view (the dock's abort).
 		const outcome = abortTurn(chat.id);
@@ -1062,7 +1156,7 @@ describe("background-turn runner (owner ruling 2026-09-25: every turn is a serve
 
 		// And after a settled turn, the registry is empty — the GET would
 		// serve the same terminal, not a stale handle.
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "quiz me" }), agentFactory(engine));
 		assert.equal(runningTurn(chat.id), undefined, "no handle survives settle");
 	});
 
@@ -1134,7 +1228,7 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 
 	const factory: Parameters<typeof handleChatRequest>[1] = (opts) =>
 		createTeacherAgent(undefined, { engine, messages: opts.messages, tools });
-	await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), factory));
+	await drainTurn(post(chat.id, { type: "text", text: "teach me the solar system" }), factory);
 
 	const saved1 = chatStore.getChat(chat.id)!;
 	const savedContent1 = (saved1.messages[1] as { content: unknown }).content as Array<{ type: string; name?: string }>;
@@ -1161,7 +1255,7 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 	const answer = buildAnswer(qd, { text: "It stays near the Sun." });
 	assert.equal(answer.correct, undefined, "no client grading — the model grades");
 
-	await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), factory));
+	await drainTurn(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), factory);
 
 	const saved2 = chatStore.getChat(chat.id)!;
 	const view2 = projectView(saved2.messages);
@@ -1190,7 +1284,7 @@ describe("the silent dismissal (A2)", () => {
 		createdChats.push(chat.id);
 
 		// Turn 1: the quiz dangles.
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine));
 		assert.ok(danglingQuestionOf(chatStore.getChat(chat.id)!.messages), "the quiz is pending");
 
 		// The dismissal: SILENT — record completes the call, nothing wakes.
@@ -1208,7 +1302,7 @@ describe("the silent dismissal (A2)", () => {
 		// The next plain message is THE wake — the model sees the skipped
 		// question and the user's text in one context (the steer-batch
 		// outcome, delivered by record truth).
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "skip that — tell me about Mars" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "skip that — tell me about Mars" }), agentFactory(engine));
 		assert.equal(calls.length, 2, "exactly one wake: the user's message");
 		assert.match(calls[1]!.join("\n"), /dismissed/, "the dismissed result rode the wake's context");
 		assert.equal(endsInDismissal(chatStore.getChat(chat.id)!.messages), false, "the pause lifted with the send");
@@ -1295,7 +1389,7 @@ describe("parallel question calls: the answer defers its wake while a sibling da
 
 		// Turn 1: the batch lands; both calls dangle (the dock shows the quiz —
 		// the first in call order).
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "ask me two questions in parallel" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "ask me two questions in parallel" }), agentFactory(engine));
 		let saved = chatStore.getChat(chat.id)!;
 		let pending = danglingQuestionOf(saved.messages);
 		assert.equal(pending?.toolCallId, "call-1", "the dock holds the quiz first");
@@ -1303,7 +1397,7 @@ describe("parallel question calls: the answer defers its wake while a sibling da
 		// The graded answer: the result appends ADJACENT to the calling
 		// assistant message — and NO wake fires while the ask still dangles.
 		const quizAns = gradedAnswer(QUIZ_INPUT, ["Mercury"]);
-		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer: quizAns }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "answer", toolCallId: "call-1", answer: quizAns }), agentFactory(engine));
 		assert.equal(calls.length, 1, "the sibling answer woke NOTHING (the gate deferred)");
 		saved = chatStore.getChat(chat.id)!;
 		assert.equal((saved.messages[2] as { toolCallId?: string }).toolCallId, "call-1", "quiz result adjacent to the batch");
@@ -1320,7 +1414,7 @@ describe("parallel question calls: the answer defers its wake while a sibling da
 			text: "History",
 			answeredAt: new Date().toISOString(),
 		};
-		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-2", answer: askAns }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "answer", toolCallId: "call-2", answer: askAns }), agentFactory(engine));
 		assert.equal(calls.length, 2, "exactly one wake: the last answer's turn");
 		saved = chatStore.getChat(chat.id)!;
 		assert.equal(danglingQuestionOf(saved.messages), null, "nothing dangles anymore");
@@ -1360,10 +1454,10 @@ describe("parallel rounds: the LAST resolution decides the wake (owner ruling 20
 		const { engine, calls } = scriptedTeacher(batchLesson);
 		const chat = createConfiguredChat("Test: round 1");
 		createdChats.push(chat.id);
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "two questions please" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "two questions please" }), agentFactory(engine));
 
 		// Answer the quiz — deferred by the parallel gate.
-		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-1", answer: gradedAnswer(QUIZ_INPUT, ["Mercury"]) }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "answer", toolCallId: "call-1", answer: gradedAnswer(QUIZ_INPUT, ["Mercury"]) }), agentFactory(engine));
 		assert.equal(calls.length, 1, "the sibling answer deferred");
 
 		// Dismiss the ask — the LAST resolution is a dismissal: no continuation
@@ -1380,12 +1474,12 @@ describe("parallel rounds: the LAST resolution decides the wake (owner ruling 20
 		const { engine, calls } = scriptedTeacher(batchLesson);
 		const chat = createConfiguredChat("Test: round 2");
 		createdChats.push(chat.id);
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "two questions please" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "two questions please" }), agentFactory(engine));
 
 		assert.equal((await dismissPost(chat.id, "call-1")).status, 200);
 		assert.equal(calls.length, 1, "the dismissal woke nothing");
 
-		await drain(await handleChatRequest(post(chat.id, { type: "answer", toolCallId: "call-2", answer: { kind: "ask", questionText: "Next topic?", dontKnow: false, answers: [], text: "Chemistry", answeredAt: new Date().toISOString() } }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "answer", toolCallId: "call-2", answer: { kind: "ask", questionText: "Next topic?", dontKnow: false, answers: [], text: "Chemistry", answeredAt: new Date().toISOString() } }), agentFactory(engine));
 		assert.equal(calls.length, 2, "the trailing answer fired the one wake");
 		const prompt2 = calls[1]!.join("\n");
 		assert.match(prompt2, /Chemistry/, "the answer rode the wake");
@@ -1451,8 +1545,11 @@ describe("composer steering: POST /api/chats/[id]/steer", () => {
 		assert.equal(res.status, 200);
 		assert.equal((await res.json() as { ok: boolean }).ok, true);
 
+		// CONNECTION DIET B: the drain rides the reattach wire (the POST
+		// acked long ago). Attach BEFORE releasing — a live view.
+		const viewText = drainRunning(chat.id);
 		release(); // the first response completes → the drain → the second call
-		const body = await drain(turnRes);
+		const body = await viewText;
 		assert.match(body, /also cover Venus/, "the drained steer rode the live stream verbatim");
 
 		// ONE turn: the second model call's context contains the steer
@@ -1503,22 +1600,13 @@ describe("duplicate provider tool-call ids (the Lacan fix)", () => {
 
 		const chat = chatStore.createChat("Lacan: duplicate call_0 turns");
 		// Turn 1: the ask question.
-		await drain(await handleChatRequest(post(chat.id, { type: "text", text: "teach me Lacan" }), agentFactory(engine)));
+		await drainTurn(post(chat.id, { type: "text", text: "teach me Lacan" }), agentFactory(engine));
 		let saved = chatStore.getChat(chat.id)!;
 		let pending = danglingQuestionOf(saved.messages)!;
 		assert.equal(pending.tool, "ask_user_question");
 		// The client answers with the id IT SAW — the persisted one.
 		const askId = pending.toolCallId;
-		await drain(
-			await handleChatRequest(
-				post(chat.id, {
-					type: "answer",
-					toolCallId: askId,
-					answer: { kind: "ask", questionText: ASK.question, dontKnow: false, answers: [], text: "The theory core", answeredAt: new Date().toISOString() },
-				}),
-				agentFactory(engine),
-			),
-		);
+		await drainTurn(post(chat.id, { type: "answer", toolCallId: askId, answer: { kind: "ask", questionText: ASK.question, dontKnow: false, answers: [], text: "The theory core", answeredAt: new Date().toISOString() }, }), agentFactory(engine));
 
 		// Turn 2: the quiz — ALSO `call_0` from the provider.
 		saved = chatStore.getChat(chat.id)!;
@@ -1527,9 +1615,7 @@ describe("duplicate provider tool-call ids (the Lacan fix)", () => {
 		const quizId = pending.toolCallId;
 		assert.notEqual(quizId, askId, "the uniquifier reminted the colliding id at the wire boundary");
 		assert.match(quizId, /^call_0~\d+$/, "mint scheme: orig~n");
-		await drain(
-			await handleChatRequest(post(chat.id, { type: "answer", toolCallId: quizId, answer: gradedAnswer(QUIZ2, ["Mercury"]) }), agentFactory(engine)),
-		);
+		await drainTurn(post(chat.id, { type: "answer", toolCallId: quizId, answer: gradedAnswer(QUIZ2, ["Mercury"]) }), agentFactory(engine));
 
 		saved = chatStore.getChat(chat.id)!;
 		// The invariant: CALL ids are unique among themselves (a call and its

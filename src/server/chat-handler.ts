@@ -21,7 +21,7 @@ import {
 	steerLiveChat,
 	unregisterLiveAgent,
 } from "./jobs.ts";
-import { piTurnResponse, runPiTurn } from "./pi/ui-stream.ts";
+import { runPiTurn } from "./pi/ui-stream.ts";
 import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
@@ -439,6 +439,10 @@ export async function handleChatInput(
 		providerEventNote(chatId, "turn", `run start (base: ${merged.length} messages)`);
 		const handle = runPiTurn({
 			agent: constructed,
+			// The coalescing window seam (COMPACTION LAW, 2026-10-09): tests
+			// tighten it via LH_UPDATE_FLUSH_MS; production rides the 100ms
+			// default in ui-stream.
+			...(process.env.LH_UPDATE_FLUSH_MS ? { updateFlushMs: Number(process.env.LH_UPDATE_FLUSH_MS) } : {}),
 			// THE LACAN FIX (2026-10-04): seed the uniquifier with every
 			// tool-call id the record already holds — a provider that resets
 			// ids per response (DeepSeek) then gets fresh unique ids for this
@@ -545,9 +549,16 @@ export async function handleChatInput(
 		// runPiTurn call is race-free: the agent loop only ticks in later
 		// microtasks, so settle (and thus unregister) cannot beat us here.
 		registerTurn(chatId, handle);
-		// The POST response: just this caller's view onto the running turn —
-		// identical wire dialect to the reattach stream.
-		return piTurnResponse(handle);
+		// CONNECTION DIET B (owner, 2026-10-10 — the parallel-session freeze
+		// postmortem): the POST no longer holds the turn's SSE stream open for
+		// its whole duration. It acknowledges acceptance and CLOSES; the
+		// submitter attaches through GET /api/chats/[id]/stream — the same
+		// universal reattach wire a returning visitor uses. The browser's
+		// 6-connections-per-origin pool is the scarce resource: a submission
+		// must cost zero permanently-held slots beyond the one live view. The
+		// turn itself is a server-side process (ruling 2026-09-25) — it never
+		// needed this connection, only a view did.
+		return Response.json({ ok: true });
 	} catch (err) {
 		// The stream never started, so no onFinish will fire — clear the registry
 		// or a malformed request would lock the chat until the TTL eviction.
