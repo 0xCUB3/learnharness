@@ -14,6 +14,12 @@
  *   publishes it as --lh-zoom so physical-constant lengths (the traffic-
  *   light gutter) can divide by it.
  *
+ *   window.lh.onUpdateStatus(cb) / window.lh.installUpdate() — the
+ *   auto-update channel (Wave C, 2026-10-10): "lh:update-status" pushes
+ *   {status:"downloaded", version} once an update is staged; installUpdate
+ *   asks main to kill the server and quit-and-install. Browser builds:
+ *   both absent, the banner never renders.
+ *
  * Channel names are mirrored in electron/main.cjs — keep them in sync.
  */
 const { contextBridge, ipcRenderer } = require("electron");
@@ -26,4 +32,10 @@ contextBridge.exposeInMainWorld("lh", {
 		return () => ipcRenderer.removeListener("lh:zoom", listener);
 	},
 	getZoom: () => ipcRenderer.invoke("lh:zoom:get"),
+	onUpdateStatus: (cb) => {
+		const listener = (_event, status) => cb(status);
+		ipcRenderer.on("lh:update-status", listener);
+		return () => ipcRenderer.removeListener("lh:update-status", listener);
+	},
+	installUpdate: () => ipcRenderer.send("lh:update-install"),
 });

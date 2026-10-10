@@ -60,6 +60,9 @@ declare global {
 			/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
 			onZoom?: (cb: (factor: number) => void) => () => void;
 			getZoom?: () => Promise<number>;
+			/** Auto-update channel (Wave C, 2026-10-10): "lh:update-status" pushes once a staged update exists. */
+			onUpdateStatus?: (cb: (status: { status: string; version: string | null }) => void) => () => void;
+			installUpdate?: () => void;
 		};
 	}
 }

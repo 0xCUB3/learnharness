@@ -24,7 +24,7 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -298,6 +298,104 @@ function createWindow(url) {
  * lights, is impossible without rebuilding the window). */
 const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 
+/* ── Auto-update (Wave C, owner 2026-10-10: silent download + restart ─────
+ * banner; checks at startup + every 24h) ─────────────────────────────────
+ *
+ * Feed: GitHub Releases (electron-builder.yml publish → app-update.yml,
+ * baked + signed into the bundle). macOS needs the app signed (it is —
+ * Developer ID) and updates ride the zip target (Squirrel.Mac); blockmaps
+ * give differential downloads for free.
+ *
+ * Hard rules:
+ *  - DEV NEVER UPDATES: !app.isPackaged skips the updater entirely — the
+ *    dev world runs `next dev` and has no signed bundle.
+ *  - THE UPDATER CAN NEVER TAKE THE APP DOWN: every event and check is
+ *    caught and logged (feed down, disk full, bad signature — all just
+ *    log lines; the app keeps working, update or no update).
+ *  - LH_UPDATE_FEED (env): overrides the baked GitHub feed with a generic
+ *    local server — the pre-release verification drill (serve
+ *    latest-mac.yml + zip + blockmap from any localhost HTTP dir and
+ *    watch a real installed copy find/download/restart). Test-only seam.
+ *
+ * Install path: the downloaded update applies on quit (autoInstallOnAppQuit
+ * — Squirrel.Mac stages natively and swaps on relaunch). The renderer
+ * banner asks for an immediate restart via "lh:update-install"; we kill
+ * the child server FIRST — deterministic ordering: the server lives
+ * inside the .app bundle Squirrel is about to replace (extraResources),
+ * and before-quit alone would race the swap. */
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let autoUpdater = null; // electron-updater's, packaged builds only
+
+function broadcastUpdateStatus(status) {
+	for (const win of BrowserWindow.getAllWindows()) {
+		try {
+			win.webContents.send("lh:update-status", status);
+		} catch {
+			/* window mid-teardown — the next push retries */
+		}
+	}
+}
+
+function checkForUpdates({ manual = false } = {}) {
+	if (!autoUpdater) return;
+	autoUpdater
+		.checkForUpdates()
+		.then((result) => {
+			// The download itself is silent (autoDownload); the banner fires on
+			// update-downloaded. Manual checks additionally answer directly.
+			if (!manual) return;
+			const version = result?.updateInfo?.version;
+			if (!version) dialog.showMessageBox({ type: "info", message: "You're up to date.", detail: `LearnHarness ${app.getVersion()} is the latest version.` });
+		})
+		.catch((err) => {
+			log(`update check failed: ${err?.message ?? err}`);
+			if (manual) dialog.showMessageBox({ type: "warning", message: "Couldn't check for updates.", detail: String(err?.message ?? err) });
+		});
+}
+
+function installUpdateNow() {
+	// Kill the server BEFORE the quit-and-install (see block comment).
+	try {
+		killServer();
+	} catch {
+		/* already dead */
+	}
+	autoUpdater?.quitAndInstall();
+}
+
+function setupAutoUpdater() {
+	if (!app.isPackaged) {
+		log("auto-update: dev build — updater disabled");
+		return;
+	}
+	try {
+		autoUpdater = require("electron-updater").autoUpdater;
+	} catch (err) {
+		log(`auto-update: electron-updater unavailable (${err?.message ?? err}) — updates disabled`);
+		return;
+	}
+	const feed = process.env.LH_UPDATE_FEED;
+	if (feed) {
+		autoUpdater.setFeedURL({ provider: "generic", url: feed });
+		log(`auto-update: LH_UPDATE_FEED override → ${feed}`);
+	}
+	autoUpdater.autoDownload = true;
+	autoUpdater.autoInstallOnAppQuit = true;
+	// Route every updater log line through the shell's own log (userData/
+	// logs/main.log) — feed failures must be diagnosable after the fact.
+	autoUpdater.logger = {
+		info: (m) => log(`updater: ${m}`),
+		warn: (m) => log(`updater warn: ${m}`),
+		debug: (m) => {}, // too chatty for the persistent log
+		error: (m) => log(`updater error: ${m}`),
+	};
+	autoUpdater.on("update-downloaded", (info) => {
+		log(`update downloaded: ${info?.version} — banner shown`);
+		broadcastUpdateStatus({ status: "downloaded", version: info?.version ?? null });
+	});
+	autoUpdater.on("error", (err) => log(`updater error: ${err?.message ?? err}`));
+}
+
 function zoomStep(win, dir) {
 	const current = win.webContents.getZoomFactor();
 	const next =
@@ -321,6 +419,9 @@ function installMenu() {
 			label: app.name,
 			submenu: [
 				{ role: "about" },
+				// Manual check (Wave C): answers via native dialog — no renderer
+				// round-trip. The 24h automatic checks stay silent.
+				{ label: "Check for Updates…", click: () => checkForUpdates({ manual: true }) },
 				{ type: "separator" },
 				{ role: "hide" },
 				{ role: "hideOthers" },
@@ -393,6 +494,13 @@ async function main() {
 
 	installMenu();
 
+	// Auto-update (Wave C): wire the updater before the window so the
+	// banner channel is live from first paint; the first check and the 24h
+	// interval fire after it below. setupAutoUpdater's contract: failures
+	// are log lines — this can never block boot.
+	setupAutoUpdater();
+	ipcMain.on("lh:update-install", () => installUpdateNow());
+
 	// Sidebar-at-narrow-window (owner, 2026-09-17): the renderer auto-closes
 	// the sidebar below SIDEBAR_AUTOCLOSE (928px); opening it again at that
 	// width asks the window to widen instead — the layout never has to
@@ -413,4 +521,10 @@ async function main() {
 	});
 	createWindow(url);
 	log(`window open: ${url}`);
+	// First update check AFTER the window exists (the downloaded-banner
+	// push needs a listener); dev builds no-op (no autoUpdater).
+	if (autoUpdater) {
+		checkForUpdates();
+		setInterval(() => checkForUpdates(), UPDATE_CHECK_INTERVAL_MS);
+	}
 }

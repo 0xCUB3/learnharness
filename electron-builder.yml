@@ -41,6 +41,33 @@ files:
   - "!**/*"
   - electron/**/*
   - package.json
+  # Auto-update (Wave C, 2026-10-10): electron-updater + its runtime tree
+  # re-included explicitly. The negation above excludes node_modules, and
+  # the shell's bare positives can't re-include them — these explicit
+  # node_modules positives do (gitignore order: the LAST matching pattern
+  # wins; verified post-build by listing the asar — see desktop:dist notes).
+  # Tree fact-checked via each package's declared dependencies:
+  # electron-updater → fs-extra, js-yaml, lazy-val, lodash.escaperegexp,
+  # lodash.isequal, semver, tiny-typed-emitter, builder-util-runtime;
+  # builder-util-runtime → debug, sax; fs-extra → graceful-fs, jsonfile,
+  # universalify; debug → ms; jsonfile → universalify (again); js-yaml →
+  # argparse. Keep in sync when electron-updater bumps (npm ls --all).
+  - node_modules/electron-updater/**/*
+  - node_modules/fs-extra/**/*
+  - node_modules/js-yaml/**/*
+  - node_modules/lazy-val/**/*
+  - node_modules/lodash.escaperegexp/**/*
+  - node_modules/lodash.isequal/**/*
+  - node_modules/semver/**/*
+  - node_modules/tiny-typed-emitter/**/*
+  - node_modules/builder-util-runtime/**/*
+  - node_modules/debug/**/*
+  - node_modules/sax/**/*
+  - node_modules/graceful-fs/**/*
+  - node_modules/jsonfile/**/*
+  - node_modules/universalify/**/*
+  - node_modules/ms/**/*
+  - node_modules/argparse/**/*
 extraResources:
   # Copy from the PARENT dir (.next), not .next/standalone itself:
   # electron-builder hard-excludes a copy's root node_modules and the
