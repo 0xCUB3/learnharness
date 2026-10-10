@@ -1,0 +1,18 @@
+{
+	"id": "job_mv28tfii_2a54290a",
+	"kind": "pdf",
+	"chatId": "chat_mv27rrra_feff23b6",
+	"toolCallId": "call_63f708f61cec40a9b45c45dafb5af687",
+	"status": "error",
+	"activity": "failed",
+	"createdAt": "2026-10-10T10:20:04.938Z",
+	"updatedAt": "2026-10-10T10:20:09.331Z",
+	"error": "Invalid PDF structure.",
+	"result": {
+		"path": "/Users/amos/Downloads/test_session/test.txt",
+		"question": "This is a wiring test, not a real extraction job. There is no PDF involved: the path given points to a plain-text file containing only the word \"test\". Please confirm receipt of the job, say hi, and state plainly that no PDF content was available to read.",
+		"brief": "PDF failed: Invalid PDF structure.",
+		"pagesRead": [],
+		"pagesConsulted": []
+	}
+}

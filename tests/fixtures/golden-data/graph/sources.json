@@ -1,0 +1,517 @@
+{
+	"src_d29e7ef2599a": {
+		"id": "src_d29e7ef2599a",
+		"filePath": "learn database.md",
+		"importedAt": "2026-09-30T14:48:11.111Z",
+		"contentFp": "830632dfac338256",
+		"extractions": [
+			{
+				"startedAt": 1790779691113,
+				"at": "2026-09-30T14:51:12.468Z",
+				"durationMs": 181354,
+				"stats": {
+					"nodes": 30,
+					"chains": 14
+				},
+				"stages": {
+					"extractor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 9299,
+								"outputTokens": 12570,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 10182
+							}
+						]
+					},
+					"auditor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 3913,
+								"outputTokens": 39,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 16
+							},
+							{
+								"inputTokens": 3955,
+								"outputTokens": 74,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 10
+							}
+						]
+					}
+				}
+			},
+			{
+				"startedAt": 1790779872468,
+				"at": "2026-09-30T14:52:56.141Z",
+				"durationMs": 103672,
+				"stats": {
+					"nodes": 21,
+					"chains": 12
+				},
+				"stages": {
+					"extractor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 12110,
+								"outputTokens": 11792,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 9596
+							}
+						]
+					},
+					"auditor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 3654,
+								"outputTokens": 30,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 7
+							},
+							{
+								"inputTokens": 3743,
+								"outputTokens": 61,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 13
+							},
+							{
+								"inputTokens": 1940,
+								"outputTokens": 2385,
+								"cacheReadTokens": 3712,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 2198
+							},
+							{
+								"inputTokens": 1398,
+								"outputTokens": 8339,
+								"cacheReadTokens": 7936,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 8151
+							},
+							{
+								"inputTokens": 1200,
+								"outputTokens": 823,
+								"cacheReadTokens": 17664,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 496
+							}
+						]
+					}
+				}
+			},
+			{
+				"startedAt": 1790779976141,
+				"at": "2026-09-30T14:54:52.659Z",
+				"durationMs": 116517,
+				"stats": {
+					"nodes": 19,
+					"chains": 14
+				},
+				"stages": {
+					"extractor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 9400,
+								"outputTokens": 12855,
+								"cacheReadTokens": 2048,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 10237
+							}
+						]
+					},
+					"auditor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 3918,
+								"outputTokens": 33,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 10
+							},
+							{
+								"inputTokens": 4010,
+								"outputTokens": 65,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 18
+							},
+							{
+								"inputTokens": 3747,
+								"outputTokens": 4564,
+								"cacheReadTokens": 3840,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 4165
+							},
+							{
+								"inputTokens": 5317,
+								"outputTokens": 281,
+								"cacheReadTokens": 7552,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 52
+							},
+							{
+								"inputTokens": 3067,
+								"outputTokens": 805,
+								"cacheReadTokens": 12800,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 506
+							}
+						]
+					}
+				}
+			}
+		]
+	},
+	"src_c4f225a782f1": {
+		"id": "src_c4f225a782f1",
+		"filePath": "learn computer.md",
+		"importedAt": "2026-09-30T14:57:47.733Z",
+		"contentFp": "bdd1ba5f7ed7f666",
+		"extractions": [
+			{
+				"startedAt": 1790780267734,
+				"at": "2026-09-30T14:58:30.139Z",
+				"durationMs": 42404,
+				"stats": {
+					"nodes": 13,
+					"chains": 9
+				},
+				"stages": {
+					"extractor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 3609,
+								"outputTokens": 3957,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 2693
+							}
+						]
+					},
+					"auditor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 1287,
+								"outputTokens": 42,
+								"cacheReadTokens": 1408,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 7
+							},
+							{
+								"inputTokens": 88,
+								"outputTokens": 84,
+								"cacheReadTokens": 2688,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 36
+							},
+							{
+								"inputTokens": 5235,
+								"outputTokens": 611,
+								"cacheReadTokens": 2816,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 284
+							},
+							{
+								"inputTokens": 3764,
+								"outputTokens": 561,
+								"cacheReadTokens": 8576,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 318
+							},
+							{
+								"inputTokens": 2567,
+								"outputTokens": 227,
+								"cacheReadTokens": 12800,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 58
+							}
+						]
+					}
+				}
+			}
+		]
+	},
+	"src_145793466a55": {
+		"id": "src_145793466a55",
+		"filePath": "learning software architecture.md",
+		"importedAt": "2026-09-30T14:58:51.639Z",
+		"contentFp": "929397e07a79ea38",
+		"extractions": [
+			{
+				"startedAt": 1790780331640,
+				"at": "2026-09-30T15:00:14.763Z",
+				"durationMs": 83123,
+				"stats": {
+					"nodes": 20,
+					"chains": 12
+				},
+				"stages": {
+					"extractor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 7042,
+								"outputTokens": 8814,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 6981
+							}
+						]
+					},
+					"auditor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 1893,
+								"outputTokens": 35,
+								"cacheReadTokens": 1408,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 0
+							},
+							{
+								"inputTokens": 72,
+								"outputTokens": 91,
+								"cacheReadTokens": 3328,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 6
+							},
+							{
+								"inputTokens": 6002,
+								"outputTokens": 2625,
+								"cacheReadTokens": 3456,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 2285
+							},
+							{
+								"inputTokens": 1558,
+								"outputTokens": 1276,
+								"cacheReadTokens": 12032,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 972
+							},
+							{
+								"inputTokens": 1012,
+								"outputTokens": 1006,
+								"cacheReadTokens": 14848,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 673
+							}
+						]
+					}
+				}
+			}
+		]
+	},
+	"src_31827b85d75f": {
+		"id": "src_31827b85d75f",
+		"filePath": "learning libertarianism.md",
+		"importedAt": "2026-09-30T15:00:57.180Z",
+		"contentFp": "a70daff5e1771705",
+		"extractions": [
+			{
+				"startedAt": 1790780457181,
+				"at": "2026-09-30T15:01:46.324Z",
+				"durationMs": 49143,
+				"stats": {
+					"nodes": 20,
+					"chains": 9
+				},
+				"stages": {
+					"extractor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 9013,
+								"outputTokens": 8220,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 5811
+							}
+						]
+					},
+					"auditor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 3905,
+								"outputTokens": 35,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 0
+							},
+							{
+								"inputTokens": 4048,
+								"outputTokens": 208,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 55
+							},
+							{
+								"inputTokens": 7807,
+								"outputTokens": 243,
+								"cacheReadTokens": 3840,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 59
+							},
+							{
+								"inputTokens": 1276,
+								"outputTokens": 153,
+								"cacheReadTokens": 11520,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 52
+							}
+						]
+					}
+				}
+			},
+			{
+				"startedAt": 1790780506325,
+				"at": "2026-09-30T15:04:50.482Z",
+				"durationMs": 184157,
+				"stats": {
+					"nodes": 15,
+					"chains": 11
+				},
+				"stages": {
+					"extractor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 11539,
+								"outputTokens": 15465,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 13164
+							}
+						]
+					},
+					"auditor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 3688,
+								"outputTokens": 31,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 8
+							},
+							{
+								"inputTokens": 3814,
+								"outputTokens": 95,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 48
+							},
+							{
+								"inputTokens": 2160,
+								"outputTokens": 1884,
+								"cacheReadTokens": 3712,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 1633
+							},
+							{
+								"inputTokens": 4968,
+								"outputTokens": 6107,
+								"cacheReadTokens": 5760,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 5794
+							},
+							{
+								"inputTokens": 7413,
+								"outputTokens": 4851,
+								"cacheReadTokens": 10624,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 4411
+							}
+						]
+					}
+				}
+			},
+			{
+				"startedAt": 1790780690483,
+				"at": "2026-09-30T15:07:24.186Z",
+				"durationMs": 153703,
+				"stats": {
+					"nodes": 13,
+					"chains": 10
+				},
+				"stages": {
+					"extractor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 9181,
+								"outputTokens": 7181,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 5511
+							}
+						]
+					},
+					"auditor": {
+						"model": "openrouter:deepseek/deepseek-v4.1-flash",
+						"steps": [
+							{
+								"inputTokens": 3053,
+								"outputTokens": 34,
+								"cacheReadTokens": 0,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 0
+							},
+							{
+								"inputTokens": 129,
+								"outputTokens": 76,
+								"cacheReadTokens": 3072,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 17
+							},
+							{
+								"inputTokens": 3648,
+								"outputTokens": 1815,
+								"cacheReadTokens": 3072,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 1573
+							},
+							{
+								"inputTokens": 1305,
+								"outputTokens": 343,
+								"cacheReadTokens": 8448,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 85
+							},
+							{
+								"inputTokens": 449,
+								"outputTokens": 279,
+								"cacheReadTokens": 9984,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 22
+							},
+							{
+								"inputTokens": 672,
+								"outputTokens": 2406,
+								"cacheReadTokens": 10496,
+								"cacheWriteTokens": 0,
+								"reasoningTokens": 1980
+							}
+						]
+					}
+				}
+			}
+		]
+	}
+}

@@ -1,0 +1,14 @@
+{
+	"id": "job_mux5xn7v_b49f3458",
+	"kind": "research",
+	"chatId": "chat_mux5xn73_b1ccd21e",
+	"toolCallId": "call-mid",
+	"status": "done",
+	"activity": "delivered",
+	"createdAt": "2026-10-06T21:00:31.819Z",
+	"updatedAt": "2026-10-06T21:00:32.122Z",
+	"result": {
+		"brief": "Mid-run brief.",
+		"sources": []
+	}
+}

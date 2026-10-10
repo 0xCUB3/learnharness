@@ -1,0 +1,26 @@
+{
+	"id": "job_mv282vv0_e7b89c9b",
+	"kind": "research",
+	"chatId": "chat_mv27rrra_feff23b6",
+	"toolCallId": "call_88535d0b5cb240e488884f29e06fb7a7",
+	"status": "error",
+	"activity": "aborted",
+	"createdAt": "2026-10-10T09:59:26.412Z",
+	"updatedAt": "2026-10-10T09:59:55.597Z",
+	"usage": {
+		"model": "openrouter:deepseek/deepseek-v4.1-flash",
+		"inputTokens": 6364,
+		"outputTokens": 712,
+		"cacheReadTokens": 5120,
+		"cacheWriteTokens": 0,
+		"reasoningTokens": 233,
+		"steps": 4,
+		"lastStep": {
+			"inputTokens": 0,
+			"outputTokens": 0,
+			"cacheReadTokens": 0,
+			"cacheWriteTokens": 0
+		}
+	},
+	"error": "Aborted by learner"
+}

@@ -1,0 +1,30 @@
+{
+	"id": "job_mv28p0fs_0a16b76e",
+	"kind": "visual",
+	"chatId": "chat_mv27rrra_feff23b6",
+	"toolCallId": "call_03e0d13f91bd47c3b1d1ddc6a5c941fc",
+	"status": "done",
+	"activity": "delivered",
+	"createdAt": "2026-10-10T10:16:38.776Z",
+	"updatedAt": "2026-10-10T10:17:55.008Z",
+	"usage": {
+		"model": "openrouter:qwen/qwen3.8-max-0902",
+		"inputTokens": 7786,
+		"outputTokens": 2872,
+		"cacheReadTokens": 2048,
+		"cacheWriteTokens": 0,
+		"reasoningTokens": 1694,
+		"steps": 3,
+		"lastStep": {
+			"inputTokens": 4289,
+			"outputTokens": 507,
+			"cacheReadTokens": 0,
+			"cacheWriteTokens": 0,
+			"reasoningTokens": 265
+		}
+	},
+	"result": {
+		"svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"300\" viewBox=\"0 0 800 300\">\n  <rect x=\"0\" y=\"0\" width=\"800\" height=\"300\" fill=\"#ffffff\"/>\n\n  <!-- unmastered mass: v = 0.30 (x=280) to v = 1.0 (x=700) -->\n  <rect x=\"280\" y=\"88\" width=\"420\" height=\"44\" fill=\"#e9e9e9\" stroke=\"#bdbdbd\" stroke-width=\"1\"/>\n  <text x=\"490\" y=\"116\" font-family=\"Helvetica, Arial, sans-serif\" font-size=\"14\" fill=\"#444444\" text-anchor=\"middle\">(1 − p) = unmastered mass</text>\n\n  <!-- number line -->\n  <line x1=\"100\" y1=\"165\" x2=\"700\" y2=\"165\" stroke=\"#333333\" stroke-width=\"2\"/>\n  <line x1=\"100\" y1=\"156\" x2=\"100\" y2=\"174\" stroke=\"#333333\" stroke-width=\"2\"/>\n  <line x1=\"700\" y1=\"156\" x2=\"700\" y2=\"174\" stroke=\"#333333\" stroke-width=\"2\"/>\n  <text x=\"100\" y=\"196\" font-family=\"Helvetica, Arial, sans-serif\" font-size=\"14\" fill=\"#444444\" text-anchor=\"middle\">0</text>\n  <text x=\"700\" y=\"196\" font-family=\"Helvetica, Arial, sans-serif\" font-size=\"14\" fill=\"#444444\" text-anchor=\"middle\">1</text>\n\n  <!-- dots -->\n  <circle cx=\"280\" cy=\"165\" r=\"5.5\" fill=\"#333333\"/>\n  <circle cx=\"364\" cy=\"165\" r=\"5.5\" fill=\"#333333\"/>\n  <text x=\"272\" y=\"150\" font-family=\"Helvetica, Arial, sans-serif\" font-size=\"14\" fill=\"#444444\" text-anchor=\"end\">p = 0.30</text>\n  <text x=\"372\" y=\"150\" font-family=\"Helvetica, Arial, sans-serif\" font-size=\"14\" fill=\"#444444\" text-anchor=\"start\">p<tspan dy=\"-5\" font-size=\"11\">−</tspan><tspan dy=\"5\"> = 0.44</tspan></text>\n\n  <!-- arrow: predict shift -->\n  <line x1=\"280\" y1=\"204\" x2=\"352\" y2=\"204\" stroke=\"#2563eb\" stroke-width=\"2.5\"/>\n  <polygon points=\"366,204 350,197 350,211\" fill=\"#2563eb\"/>\n  <text x=\"323\" y=\"232\" font-family=\"Helvetica, Arial, sans-serif\" font-size=\"14\" fill=\"#2563eb\" text-anchor=\"middle\">+0.16 = (1 − p) × T,  with T = 0.20</text>\n\n  <!-- caption -->\n  <text x=\"400\" y=\"272\" font-family=\"Helvetica, Arial, sans-serif\" font-size=\"14\" fill=\"#555555\" text-anchor=\"middle\">belief that the student has mastered the skill</text>\n</svg>",
+		"notes": "The figure is correct and clean: the number line spans 0→1 (x=100→700), the shaded unmastered mass runs exactly from x=280 (v=0.30) to x=700 (v=1.0), dots sit at the proportional positions 280 and 364, and the single blue arrow shows the +0.16 predict shift. No overlaps, nothing clipped.\n\n**Notes for the teacher:** The figure shows one number line for belief P(mastered), with the light-gray block marking the unmastered mass (1−p) from 0.30 to 1.0, and a single blue arrow from p=0.30 to p⁻=0.44 illustrating that the predict step moves only that unmastered mass by (1−p)×T = 0.16. Dot positions are exactly proportional to 0.30 and 0.44 on the 0–1 axis; the superscript minus in \"p⁻\" is rendered via a tspan for reliable display."
+	}
+}
