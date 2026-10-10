@@ -561,8 +561,19 @@ export class SessionModel {
 			this.tail = [...this.tail, ...optimistic];
 		});
 		try {
-			const res = await this.postInputEvent(input, controller.signal);
-			if (controller.signal.aborted) return;
+			// SUBMITS ARE NOT ABORTABLE BY VIEW TEARDOWN (owner, 2026-10-10 —
+			// the dead-session-start postmortem): the POST must NOT ride
+			// consumeAbort. Diet A's abort-on-unmount (session.ts's stop())
+			// fires on React StrictMode's simulated remount in dev — it killed
+			// the ?prompt first send ~8ms in (POST aborted, never retried:
+			// the page's sentInitial guard had already flipped), leaving the
+			// session dead until a second message, which then persisted
+			// WITHOUT the first — the optimistic tail rode a record that never
+			// contained it. The POST is a ~100ms ack since Diet B; it cannot
+			// starve the connection pool, so it needs no teardown guard. The
+			// STREAM consume stays on the controller — releasing that held
+			// connection is Diet A's whole job.
+			const res = await this.postInputEvent(input);
 			if (res.status === 409) {
 				this.setError("A turn is already running — try again in a moment.");
 				this.setStatus("error");
@@ -582,6 +593,10 @@ export class SessionModel {
 			// replay lands on top). One live view connection per page, always —
 			// the browser's 6-per-origin pool is the scarce resource.
 			await res.text().catch(() => {}); // drain the tiny ack; release the socket
+			// A stop() or a newer send/consume won while the ack was in
+			// flight: the turn is live server-side either way — do not attach
+			// a stream from a view that is gone or superseded.
+			if (this.consumeAbort !== controller) return;
 			await this.resumeStream(true);
 		} catch (err) {
 			if ((err as Error).name === "AbortError") return; // stop() or a newer consume won

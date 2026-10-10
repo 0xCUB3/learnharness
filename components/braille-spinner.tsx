@@ -36,7 +36,7 @@ export const SPINNER_FRAMES = FRAMES.length;
 
 export function BrailleSpinner({
 	className,
-	label = "Teacher is working",
+	label = "Working",
 }: {
 	/** Sizing/position classes; height drives the scale (width is the cell's 1:2 aspect). */
 	className?: string;

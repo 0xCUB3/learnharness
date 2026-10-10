@@ -67,7 +67,7 @@ describe("SessionRow", () => {
 		assert.ok(html.includes("braille-frame"), "CSS-animated frames");
 		assert.ok((html.match(/class="braille-frame"/g) ?? []).length === 10, "all ten frames");
 		assert.ok(html.includes('data-frame="0"'), "frame 0 leads (static fallback)");
-		assert.ok(html.includes("Teacher is working"), "accessible label");
+		assert.ok(html.includes("Working"), "accessible label");
 		assert.ok(!html.includes("bg-attention"), "no colored state fill — monochrome by design");
 	});
 
@@ -77,7 +77,7 @@ describe("SessionRow", () => {
 		// contract can't silently re-widen: an extraction-only "working"
 		// row would be a double signal.
 		const html = render(item({ busy: true, pendingQuestion: false }));
-		assert.ok(html.includes("Teacher is working"), "the spinner's label names the turn, not agents");
+		assert.ok(html.includes("Working"), "the spinner's label names the turn, not agents");
 	});
 
 	it("the meta line: state replaces the count when the state is the useful fact", () => {
@@ -87,7 +87,7 @@ describe("SessionRow", () => {
 		assert.ok(!awaiting.includes("braille-spinner"), "…and the spinner stays off");
 
 		const working = render(item({ busy: true }));
-		assert.ok(working.includes("Teacher is working…"), "working meta");
+		assert.ok(working.includes("Working…"), "working meta");
 
 		// Owner, typography round 5: the message count is dropped — it
 		// informed no decision. Idle meta is just how long ago.
@@ -121,9 +121,10 @@ describe("timeAgo", () => {
 });
 
 describe("SessionRow practice badge (practice sessions, 2026-10-04)", () => {
-	it("a practice row carries the dumbbell badge and the Practicing meta while busy", () => {
+	it("a practice row carries the dumbbell badge and the unified Working meta while busy (owner, 2026-10-10)", () => {
 		const html = render(item({ kind: "practice", busy: true }));
-		assert.match(html, /Practicing…/);
+		assert.match(html, /Working…/);
+		assert.doesNotMatch(html, /Practicing…/);
 		assert.match(html, /aria-label="Practice session"/);
 	});
 
@@ -133,9 +134,9 @@ describe("SessionRow practice badge (practice sessions, 2026-10-04)", () => {
 		assert.doesNotMatch(html, /Practicing…/);
 	});
 
-	it("busy teaching rows still say the teacher is working", () => {
+	it("busy teaching rows say the same unified Working", () => {
 		const html = render(item({ busy: true }));
-		assert.match(html, /Teacher is working…/);
+		assert.match(html, /Working…/);
 	});
 
 	it("a practice row with a posed problem says the problem is waiting", () => {

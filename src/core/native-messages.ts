@@ -213,7 +213,12 @@ export function newGraphContextMessage(picks: readonly GraphContextPick[], chain
 	// ids at the seam). Chains below stay NAMES — they are comprehension
 	// context, not tags; names read, ids reference.
 	const lines = [
-		"Contextualization — the learner picked these propositions from their knowledge map when starting this session:",
+		// PREAMBLE LAW (owner, 2026-10-10): custom markers flatten to
+		// USER-role messages on the wire (toLlmMessages) — this text arrives
+		// in the learner's voice channel, so it must not read like a system
+		// broadcast. The bracket convention (NEXT_PROBLEM_TEXT's kin) marks
+		// it honestly as injected session context, not learner speech.
+		"[Session context] — picked from the learner's knowledge map when starting this session:",
 		"",
 		"Propositions (id — name: statement; the problem tool's target field uses these ids):",
 		...picks.map((p) => `- [${p.id}] ${p.name}: ${p.statement}`),

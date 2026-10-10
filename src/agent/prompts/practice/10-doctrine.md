@@ -2,7 +2,7 @@
      §I material-arrival generalized (verbal descriptions, outside problems);
      §VIII pause law (owner round 16, 2026-10-06: concluding ends the turn;
      the learner's explicit go-ahead paces the stream). Tool mechanics live
-     in 00-base.md; theory in docs/vision-practice-sessions.md's source note. -->
+     in 00-base.md; theory in the archived vision-practice note (docs-archive). -->
 
 # The practice session
 

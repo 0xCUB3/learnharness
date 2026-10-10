@@ -248,7 +248,7 @@ function sessionMeta(chat: ChatListItem): string {
 	if ((chat.kind ?? "teach") === "practice" && chat.pendingProblem) {
 		return `Problem waiting · ${timeAgo(chat.updatedAt)}`;
 	}
-	if (chat.busy) return (chat.kind ?? "teach") === "practice" ? "Practicing…" : "Teacher is working…";
+	if (chat.busy) return "Working…";
 	return timeAgo(chat.updatedAt);
 }
 

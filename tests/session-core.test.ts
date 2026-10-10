@@ -593,6 +593,48 @@ describe("resumeStream (the reattach path)", () => {
 		assert.equal(m.getState().status, "ready");
 	});
 
+	it("SESSION START SURVIVES A STOP() RACING THE SUBMIT (owner, 2026-10-10 — the dead-practice-start postmortem)", async () => {
+		// React StrictMode's simulated remount fires the unmount cleanup
+		// (~8ms in) while the ?prompt first send's POST is in flight — the
+		// exact live repro: pre-fix, the POST rode consumeAbort and died
+		// with AbortError, the page's sentInitial guard never retried, and
+		// the session sat dead until a second message (which then persisted
+		// WITHOUT the first). The law: submits are not abortable by view
+		// teardown — the POST completes, the turn is server-side, and the
+		// dead view attaches no stream.
+		let resolvePost!: () => void;
+		let postAborted = false;
+		const fetches: string[] = [];
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			fetches.push(url);
+			if (url === "/api/chat") {
+				init?.signal?.addEventListener("abort", () => {
+					 postAborted = true;
+				});
+				await new Promise<void>((r) => {
+					 resolvePost = () => r();
+				});
+				return Response.json({ ok: true });
+			}
+			if (url === "/api/chats/chat_x") {
+				return Response.json({ messages: [{ id: "u1", role: "user", content: "quiz me", timestamp: 1 }] });
+			}
+			if (url === "/api/chats/chat_x/stream") return new Response("data: [DONE]\n\n", { status: 200 });
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof globalThis.fetch;
+		const m = model();
+		const sending = m.send({ type: "text", text: "quiz me" });
+		await new Promise((r) => setTimeout(r, 5)); // the POST is in flight
+		m.stop(); // StrictMode's simulated unmount lands mid-submit
+		resolvePost(); // the ack completes anyway
+		await sending;
+		assert.equal(postAborted, false, "the submit POST carries no teardown signal at all");
+		assert.ok(fetches.includes("/api/chat"), "the submit reached the server");
+		assert.ok(!fetches.some((u) => u.endsWith("/stream")), "a dead view attaches no stream — the turn is server-side");
+		assert.equal(m.getState().status, "ready");
+	});
+
 	it("REATTACH REPLAYS ONTO A CLEAN SLATE (owner, optimistic round 3): an aborted attempt's partials never double", async () => {
 		// StrictMode's simulated remount aborts the first resume mid-replay;
 		// its partial tail survived into the retry and the replay DOUBLED

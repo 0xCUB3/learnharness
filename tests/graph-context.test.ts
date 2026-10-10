@@ -48,7 +48,7 @@ describe("newGraphContextMessage", () => {
 	it("frames the context for the model: propositions listed, chains appended", () => {
 		const m = newGraphContextMessage(PICKS, ["Modus ponens → Soundness"]);
 		assert.equal(m.customType, "graph-context");
-		assert.match(m.content, /Contextualization — the learner picked these propositions/);
+		assert.match(m.content, /\[Session context\] — picked from the learner's knowledge map/);
 		// IDS FIRST (owner round 9): every pick carries its id — the problem
 		// tool's target field references these; names alone no longer.
 		assert.ok(m.content.includes(`- [${PICKS[0]!.id}] Modus ponens: If P implies Q and P holds, Q holds.`));
@@ -69,7 +69,7 @@ describe("newGraphContextMessage", () => {
 		const wire = toLlmMessages([m as unknown as LhMessage] as never);
 		assert.equal(wire.length, 1);
 		assert.equal(wire[0]!.role, "user");
-		assert.ok(String((wire[0]!.content as { text?: string }[])[0]!.text).includes("Contextualization"));
+		assert.ok(String((wire[0]!.content as { text?: string }[])[0]!.text).includes("[Session context]"));
 	});
 
 	it("projectView: a user-side data part — never a text bubble", () => {
