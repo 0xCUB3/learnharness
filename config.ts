@@ -86,6 +86,13 @@ export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
  */
 export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");
 
+/** The graph-family FORMAT STAMP sidecar (schema-versioning wave,
+ *  2026-10-10): one version for the whole family — the four JSONL ledgers,
+ *  sources.json, render-settings.json. LAZY v1: absent = v1; the first
+ *  graph-family write creates it. positions.json is REBUILDABLE and rides
+ *  along unversioned by design (owner ruling). */
+export const GRAPH_FORMAT_FILE = path.join(PATHS.graph, "format.json");
+
 /**
  * THE USER SETTINGS RECORD (settings-storage wave, 2026-09-19): one
  * versioned, DELTA-shaped JSON blob at the data-dir seam holding every

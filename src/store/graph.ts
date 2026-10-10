@@ -35,6 +35,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LEDGER_FILES, POSITIONS_FILE, SOURCES_FILE } from "../../config.ts";
+import { assertGraphFormat, ensureGraphFormat } from "./graph-format.ts";
 import type {
 	GraphChain,
 	GraphNode,
@@ -51,6 +52,7 @@ import type { GraphStore } from "../core/ports.ts";
 
 function appendLine<T>(file: string, record: T): void {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
+	ensureGraphFormat(); // the lazy format stamp (graph-format.ts)
 	fs.appendFileSync(file, `${JSON.stringify(record)}\n`, "utf-8");
 }
 
@@ -83,6 +85,7 @@ const isString = (v: unknown): v is string => typeof v === "string";
 
 /** Strict shape guards — anything not matching a W4 ledger shape is skipped. */
 function readValid<T>(file: string, isValid: (v: unknown) => v is T): T[] {
+	assertGraphFormat(); // honest refusal on a newer-stamped data dir
 	return readRawLines(file).filter(isValid);
 }
 
@@ -280,6 +283,7 @@ const isPosition = (v: unknown): v is Position =>
 /** sources.json — { id: NotesSource }. Read-modify-write, NOT append-only:
  *  the usage log lives inside the record (like a chat's JSON file). */
 function readSourceMap(): Record<string, NotesSource> {
+	assertGraphFormat(); // honest refusal on a newer-stamped data dir
 	let raw: string;
 	try {
 		raw = fs.readFileSync(SOURCES_FILE, "utf-8");
@@ -301,6 +305,7 @@ function readSourceMap(): Record<string, NotesSource> {
 
 function writeSourceMap(map: Record<string, NotesSource>): void {
 	fs.mkdirSync(path.dirname(SOURCES_FILE), { recursive: true });
+	ensureGraphFormat(); // the lazy format stamp (graph-format.ts)
 	fs.writeFileSync(SOURCES_FILE, JSON.stringify(map, null, "\t"), "utf-8");
 }
 

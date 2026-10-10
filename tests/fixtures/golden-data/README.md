@@ -36,3 +36,12 @@ core tool surface must appear in real data here.
 Run the app (`npm run dev`), exercise the feature against `data/`, then copy
 the produced record in verbatim. Do not hand-edit content; if a record needs
 pruning, re-run the flow instead.
+
+## Stamps
+
+These files are deliberately the UNSTAMPED legacy shape (schema-stamp wave,
+2026-10-10): lazy v1 means absence reads as current-valid, so this set pins
+the pre-stamp read path forever. Stamped writes (chat `version: 1`, the
+`graph/format.json` sidecar) are pinned by `tests/schema-stamps.test.ts`.
+New records copied in after their first post-stamp write will carry the
+stamps — that shape is equally current-valid.

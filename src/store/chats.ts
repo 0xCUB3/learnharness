@@ -13,6 +13,7 @@ import { PATHS } from "../../config.ts";
 import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
 import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
+import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
 import { phaseAt3Lh } from "../core/phases.ts";
@@ -44,17 +45,35 @@ function createChat(title: string, kind?: "practice"): ChatRecord {
 		...(kind === "practice" ? { kind: "practice" as const } : {}),
 	};
 	fs.mkdirSync(PATHS.chats, { recursive: true });
-	fs.writeFileSync(chatFile(record.id), JSON.stringify(record, null, "\t"), "utf-8");
+	writeChat(record);
 	emit("chats-changed", {});
-	return record;
+	return { ...record, version: CURRENT_CHAT_VERSION }; // the in-memory twin of what landed on disk
+}
+
+/** THE WRITE CHOKE POINT (schema-versioning wave, owner 2026-10-10): every
+ *  record persist goes through here and carries the CURRENT version stamp —
+ *  lazy migration means existing files only get stamped on their next write.
+ *  A future-version guard lives on the read side (getChat). */
+function writeChat(record: ChatRecord): void {
+	fs.writeFileSync(chatFile(record.id), JSON.stringify({ ...record, version: CURRENT_CHAT_VERSION }, null, "\t"), "utf-8");
 }
 
 function getChat(id: string): ChatRecord | null {
+	let parsed: unknown;
 	try {
-		return JSON.parse(fs.readFileSync(chatFile(id), "utf-8")) as ChatRecord;
+		parsed = JSON.parse(fs.readFileSync(chatFile(id), "utf-8"));
 	} catch {
 		return null;
 	}
+	// Honest refusal (owner ruling 2026-10-10): a record stamped NEWER than
+	// this build (the downgrade scenario) reads as absent, never misparsed —
+	// the next read-modify-write must not rewrite what it doesn't understand.
+	const v = (parsed as { version?: unknown }).version;
+	if (typeof v === "number" && v > CURRENT_CHAT_VERSION) {
+		console.error(`[chat ${id}] record stamped with schema version ${v} > ${CURRENT_CHAT_VERSION} — this app build is older; refusing to read it`);
+		return null;
+	}
+	return parsed as ChatRecord;
 }
 
 function listChats(): ChatSummary[] {
@@ -109,7 +128,7 @@ function saveMessages(id: string, messages: LhMessage[]): void {
 	if (!record) throw new Error(`Chat not found: ${id}`);
 	record.messages = messages;
 	record.updatedAt = new Date().toISOString();
-	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+	writeChat(record);
 }
 
 /** Append one usage entry to the record's turn log — idempotent per
@@ -122,7 +141,7 @@ function appendTurnUsage(id: string, entry: TurnUsage): void {
 	record.turns = record.turns?.some((t) => t.id === entry.id)
 		? record.turns
 		: [...(record.turns ?? []), entry];
-	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+	writeChat(record);
 }
 
 /** Append one extraction-run usage entry to the record's extractions
@@ -134,7 +153,7 @@ function appendExtractionUsage(id: string, entry: ExtractionRunUsage): void {
 	record.extractions = record.extractions?.some((r) => r.startedAt === entry.startedAt)
 		? record.extractions
 		: [...(record.extractions ?? []), entry];
-	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+	writeChat(record);
 }
 
 /** Persist the per-chat model/thinking settings — replace-whole (the
@@ -145,7 +164,7 @@ function saveSettings(id: string, settings: ChatSettings): void {
 	// Like saveTree: a settings tweak is not conversation activity, so it
 	// deliberately does NOT bump updatedAt (sidebar order must not churn).
 	record.settings = settings;
-	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+	writeChat(record);
 }
 
 /** Rename a session (the header's click-to-edit title, 2026-09-17). Like
@@ -157,7 +176,7 @@ function renameChat(id: string, title: string): ChatRecord {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
 	record.title = title.trim() || "Untitled session";
-	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+	writeChat(record);
 	emit("chats-changed", {});
 	return record;
 }
@@ -183,7 +202,7 @@ function saveTree(id: string, tree: PlanTree): void {
 	record.tree = tree;
 	// Deliberately does NOT bump updatedAt: tree mutations piggyback on the
 	// turn's saveMessages, and sidebar ordering shouldn't churn on tree edits.
-	fs.writeFileSync(chatFile(id), JSON.stringify(record, null, "\t"), "utf-8");
+	writeChat(record);
 }
 
 export const chatStore: ChatStore = {

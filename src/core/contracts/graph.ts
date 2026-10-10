@@ -120,6 +120,10 @@ export interface NamingRunStats {
 	appended: number;
 }
 
+/** The graph-family format version this build writes and understands
+ *  (the format.json sidecar — src/store/graph-format.ts). */
+export const CURRENT_GRAPH_FORMAT_VERSION = 1;
+
 
 export interface GraphNode {
 	/** Opaque stable id, store-assigned: "n_" + nanoid-like. */
