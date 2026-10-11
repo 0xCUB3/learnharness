@@ -55,6 +55,12 @@ const nextConfig: NextConfig = {
 		"*": [
 			"node_modules/pdfjs-dist/legacy/**/*",
 			"node_modules/pdfjs-dist/standard_fonts/**/*",
+			// Wave E (2026-10-10): pdf_render paints via @napi-rs/canvas — its
+			// platform binary (@napi-rs/canvas-<platform>-<arch>) is a dynamic
+			// optional-dep require the tracer cannot see. Builds run per-OS and
+			// npm installs only the current platform's binary, so this glob
+			// resolves to exactly one Skia binary per build.
+			"node_modules/@napi-rs/canvas-*/**/*",
 			"node_modules/@earendil-works/pi-ai/dist/providers/data/**/*",
 			"node_modules/@earendil-works/pi-agent-core/dist/**/*.json",
 		],
@@ -66,6 +72,7 @@ const nextConfig: NextConfig = {
 		"@earendil-works/pi-ai",
 		"@earendil-works/pi-agent-core",
 		"pdfjs-dist", // sources v0: bundling breaks its node fake-worker path
+		"@napi-rs/canvas", // native binding — bundling breaks the .node require
 	],
 };
 

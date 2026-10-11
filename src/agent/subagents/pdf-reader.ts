@@ -173,9 +173,9 @@ export async function runPdfReaderAgent(
 	if (openError) {
 		return { path: pdfPath, question: input.question, brief: `PDF failed: ${openError}`, pagesRead: [], pagesConsulted: [] };
 	}
-	const chromeReason = headless.unavailableReason();
-	// Chrome missing does NOT fail the run: text-side tools still work; the
-	// doctrine degrades to extract+search (render calls return an error note).
+	// No Chrome gate (Wave E, 2026-10-10): pdf_render is native now
+	// (pdfjs paints into @napi-rs/canvas in-process) — the whole pdf-reader
+	// runs browser-free; text tools always worked without one.
 
 	const tools = createPdfTools(pdfPath);
 	const toolDeclarations = Object.values(tools);
@@ -280,30 +280,24 @@ export async function runPdfReaderAgent(
 					} else if (call.name === "pdf_render") {
 						const spec = String(args.pages ?? "1");
 						const dpi = numOr(args.dpi, 150);
-						if (chromeReason) {
-							toolResults.push(
-								toolText(call.id, call.name, `ERROR: rendering unavailable — ${chromeReason} Read via pdf_extract instead.`),
-							);
+						const wanted = specNumbers(spec, RENDER_BATCH_CAP);
+						opts.onActivity?.(`pdf_render: ${spec} @${dpi}dpi`);
+						const pages = await headless.renderPdfPages(pdfPath, wanted, { dpi });
+						for (const p of pages) {
+							consulted.add(p.page);
+							read.add(p.page);
+						}
+						if (pages.length === 0) {
+							toolResults.push(toolText(call.id, call.name, "ERROR: no pages rendered (spec matched nothing?)"));
 						} else {
-							const wanted = specNumbers(spec, RENDER_BATCH_CAP);
-							opts.onActivity?.(`pdf_render: ${spec} @${dpi}dpi`);
-							const pages = await headless.renderPdfPages(pdfPath, wanted, { dpi });
-							for (const p of pages) {
-								consulted.add(p.page);
-								read.add(p.page);
-							}
-							if (pages.length === 0) {
-								toolResults.push(toolText(call.id, call.name, "ERROR: no pages rendered (spec matched nothing?)"));
-							} else {
-								renderedImages = pages;
-								toolResults.push(
-									toolText(
-										call.id,
-										call.name,
-										`Rendered ${pages.length} page(s) at ${dpi} DPI — the images follow below. Read them carefully (equations, diagrams, layout).`,
-									),
-								);
-							}
+							renderedImages = pages;
+							toolResults.push(
+								toolText(
+									call.id,
+									call.name,
+									`Rendered ${pages.length} page(s) at ${dpi} DPI — the images follow below. Read them carefully (equations, diagrams, layout).`,
+								),
+							);
 						}
 					} else {
 						toolResults.push(toolText(call.id, call.name, `ERROR: unknown tool "${call.name}"`));

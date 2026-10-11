@@ -290,92 +290,64 @@ async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buff
 	}
 }
 
-// ─── PDF page rasterization (pdfjs paints, Chrome hosts) ───────────────
+// ─── PDF page rasterization (pdfjs paints, Skia hosts) ─────────────────
 
 /** Render PDF pages to PNGs — the sources-v0 pdf-reader's eyes.
  *
- *  The engine (user-chosen hybrid, live-verified 2026-09-19): pdfjs paints
- *  each page into a <canvas> (scale = dpi/72, the skill's zoom arithmetic)
- *  inside a headless Chrome tab, and the canvas pixels come back via
- *  toDataURL. Chrome's OWN PDF viewer plugin does not paint in headless
- *  mode (verified: identical blank screenshots regardless of page), so the
- *  canvas shim is the pixel path — Chrome still hosts and encodes, no
- *  native node-canvas anywhere. PDF bytes pass in as base64 (fetch() is
- *  blocked on file://); pdfjs runs via its real worker module under
- *  --allow-file-access-from-files. */
+ *  History: pdfjs ALWAYS painted the pages (scale = dpi/72, the skill's
+ *  zoom arithmetic) — first inside a headless Chrome tab (canvas shim,
+ *  toDataURL, 2026-09-19), now into @napi-rs/canvas in this process (Wave
+ *  E, 2026-10-10). The paint engine never changed; only the canvas host:
+ *  Skia in-process via pdfjs-dist v6's own Node integration. No browser,
+ *  no temp files, no base64 hop. */
 async function renderPdfPages(
 	pdfPath: string,
 	pages: number[],
 	opts: RenderPdfOptions = {},
 ): Promise<RenderedPdfPage[]> {
 	const dpi = opts.dpi ?? 150;
-	const pdfAbs = path.resolve(pdfPath);
-	const pdfjsUrl = pathToFileURL(
-		path.join(PATHS_nodeModules(), "pdfjs-dist/legacy/build/pdf.mjs"),
-	).href;
-	const b64 = fs.readFileSync(pdfAbs).toString("base64");
-
-	const dir = tempDir("lh-pdf-");
-	const file = path.join(dir, "shim.html");
-	fs.writeFileSync(
-		file,
-		"<!doctype html><html><head><meta charset='utf-8'><style>html,body{margin:0;padding:0;background:#fff}canvas{display:block}</style></head><body></body></html>",
-		"utf-8",
-	);
-
-	const browser = await launchBrowser(["--allow-file-access-from-files"]);
+	// NATIVE CANVAS (Wave E, owner 2026-10-10): pdfjs paints into
+	// @napi-rs/canvas in this process — no browser involved. pdfjs-dist v6's
+	// own Node integration IS @napi-rs/canvas (its optionalDependency: the
+	// NodeCanvasFactory requires it), so the paint engine is the exact code
+	// that used to run in the Chrome shim tab; only the canvas host changed
+	// (Skia in-process instead of a DOM canvas). Text-side pdf tools never
+	// needed a browser; now renders don't either.
+	const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+	const { createCanvas } = await import("@napi-rs/canvas");
+	const data = new Uint8Array(fs.readFileSync(path.resolve(pdfPath)));
+	// Standard-font data as a directory path (live-smoke finding 2026-09-19:
+	// without it pdfjs renders non-embedded standard fonts via fallback);
+	// verbosity 0 = errors only (JBIG2 noise on scanned PDFs).
+	const standardFontDataUrl =
+		path.join(PATHS_nodeModules(), "pdfjs-dist", "standard_fonts") + path.sep;
+	const loadingTask = pdfjs.getDocument({ data, standardFontDataUrl, verbosity: 0 });
+	const doc = await loadingTask.promise;
 	try {
-		const page = await browser.newPage();
-		await page.setViewport({ width: 1200, height: 1600, deviceScaleFactor: 1 });
-		await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
-		// Standard-font data as a file URL (live-smoke finding 2026-09-19:
-		// without it pdfjs renders non-embedded standard fonts via fallback);
-		// verbosity 0 = errors only (JBIG2 noise on scanned PDFs).
-		const fontsUrl = pathToFileURL(path.join(PATHS_nodeModules(), "pdfjs-dist", "standard_fonts") + path.sep).href;
-		const results = await page.evaluate(
-			async (b64pdf, workerUrl, pageNos, dpi, fontsUrl) => {
-				// window-scope dynamic import (Chrome evaluates this string in the
-				// shim page, not under Node)
-				const pdfjs = (await import(workerUrl)) as typeof import("pdfjs-dist");
-				pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.replace("pdf.mjs", "pdf.worker.mjs");
-				const bin = atob(b64pdf);
-				const bytes = new Uint8Array(bin.length);
-				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-				const doc = await pdfjs.getDocument({ data: bytes, standardFontDataUrl: fontsUrl, verbosity: 0 }).promise;
-				const out: Array<{ page: number; dataUrl: string; w: number; h: number }> = [];
-				for (const pageNo of pageNos) {
-					if (pageNo < 1 || pageNo > doc.numPages) continue;
-					const pg = await doc.getPage(pageNo);
-					const vp = pg.getViewport({ scale: dpi / 72 });
-					const canvas = document.createElement("canvas");
-					canvas.width = Math.ceil(vp.width);
-					canvas.height = Math.ceil(vp.height);
-					const ctx = canvas.getContext("2d");
-					if (!ctx) throw new Error("canvas 2d context unavailable");
-					await pg.render({ canvasContext: ctx, canvas, viewport: vp }).promise;
-					out.push({ page: pageNo, dataUrl: canvas.toDataURL("image/png"), w: canvas.width, h: canvas.height });
-				}
-				return out;
-			},
-			b64,
-			pdfjsUrl,
-			pages,
-			dpi,
-			fontsUrl,
-		);
-		return results.map((r) => ({
-			page: r.page,
-			// canvas-encoded PNG → providerSafePng for the same single-IDAT
-			// canonical form every other vision-model image gets.
-			png: providerSafePng(Buffer.from(r.dataUrl.slice(r.dataUrl.indexOf(",") + 1), "base64")),
-		}));
-	} finally {
-		await browser.close().catch(() => {});
-		try {
-			fs.rmSync(dir, { recursive: true, force: true });
-		} catch {
-			/* best-effort cleanup */
+		const out: RenderedPdfPage[] = [];
+		for (const pageNo of pages) {
+			if (pageNo < 1 || pageNo > doc.numPages) continue;
+			const pg = await doc.getPage(pageNo);
+			const vp = pg.getViewport({ scale: dpi / 72 });
+			const canvas = createCanvas(Math.ceil(vp.width), Math.ceil(vp.height));
+			const ctx = canvas.getContext("2d");
+			// pdfjs's render types speak the DOM context; @napi-rs/canvas's
+			// context is the same 2D API implemented over Skia.
+			await pg.render({
+				canvasContext: ctx as unknown as CanvasRenderingContext2D,
+				canvas: canvas as unknown as HTMLCanvasElement,
+				viewport: vp,
+			}).promise;
+			out.push({
+				page: pageNo,
+				// Skia-encoded PNG → providerSafePng for the same single-IDAT
+				// canonical form every other vision-model image gets.
+				png: providerSafePng(canvas.toBuffer("image/png")),
+			});
 		}
+		return out;
+	} finally {
+		await loadingTask.destroy().catch(() => {});
 	}
 }
 
