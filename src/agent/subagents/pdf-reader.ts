@@ -167,7 +167,7 @@ export async function runPdfReaderAgent(
 	const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
 	const pdfPath = input.path;
 
-	// Deterministic upfront failure: unreadable / unparseable / no Chrome
+	// Deterministic upfront failure: unreadable / unparseable
 	// for renders — the brief never starts on a broken source.
 	const openError = await probeReadable(pdfPath);
 	if (openError) {

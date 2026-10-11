@@ -16,7 +16,8 @@ import { healToolRecord } from "../tools/heal.ts";
  *
  * Shape: a ToolLoopAgent with two executable tools (write_demo / run_demo) —
  * the engine is injectable (tests use a scripted faux engine) and the headless
- * API is injectable (tests use a fake; production uses system Chrome).
+ * API is injectable (tests use a fake; production uses the app's own
+ * Chromium browser service, system Chrome as fallback).
  *
  * Failure semantics (decided in the W6 brief): `tested: true` means "the
  * verify loop ran"; on failure the result is { title, html: "", tested: true,
@@ -64,7 +65,7 @@ Build quality:
 
 THE HOUSE RULE — never deliver untested:
 1. Call write_demo with the complete HTML document.
-2. Call run_demo. It loads the file in headless Chrome, waits ~2s, and reports console errors, uncaught
+2. Call run_demo. It loads the file in a headless browser, waits ~2s, and reports console errors, uncaught
    errors (window.onerror), and failed requests. Optionally pass a probe: a JS expression evaluated in
    the page (e.g. "typeof window.simulate === 'function'" or a state assertion) to check deeper.
 3. If run_demo reports problems, FIX the document and call write_demo again, then run_demo again.
@@ -119,7 +120,7 @@ export function createDemoBuilderTools(
 			name: "run_demo",
 			label: "run_demo",
 			description:
-				"Headlessly execute the current demo in Chrome and report console errors, uncaught errors, and failed requests. " +
+				"Headlessly execute the current demo in a browser and report console errors, uncaught errors, and failed requests. " +
 				"Optionally pass a probe expression to assert on page state.",
 			parameters: runDemoInput,
 			execute: serverExecute("run_demo", runDemoInput, async ({ probe }) => {

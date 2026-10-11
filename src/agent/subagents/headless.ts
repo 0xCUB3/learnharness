@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -104,10 +105,150 @@ export function resolveChromeExecutablePath(): string | null {
 }
 
 const NO_CHROME_MESSAGE =
-	"No Chrome/Chromium found for headless testing. Install Google Chrome or set CHROME_PATH to a Chrome executable. " +
-	"(Verification is mandatory — demos and visuals are never delivered untested.)";
+	"No render engine available: the app's own browser helper failed to start and no system Chrome/Chromium was found. " +
+	"Install Google Chrome or set CHROME_PATH to a Chrome executable. " +
+	"(Verification is mandatory — demos are never delivered untested.)";
 
-async function launchBrowser(extraArgs: string[] = []): Promise<import("puppeteer-core").Browser> {
+// ─── The app's own Chromium as a browser service (Wave E stage 3) ────────────
+// Demos execute JS and need a browser. PRIMARY: this very app's binary
+// spawned with --browser-service (main.cjs boots a hidden window with a CDP
+// port and prints "BROWSER_SERVICE_CDP <port>"). FALLBACK: system Chrome.
+// The helper's stdin is held open by this process; server death = EOF = the
+// helper quits — no orphans. PDFs and SVGs never come here (native now).
+
+/** Handshake line parser (pure; exported for tests). */
+export function parseBrowserServiceLine(line: string): number | null {
+	const m = line.match(/^BROWSER_SERVICE_CDP (\d+)$/);
+	if (!m) return null;
+	const port = Number(m[1]);
+	return port >= 1 && port <= 65535 ? port : null;
+}
+
+/** Spawn env sanitizer (pure; exported for tests): the helper must run as a
+ *  FULL Electron app — ELECTRON_RUN_AS_NODE must not leak — and must not
+ *  inherit the dev-shell userData redirect. */
+export function browserServiceSpawnEnv(
+	env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+	const out: Record<string, string | undefined> = { ...env };
+	delete out.ELECTRON_RUN_AS_NODE;
+	delete out.LH_DEV_URL;
+	return out;
+}
+
+/** The helper binary: inside the packaged app the server runs under
+ *  ELECTRON_RUN_AS_NODE so process.execPath IS the app binary; in dev
+ *  (plain node) the electron package resolves to the dev binary path. */
+export function browserServiceBinary(): string | null {
+	if (process.versions.electron) return process.execPath;
+	try {
+		const req = createRequire(import.meta.url);
+		const p = req("electron") as unknown as string;
+		return typeof p === "string" && p.length > 0 ? p : null;
+	} catch {
+		return null;
+	}
+}
+
+const BROWSER_SERVICE_TIMEOUT_MS = 15_000;
+let browserServiceProc: import("node:child_process").ChildProcess | null = null;
+
+async function connectBrowserService(): Promise<import("puppeteer-core").Browser | null> {
+	const puppeteer = (await import("puppeteer-core")).default;
+	const { spawn } = await import("node:child_process");
+	let port: number | null = null;
+
+	if (browserServiceProc && browserServiceProc.exitCode === null) {
+		// Helper alive from a previous run — reuse its endpoint.
+		port = (browserServiceProc as { __cdpPort?: number }).__cdpPort ?? null;
+	}
+	if (port === null) {
+		const binary = browserServiceBinary();
+		if (!binary) return null;
+		// Packaged: execPath runs the bundled app (flag reaches main.cjs).
+		// Dev: the bare electron binary needs the repo root as the app arg —
+		// flagless it would open Electron's default app instead of our shell.
+		const appArgs = process.versions.electron ? ["--browser-service"] : [
+			// src/agent/subagents → repo root
+			path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", ".."),
+			"--browser-service",
+		];
+		const proc = spawn(binary, appArgs, {
+			// Cast: the sanitizer is pure over a loose record; NODE_ENV is
+			// always present in a real process.env.
+			env: browserServiceSpawnEnv(process.env) as NodeJS.ProcessEnv,
+			stdio: ["pipe", "pipe", "pipe"] as const,
+		});
+		browserServiceProc = proc;
+		port = await new Promise<number | null>((resolve) => {
+			let buf = "";
+			const timer = setTimeout(() => {
+				proc.kill();
+				resolve(null);
+			}, BROWSER_SERVICE_TIMEOUT_MS);
+			const onData = (chunk: Buffer) => {
+				buf += chunk.toString("utf8");
+				const line = buf.split("\n").find((l) => parseBrowserServiceLine(l) !== null);
+				if (line !== undefined) {
+					clearTimeout(timer);
+					resolve(parseBrowserServiceLine(line));
+				}
+			};
+			proc.stdout.on("data", onData);
+			proc.once("exit", () => {
+				clearTimeout(timer);
+				resolve(null);
+			});
+		});
+		if (port === null) {
+			browserServiceProc = null;
+			return null;
+		}
+		(proc as { __cdpPort?: number }).__cdpPort = port;
+	}
+
+	try {
+		const version = await fetch(`http://127.0.0.1:${port}/json/version`);
+		const info = (await version.json()) as { webSocketDebuggerUrl?: string };
+		if (!info.webSocketDebuggerUrl) return null;
+		// connect ≠ launch: browser.close() below merely disconnects — the
+		// helper stays resident for the next job (stdin-held lifetime).
+		return await puppeteer.connect({
+			browserWSEndpoint: info.webSocketDebuggerUrl,
+			defaultViewport: null,
+		});
+	} catch {
+		return null;
+	}
+}
+
+/** Serialized helper-page use: the helper owns ONE page target (Electron's
+ *  CDP has no Target.createTarget — pages must be windows the helper made),
+ *  so concurrent jobs queue here instead of fighting over one webContents. */
+let helperPageChain: Promise<unknown> = Promise.resolve();
+
+async function withBrowserPage<T>(fn: (page: import("puppeteer-core").Page) => Promise<T>): Promise<T> {
+	// Helper first (owner ruling 2026-10-10: the app's own Chromium primary,
+	// system Chrome fallback) — deterministic across users, zero install.
+	const helper = await connectBrowserService();
+	if (helper) {
+		const run = async (): Promise<T> => {
+			const pages = await helper.pages();
+			const page = pages.find((p) => p.target().type() === "page");
+			if (!page) throw new Error("browser service: no page target");
+			try {
+				return await fn(page);
+			} finally {
+				// Drop all page state (JS heap, listeners) between jobs.
+				await page.goto("about:blank").catch(() => {});
+			}
+		};
+		const next = helperPageChain.then(run, run);
+		helperPageChain = next.catch(() => {});
+		return next;
+	}
+
+	// Chrome fallback: per-job launch, close on the way out (old semantics).
 	const puppeteer = (await import("puppeteer-core")).default;
 	const executablePath = resolveChromeExecutablePath();
 	const browser = await puppeteer.launch({
@@ -115,9 +256,14 @@ async function launchBrowser(extraArgs: string[] = []): Promise<import("puppetee
 		// Explicit path when we found one; otherwise let puppeteer resolve the
 		// system Chrome install itself via the "chrome" channel.
 		...(executablePath ? { executablePath } : { channel: "chrome" as const }),
-		args: ["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", ...extraArgs],
+		args: ["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
 	});
-	return browser;
+	try {
+		const page = await browser.newPage();
+		return await fn(page);
+	} finally {
+		await browser.close().catch(() => {});
+	}
 }
 
 /** A temp dir per invocation; removed in finally. */
@@ -139,9 +285,8 @@ async function runDemo(html: string, opts: RunDemoOptions = {}): Promise<DemoRun
 	let probeResult: unknown;
 	let probed = false;
 
-	const browser = await launchBrowser();
 	try {
-		const page = await browser.newPage();
+		await withBrowserPage(async (page) => {
 		page.on("console", (msg) => {
 			if (msg.type() === "error") consoleErrors.push(msg.text());
 		});
@@ -162,8 +307,8 @@ async function runDemo(html: string, opts: RunDemoOptions = {}): Promise<DemoRun
 		} catch (err) {
 			pageErrors.push(err instanceof Error ? err.message : String(err));
 		}
+		});
 	} finally {
-		await browser.close().catch(() => {});
 		try {
 			fs.rmSync(dir, { recursive: true, force: true });
 		} catch {
@@ -289,9 +434,7 @@ async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buff
 		"utf-8",
 	);
 
-	const browser = await launchBrowser();
-	try {
-		const page = await browser.newPage();
+	return withBrowserPage(async (page) => {
 		const { width, height } = svgViewport(svg, opts);
 		await page.setViewport({ width, height });
 		await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
@@ -300,14 +443,13 @@ async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buff
 		// provider (see providerSafePng) — the visual-maker feeds this exact
 		// buffer back to the vision model as its only way to "look".
 		return providerSafePng(Buffer.from(shot));
-	} finally {
-		await browser.close().catch(() => {});
+	}).finally(() => {
 		try {
 			fs.rmSync(dir, { recursive: true, force: true });
 		} catch {
 			/* best-effort cleanup */
 		}
-	}
+	});
 }
 
 // ─── PDF page rasterization (pdfjs paints, Skia hosts) ─────────────────
@@ -381,10 +523,12 @@ function PATHS_nodeModules(): string {
 
 export const realHeadless: HeadlessApi = {
 	available() {
-		return resolveChromeExecutablePath() !== null;
+		// The helper binary exists by construction in the packaged app; in dev
+		// it resolves via the electron package. System Chrome widens coverage.
+		return browserServiceBinary() !== null || resolveChromeExecutablePath() !== null;
 	},
 	unavailableReason() {
-		return resolveChromeExecutablePath() === null ? NO_CHROME_MESSAGE : null;
+		return browserServiceBinary() === null && resolveChromeExecutablePath() === null ? NO_CHROME_MESSAGE : null;
 	},
 	runDemo,
 	renderSvg,

@@ -8,7 +8,8 @@ import { getHeadless, type HeadlessApi } from "./headless.ts";
 
 /**
  * The visual-maker sub-agent (vision §2.5): authors ONE precise SVG from a
- * brief, renders it to a PNG in the SAME headless Chrome, LOOKS at the
+ * brief, renders it to a PNG with the same rasterizer the transcript
+ * will use, LOOKS at the
  * result, and iterates until correct — a direct port of the vault POC's
  * svg-maker doctrine ("the one rule that matters: verify by looking").
  *
@@ -64,7 +65,7 @@ Your three tools:
 - edit_svg({ old_text, new_text }) — a surgical exact-match replacement in the current SVG:
   old_text must appear EXACTLY ONCE; it is replaced by new_text. Call write_svg first. For anything
   beyond a one-spot fix (new elements, restructured layout), write_svg the whole document again.
-- render_svg({}) — rasterize the current SVG in headless Chrome. The render arrives as an image in the
+- render_svg({}) — rasterize the current SVG to a PNG. The render arrives as an image in the
   message right after the tool result.
 
 THE ONE RULE THAT MATTERS MOST: verify by looking. You are done only when you have LOOKED at the
