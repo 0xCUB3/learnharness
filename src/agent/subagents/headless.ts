@@ -261,6 +261,26 @@ function crc32(buf: Buffer): number {
 }
 
 async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buffer> {
+	// NATIVE FIRST (Wave E stage 2, owner 2026-10-10): resvg rasterizes
+	// static SVG in-process — visual-maker SVGs never execute script, so a
+	// browser adds nothing but a process. White background mirrors the old
+	// Chrome page (html,body{background:#fff}); fitTo width mirrors
+	// svgViewport semantics (attrs win, viewBox-only gets the 900 default,
+	// opts override). The browser path below stays as the fallback for
+	// exotic-SVG features resvg cannot parse — failures there used to be
+	// the ONLY path, so nothing regresses.
+	const { width } = svgViewport(svg, opts);
+	try {
+		const { Resvg } = await import("@resvg/resvg-js");
+		const resvg = new Resvg(svg, {
+			fitTo: { mode: "width", value: width },
+			font: { loadSystemFonts: true },
+			background: "#ffffff",
+		});
+		return providerSafePng(resvg.render().asPng());
+	} catch {
+		/* fall through to the browser path */
+	}
 	const dir = tempDir("lh-visual-");
 	const file = path.join(dir, "figure.html");
 	fs.writeFileSync(
