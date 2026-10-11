@@ -4,6 +4,7 @@ import {
 	actionForBinding,
 	bindingForAction,
 	formatBinding,
+	IS_MAC,
 	kbdEventForAction,
 	KEYBOARD_ACTIONS,
 } from "../src/core/keyboard.ts";
@@ -40,7 +41,7 @@ describe("the ⌘B chain — keypress → binding → action → event", () => {
 	it("mod+b is the toggle-sidebar action", () => {
 		assert.equal(actionForBinding("mod+b"), "toggle-sidebar");
 		assert.equal(bindingForAction("toggle-sidebar"), "mod+b");
-		assert.equal(formatBinding("mod+b"), "⌘B");
+		assert.equal(formatBinding("mod+b"), IS_MAC ? "⌘B" : "Ctrl+B");
 	});
 
 	it("the event the chain ends in is the one the sidebar answers on", () => {
@@ -51,9 +52,9 @@ describe("the ⌘B chain — keypress → binding → action → event", () => {
 });
 
 describe("the thinking pill suffix — ⇧⇥ via the registry", () => {
-	it("shift+tab formats as ⇧⇥ and maps to cycle-thinking", () => {
+	it("shift+tab uses the platform's modifier label and maps to cycle-thinking", () => {
 		assert.equal(actionForBinding("shift+tab"), "cycle-thinking");
-		assert.equal(formatBinding("shift+tab"), "⇧⇥");
+		assert.equal(formatBinding("shift+tab"), IS_MAC ? "⇧⇥" : "Shift+⇥");
 	});
 });
 

@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
  * pdf_search / pdf_render), on the user-chosen hybrid stack:
  *
  * - TEXT (info / extract / search): pdfjs-dist — pure JS, no native deps.
- * - RENDER: the shared headless-Chrome infra (subagents/headless.ts,
- *   puppeteer + system Chrome) screenshots pdfium-rendered pages.
+ * - RENDER: subagents/headless.ts uses the same pdfjs engine with
+ *   @napi-rs/canvas (Skia), in-process — no browser needed.
  *
  * Doctrine (the skill's reading strategy, mirrored in the sub-agent's system
  * prompt): triage with pdf_info FIRST, then size-based strategy — short PDFs
@@ -45,10 +45,11 @@ async function loadPdfjs() {
 
 /** Standard-font data dir (live-smoke finding 2026-09-19: without it pdfjs
  *  warns and falls back on non-embedded standard fonts — Helvetica, Times…).
- *  The node side takes a plain filesystem path. Resolved from this module's
- *  location, the headless.ts PATHS_nodeModules idiom. */
+ *  The node side takes a plain filesystem path, shared by text and rendering.
+ *  pdfjs checks endsWith("/") even on Windows: use a literal trailing slash,
+ *  NOT path.sep ("\\" on Windows). Node fs accepts this path on every OS. */
 export function standardFontsDir(): string {
-	return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "node_modules", "pdfjs-dist", "standard_fonts") + path.sep;
+	return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "node_modules", "pdfjs-dist", "standard_fonts") + "/";
 }
 
 async function openDocument(filePath: string) {

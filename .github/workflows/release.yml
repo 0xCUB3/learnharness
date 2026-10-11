@@ -115,7 +115,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Native renderer tests on this OS
-        run: npx electron --import tsx --test tests/pdf-native-render.test.ts tests/svg-native-render.test.ts tests/browser-service.test.ts
+        run: npx electron --import tsx --test tests/pdf-native-render.test.ts tests/pdf-ops.test.ts tests/svg-native-render.test.ts tests/browser-service.test.ts
         env:
           NODE_ENV: test
           ELECTRON_RUN_AS_NODE: "1"

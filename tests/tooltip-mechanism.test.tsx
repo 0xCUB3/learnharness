@@ -3,10 +3,9 @@
  * icon/pill controls ride the styled Radix tooltip via Hint, the shortcut
  * appended as an em-dash suffix off the LIVE registry (a rebind changes
  * the suffix); truncation-reveals keep native title=; the copy carries no
- * internal vocabulary. Node has no navigator → IS_MAC is false → the mod
- * glyph renders "Ctrl+" here; the composition logic is the pin, not the
- * platform glyph. (Node 26 ships navigator.platform — on this Mac the real
- * ⌘/⇧ glyphs render, so they're pinned as-is.)
+ * internal vocabulary. Node 26 exposes the host platform through navigator,
+ * so expectations cover Mac glyphs AND Ctrl+/Shift+ elsewhere. Composition
+ * is the pin; running on a Mac must not be a test prerequisite.
  */
 
 import React from "react";
@@ -19,12 +18,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Hint, hintText } from "../components/ui/hint.tsx";
 import { TOOLTIP_DELAY_MS } from "../components/ui/tooltip.tsx";
 import { AUTO_UPDATE_HINT } from "../components/settings/settings-dialog.tsx";
+import { IS_MAC } from "../src/core/keyboard.ts";
 
 describe("hintText — the parenthesized composition", () => {
 	it("a registry action appends the LIVE binding (override-aware source)", () => {
-		assert.equal(hintText("Dictate", "toggle-dictation"), "Dictate (⌘D)");
-		assert.equal(hintText("Settings", "open-settings"), "Settings (⌘,)");
-		assert.equal(hintText("Search sessions", "sessions-search"), "Search sessions (⌘⇧F)");
+		assert.equal(hintText("Dictate", "toggle-dictation"), IS_MAC ? "Dictate (⌘D)" : "Dictate (Ctrl+D)");
+		assert.equal(hintText("Settings", "open-settings"), IS_MAC ? "Settings (⌘,)" : "Settings (Ctrl+,)");
+		assert.equal(hintText("Search sessions", "sessions-search"), IS_MAC ? "Search sessions (⌘⇧F)" : "Search sessions (Ctrl+Shift+F)");
 	});
 
 	it("surface-owned keys ride the binding prop (no registry entry)", () => {

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { standardFontsDir } from "./pdf-ops";
 
 /**
  * Verification engines for sub-agents: demos use the app's own Electron
@@ -483,9 +484,7 @@ async function renderPdfPages(
 	// Standard-font data as a directory path (live-smoke finding 2026-09-19:
 	// without it pdfjs renders non-embedded standard fonts via fallback);
 	// verbosity 0 = errors only (JBIG2 noise on scanned PDFs).
-	const standardFontDataUrl =
-		path.join(PATHS_nodeModules(), "pdfjs-dist", "standard_fonts") + path.sep;
-	const loadingTask = pdfjs.getDocument({ data, standardFontDataUrl, verbosity: 0 });
+	const loadingTask = pdfjs.getDocument({ data, standardFontDataUrl: standardFontsDir(), verbosity: 0 });
 	const doc = await loadingTask.promise;
 	try {
 		const out: RenderedPdfPage[] = [];
@@ -513,12 +512,6 @@ async function renderPdfPages(
 	} finally {
 		await loadingTask.destroy().catch(() => {});
 	}
-}
-
-/** node_modules — resolved from this module's location. */
-function PATHS_nodeModules(): string {
-	// import.meta.url = .../src/agent/subagents/headless.ts → three up + node_modules
-	return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "node_modules");
 }
 
 // ─── the real API ────────────────────────────────────────────────────────────

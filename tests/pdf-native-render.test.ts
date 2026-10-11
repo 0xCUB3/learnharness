@@ -7,9 +7,11 @@
  * this process).
  */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { realHeadless } from "../src/agent/subagents/headless.ts";
+import { standardFontsDir } from "../src/agent/subagents/pdf-ops.ts";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-3page.pdf");
 
@@ -30,6 +32,12 @@ function pngFacts(buf: Buffer): { w: number; h: number; idats: number } {
 }
 
 describe("native pdf_render (pdfjs paints, @napi-rs/canvas hosts)", () => {
+	it("the shared font directory ends in pdfjs's required slash on every OS", () => {
+		const fonts = standardFontsDir();
+		assert.ok(fonts.endsWith("/"), "pdfjs rejects a trailing Windows backslash");
+		assert.ok(fs.statSync(fonts).isDirectory(), "the filesystem accepts the shared font path");
+	});
+
 	it("renders fixture pages as canonical single-IDAT PNGs", async () => {
 		const pages = await realHeadless.renderPdfPages(FIXTURE, [1, 3], { dpi: 150 });
 		assert.equal(pages.length, 2, "requested pages 1 and 3");

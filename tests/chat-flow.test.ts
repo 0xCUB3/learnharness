@@ -1598,7 +1598,8 @@ describe("duplicate provider tool-call ids (the Lacan fix)", () => {
 			() => fauxAssistantMessage([fauxText("Right — and that is where Lacan begins.")]),
 		]);
 
-		const chat = chatStore.createChat("Lacan: duplicate call_0 turns");
+		const chat = createConfiguredChat("Lacan: duplicate call_0 turns");
+		createdChats.push(chat.id);
 		// Turn 1: the ask question.
 		await drainTurn(post(chat.id, { type: "text", text: "teach me Lacan" }), agentFactory(engine));
 		let saved = chatStore.getChat(chat.id)!;
