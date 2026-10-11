@@ -2,6 +2,12 @@
 	"name": "learnharness",
 	"version": "0.2.0",
 	"license": "AGPL-3.0-only",
+	"author": {
+		"name": "Amos Blomqvist",
+		"email": "255718537+amosblomqvist@users.noreply.github.com"
+	},
+	"homepage": "https://github.com/amosblomqvist/learnharness",
+	"desktopName": "learnharness.desktop",
 	"description": "A standalone learning harness: a teacher agent (AI SDK) with quiz/ask interactions, session artifacts, and a derived knowledge graph of what the learner knows.",
 	"type": "module",
 	"private": true,

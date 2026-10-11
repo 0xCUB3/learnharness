@@ -1,0 +1,176 @@
+name: Desktop release
+
+on:
+  push:
+    tags: ["v*"]
+  # Manual runs are artifact-only, unsigned, and NEVER create a release.
+  # Use this for the first Windows/Linux dress rehearsal without secrets.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize separate runs for the same ref; never cancel an upload in flight.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  quality:
+    name: Release gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: npm
+      - run: npm ci
+      - name: Tag must match package.json
+        if: github.event_name == 'push'
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const {version} = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            if (process.env.GITHUB_REF_NAME !== `v${version}`) {
+              console.error("Release tag must equal v" + version);
+              process.exit(1);
+            }
+          '
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run lint
+
+  draft:
+    name: Prepare one draft
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # This job succeeds without creating anything on manual rehearsals.
+      # Preparing once avoids the publisher's list-miss/create race between OS jobs.
+      - name: Create or reuse the tag's draft
+        if: github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const tag = context.ref.replace(/^refs\/tags\//, "");
+            const version = tag.slice(1);
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner, repo, per_page: 100,
+            });
+            const matches = releases.filter(release =>
+              release.tag_name === tag || release.tag_name === version);
+            if (matches.length > 1) {
+              throw new Error(`Multiple releases match ${tag}; resolve them before uploading.`);
+            }
+            if (matches.length === 1) {
+              if (!matches[0].draft) {
+                throw new Error(`${tag} is already published; refusing to modify it.`);
+              }
+              core.info(`Reusing draft ${matches[0].id} for ${tag}`);
+              return;
+            }
+            const {data} = await github.rest.repos.createRelease({
+              owner, repo, tag_name: tag, name: version, draft: true,
+            });
+            core.info(`Created draft ${data.id} for ${tag}`);
+
+  package:
+    name: Package (${{ matrix.platform }})
+    needs: [quality, draft]
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: mac-arm64
+            builder_args: --mac --arm64
+          - os: windows-2025
+            platform: windows-x64
+            builder_args: --win --x64
+          - os: ubuntu-24.04
+            platform: linux-x64
+            builder_args: --linux --x64
+    runs-on: ${{ matrix.os }}
+    # Apple's notarization queue has taken ~2 hours for this team.
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: npm
+      - run: npm ci
+      - name: Native renderer tests on this OS
+        run: npx electron --import tsx --test tests/pdf-native-render.test.ts tests/svg-native-render.test.ts tests/browser-service.test.ts
+        env:
+          NODE_ENV: test
+          ELECTRON_RUN_AS_NODE: "1"
+      - run: npm run build
+      - run: node scripts/build-server.mjs
+      - run: node scripts/smoke-server.mjs --electron
+      - name: Validate macOS release secrets
+        if: github.event_name == 'push' && runner.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing signing/notarization secret: $name"
+              exit 1
+            fi
+          done
+      - name: Signed and notarized macOS release → draft
+        if: github.event_name == 'push' && runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder ${{ matrix.builder_args }} --publish always -c.forceCodeSigning=true
+      - name: Windows/Linux release → draft
+        if: github.event_name == 'push' && runner.os != 'macOS'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder ${{ matrix.builder_args }} --publish always
+      - name: Unsigned macOS rehearsal (no publish, no notarization)
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder ${{ matrix.builder_args }} --publish never -c.mac.notarize=false
+      - name: Windows/Linux rehearsal (no publish)
+        if: github.event_name == 'workflow_dispatch' && runner.os != 'macOS'
+        run: npx electron-builder ${{ matrix.builder_args }} --publish never
+      - name: Save installers and update metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: learnharness-${{ matrix.platform }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.blockmap
+            dist/latest*.yml

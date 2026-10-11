@@ -5,16 +5,14 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
- * Shared headless-browser helper for the verifying sub-agents (W6):
- * the demo-builder executes demos and captures errors; the visual-maker
- * rasterizes SVGs so it can look at them. Both use the SAME system Chrome
- * via puppeteer-core — NO bundled chromium is downloaded.
+ * Verification engines for sub-agents: demos use the app's own Electron
+ * browser-service via puppeteer-core, with system Chrome as fallback.
+ * SVGs use resvg (browser fallback); PDFs use pdfjs + Skia (no browser).
+ * No extra Chromium is shipped or downloaded.
  *
- * Chrome resolution: process.env.CHROME_PATH first, then the common
- * macOS/Linux install paths. If none exists we fall back to puppeteer's
- * `channel: "chrome"` at launch time; `available()` is cheap and only knows
- * about the explicit candidates, so a channel-only setup reports unavailable
- * and the builders refuse to run (the house rule: never skip testing).
+ * Chrome fallback resolution: CHROME_PATH first, then common macOS,
+ * Windows and Linux install paths. `available()` is a cheap executable
+ * check; the helper must still prove it can launch/connect at job time.
  *
  * Test seam: `headlessOverride.current` replaces the whole API (tests inject
  * a fake; nothing here touches a real browser). Builders call `getHeadless()`.
@@ -58,16 +56,15 @@ export interface RenderedPdfPage {
 }
 
 export interface HeadlessApi {
-	/** True when a Chrome executable is resolvable (cheap, no launch). */
+	/** True when a browser helper or Chrome is resolvable (cheap, no launch). */
 	available(): boolean;
 	/** Why not — for error messages. */
 	unavailableReason(): string | null;
-	/** Load the HTML in headless Chrome, capture errors, optionally probe. */
+	/** Execute HTML in a browser, capture errors, optionally probe. */
 	runDemo(html: string, opts?: RunDemoOptions): Promise<DemoRunResult>;
 	/** Rasterize an SVG to a PNG buffer (for verify-by-looking). */
 	renderSvg(svg: string, opts?: RenderSvgOptions): Promise<Buffer>;
-	/** Render PDF pages to PNG buffers via Chrome's pdfium viewer (for the
-	 *  pdf-reader sub-agent's look-at-the-page loop). */
+	/** Render PDF pages to PNGs natively (pdfjs + Skia) for the pdf-reader. */
 	renderPdfPages(pdfPath: string, pages: number[], opts?: RenderPdfOptions): Promise<RenderedPdfPage[]>;
 }
 
@@ -81,6 +78,11 @@ export function getHeadless(): HeadlessApi {
 // ─── Chrome resolution ───────────────────────────────────────────────────────
 
 const CHROME_CANDIDATES = [
+	...(process.platform === "win32" ? [
+		path.join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
+		path.join(process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
+		...(process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe")] : []),
+	] : []),
 	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 	"/Applications/Chromium.app/Contents/MacOS/Chromium",
 	"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",

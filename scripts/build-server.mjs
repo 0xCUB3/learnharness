@@ -6,7 +6,9 @@
  * outside that the docs require us to copy: public/ and .next/static/.
  * This script finishes the job and sanity-checks the result — including
  * the exclusion that keeps the repo's real data/ OUT of the bundle
- * (see next.config.ts outputFileTracingExcludes).
+ * (see next.config.ts outputFileTracingExcludes). It also removes two
+ * exact build-only paths the tracer sweeps in: old installers and the
+ * development Electron runtime. Broad trace exclusions break externals.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -55,6 +57,22 @@ for (const secret of ["auth.json", ".env", ".env.local"]) {
 		console.error(`[build-server] REFUSING: standalone contains ${secret} — dev secrets would ship in the app.`);
 		console.error("             Check outputFileTracingExcludes in next.config.ts.");
 		process.exit(1);
+	}
+}
+
+// 2c) Payload curation (2026-10-11): the trace sweep can copy repo-root
+// dist/ (previous installers, recursively) and the development Electron
+// runtime (the demo helper's dev-only require). Neither belongs in the
+// server: packaged helpers use process.execPath, the app's own binary.
+// Remove ONLY these standalone-root paths AFTER tracing — excluding a
+// generic dist/** earlier broke pi-ai / pi-agent-core's runtime dist/.
+// Never touch ROOT/dist or ROOT/node_modules/electron (the running app
+// and the build runtime); native canvas/resvg packages stay untouched.
+for (const extra of ["dist", path.join("node_modules", "electron")]) {
+	const target = path.join(STANDALONE, extra);
+	if (exists(target)) {
+		fs.rmSync(target, { recursive: true, force: true });
+		console.log(`[build-server] removed build-only payload: ${extra}`);
 	}
 }
 

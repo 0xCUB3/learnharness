@@ -4,6 +4,9 @@
  * on (electron/main.cjs), so this file is the renderer's entire access to
  * Electron — keep it a minimal, explicit API surface.
  *
+ *   window.lh.platform — read-only OS identity for native window-control
+ *   gutters (darwin: left traffic lights; win32/linux: right overlay).
+ *
  *   window.lh.expandWindow() — widen the window to the sidebar auto-close
  *   threshold (928px) when the sidebar is opened below it. The main
  *   process clamps: no-op if the window is already wide enough.
@@ -25,6 +28,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("lh", {
+	platform: process.platform,
 	expandWindow: () => ipcRenderer.send("lh:expand-window"),
 	onZoom: (cb) => {
 		const listener = (_event, factor) => cb(factor);

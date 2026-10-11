@@ -258,8 +258,16 @@ function createWindow(url) {
 		// (band 0–59.5, pill box 19–39.5) — y 22.5 lands the circles at
 		// 29.25, exactly on the pill. Wordmark gutter: components/sidebar.tsx.
 		// Dragging comes from the renderer's .lh-drag bands (app/globals.css).
-		titleBarStyle: "hiddenInset",
-		trafficLightPosition: { x: 16, y: 22.5 },
+		...(process.platform === "darwin"
+			? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 22.5 } }
+			: {
+				titleBarStyle: "hidden",
+				// Native min/max/close on the right; the renderer reserves their
+				// actual width via env(titlebar-area-*), not a guessed gutter.
+				titleBarOverlay: { color: "#141414", symbolColor: "#e5e5e5", height: 60 },
+				// Keep the custom bar alone; Alt reveals the native menu.
+				autoHideMenuBar: true,
+			}),
 		webPreferences: {
 			contextIsolation: true,
 			sandbox: true,
@@ -361,7 +369,9 @@ const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
  * Feed: GitHub Releases (electron-builder.yml publish → app-update.yml,
  * baked + signed into the bundle). macOS needs the app signed (it is —
  * Developer ID) and updates ride the zip target (Squirrel.Mac); blockmaps
- * give differential downloads for free.
+ * give differential downloads for free. Windows uses NSIS; Linux uses
+ * AppImage or DebUpdater (6.8.9 supports deb; installation can request
+ * administrator permission via the package manager — owner 2026-10-11).
  *
  * Hard rules:
  *  - DEV NEVER UPDATES: !app.isPackaged skips the updater entirely — the

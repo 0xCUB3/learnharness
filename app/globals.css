@@ -486,9 +486,9 @@ body {
 
 /* ─────────────────────────────────────────────────────────────────────────
    Electron merged chrome (owner, 2026-09-17). The system title bar is
-   hidden (titleBarStyle: "hiddenInset" in electron/main.cjs); the app's
-   own 60px header bands are the drag surface. Everything here is inert
-   in the plain browser — it keys off <html class="lh-electron">, which
+   hidden (macOS hiddenInset; Windows/Linux hidden + native controls
+   overlay in electron/main.cjs); the app's 60px bands are the drag surface.
+   Everything here is inert in the plain browser — it keys off <html class="lh-electron">, which
    SidebarProvider sets after mount when it detects the Electron shell.
 
    - .lh-drag        window-drag region — on a dedicated mask div in
@@ -532,11 +532,28 @@ body {
 .lh-electron {
 	--lh-zoom: 1;
 }
-.lh-electron .lh-lights-gutter {
+.lh-electron[data-lh-platform="darwin"] .lh-lights-gutter {
 	padding-left: calc(92px / var(--lh-zoom));
 }
-.lh-electron .lh-closed-toggle {
+.lh-electron[data-lh-platform="darwin"] .lh-closed-toggle {
 	margin-left: calc(92px / var(--lh-zoom));
+}
+
+/* Windows/Linux Window Controls Overlay: Chromium publishes the usable
+   titlebar rectangle in CSS coordinates (including resize/zoom changes).
+   Reserve the native buttons' actual right-side extent, no fixed width
+   and no second zoom division. The env fallbacks make fullscreen/absent
+   overlay a zero gutter. Keep this independent of .lh-drag: rename mode
+   still needs to clear the native buttons when dragging is disabled. */
+.lh-electron:is([data-lh-platform="win32"], [data-lh-platform="linux"]) {
+	--lh-wco-right: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+}
+.lh-electron .lh-wco-gutter {
+	padding-right: calc(0.75rem + var(--lh-wco-right, 0px));
+}
+.lh-electron .lh-wco-floating {
+	right: calc(0.5rem + var(--lh-wco-right, 0px));
+	max-width: max(0px, calc(100% - 5.5rem - var(--lh-wco-right, 0px)));
 }
 
 /* --font-title deliberately NOT @theme inline (see comment above): the

@@ -28,11 +28,13 @@ const nextConfig: NextConfig = {
 	// @anthropic-ai — pi-ai's deps — vanished from the trace entirely).
 	// Anchored "./"-prefixed forms behave the same. Only the three entries
 	// below are verified safe (complete externals trace + clean payload).
-	// The 7.4 GB recursive-DMG payload (repo dist/ swept into the bundle,
-	// shipping the previous build inside the next) is instead prevented by
-	// the `rm -rf dist .next/standalone` clean step in desktop:dist —
-	// verified sufficient, since the sweep can only copy what exists at
-	// trace time. scripts/build-server.mjs guards the rest.
+	// The recursive-DMG payload (repo dist/ swept into the bundle, shipping
+	// the previous build inside the next) is instead prevented by the
+	// desktop:dist clean step AND targeted post-trace curation in
+	// scripts/build-server.mjs (2026-10-11): remove standalone-root dist/
+	// and node_modules/electron/ (the demo helper's DEV runtime; packaged
+	// helpers use the app's own binary). Runtime dependencies' dist/ dirs
+	// stay intact, and the script guards against leaked data/keys.
 	outputFileTracingExcludes: {
 		"*": [
 			"data/**/*",

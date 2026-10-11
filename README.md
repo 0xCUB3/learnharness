@@ -24,11 +24,17 @@ A system whose premise is that it can be trusted is built so that it can be chec
 
 ## Download
 
-**[Releases](https://github.com/amosblomqvist/learnharness/releases)** — macOS on Apple Silicon, signed and notarized. Windows and Linux are planned.
+**[Releases](https://github.com/amosblomqvist/learnharness/releases)**
+
+- **macOS (Apple Silicon):** signed and notarized DMG.
+- **Windows (x64):** installer. Currently unsigned; Windows may show an “unknown publisher” / SmartScreen warning.
+- **Linux (x64):** AppImage (recommended) or Debian/Ubuntu `.deb`.
+
+All three platforms support in-app updates. AppImage updates need no administrator permission; `.deb` updates may request it.
 
 ## Quick start
 
-1. Download the DMG and drag the app to Applications.
+1. Download your platform’s package: drag the macOS app to Applications, run the Windows installer, or make the Linux AppImage executable and open it (alternatively, install the `.deb`).
 2. Open Settings, paste your OpenRouter API key, and pick your models.
 3. Start a session and say what you want to understand.
 
@@ -41,6 +47,8 @@ npm test           # deterministic, no LLM, no network
 ```
 
 The architecture spec and full development guide live in [`docs/`](docs/) — start with [`docs/architecture.md`](docs/architecture.md) and [`docs/development.md`](docs/development.md).
+
+Questions or bugs: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
 
 ## License
 

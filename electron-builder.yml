@@ -1,4 +1,4 @@
-# electron-builder config — LearnHarness desktop (macOS arm64 first).
+# electron-builder config — LearnHarness desktop (macOS arm64; Windows/Linux x64).
 #
 # Shape (fact-checked 2026-09-17):
 #   - the app's real server (.next/standalone, curated by
@@ -114,6 +114,33 @@ mac:
   notarize: true
 dmg:
   title: "${productName} ${version}"
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: "${productName}-${version}-${arch}-setup.${ext}"
+  # Unsigned Windows release (owner ruling): preserve icon/version metadata,
+  # skip signing, and do not require a publisher signature for updates.
+  signExecutable: false
+  verifyUpdateCodeSignature: false
+nsis:
+  oneClick: true
+  perMachine: false
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  category: Education
+  # Match Electron's app_id/WM_CLASS to the installed desktop launcher.
+  syncDesktopName: true
+  # Both targets update via electron-updater 6.8.9. AppImage replaces its
+  # own file; deb uses dpkg/apt and may request administrator permission.
 publish:
   # Update feed = GitHub Releases (decided 2026-10-08): latest-mac.yml +
   # zip/blockmap live on releases; electron-updater reads them anonymously.
@@ -124,3 +151,5 @@ publish:
   - provider: github
     owner: amosblomqvist
     repo: learnharness
+    # All three CI jobs contribute assets; only the owner publishes it.
+    releaseType: draft

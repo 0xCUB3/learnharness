@@ -56,6 +56,8 @@ declare global {
 	interface Window {
 		/** Preload bridge (electron/preload.cjs) — Electron only, absent in the browser. */
 		lh?: {
+			/** Read-only host OS; determines the native-control gutter. */
+			platform?: string;
 			expandWindow: () => void;
 			/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
 			onZoom?: (cb: (factor: number) => void) => () => void;
@@ -91,6 +93,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		// and in the plain browser the class never appears.
 		if (IS_ELECTRON) {
 			document.documentElement.classList.add("lh-electron");
+			document.documentElement.dataset.lhPlatform = window.lh?.platform ?? "";
 		}
 
 		// THE ZOOM TRUTH (owner round 7, 2026-10-05): ⌘±/⌘0 zoom the UI

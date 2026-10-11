@@ -12,7 +12,9 @@
  * in seconds, not after a full packaging pass.
  *
  * What it does: spawns .next/standalone/server.js exactly the way the
- * Electron shell does (electron/main.cjs) — 127.0.0.1 on a kernel-assigned
+ * Electron shell does (electron/main.cjs) — with --electron it uses
+ * Electron's bundled Node via ELECTRON_RUN_AS_NODE, otherwise host Node —
+ * 127.0.0.1 on a kernel-assigned
  * free port, NODE_ENV=production, a THROWAWAY LH_DATA_DIR and an EMPTY
  * LH_AUTH_FILE under os.tmpdir() (no real keys or data ever touch it) —
  * polls GET / until 200, then probes the GET-only API surface (graph /
@@ -23,6 +25,7 @@
  * way, same day).
  */
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as net from "node:net";
@@ -32,6 +35,8 @@ import * as path from "node:path";
 const ROOT = path.resolve(import.meta.dirname, "..");
 const STANDALONE = path.join(ROOT, ".next", "standalone");
 const SERVER = path.join(STANDALONE, "server.js");
+const ELECTRON_MODE = process.argv.includes("--electron");
+const RUNTIME = ELECTRON_MODE ? createRequire(import.meta.url)("electron") : process.execPath;
 
 const POLL_MS = 500;
 const BOOT_TIMEOUT_MS = 30_000;
@@ -95,10 +100,12 @@ async function main() {
 		for (const line of tail.slice(-40)) if (line.trim()) console.error(`    ${line}`);
 	};
 
-	const child = spawn(process.execPath, [SERVER], {
+	console.log(`[smoke-server] runtime: ${ELECTRON_MODE ? "Electron bundled Node" : "host Node"}`);
+	const child = spawn(RUNTIME, [SERVER], {
 		cwd: STANDALONE,
 		env: {
 			...process.env,
+			...(ELECTRON_MODE ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
 			NODE_ENV: "production",
 			PORT: String(port),
 			HOSTNAME: "127.0.0.1",
