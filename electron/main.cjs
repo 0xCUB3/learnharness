@@ -262,9 +262,11 @@ function createWindow(url) {
 			? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 22.5 } }
 			: {
 				titleBarStyle: "hidden",
-				// Native min/max/close on the right; the renderer reserves their
-				// actual width via env(titlebar-area-*), not a guessed gutter.
-				titleBarOverlay: { color: "#141414", symbolColor: "#e5e5e5", height: 60 },
+				// Native min/max/close on the right, at the OS's compact default
+				// height. Do not force the zoom-invariant native overlay to match
+				// the renderer's 60 CSS px bar: zooming out would cover its border.
+				// The renderer reserves the actual width via env(titlebar-area-*).
+				titleBarOverlay: { color: "#141414", symbolColor: "#e5e5e5" },
 				// Keep the custom bar alone; Alt reveals the native menu.
 				autoHideMenuBar: true,
 			}),
