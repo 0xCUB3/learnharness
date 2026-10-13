@@ -1313,7 +1313,7 @@ export function Chat({
 				<SessionFind scopeRef={sessionFindScopeRef} scrollContextRef={scrollContextRef} />
 				<div ref={sessionFindScopeRef} className="relative flex min-h-0 flex-1">
 				<Conversation className="h-full min-w-0 flex-1" initial="instant" contextRef={scrollContextRef}>
-					<SessionMessageNavigation messages={messages} />
+					<SessionMessageNavigation />
 					<ConversationContent className="min-h-full gap-0 p-0">
 						<div data-session-find-root="" className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
 							{messages.length === 0 && !busy && (

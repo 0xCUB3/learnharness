@@ -1658,7 +1658,7 @@ export function GraphView({
 									return (
 										<div key={sourceId} className="flex items-center gap-1.5">
 											<FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
-											<span className="min-w-0 flex-1 truncate px-1 py-1 text-sm text-muted-foreground">
+											<span className="min-w-0 flex-1 truncate px-2 py-1.5 text-sm text-muted-foreground">
 												{snapshot.fileSources[sourceId]}
 											</span>
 										</div>
@@ -1670,7 +1670,7 @@ export function GraphView({
 										<Link
 											href={propositionSessionHref(selected.node, sourceId)}
 											scroll={false}
-											className="min-w-0 flex-1 truncate rounded-md px-1 py-1 text-sm text-foreground transition-colors hover:bg-accent"
+											className="min-w-0 flex-1 truncate rounded-md px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
 										>
 											{snapshot?.sessions[sourceId] ?? sourceId}
 										</Link>
