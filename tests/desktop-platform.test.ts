@@ -115,10 +115,16 @@ describe("desktop packaging policy", () => {
 });
 
 describe("desktop release workflow", () => {
-	type Step = { if?: string; run?: string; env?: Record<string, string>; with?: { script: string } };
+	type Step = {
+		if?: string; run?: string; uses?: string; env?: Record<string, string>;
+		with?: { script?: string; "xcode-version"?: string };
+	};
 	type Workflow = {
 		concurrency: { group: string; "cancel-in-progress": boolean };
-		jobs: Record<string, { needs?: string | string[]; steps: Step[] }>;
+		jobs: Record<string, {
+			needs?: string | string[]; steps: Step[]; "runs-on"?: string;
+			strategy?: { matrix: { include: { os: string; platform: string; builder_args?: string }[] } };
+		}>;
 	};
 	const yaml = require("js-yaml") as { load(source: string): Workflow };
 	const workflow = yaml.load(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
@@ -128,6 +134,7 @@ describe("desktop release workflow", () => {
 	const prepare = draft.steps[0];
 	assert.ok(prepare?.with);
 	const script = prepare.with.script;
+	assert.ok(script);
 	type Release = { id: number; tag_name: string; draft: boolean };
 
 	/** Execute the REAL action script with an in-memory GitHub API. */
@@ -174,6 +181,24 @@ describe("desktop release workflow", () => {
 			assert.equal(native.env?.ELECTRON_RUN_AS_NODE, "1");
 			assert.ok(steps.some(step => step.run === "node scripts/smoke-server.mjs --electron"));
 		}
+	});
+
+	it("pairs Icon Composer packaging with macOS 26 and Xcode selection, retaining macOS 15 CI", () => {
+		const mac = packaging.strategy?.matrix.include.find(entry => entry.platform === "mac-arm64");
+		assert.equal(mac?.os, "macos-26", "actool's .icon compiler needs macOS 26 host frameworks, not just newer Xcode");
+		assert.equal(mac?.builder_args, "--mac --arm64");
+		assert.equal(packaging["runs-on"], "${{ matrix.os }}");
+		const xcodeIndex = packaging.steps.findIndex(step => step.uses === "maxim-lobanov/setup-xcode@v1");
+		assert.ok(xcodeIndex >= 0);
+		const xcode = packaging.steps[xcodeIndex];
+		assert.equal(xcode?.if, "runner.os == 'macOS'");
+		assert.equal(xcode?.with?.["xcode-version"], "latest-stable");
+		const buildIndex = packaging.steps.findIndex(step => step.run?.includes("electron-builder"));
+		assert.ok(buildIndex > xcodeIndex, "select Xcode before packaging compiles the icon");
+
+		const ci = yaml.load(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+		const ciMac = ci.jobs.standalone?.strategy?.matrix.include.find(entry => entry.platform === "mac-arm64");
+		assert.equal(ciMac?.os, "macos-15", "ordinary CI keeps older macOS build/boot coverage");
 	});
 
 	it("creates exactly one unpublished draft when none matches", async () => {

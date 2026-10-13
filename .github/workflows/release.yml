@@ -92,7 +92,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15
+          - os: macos-26
             platform: mac-arm64
             builder_args: --mac --arm64
           - os: windows-2025
@@ -114,9 +114,9 @@ jobs:
           node-version: "26"
           cache: npm
       # The mac icon is the Icon Composer document (build/icon.icon);
-      # compiling it needs actool ≥ 26 (Xcode 26+). macos-15 images carry
-      # several Xcodes with an older default — select the latest stable
-      # explicitly. No-op for the windows/linux matrix legs.
+      # compiling it needs both macOS 26+ and actool ≥ 26 (Xcode 26+).
+      # Xcode 26's asset compiler crashes on macOS 15's older frameworks.
+      # Select the latest stable Xcode; no-op for Windows/Linux.
       - name: Select Xcode 26+ for actool (mac icon compile)
         if: runner.os == 'macOS'
         uses: maxim-lobanov/setup-xcode@v1
