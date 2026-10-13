@@ -129,6 +129,48 @@ function closeEndsLine(text: string, afterClose: number): boolean {
  * Rewrite balanced `\(...\)` → `$$...$$` and `\[...\]` → `$$\n...\n$$`.
  * Everything else passes through byte-for-byte.
  */
+/** The escaped-dollar-aware inline closer (owner, 2026-10-12): micromark's
+ *  mathText closer is code-span logic — ANY size-matched `$` run closes,
+ *  `\$` included, so `$x = \$5$` closes at the `\$` and errors. KaTeX's
+ *  own auto-render scanner skips escaped dollars, and KaTeX renders `\$`
+ *  fine — the author's intent is unambiguous: an escaped dollar (odd number
+ *  of backslashes before it) never closes the span. Mirrors findDollarClose's
+ *  inline rules otherwise (exact size match, whole-run skip). */
+function findInlineDollarCloseEscapeAware(text: string, from: number): number {
+	for (let j = from; j < text.length;) {
+		if (text[j] !== "$") {
+			j += 1;
+			continue;
+		}
+		if (isEscaped(text, j)) {
+			j += 1;
+			continue; // `\$` never closes
+		}
+		const count = dollarRun(text, j);
+		if (count === 1) return j;
+		j += count;
+	}
+	return -1;
+}
+
+/** Replace `\$` (odd-backslash dollars) inside a math span with the
+ *  dollar-free `\text{\textdollar}` — KaTeX-safe in math mode (bare
+ *  `\textdollar` is text-mode-only there). Even-backslash dollars (`\\$`,
+ *  row break + dollar) are left alone. */
+function replaceEscapedDollars(content: string): string {
+	let replaced = "";
+	for (let j = 0; j < content.length;) {
+		if (content[j] === "\\" && content[j + 1] === "$" && !isEscaped(content, j)) {
+			replaced += "\\text{\\textdollar}";
+			j += 2;
+		} else {
+			replaced += content[j];
+			j += 1;
+		}
+	}
+	return replaced;
+}
+
 export function transformMathDelimiters(markdown: string): string {
 	const out: string[] = [];
 	let i = 0;
@@ -205,6 +247,35 @@ export function transformMathDelimiters(markdown: string): string {
 				// Unbalanced or empty: leave both characters untouched.
 			}
 		}
+
+		// Escaped dollars inside inline math (owner, 2026-10-12): normalize
+		// BEFORE tokenization — inside a balanced inline span, `\$` becomes the
+		// dollar-free `\text{\textdollar}` so the scanner's closer is the one
+		// the author meant (micromark would otherwise close at the `\$`, error
+		// out, and cascade). Display runs are copied whole and left untouched —
+		// a lone `$` can't close `$$`, so `\$` already survives there — and
+		// copying the run stops its second `$` posing as an inline opener.
+		// Spans without escaped dollars emit byte-identical text; prose `\$`,
+		// code, and unbalanced spans are untouched.
+		if (ch === "$" && !isEscaped(markdown, i)) {
+			const run = dollarRun(markdown, i);
+			if (run === 1) {
+				const closeAt = findInlineDollarCloseEscapeAware(markdown, i + 1);
+				if (closeAt !== -1) {
+					const content = markdown.slice(i + 1, closeAt);
+					const replaced = replaceEscapedDollars(content);
+					if (replaced !== content) {
+						out.push(`$${replaced}$`);
+						i = closeAt + 1;
+						continue;
+					}
+				}
+			} else {
+				out.push(markdown.slice(i, i + run));
+				i += run;
+				continue;
+			}
+			}
 
 		out.push(ch);
 		i += 1;

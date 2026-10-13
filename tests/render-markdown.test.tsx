@@ -253,3 +253,95 @@ describe("render — bold is the real <strong> (the dead Bold-color fix)", () =>
 		assert.ok(html.includes("<em>"), "italic renders a native em element");
 	});
 });
+
+// ─── escaped dollars inside math (owner, 2026-10-12) ────────────────────────
+//
+// micromark's mathText closer is code-span logic — ANY size-matched `$` run
+// closes, `\$` included — so `$x = \$5$` closed at the escape and errored.
+// KaTeX itself renders `\$` fine (and its own auto-render scanner skips
+// escaped dollars). The fix normalizes at the render seam: inside balanced
+// inline spans, `\$` becomes the dollar-free `\text{\textdollar}` BEFORE
+// tokenization, so the scanner's closer is the one the author meant.
+
+describe("escaped dollars inside math — transform units", () => {
+	it("replaces \\$ inside a balanced inline span", () => {
+		assert.equal(
+			transformMathDelimiters("It costs $x = \\$5$ at market."),
+			"It costs $x = \\text{\\textdollar}5$ at market.",
+		);
+	});
+
+	it("replaces every escaped dollar in the span, including the \\text{\\$} form", () => {
+		assert.equal(
+			transformMathDelimiters("$\\$3 + \\text{\\$}4 = \\$7$ exactly."),
+			"$\\text{\\textdollar}3 + \\text{\\text{\\textdollar}}4 = \\text{\\textdollar}7$ exactly.",
+		);
+	});
+
+	it("does NOT replace even-backslash dollars (row break + dollar keeps closing)", () => {
+		// `$a\\$` closes at that `$` in micromark today — the parity is load-
+		// bearing; replacing it would change span ends for legitimate TeX.
+		const md = "$a\\\\$b$ tail";
+		assert.equal(transformMathDelimiters(md), md);
+	});
+
+	it("leaves prose escaped dollars and bare currency untouched", () => {
+		const md = "It costs \\$5 flat, then $5 and $10 more.";
+		assert.equal(transformMathDelimiters(md), md);
+	});
+
+	it("leaves display spans untouched — a lone $ can't close $$, \\$ already survives", () => {
+		const md = "$$x = \\$5,\\ q = \\$12$$";
+		assert.equal(transformMathDelimiters(md), md);
+	});
+
+	it("leaves code spans, fences, and unbalanced spans untouched", () => {
+		assert.equal(transformMathDelimiters("Type `$x = \\$5$` literally."), "Type `$x = \\$5$` literally.");
+		assert.equal(transformMathDelimiters("```\n$x = \\$5$\n```"), "```\n$x = \\$5$\n```");
+		assert.equal(transformMathDelimiters("Broken: $x = \\$5"), "Broken: $x = \\$5");
+	});
+
+	it("clean spans stay byte-identical; only the escape-bearing span changes", () => {
+		const md = "$a$ costs $5\\$10$ and $b$";
+		assert.equal(
+			transformMathDelimiters(md),
+			"$a$ costs $5\\text{\\textdollar}10$ and $b$",
+		);
+	});
+});
+
+describe("escaped dollars inside math — rendering", () => {
+	it("renders $x = \\$5$ as one clean math span with a visible dollar", () => {
+		const html = render("It costs $x = \\$5$ at market.");
+		assert.equal((html.match(/class="katex"/g) ?? []).length, 1, "one math span");
+		assert.ok(!html.includes("katex-error"), "no KaTeX errors");
+		assert.ok(html.includes("\\text{\\textdollar}"), "the dollar-free command reaches KaTeX");
+	});
+
+	it("the session cascade case renders every later span cleanly", () => {
+		// The latex-testing session's Test 6: the early close used to error
+		// and could swallow the following text.
+		const html = render("Line A: $x = \\$5$.\n\nLine B: $y = 2$.\n\nWhat is $2 + 2$?");
+		assert.equal((html.match(/class="katex"/g) ?? []).length, 3, "all three spans render");
+		assert.ok(!html.includes("katex-error"), "no KaTeX errors");
+		assert.ok(html.includes("Line B:"), "prose between spans survives");
+	});
+
+	it("renders the \\text{\\$} form (Test 5's text-mode dollar)", () => {
+		const html = render("Price: $\\text{\\$}12$ today.");
+		assert.equal((html.match(/class="katex"/g) ?? []).length, 1);
+		assert.ok(!html.includes("katex-error"));
+	});
+
+	it("legacy \\(...\\$...\\) converts and renders with the dollar intact", () => {
+		const html = render("Old form \\(x = \\$5\\) renders.");
+		assert.equal((html.match(/class="katex"/g) ?? []).length, 1);
+		assert.ok(!html.includes("katex-error"));
+	});
+
+	it("code spans keep the escaped dollar literal", () => {
+		const html = render("Type `$x = \\$5$` literally.");
+		assert.equal((html.match(/class="katex"/g) ?? []).length, 0, "code is not math");
+		assert.ok(html.includes("$x = \\$5$"), "the literal source stays visible");
+	});
+});
