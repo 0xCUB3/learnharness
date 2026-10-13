@@ -6,7 +6,7 @@ import { visibleQueuedSteers } from "@/components/session-core";
 import { SetupDialog } from "@/components/setup-dialog";
 import { Hint } from "@/components/ui/hint";
 import { useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
-import { useStickToBottomContext } from "use-stick-to-bottom";
+import { useStickToBottomContext, type StickToBottomContext } from "use-stick-to-bottom";
 import {
 	Conversation,
 	ConversationContent,
@@ -34,6 +34,9 @@ import { StatsBar } from "@/components/stats-bar";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import {
 	isProviderKeyRefusal,
+	firstSourceTextParts,
+	messageAnchorId,
+	textPartMessageId,
 	kbdEventForAction as kbdEventForChat,
 	needsContinuation,
 	type ChatInput,
@@ -48,6 +51,8 @@ import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog"
 import { ArrowRightIcon, DumbbellIcon, WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
+import { SessionFind } from "@/components/session-find";
+import { SessionMessageNavigation } from "@/components/session-navigation";
 import { PracticeDock } from "@/components/practice-dock";
 import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-cards";
 import { GraphContextCard, type GraphContextData } from "@/components/graph-context-card";
@@ -233,6 +238,10 @@ export function Chat({
 	// turn stream is the VERBATIM AgentEvent passthrough the server emits.
 	const { messages, nativeMessages, send, steer, steerQueue, submitAnswer, dismissQuestion, dismissProblem, setMessages, adoptRecord, status, error, stop, clearError, resumeStream, setReattachSettled } =
 		useChatSession({ chatId, initialMessages, initiallyInFlight });
+
+	const sessionFindScopeRef = useRef<HTMLDivElement | null>(null);
+	const scrollContextRef = useRef<StickToBottomContext | null>(null);
+	const sourceTextParts = useMemo(() => firstSourceTextParts(messages), [messages]);
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
 	setReattachSettled(() => reattachSettledRef.current());
@@ -1301,10 +1310,12 @@ export function Chat({
 					)}
 				</TopBar>
 
-				<div className="relative flex min-h-0 flex-1">
-				<Conversation className="h-full min-w-0 flex-1" initial="instant">
+				<SessionFind scopeRef={sessionFindScopeRef} scrollContextRef={scrollContextRef} />
+				<div ref={sessionFindScopeRef} className="relative flex min-h-0 flex-1">
+				<Conversation className="h-full min-w-0 flex-1" initial="instant" contextRef={scrollContextRef}>
+					<SessionMessageNavigation messages={messages} />
 					<ConversationContent className="min-h-full gap-0 p-0">
-						<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
+						<div data-session-find-root="" className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
 							{messages.length === 0 && !busy && (
 								<ConversationEmptyState
 									title="New session"
@@ -1456,8 +1467,15 @@ export function Chat({
 													);
 												}
 												switch (part.type) {
-													case "text":
-														return <MessageResponse key={pi}>{part.text}</MessageResponse>;
+													case "text": {
+														const sourceId = textPartMessageId(part.id);
+														const anchor = sourceId && sourceTextParts.get(sourceId) === part.id ? messageAnchorId(sourceId) : undefined;
+														return (
+															<div key={part.id || pi} id={anchor} data-source-message-id={sourceId ?? undefined} className="lh-source-passage">
+																<MessageResponse>{part.text}</MessageResponse>
+															</div>
+														);
+													}
 													case "reasoning":
 														return (
 															<Reasoning key={pi} isStreaming={status === "streaming" && isLastPart} className="mb-2">

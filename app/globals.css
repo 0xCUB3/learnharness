@@ -588,3 +588,13 @@ body {
 		animation: none;
 	}
 }
+
+/* Source-message arrival: a brief, static theme-colored spotlight. */
+.lh-source-passage {
+	scroll-margin-top: 1rem;
+}
+.lh-source-highlight {
+	background-color: var(--accent);
+	outline: 1px solid var(--border);
+	border-radius: 0.25rem;
+}

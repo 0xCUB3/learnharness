@@ -69,10 +69,9 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "new-session", label: "New session", scope: "global", binding: "mod+n" },
 	{ id: "rename-session", label: "Rename session", scope: "chat", binding: "f2" },
 	{ id: "toggle-user-thinking", label: "Toggle all your thinking", scope: "chat", binding: "mod+t" },
-	// ⌘F is surface-scoped (owner key map): the graph focuses node search; a
-	// chat-scoped transcript search rides the same event when it lands (the
-	// graph's listener simply isn't mounted on chat pages).
-	{ id: "find", label: "Find (graph: node search)", scope: "graph", binding: "mod+f" },
+	// Mod+F is surface-scoped: graph node search and session text Find share
+	// one action/binding. Only the currently mounted surface listens.
+	{ id: "find", label: "Find", scope: "global", binding: "mod+f" },
 	{ id: "cheat-sheet", label: "Shortcut cheat sheet", scope: "global", binding: "?" },
 	// The question dock's row machine (wave B) — displayOnly: the dock owns
 	// the keys while a question is expanded; the registry never dispatches

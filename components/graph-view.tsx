@@ -66,7 +66,7 @@
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { FileTextIcon, ListTreeIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
-import { incrementalLayout, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { incrementalLayout, propositionSessionHref, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useActivity } from "@/components/activity-dock";
@@ -1668,7 +1668,8 @@ export function GraphView({
 								return (
 									<div key={sourceId} className="flex items-center gap-1.5">
 										<Link
-											href={`/chat/${sourceId}`}
+											href={propositionSessionHref(selected.node, sourceId)}
+											scroll={false}
 											className="min-w-0 flex-1 truncate rounded-md px-1 py-1 text-sm text-foreground transition-colors hover:bg-accent"
 										>
 											{snapshot?.sessions[sourceId] ?? sourceId}
