@@ -128,6 +128,18 @@ mac:
   notarize: true
 dmg:
   title: "${productName} ${version}"
+  # Owner artwork: 540×380 at 1×; the sibling background@2x.png is
+  # combined into a Retina TIFF by dmg-builder. Centres use 1× coordinates.
+  background: build/background.png
+  iconSize: 80
+  contents:
+    - x: 130
+      y: 190
+      type: file
+    - x: 410
+      y: 190
+      type: link
+      path: /Applications
 afterPack: scripts/after-pack.cjs
 win:
   icon: build/icon.ico

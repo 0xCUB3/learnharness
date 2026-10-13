@@ -183,3 +183,55 @@ jobs:
             dist/*.deb
             dist/*.blockmap
             dist/latest*.yml
+
+  # The last gate before a human publishes: after ALL three packaging jobs
+  # have uploaded, fail the run unless the tag's single draft release holds
+  # exactly the 11 verified assets (4 installers + mac updater ZIP + their
+  # blockmaps + 3 latest*.yml feeds) and the feeds reference those uploads
+  # by exact name at the package.json version. Read-only: it never creates,
+  # edits, publishes, or deletes anything. Manual rehearsals upload nothing,
+  # so there is no draft to verify and the job stays skipped.
+  verify:
+    name: Verify draft release
+    needs: package
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # The tagged revision — verify exactly what was packaged, not a moving default.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: npm
+      - run: npm ci
+      - name: List every release, drafts included
+        # --slurp wraps the paginated pages into one JSON document
+        # ([[release,...],[release,...]]); the validator flattens it.
+        run: gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+      - name: Select the tag's single draft
+        # Machine JSON on stdout (release id + asset ids); warnings on stderr.
+        run: npx tsx scripts/verify-release.ts select "$RUNNER_TEMP/releases.json" --tag "$GITHUB_REF_NAME" > "$RUNNER_TEMP/draft.json"
+      - name: Download the three update feeds
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/metadata"
+          for name in latest-mac.yml latest.yml latest-linux.yml; do
+            id=$(DRAFT="$RUNNER_TEMP/draft.json" NAME="$name" node -e '
+              const fs = require("node:fs");
+              const draft = JSON.parse(fs.readFileSync(process.env.DRAFT, "utf8"));
+              const asset = draft.assets.find((entry) => entry.name === process.env.NAME);
+              if (asset == null) { console.error("draft has no " + process.env.NAME); process.exit(1); }
+              console.log(asset.id);
+            ')
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" -H "Accept: application/octet-stream" > "$RUNNER_TEMP/metadata/$name"
+            echo "downloaded $name ($(wc -c < "$RUNNER_TEMP/metadata/$name") bytes)"
+          done
+      - name: Verify draft assets and update feeds
+        run: npx tsx scripts/verify-release.ts verify "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/metadata" --tag "$GITHUB_REF_NAME"

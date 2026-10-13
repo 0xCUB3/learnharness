@@ -8,7 +8,7 @@
 	},
 	"homepage": "https://github.com/amosblomqvist/learnharness",
 	"desktopName": "learnharness.desktop",
-	"description": "A standalone learning harness: a teacher agent (AI SDK) with quiz/ask interactions, session artifacts, and a derived knowledge graph of what the learner knows.",
+	"description": "An agent harness for learning: adaptive teaching, practice, and a persistent knowledge graph.",
 	"type": "module",
 	"private": true,
 	"main": "electron/main.cjs",

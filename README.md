@@ -1,44 +1,65 @@
-# LearnHarness
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lh_banner_dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/lh_banner_light.svg">
+    <img src="docs/assets/lh_banner_light.svg" alt="LearnHarness" width="640">
+  </picture>
+</p>
 
-A desktop AI tutor that teaches by questioning — one reasoning step at a time — and keeps everything you learn in a growing knowledge graph.
+<p align="center"><strong>An agent harness for learning.</strong></p>
 
-It runs on your machine, with your own API key. Your data stays in plain files you can open.
+<p align="center">
+  <a href="https://learnharness.ai">Download</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="docs/development.md">Documentation</a> ·
+  <a href="https://github.com/amosblomqvist/learnharness/issues">Issues</a>
+</p>
 
-## The idea
+LearnHarness uses AI agents to plan and teach lessons from your current understanding to your goal. It builds a detailed picture of what you understand and how you reason. That picture is updated as you learn.
 
-Understanding has a dependency structure: some things require other things first. A lesson that ignores what you already hold is wasted on you; a lesson that outruns what you hold is lost on you. There is exactly one optimal path — the smallest set of steps from what you know to what you want to know — and finding it requires knowing precisely what you know.
+Instead of just giving you an explanation, it uses your answers and thinking to decide what you need next. Teaching builds understanding one reasoning step at a time. Practice makes it usable. A persistent knowledge graph carries it across sessions.
 
-So LearnHarness measures first. It questions you to bracket the edge of your understanding, plans the shortest path from that edge to your goal, then teaches it one reasoning step at a time — checking that each step lands before building on it. Every step is small enough to feel obvious on arrival.
+<!-- Teaching-session screenshot goes here when supplied. -->
 
-And it remembers. Everything taught accumulates into a single persistent structure — propositions and the reasoning chains that connect them — rendered as the graph that is the app's home view. The next session starts from what the last one built: no re-probing what you already hold, questions aimed at the actual boundary of your knowledge, learning that compounds.
+## How it works
 
-Teaching installs understanding; practice makes it available when you need it. Separate practice sessions draw problems from the same graph — retrieval at the edge of your ability, not review — because being taught something and having it come to mind in the right situation are different states.
+1. **Measure.** Before teaching, the agent finds where your understanding ends on each part the lesson depends on. Your answers, confidence, and thinking show it where to start.
+2. **Plan.** It works out a dependency map from that starting point to your goal. You can see the plan, and the lesson adapts when your understanding turns out different.
+3. **Teach.** Each step builds on something you already understand. You predict, get an explanation, and check your understanding. Confusions are repaired before anything is built on them. The aim is for the goal to feel obviously true, not merely familiar.
+4. **Practice.** Separate sessions pose varied problems that require the right knowledge to come to mind without being named first. Problems and hints adapt to your reasoning.
 
-## Yours, locally
+**Think out loud.** The thinking fields let you explain your reasoning, uncertainties, and reactions in your own words. This is how the agent gets a detailed picture rather than just a record of right and wrong answers. You can type or use dictation.
 
-A system whose premise is that it can be trusted is built so that it can be checked:
+The agent can also research questions in the background, create visual explanations, and build interactive demonstrations.
 
-- **Your keys.** Bring your own ([OpenRouter](https://openrouter.ai/) works out of the box). No subscription, no markup — a live cost meter shows what each session actually spent.
-- **Your machine.** Chats, graph, settings — plain files under your home directory. Nothing is sent anywhere except the model calls you configure.
-- **Inspectable.** Every system prompt is visible and tunable. The graph is stored as reasoning chains — the structure of what you were taught, not a pile of text.
+## Knowledge that carries forward
 
-## Download
+What you are taught accumulates as propositions and reasoning chains: individual claims and the premises that lead to them. The graph shows this structure, with links back to the source sessions. You can also import notes.
 
-**[Releases](https://github.com/amosblomqvist/learnharness/releases)**
+Future teaching sessions can read the graph instead of starting from scratch. Practice sessions can draw their material from it. It stores the ideas and their connections, not ratings of your ability.
 
-- **macOS (Apple Silicon):** signed and notarized DMG.
-- **Windows (x64):** installer. Currently unsigned; Windows may show an “unknown publisher” / SmartScreen warning.
-- **Linux (x64):** AppImage (recommended) or Debian/Ubuntu `.deb`.
+<!-- Knowledge-graph screenshot goes here when supplied. -->
 
-All three platforms support in-app updates. AppImage updates need no administrator permission; `.deb` updates may request it.
+## Download and get started
 
-## Quick start
+**[Download from learnharness.ai](https://learnharness.ai)** · [GitHub Releases](https://github.com/amosblomqvist/learnharness/releases)
 
-1. Download your platform’s package: drag the macOS app to Applications, run the Windows installer, or make the Linux AppImage executable and open it (alternatively, install the `.deb`).
-2. Open Settings, paste your OpenRouter API key, and pick your models.
-3. Start a session and say what you want to understand.
+- **macOS (Apple Silicon):** signed and notarized DMG. Drag the app to Applications.
+- **Windows (x64):** run the installer. It is currently unsigned; Windows may show an “unknown publisher” or SmartScreen warning.
+- **Linux (x64):** make the AppImage executable and open it, or install the Debian/Ubuntu `.deb`.
 
-## Development
+Add your provider API key and choose your models, then start a session with what you want to understand. LearnHarness supports 30+ provider options, including OpenAI, Anthropic, Google, DeepSeek, and OpenRouter. Optional dictation and web search use separate service keys.
+
+All three platforms support in-app updates.
+
+## Your keys, your data
+
+- **Your keys and models.** No LearnHarness subscription or markup. You pay your providers for usage; a live cost meter shows model costs.
+- **Local storage.** Your chats, graph, settings, and API keys live on your machine. Learning records are plain files you can inspect.
+- **External services.** Models run through your configured providers. Model requests send the context needed for the task; web research and dictation also contact external services. Local storage does not mean offline processing.
+- **Inspectable behavior.** System prompts are visible and editable. The app is open source under the AGPL-3.0 license.
+
+## Development and support
 
 ```bash
 npm install
@@ -46,9 +67,9 @@ npm run dev        # http://localhost:3000
 npm test           # deterministic, no LLM, no network
 ```
 
-The architecture spec and full development guide live in [`docs/`](docs/) — start with [`docs/architecture.md`](docs/architecture.md) and [`docs/development.md`](docs/development.md).
+See the [development guide](docs/development.md), [architecture](docs/architecture.md), and [desktop release guide](docs/desktop-release.md).
 
-Questions or bugs: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
+Questions, bug reports, and feature requests: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
 
 ## License
 
