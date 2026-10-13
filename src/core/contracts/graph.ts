@@ -231,11 +231,20 @@ export interface ExtractedProposition {
 	/** Verbatim phrasings the session used. */
 	aliases: string[];
 	/* Submit-schema slim (owner, 2026-09-28): `messages` and `evidence`
-	 * are GONE. Provenance is chat-level (the run's source key); the
-	 * verbatim-quote fields were never persisted and weak models burned
-	 * their retries on them ("propositions.0: must be object" — the
-	 * stringified-payload collapse). The extractor reports propositions
-	 * + structure, nothing else. */
+	 * are GONE. The verbatim-quote fields were never persisted and weak
+	 * models burned their retries on them ("propositions.0: must be
+	 * object" — the stringified-payload collapse). The extractor reports
+	 * propositions + structure, nothing else. */
+	/** OPTIONAL, SESSION PATH ONLY (owner, 2026-10-13): the message id of
+	 *  the ONE teacher passage this proposition came from — the extractor
+	 *  copies it from the view's "TEACHER [id]" label (core/coverage.ts
+	 *  messageViewLines) and the submit seam validates it against the
+	 *  CURRENT batch. The merger stamps it into the node's provenance
+	 *  point {chatId, messageId} (new nodes AND link-appends); chains
+	 *  stay chat-level. Notes imports and legacy/core callers have none:
+	 *  undefined → messageId "" (chat-level), so NO persisted shape or
+	 *  format version changes (GraphNode / ProvenancePoint untouched). */
+	messageId?: string;
 }
 
 /** One proposed argument (extractor redesign, 2026-09-30). Endpoints are

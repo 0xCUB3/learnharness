@@ -28,7 +28,6 @@ import type { GraphStore } from "../../core/ports.ts";
 import { emit } from "../../core/events.ts";
 import { settleGraphLayout } from "../../core/layout-settle.ts";
 import { batchRuns, coverageOf, messageViewLines } from "../../core/coverage.ts";
-import { teacherProseBlocks } from "../../core/coverage.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { auditorGraphTools } from "../tools/graph.ts";
 import { runSubmitAgent, healStringifiedArrays } from "./submit-agent.ts";
@@ -42,10 +41,15 @@ import { runSubmitAgent, healStringifiedArrays } from "./submit-agent.ts";
  * gain; the extractor itself is the assembler now):
  *
  *   extractor (LLM)  the ONE stage that sees the raw source (a session
- *                    rendered as the teacher's prose, or a notes file
- *                    verbatim, walked in stretches) → submits NEW core
- *                    ideas + reasoning chains (owner redesign,
- *                    2026-09-30). DIGEST-AWARE (2026-09-30 evening):
+ *                    rendered as the teacher's prose — each passage
+ *                    labeled with its ACTUAL message id, "TEACHER [id]",
+ *                    owner 2026-10-13 — or a notes file verbatim, walked
+ *                    in stretches) → submits NEW core ideas + reasoning
+ *                    chains (owner redesign, 2026-09-30); a session
+ *                    submit additionally carries each proposition's
+ *                    messageId — the anchor the merger stamps into the
+ *                    node's message-granular provenance (2026-10-13).
+ *                    DIGEST-AWARE (2026-09-30 evening):
  *                    when the source already yielded material, the
  *                    prompt carries THE GRAPH SO FAR (that source's
  *                    propositions + chains, ids verbatim) and the
@@ -104,14 +108,16 @@ import { runSubmitAgent, healStringifiedArrays } from "./submit-agent.ts";
 
 /**
  * The extraction view: the session as TEACHER PROSE ONLY (owner ruling,
- * 2026-09-28 — supersedes the 2026-09-27 whole-session markdown view):
- * plain prose paragraphs under the session title. The shared markdown
- * engine (core/session-markdown.ts) keeps the full session format for
- * the future user-facing export; the extractor no longer uses it.
+ * 2026-09-28 — supersedes the 2026-09-27 whole-session markdown view),
+ * each passage labeled with its actual message id (2026-10-13). The
+ * shared markdown engine (core/session-markdown.ts) keeps the full session
+ * format for the future user-facing export; the extractor no longer uses
+ * it.
  */
 
 /** The whole-record view (used by callers that render a full session;
- *  the pipeline itself batches). TEACHER PROSE ONLY (owner, 2026-09-28).
+ *  the pipeline itself batches). TEACHER PROSE ONLY (owner, 2026-09-28),
+ *  passages labeled with their message ids (2026-10-13).
  */
 export function transcriptView(record: ChatRecord): string {
 	return proseView(record.messages, record.title);
@@ -119,13 +125,17 @@ export function transcriptView(record: ChatRecord): string {
 
 /** The extraction view under the teacher-prose ruling (owner, 2026-09-28):
  *  ONLY the teacher agent's text blocks — no learner messages, no
- *  thinking, no tool calls or results, no quiz blocks. Plain paragraphs
- *  under the session title; the shared markdown engine stays reserved for
- *  the future user-facing export. */
+ *  thinking, no tool calls or results, no quiz blocks — each labeled with
+ *  its ACTUAL message id (owner, 2026-10-13): the view lines ARE
+ *  core/coverage.ts messageViewLines ("TEACHER [id] text"), the exact
+ *  lines the coverage fingerprints hash, so the extractor can anchor
+ *  every proposition to the passage it came from (the session submit's
+ *  required messageId). The shared markdown engine stays reserved for the
+ *  future user-facing export. */
 function proseView(messages: ReadonlyArray<LhMessage>, title?: string): string {
-	const prose = teacherProseBlocks(messages);
+	const lines = messages.flatMap((message) => messageViewLines(message, message.id));
 	const head = title && title.length > 0 ? `# ${title}\n\n` : "";
-	return head + prose.join("\n\n");
+	return head + lines.join("\n\n");
 }
 
 // ─── the extractor ──────────────────────────────────────────────────────────
@@ -176,21 +186,45 @@ const chainSchema = Type.Object({
 // here + a ??-fill at the submit seam (fillFindings/fillAudit below) — same
 // contract on the wire (omission tolerated, empty never means "invalid"),
 // no zod left in the agent band.
-const findingsProps = {
+const propositionsDescription =
+	"Only the NEW core ideas this stretch contributes — ideas the prompt's THE GRAPH SO FAR already " +
+	"holds are referenced by id in chains, never restated here.";
+const chainsDescription =
+	"Every argument this stretch makes — including arguments that join new ideas to established " +
+	"ones; conclusions reusable by id as premises of later chains; bare ideas (no argument) ride " +
+	"the propositions list alone; pass [] when none — never omit the field.";
+
+const findingsSchema = Type.Object({
 	propositions: Type.Array(Type.Object(propositionProps), {
-		description:
-			"Only the NEW core ideas this stretch contributes — ideas the prompt's THE GRAPH SO FAR already " +
-			"holds are referenced by id in chains, never restated here.",
+		description: propositionsDescription,
 	}),
 	chains: Type.Array(chainSchema, {
+		description: chainsDescription,
+	}),
+});
+
+// THE SESSION EXTENSION (owner, 2026-10-13): every session proposition
+// carries a REQUIRED messageId — the anchor of the passage it came from,
+// copied from the view's "TEACHER [id]" label (validated at the submit
+// seam against the CURRENT batch). The NOTES door has no messages: its
+// schema stays the base shape above, prompt and wire unchanged.
+const sessionPropositionProps = {
+	...propositionProps,
+	messageId: Type.String({
 		description:
-			"Every argument this stretch makes — including arguments that join new ideas to established " +
-			"ones; conclusions reusable by id as premises of later chains; bare ideas (no argument) ride " +
-			"the propositions list alone; pass [] when none — never omit the field.",
+			"The message id of the ONE passage in this stretch that most directly states or explains this " +
+			'proposition — copy it EXACTLY from that passage\'s "TEACHER [id]" label.',
 	}),
 };
 
-const findingsSchema = Type.Object(findingsProps);
+const sessionFindingsSchema = Type.Object({
+	propositions: Type.Array(Type.Object(sessionPropositionProps), {
+		description: propositionsDescription,
+	}),
+	chains: Type.Array(chainSchema, {
+		description: chainsDescription,
+	}),
+});
 
 /** What the extractor SUBMITS (the redesign's wire shape) — propositions
  *  + chains. fillFindings normalizes it; validateFindingsChains checks
@@ -198,6 +232,10 @@ const findingsSchema = Type.Object(findingsProps);
  *  SessionFindings — chains are stored AS-IS (chains-primary, owner
  *  2026-09-30: no edge translation at any seam). */
 type FindingsSubmit = Static<typeof findingsSchema>;
+
+/** The SESSION wire — the notes shape plus the REQUIRED messageId anchor
+ *  on every proposition (owner, 2026-10-13). */
+type SessionFindingsSubmit = Static<typeof sessionFindingsSchema>;
 
 // VERDICTS-ONLY (owner, 2026-09-28): the auditor never alters the
 // extractor's findings, so it does not restate them — links are its
@@ -217,9 +255,11 @@ const auditSchema = Type.Object({
 	),
 });
 
-// The notes front door's shapes are IDENTICAL to the session shapes now
-// (the only difference was quiz attribution, which no longer exists):
-// one schema, one findings type, both front doors.
+// The notes front door's wire shape is the session shape MINUS the
+// messageId anchor (owner, 2026-10-13: only the SESSION door demands
+// passage anchors — notes have no messages, so their prompt and schema
+// stay exactly as they were): one base findings type for both doors,
+// the anchor riding as an optional field.
 type NotesFindings = SessionFindings;
 type NotesAuditResult = AuditVerdicts;
 
@@ -233,11 +273,28 @@ type NotesAuditResult = AuditVerdicts;
 // a pile of nodes with no structure). Only the per-item aliases stay
 // optional with a ??-fill.
 
-function fillFindings(raw: FindingsSubmit): FindingsSubmit {
+function fillFindings<T extends { propositions: Array<{ aliases?: string[] }>; chains: unknown }>(
+	raw: T,
+): T {
 	return {
+		...raw,
 		propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
-		chains: raw.chains,
 	};
+}
+
+/** The notes fill: the shared alias ??-fill PLUS the door's boundary — a
+ *  stray messageId (the notes schema has none; extra properties pass
+ *  schema validation) is stripped so notes provenance stays chat-level
+ *  (the file is the anchor, owner 2026-09-13). */
+function fillNotesFindings(raw: FindingsSubmit): FindingsSubmit {
+	return fillFindings({
+		...raw,
+		propositions: raw.propositions.map((p) => {
+			const stripped = { ...p } as typeof p & { messageId?: unknown };
+			delete stripped.messageId;
+			return stripped;
+		}),
+	});
 }
 
 /** The chain laws (extractor redesign, 2026-09-30; digest-aware
@@ -266,12 +323,38 @@ function validateFindingsChains(value: FindingsSubmit, existingIds: ReadonlySet<
 	return null;
 }
 
+/** The SESSION anchor law (owner, 2026-10-13): every proposition names a
+ *  passage of the CURRENT batch — nonempty, and a teacher-prose message
+ *  id present in the stretch this extractor is reading (the same ids the
+ *  view's TEACHER [id] labels carry). Refused anchors ride the existing
+ *  error-back channel: no merge, no coverage checkpoint, until a valid
+ *  submit lands. The boundary is strict on purpose — an id from a LATER
+ *  or already-covered batch, another chat, or a learner/tool message is
+ *  refused even when it is a real message id of this chat. */
+function validateSessionAnchors(value: SessionFindingsSubmit, batchIds: ReadonlySet<string>): string | null {
+	for (const p of value.propositions) {
+		if (p.messageId.trim().length === 0) {
+			return `propositions: "${p.id}" is missing its messageId — copy the message id from the brackets of the passage (TEACHER [id]) that most directly states or explains it.`;
+		}
+		if (!batchIds.has(p.messageId)) {
+			return `propositions: "${p.id}" names messageId "${p.messageId}", which is not a passage of THIS stretch — copy the id from the brackets of one of this stretch's own TEACHER [id] passages.`;
+		}
+	}
+	return null;
+}
+
 /** (chains-primary, owner 2026-09-30) the wire IS the pipeline shape
  *  now: propositions + chains, no translation — the stores keep the
  *  chains and the derived edge view is recomputed on read. The fill
  *  already ran inside runSubmitAgent; this only re-asserts the
- *  aliases-filled type. */
-const asSessionFindings = (raw: FindingsSubmit): SessionFindings => ({
+ *  aliases-filled type (and preserves the session submit's messageId
+ *  anchor, 2026-10-13 — both doors lift through here). */
+const asSessionFindings = (
+	raw: {
+		propositions: Array<{ id: string; name: string; statement: string; aliases?: string[]; messageId?: string }>;
+		chains: Array<{ premises: string[]; conclusion: string }>;
+	},
+): SessionFindings => ({
 	propositions: raw.propositions.map((p) => ({ ...p, aliases: p.aliases ?? [] })),
 	chains: raw.chains,
 });
@@ -292,6 +375,14 @@ function fillAudit(raw: Static<typeof auditSchema>): AuditVerdicts {
 // session and notes share the core by construction. (The old opening
 // describing Quiz/Recall-check/Question blocks was stale since the
 // 2026-09-28 teacher-prose ruling and is simply omitted.)
+
+/** The session-only anchor instruction (owner, 2026-10-13, verbatim):
+ *  passages arrive labeled "TEACHER [id]" and every proposition must
+ *  name the ONE passage it came from — the anchor the merger stamps
+ *  into message-granular provenance. Notes have no passages: their
+ *  contextualization stays untouched. */
+export const SESSION_MESSAGE_ID_RULE =
+	"For each new proposition, copy the message ID of the passage that most directly states or explains it into messageId.";
 
 export const SESSION_PREAMBLE =
 	"You are the extraction stage of a learning application. You read one stretch of a source — a teaching " +
@@ -337,7 +428,7 @@ reappear, by id, as a premise of later chains. A bare idea that no argument uses
 propositions list alone. Include every field even when empty — "chains": [] when the source makes no
 arguments. The tool's field descriptions carry the details.`;
 
-export const EXTRACTOR_INSTRUCTIONS = `${SESSION_PREAMBLE}\n\n${EXTRACTION_CORE}`;
+export const EXTRACTOR_INSTRUCTIONS = `${SESSION_PREAMBLE}\n\n${EXTRACTION_CORE}\n\n${SESSION_MESSAGE_ID_RULE}`;
 export const NOTES_EXTRACTOR_INSTRUCTIONS = `${NOTES_PREAMBLE}\n\n${EXTRACTION_CORE}`;
 
 // ── the same-source digest (owner, 2026-09-30 evening) ──
@@ -368,28 +459,33 @@ export function sourceDigest(graph: DerivedGraph, sourceId: string): string {
 	return lines.join("\n");
 }
 
-/** The extractor over ONE session transcript (the chat front door). */
+/** The extractor over ONE session transcript (the chat front door).
+ *  `batchIds` — the CURRENT batch's teacher-prose message ids — is the
+ *  anchor boundary: every submitted proposition's messageId must name
+ *  one of them (validateSessionAnchors at the submit seam). */
 function runExtractor(
 	engine: PiEngine | undefined,
 	sourceId: string,
 	prompt: string,
 	existingIds: ReadonlySet<string>,
+	batchIds: ReadonlySet<string>,
 	signal: AbortSignal | undefined,
 	onStep: (usage: Usage, model: string, step: number, finishReason: string, tools: string) => void,
 ): Promise<SessionFindings> {
 	// Chains in (the wire), chains out (the store) — no translation seam
 	// since chains-primary. Validation runs at the submit seam (error-back)
-	// over the MIXED namespace: local ids + existing graph ids.
-	return runSubmitAgent<FindingsSubmit>({
+	// over the MIXED namespace: local ids + existing graph ids, plus the
+	// session anchor law (messageId ∈ the current batch, 2026-10-13).
+	return runSubmitAgent<SessionFindingsSubmit>({
 		role: "extractor",
 		// Debug recorder key: the source id (the run's ledger key — the
 		// chat's chatId for chat runs, the src id for notes).
 		chatId: sourceId,
 		toolName: "submit_findings",
 		toolDescription: "Submit the session findings.",
-		parameters: findingsSchema,
+		parameters: sessionFindingsSchema,
 		fill: fillFindings,
-		validate: (value) => validateFindingsChains(value, existingIds),
+		validate: (value) => validateSessionAnchors(value, batchIds) ?? validateFindingsChains(value, existingIds),
 		systemPrompt: EXTRACTOR_INSTRUCTIONS,
 		prompt,
 		engine,
@@ -401,7 +497,9 @@ function runExtractor(
 }
 
 /** The extractor over ONE source of raw personal notes (the format-agnostic
- *  front door): same single-submit shape, notes-mode prompt + schema. */
+ *  front door): same single-submit shape, notes-mode prompt + schema —
+ *  the BASE wire (no messageId: notes have no passages, and a stray one
+ *  is stripped at the fill seam). */
 function runNotesExtractor(
 	engine: PiEngine | undefined,
 	sourceId: string,
@@ -417,7 +515,7 @@ function runNotesExtractor(
 		toolName: "submit_findings",
 		toolDescription: "Submit the notes findings.",
 		parameters: findingsSchema,
-		fill: fillFindings,
+		fill: fillNotesFindings,
 		validate: (value) => validateFindingsChains(value, existingIds),
 		systemPrompt: NOTES_EXTRACTOR_INSTRUCTIONS,
 		prompt,
@@ -793,7 +891,12 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 		}
 	}
 
-	async function extract(jobKey: string, sourceId: string, view: string): Promise<SessionFindings> {
+	async function extract(
+		jobKey: string,
+		sourceId: string,
+		view: string,
+		batchIds: ReadonlySet<string>,
+	): Promise<SessionFindings> {
 		const signal = runningExtractions.get(jobKey)?.controller.signal;
 		signal?.throwIfAborted(); // an abort during a sync gap ends the job here
 		// THE DIGEST (owner, 2026-09-30 evening): the extractor continues a
@@ -816,6 +919,7 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 			sourceId,
 			prompt,
 			new Set(graph.nodes.map((n) => n.id)),
+			batchIds,
 			signal,
 			(usage, model, step, finishReason, tools) => {
 				recordStep(jobKey, "extractor", callUsage(usage), model);
@@ -838,12 +942,26 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 
 		// The auditor NEVER sees the source (owner 2026-09-27): findings
 		// JSON + identity instructions, and the graph reached through
-		// exploration tools instead of an injected dump.
+		// exploration tools instead of an injected dump. The proposition
+		// projection omits messageId (2026-10-13): the auditor is
+		// IDENTITY-only and never sees the passages, so anchors are useless
+		// to it — they add cognitive load, not signal.
 		const auditResult = await runAuditor(
 			stageEngine("auditor", deps.auditor),
 			sourceId,
 			`Proposed findings from the extractor (the source itself is not available to you — the extractor is fully trusted; the propositions only — the reasoning chains are the merger's business, owner 2026-09-30):\n\n` +
-				`${JSON.stringify({ propositions: findings.propositions }, null, 2)}\n\n` +
+				`${JSON.stringify(
+					{
+						propositions: findings.propositions.map((p) => ({
+							id: p.id,
+							name: p.name,
+							statement: p.statement,
+							aliases: p.aliases,
+						})),
+					},
+					null,
+					2,
+				)}\n\n` +
 				`The current knowledge graph has ${graph.nodes.length} node(s). Explore it with your tools and link what links.`,
 			signal,
 			(usage, model, step, finishReason, tools) => {
@@ -1010,16 +1128,24 @@ export function createExtractionPipeline(deps: ExtractionPipelineDeps): Extracti
 						status: "fulfilled",
 						value: await runJob({ id: chatId, kind: "chat", part }, async (jobKey) => {
 							// The batch's source view: TEACHER PROSE ONLY (owner,
-							// 2026-09-28) — plain paragraphs, same selection as the
-							// coverage fingerprints (messageViewLines parity).
-							const view = proseView(
-								batch.map((slot) => slot.message),
-								record.title,
+							// 2026-09-28), each passage labeled with its ACTUAL message
+							// id (2026-10-13) — the view lines ARE the coverage
+							// fingerprints' messageViewLines ("TEACHER [id] text"), one
+							// shared seam.
+							const messages = batch.map((slot) => slot.message);
+							const view = proseView(messages, record.title);
+							// The batch's teacher-prose ids — the ONLY anchors this
+							// job's submit may name (validateSessionAnchors at the
+							// submit seam refuses anything else: ids from other
+							// batches — even real ones of this chat — other chats,
+							// and non-prose messages).
+							const batchIds = new Set(
+								messages.filter((m) => messageViewLines(m, m.id).length > 0).map((m) => m.id),
 							);
 							setPhase(jobKey, "queued", "chat", undefined, part);
 							const findings = await withExtractSlot(jobKey, async () => {
 								setPhase(jobKey, "extracting", "chat", undefined, part);
-								return extract(jobKey, chatId, view);
+								return extract(jobKey, chatId, view, batchIds);
 							});
 							// SERIALIZED AUDIT (owner, 2026-09-28): audit + merge are the
 							// graph-mutating critical section — one job at a time,

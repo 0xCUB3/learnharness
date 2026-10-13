@@ -49,13 +49,14 @@ import {
 	sourceDigest,
 	EXTRACTION_CORE,
 	SESSION_PREAMBLE,
+	SESSION_MESSAGE_ID_RULE,
 	NOTES_PREAMBLE,
 	EXTRACTOR_INSTRUCTIONS,
 	NOTES_EXTRACTOR_INSTRUCTIONS,
 } from "../src/agent/subagents/extraction.ts";
-import { simplifyChains } from "../src/core/graph.ts";
+import { getGraph, simplifyChains } from "../src/core/graph.ts";
 import { ModelsNotConfiguredError, ProviderKeyMissingError, providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts";
-import { coverageOf, messageViewLines } from "../src/core/coverage.ts";
+import { coverageOf, coverageSlots, messageViewLines } from "../src/core/coverage.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { subscribe } from "../src/core/events.ts";
 import { PATHS } from "../config.ts";
@@ -232,7 +233,9 @@ after(() => {
 
 /** What the extractor SUBMITS for the fixture session (owner redesign,
  *  2026-09-30): propositions + REASONING CHAINS on the wire — one chain
- *  (p1 ⟹ p2), expanded to a follows-edge at the seam. */
+ *  (p1 ⟹ p2). Each proposition carries its passage anchor (2026-10-13):
+ *  the fixture's teacher-prose messages are a1 (chain rule prose) and a2
+ *  (derivative prose) — p1 anchors to a2, p2 to a1. */
 const FINDINGS = {
 	propositions: [
 		{
@@ -240,12 +243,14 @@ const FINDINGS = {
 			name: "Derivative",
 			statement: "The derivative measures how fast a function changes",
 			aliases: [],
+			messageId: "a2",
 		},
 		{
 			id: "p2",
 			name: "Chain rule",
 			statement: "The chain rule differentiates composed functions by multiplying local rates.",
 			aliases: [],
+			messageId: "a1",
 		},
 	],
 	chains: [
@@ -331,10 +336,22 @@ describe("transcriptView (pure — teacher prose only, owner 2026-09-28)", () =>
 		const view = transcriptView(record);
 
 		// The document header is the session title; the body is the
-		// teacher's text blocks as plain paragraphs.
+		// teacher's text blocks as labeled passages.
 		assert.match(view, /^# Extraction fixture$/m);
-		assert.match(view, /The chain rule composes rates of change along a path\./);
-		assert.match(view, /The derivative measures how fast a function changes\./);
+		assert.match(view, /^TEACHER \[a1\] The chain rule composes rates of change along a path\.$/m);
+		assert.match(view, /^TEACHER \[a2\] The derivative measures how fast a function changes\.$/m);
+
+		// MESSAGE-ID LABELS (owner, 2026-10-13): the passages carry their
+		// ACTUAL message ids, in exactly messageViewLines' shape — the same
+		// seam the coverage fingerprints hash. No label without prose: a3
+		// (quiz only) and the learner messages are not passages.
+		assert.doesNotMatch(view, /TEACHER \[a3\]/);
+		assert.doesNotMatch(view, /TEACHER \[u1\]/);
+		assert.equal(
+			view.slice(view.indexOf("TEACHER")),
+			record.messages.flatMap((m) => messageViewLines(m, m.id)).join("\n\n"),
+			"the view body IS the messageViewLines of the transcript — one shared seam",
+		);
 
 		// EVERYTHING else is gone: learner text, quiz blocks, tool notes,
 		// speaker headers — the ruling strips it all.
@@ -363,7 +380,7 @@ describe("transcriptView (pure — teacher prose only, owner 2026-09-28)", () =>
 			]),
 		].flat());
 		const view = transcriptView(chatStore.getChat(chat.id)!);
-		assert.match(view, /Prose survives\./);
+		assert.match(view, /^TEACHER \[a1\] Prose survives\.$/m, "the surviving passage is labeled with its real id");
 		assert.doesNotMatch(view, /research/);
 		assert.doesNotMatch(view, /long brief/);
 		assert.doesNotMatch(view, /### /);
@@ -479,6 +496,14 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			linkedLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId)),
 			"the link-append unions provenance",
 		);
+		// ANCHORS (2026-10-13): both lines carry their proposition's passage
+		// id — p1's link-append anchors to a2 (its passage), p2's create to a1.
+		assert.ok(
+			linkedLines.some((line) => line.provenance.some((pt) => pt.chatId === chatId && pt.messageId === "a2")),
+			"the link-append line carries p1's passage id",
+		);
+		const created = ledgers.readNodes().find((n) => n.name === "Chain rule")!;
+		assert.deepEqual(created.provenance, [{ chatId, messageId: "a1" }], "the created node anchors to p2's passage");
 
 		// COVERAGE checkpointed per message (not a whole-chat checkpoint):
 		// one entry per transcript message, fingerprinted content each —
@@ -672,7 +697,8 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 			chatStore,
 			graphStore: ledgers,
 			// 4096 budget: the fixture is sized to split in two (the factory
-			// default doubled to 8192, 2026-09-30).
+			// default again — halved back from the digest-era 8192, owner
+			// 2026-10-13).
 			getChunkTokens: () => 4096,
 			engineFor: (role) =>
 				role === "extractor"
@@ -725,7 +751,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const ledgers = memoryLedgers();
 
 		const single = (id: string, name: string, statement: string) => ({
-			propositions: [{ id, name, statement, aliases: [], }],
+			propositions: [{ id, name, statement, aliases: [], messageId: "a1" }],
 			chains: [],
 		});
 		const findingsA = single("pa", "Alpha claim", "Alpha statement, full precision");
@@ -782,7 +808,7 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const ledgers = memoryLedgers();
 
 		const single = (id: string, name: string, statement: string) => ({
-			propositions: [{ id, name, statement, aliases: [], }],
+			propositions: [{ id, name, statement, aliases: [], messageId: "a1" }],
 			chains: [],
 		});
 
@@ -1016,6 +1042,185 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 	});
 });
 
+// ─── message anchors (messageId — owner, 2026-10-13) ────────────────────────
+
+describe("message anchors (session propositions carry their passage's id)", () => {
+	/** A single-proposition submit with an explicit anchor. */
+	const anchored = (messageId: string) => ({
+		propositions: [
+			{ id: "p1", name: "Anchor claim", statement: "Anchor claim, full precision.", aliases: [], messageId },
+		],
+		chains: [],
+	});
+
+	/** One scripted extractor turn: a submit_findings tool call. */
+	const submitStep = (payload: unknown): FauxResponseStep => () =>
+		fauxAssistantMessage(
+			[fauxToolCall("submit_findings", payload as ToolCall["arguments"], { id: "anchor-call" })],
+			{ stopReason: "toolUse" },
+		);
+
+	it("a submit MISSING messageId never passes: the schema rejects every turn — nothing merges, nothing checkpoints", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		// The degraded shape: propositions without anchors, chains present —
+		// only the REQUIRED field is missing, and the schema refuses it on
+		// every turn until the budget is gone (the required-field doctrine,
+		// 2026-09-28, now covering the anchor too).
+		const bare = () =>
+			fauxEngine(
+				Array.from({ length: 4 }, () =>
+					submitStep({
+						propositions: [{ id: "p1", name: "Anchor claim", statement: "Anchor claim, full precision.", aliases: [] }],
+						chains: [],
+					}),
+				),
+			);
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			engineFor: (role) => (role === "extractor" ? bare() : submitModel("submit_review", { links: [] })),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 0, chains: 0 });
+		assert.equal(ledgers.readNodes().length, 0, "nothing merged");
+		assert.equal(ledgers.readCoverage().length, 0, "nothing checkpointed — the batch stays re-runnable");
+	});
+
+	it("an EMPTY or UNKNOWN anchor rides the error-back channel: refused, the model re-anchors clean, then merges", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		// Three bad anchors, all schema-valid (messageId is a string) — only
+		// the anchor law refuses them: empty, a LEARNER message of this very
+		// chat (real id, not a teacher passage), and pure fiction.
+		const extractor = fauxEngine([
+			submitStep(anchored("")),
+			submitStep(anchored("u1")),
+			submitStep(anchored("made_up")),
+			submitStep(anchored("a2")),
+		]);
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor,
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 1, chains: 0 }, "the retry anchored and merged");
+		const node = ledgers.readNodes()[0]!;
+		assert.deepEqual(node.provenance, [{ chatId, messageId: "a2" }], "the node anchors to its passage");
+	});
+
+	it("the boundary is the CURRENT BATCH: a real teacher message id from another batch is refused, the in-batch retry merges", async () => {
+		const { chatId } = chunkyChat(); // deterministic batches [a1,a2,a3] + [a4,a5] at the 4096 budget
+		const ledgers = memoryLedgers();
+		// Batch 1: "a5" is a REAL teacher-prose id of this very chat — but it
+		// lives in batch 2, so this stretch refuses it; the re-anchor to "a2"
+		// merges. Batch 2 anchors to its own "a4".
+		const extractor = fauxEngine([
+			submitStep(anchored("a5")),
+			submitStep(anchored("a2")),
+			submitStep(anchored("a4")),
+		]);
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			getChunkTokens: () => 4096,
+			extractor,
+			// One review per batch job (the retry lives in the extractor's
+			// own turn budget, not the auditor's).
+			auditor: fauxEngine([passThroughAuditStep(), passThroughAuditStep()]),
+		});
+		assert.deepEqual(await pipeline.runExtraction(chatId), { nodes: 2, chains: 0 });
+		const anchors = ledgers.readNodes().map((n) => n.provenance[0]!.messageId).sort();
+		assert.deepEqual(anchors, ["a2", "a4"], "each job's node anchors INSIDE its own batch — never a5");
+		assert.equal(ledgers.readCoverage().length, 5, "both batches checkpointed");
+	});
+
+	it("a LINK-APPEND carries its proposition's anchor into the existing node's provenance", async () => {
+		const { chatId } = fixtureChat();
+		const ledgers = memoryLedgers();
+		const existingId = "n_anchor_existing";
+		ledgers.appendNode({
+			id: existingId,
+			name: "Derivative",
+			statement: "Derivatives measure rates of change",
+			aliases: [],
+			createdAt: "2026-08-01T00:00:00.000Z",
+			provenance: [],
+		});
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", anchored("a2")),
+			auditor: submitModel("submit_review", { links: [{ id: "p1", linkTo: existingId }] }),
+		});
+		await pipeline.runExtraction(chatId);
+		// The link-append line — the re-encounter — carries the passage id.
+		const appended = ledgers
+			.readNodes()
+			.filter((n) => n.id === existingId)
+			.find((line) => line.provenance.some((pt) => pt.chatId === chatId))!;
+		assert.deepEqual(appended.provenance, [{ chatId, messageId: "a2" }]);
+		// And the derived graph unions it under the same point identity.
+		const merged = getGraph(ledgers).nodes.find((n) => n.id === existingId)!;
+		assert.ok(merged.provenance.some((pt) => pt.chatId === chatId && pt.messageId === "a2"));
+	});
+
+	it("the notes door stays anchor-free: no messageId required — and a stray one never reaches provenance", async () => {
+		const ledgers = memoryLedgers();
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			// NOTES_FINDINGS carries no messageId (the notes schema never
+			// asks for one) — the submit validates exactly as before.
+			extractor: submitModel("submit_findings", NOTES_FINDINGS),
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		assert.deepEqual(await pipeline.importNotes({ filePath: "/vault/anchor-free.md", text: NOTES_TEXT }), { nodes: 1, chains: 0 });
+		assert.deepEqual(
+			ledgers.readNodes()[0]!.provenance,
+			[{ chatId: ledgers.readSources()[0]!.id, messageId: "" }],
+			"notes provenance stays chat-level — the file is the anchor",
+		);
+
+		// The boundary: even a hallucinated messageId (extra properties pass
+		// schema validation) is stripped at the notes fill seam.
+		const stray = {
+			propositions: [{ ...NOTES_FINDINGS.propositions[0], messageId: "made_up" }],
+			chains: [],
+		};
+		const second = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			extractor: submitModel("submit_findings", stray),
+			auditor: submitModel("submit_review", { links: [] }),
+		});
+		assert.deepEqual(await second.importNotes({ filePath: "/vault/stray-anchor.md", text: NOTES_TEXT }), { nodes: 1, chains: 0 });
+		const secondSource = ledgers.readSources()[1]!;
+		const strayNode = ledgers.readNodes().find((n) => n.provenance.some((pt) => pt.chatId === secondSource.id))!;
+		assert.deepEqual(strayNode.provenance, [{ chatId: secondSource.id, messageId: "" }], "the stray anchor was stripped before the merger");
+	});
+
+	it("coverage fingerprints are UNCHANGED by the anchors: the stored fps equal the plain coverage-slot hashes", async () => {
+		const { chatId, record } = chunkyChat();
+		const ledgers = memoryLedgers();
+		const pipeline = createExtractionPipeline({
+			chatStore,
+			graphStore: ledgers,
+			getChunkTokens: () => 4096,
+			extractor: fauxEngine([findingsStep(), findingsStep()]),
+			auditor: fauxEngine([passThroughAuditStep(), passThroughAuditStep()]),
+		});
+		await pipeline.runExtraction(chatId);
+		// The labeled view reuses messageViewLines; the fingerprint seam is
+		// the same lines it always was — same hashes, same coverage.
+		assert.deepEqual(
+			ledgers.readCoverage().map((c) => c.fp).sort(),
+			coverageSlots(record.messages).map((slot) => slot.fp).sort(),
+		);
+		assert.equal(coverageOf(record.messages, ledgers.readCoverage(), chatId).uncoveredCount, 0);
+	});
+});
+
 // ── the notes front door (format-agnostic import) ────────────────────────────
 
 /** Raw personal notes — arbitrary format, no session, no message ids. */
@@ -1069,9 +1274,9 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 		const ledgers = memoryLedgers();
 		const extractor = submitModel("submit_findings", {
 			propositions: [
-				{ id: "p1", name: "A", statement: "A holds.", aliases: [] },
-				{ id: "p2", name: "B", statement: "B holds.", aliases: [] },
-				{ id: "p3", name: "C", statement: "A and B together entail C.", aliases: [] },
+				{ id: "p1", name: "A", statement: "A holds.", aliases: [], messageId: "a1" },
+				{ id: "p2", name: "B", statement: "B holds.", aliases: [], messageId: "a2" },
+				{ id: "p3", name: "C", statement: "A and B together entail C.", aliases: [], messageId: "a1" },
 			],
 			chains: [{ premises: ["p1", "p2"], conclusion: "p3" }],
 		});
@@ -1100,10 +1305,10 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 		const ledgers = memoryLedgers();
 		const extractor = submitModel("submit_findings", {
 			propositions: [
-				{ id: "p1", name: "A", statement: "A holds.", aliases: [] },
-				{ id: "p2", name: "B", statement: "B holds.", aliases: [] },
-				{ id: "p3", name: "C", statement: "C follows.", aliases: [] },
-				{ id: "p4", name: "Lonely", statement: "A bare proposition no argument uses.", aliases: [] },
+				{ id: "p1", name: "A", statement: "A holds.", aliases: [], messageId: "a1" },
+				{ id: "p2", name: "B", statement: "B holds.", aliases: [], messageId: "a2" },
+				{ id: "p3", name: "C", statement: "C follows.", aliases: [], messageId: "a1" },
+				{ id: "p4", name: "Lonely", statement: "A bare proposition no argument uses.", aliases: [], messageId: "a2" },
 			],
 			chains: [
 				{ premises: ["p1"], conclusion: "p3" },
@@ -1237,6 +1442,16 @@ describe("the extractor redesign (owner, 2026-09-30): chains are the deliverable
 		assert.ok(EXTRACTOR_INSTRUCTIONS.includes(EXTRACTION_CORE));
 		assert.ok(NOTES_EXTRACTOR_INSTRUCTIONS.startsWith(NOTES_PREAMBLE));
 		assert.ok(NOTES_EXTRACTOR_INSTRUCTIONS.includes(EXTRACTION_CORE), "the notes extractor shares the core by construction");
+
+		// THE ANCHOR RULE (owner, 2026-10-13) is SESSION-ONLY: the exact
+		// sentence rides the session instructions; the notes
+		// contextualization never mentions message ids at all.
+		assert.equal(
+			SESSION_MESSAGE_ID_RULE,
+			"For each new proposition, copy the message ID of the passage that most directly states or explains it into messageId.",
+		);
+		assert.ok(EXTRACTOR_INSTRUCTIONS.includes(SESSION_MESSAGE_ID_RULE), "the session instructions carry the rule");
+		assert.ok(!NOTES_EXTRACTOR_INSTRUCTIONS.includes("messageId"), "the notes prompt never mentions message ids");
 
 		// The preambles differ in exactly their source description.
 		assert.notEqual(SESSION_PREAMBLE, NOTES_PREAMBLE);
@@ -1431,12 +1646,22 @@ function capturedView(context: unknown): string {
 	return typeof last?.content === "string" ? last.content : "";
 }
 
-/** An extractor step that submits FINDINGS, optionally capturing its view. */
+/** An extractor step that submits FINDINGS, optionally capturing its view.
+ *  The step plays by the anchor law it runs under (2026-10-13): every
+ *  proposition's messageId is copied from a TEACHER [id] label of the
+ *  CURRENT stretch, so multi-batch fixtures reuse this step across batches
+ *  without ever naming a passage their batch does not hold. */
 function findingsStep(capture?: (view: string) => void): FauxResponseStep {
 	return (context) => {
-		capture?.(capturedView(context));
+		const view = capturedView(context);
+		capture?.(view);
+		const anchor = /TEACHER \[([^\]]+)\]/.exec(view)?.[1] ?? "a1";
+		const submit = {
+			...FINDINGS,
+			propositions: FINDINGS.propositions.map((p) => ({ ...p, messageId: anchor })),
+		};
 		return fauxAssistantMessage(
-			[fauxToolCall("submit_findings", FINDINGS as unknown as ToolCall["arguments"], { id: "findings-call" })],
+			[fauxToolCall("submit_findings", submit as unknown as ToolCall["arguments"], { id: "findings-call" })],
 			{ stopReason: "toolUse" },
 		);
 	};
@@ -1487,7 +1712,8 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			chatStore,
 			graphStore: ledgers,
 			// 4096 budget: the fixture is sized to split in two (the factory
-			// default doubled to 8192, 2026-09-30).
+			// default again — halved back from the digest-era 8192, owner
+			// 2026-10-13).
 			getChunkTokens: () => 4096,
 			extractor: fauxEngine([findingsStep((v) => views.push(v)), findingsStep((v) => views.push(v))]),
 			auditor: fauxEngine([passThroughAuditStep(), passThroughAuditStep()]),
@@ -1501,9 +1727,17 @@ describe("the chunked pipeline (extraction coverage)", () => {
 		assert.ok(!views[0]!.includes("topic 4:"), "the batch stops at the token budget");
 		assert.ok(views[1]!.includes("topic 4:") && views[1]!.includes("topic 5:"));
 		assert.ok(!views[1]!.includes("topic 3:"));
-		assert.doesNotMatch(views[0]!, /### /, "plain paragraphs — no speaker headers");
+		assert.doesNotMatch(views[0]!, /### /, "no speaker headers — passages are TEACHER [id] lines");
 		// The document header is the session title.
 		assert.ok(views[0]!.startsWith("# Chunky coverage fixture"));
+		// MESSAGE-ID LABELS (2026-10-13): every passage carries its REAL
+		// message id — batch 1 holds a1-a3, batch 2 a4-a5, and the labels
+		// follow the split exactly.
+		assert.match(views[0]!, /^TEACHER \[a1\] topic 1:/m);
+		assert.match(views[0]!, /^TEACHER \[a3\] topic 3:/m);
+		assert.doesNotMatch(views[0]!, /TEACHER \[a4\]/);
+		assert.match(views[1]!, /^TEACHER \[a4\] topic 4:/m);
+		assert.match(views[1]!, /^TEACHER \[a5\] topic 5:/m);
 
 		// Batch 1 merged the full findings (verdicts-only: the extractor's
 		// output always fully merges); batch 2's identical ids are a
@@ -1538,7 +1772,8 @@ describe("the chunked pipeline (extraction coverage)", () => {
 			chatStore,
 			graphStore: ledgers,
 			// 4096 budget: the fixture is sized to split in two (the factory
-			// default doubled to 8192, 2026-09-30).
+			// default again — halved back from the digest-era 8192, owner
+			// 2026-10-13).
 			getChunkTokens: () => 4096,
 			// Batch 1 submits and merges; batch 2's extractor call HANGS
 			// until the abort fires — the dock's abort button, mid-run.
@@ -1859,7 +2094,7 @@ describe("digest-aware serialized extraction (the extractor is the assembler)", 
 		});
 		ledgers.appendNode(seed("n_a", "Self-ownership"));
 		const FINDINGS_B: SessionFindings = {
-			propositions: [{ id: "p1", name: "Appropriation axiom", statement: "c", aliases: [] }],
+			propositions: [{ id: "p1", name: "Appropriation axiom", statement: "c", aliases: [], messageId: "a1" }],
 			chains: [{ premises: ["n_a", "p1"], conclusion: "p1", }].slice(0, 0), // chains live in the engine below
 		};
 		const views: string[] = [];
@@ -1871,7 +2106,7 @@ describe("digest-aware serialized extraction (the extractor is the assembler)", 
 					chains: [{ premises: ["n_a", "p1"], conclusion: "p1b" }],
 				};
 				// conclusion p1b must exist — real submit:
-				submit.propositions.push({ id: "p1b", name: "Property rights", statement: "d", aliases: [] });
+				submit.propositions.push({ id: "p1b", name: "Property rights", statement: "d", aliases: [], messageId: "a2" });
 				return fauxAssistantMessage([fauxToolCall("submit_findings", submit as unknown as ToolCall["arguments"], { id: "f1" })], { stopReason: "toolUse" });
 			},
 		]);
@@ -1918,7 +2153,7 @@ describe("digest-aware serialized extraction (the extractor is the assembler)", 
 						fauxToolCall(
 							"submit_findings",
 							{
-								propositions: [{ id: "p1", name: "Axiom", statement: "s", aliases: [] }],
+								propositions: [{ id: "p1", name: "Axiom", statement: "s", aliases: [], messageId: "a1" }],
 								chains: [],
 							} as unknown as ToolCall["arguments"],
 							{ id: "good" },
@@ -1944,11 +2179,18 @@ describe("digest-aware serialized extraction (the extractor is the assembler)", 
 		let extractCalls = 0;
 		let auditCalls = 0;
 		// One step per engine call (faux engines consume steps): two batches.
-		const extractStep = (): FauxResponseStep => () => {
+		const extractStep = (): FauxResponseStep => (context) => {
 			extractCalls++;
 			events.push(`extract${extractCalls}`);
+			// The anchor is copied from the CURRENT stretch's first TEACHER
+			// label (a1 in batch 1, a4 in batch 2) — batch-local by construction.
+			const anchor = /TEACHER \[([^\]]+)\]/.exec(capturedView(context))?.[1] ?? "a1";
+			const submit = {
+				...FINDINGS,
+				propositions: FINDINGS.propositions.map((p) => ({ ...p, messageId: anchor })),
+			};
 			return fauxAssistantMessage(
-				[fauxToolCall("submit_findings", FINDINGS as unknown as ToolCall["arguments"], { id: `f${extractCalls}` })],
+				[fauxToolCall("submit_findings", submit as unknown as ToolCall["arguments"], { id: `f${extractCalls}` })],
 				{ stopReason: "toolUse" },
 			);
 		};
@@ -1967,7 +2209,7 @@ describe("digest-aware serialized extraction (the extractor is the assembler)", 
 			graphStore: ledgers,
 			extractor,
 			auditor,
-			getChunkTokens: () => 4096, // two batches over the chunky fixture (factory default doubled to 8192, 2026-09-30)
+			getChunkTokens: () => 4096, // two batches over the chunky fixture (the factory default, 4096 — halved back 2026-10-13)
 		});
 		const stats = await pipeline.runExtraction(chatId);
 		assert.deepEqual(events, ["extract1", "audit1", "extract2", "audit2"], "strict per-source order: extract → audit → merge → NEXT extract");

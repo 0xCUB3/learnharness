@@ -290,9 +290,10 @@ describe("the merger (mergeFindings)", () => {
 			assert.equal("kind" in node, false, "no kind field");
 			assert.ok(Array.isArray(node.provenance), "provenance attached");
 		}
-		// Provenance is CHAT-LEVEL (submit-schema slim, 2026-09-28):
-		// propositions no longer carry message ids — the run's source key
-		// is the whole provenance.
+		// Provenance without an anchor stays CHAT-LEVEL: this caller submits
+		// no messageId (the legacy/core + notes shape — anchors are the
+		// session door's alone, 2026-10-13), so the run's source key is the
+		// whole provenance point.
 		const alpha = graph.nodes.find((n) => n.statement === "Alpha intuition")!;
 		assert.deepEqual(alpha.provenance, [{ chatId: chat1.id, messageId: "" }]);
 
@@ -304,6 +305,60 @@ describe("the merger (mergeFindings)", () => {
 		assert.equal(chain.conclusion, idByStatement.get("Beta rule"));
 		assert.deepEqual(chain.provenance, [{ chatId: chat1.id, messageId: "" }]);
 
+	});
+
+	it("messageId anchors (2026-10-13): creates AND link-appends stamp the passage id; chains stay chat-level", () => {
+		// The session submit's anchor (owner, 2026-10-13): a proposition may
+		// carry its passage's message id — the merger stamps it into the
+		// node's provenance point for BOTH births and re-encounters. A
+		// caller without one (notes, legacy/core — pinned above) keeps "".
+		const chat = fixtureChat(
+			"Anchor fixture",
+			[
+				...user("u1", "teach anchors"),
+				...teacher("t1", "First anchored passage."),
+				...teacher("t2", "Second anchored passage."),
+			].flat(),
+		);
+		const first = mergeFindings(
+			chat.id,
+			{
+				propositions: [{ id: "p1", name: "Anchored", statement: "Anchored statement", aliases: [], messageId: "t1" }],
+				chains: [],
+			},
+			{ links: [] },
+			graphDeps,
+			sessionSource(chat.id),
+		);
+		assert.equal(first.nodes, 1);
+		const created = scopedGraph([chat.id]).nodes.find((n) => n.statement === "Anchored statement")!;
+		assert.deepEqual(created.provenance, [{ chatId: chat.id, messageId: "t1" }], "the created node anchors to its passage");
+
+		// The re-encounter: link-appended, anchored to ITS passage — while
+		// the chain the same job asserts stays chat-level.
+		const second = mergeFindings(
+			chat.id,
+			{
+				propositions: [
+					{ id: "q1", name: "Anchored again", statement: "Anchored statement, rephrased", aliases: [], messageId: "t2" },
+					{ id: "q2", name: "Follows", statement: "Follows the anchored claim", aliases: [], messageId: "t2" },
+				],
+				chains: [{ premises: ["q1"], conclusion: "q2" }],
+			},
+			{ links: [{ id: "q1", linkTo: created.id }] },
+			graphDeps,
+			sessionSource(chat.id),
+		);
+		assert.equal(second.nodes, 1, "q1 linked (no create), q2 created");
+		const linkLine = graphStore
+			.readNodes()
+			.filter((n) => n.id === created.id)
+			.find((line) => line.provenance.some((pt) => pt.chatId === chat.id && pt.messageId === "t2"));
+		assert.ok(linkLine, "the link-append line carries the re-encounter's passage id");
+		assert.equal(linkLine!.name, "Anchored again", "the appended line is the re-encounter (reads merge it into aliases)");
+		const chains = graphStore.readChains().filter((c) => c.provenance.some((pt) => pt.chatId === chat.id));
+		assert.equal(chains.length, 1);
+		assert.deepEqual(chains[0]!.provenance, [{ chatId: chat.id, messageId: "" }], "chains stay chat-level — never anchored");
 	});
 
 	it("merges INDEPENDENTLY per call — no cross-run identity (owner, 2026-09-29)", () => {

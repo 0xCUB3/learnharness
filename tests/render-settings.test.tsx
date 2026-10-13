@@ -203,9 +203,9 @@ describe("GraphSection — master switch + chunk budget (wave 7 + 2026-10-02)", 
 	it("the chunk-budget row: unset shows EMPTY with the factory placeholder + hint — one truth with the trigger", () => {
 		const html = renderToStaticMarkup(<GraphSection graph={undefined} onSectionChange={() => {}} />);
 		const input = tagOf(html, "input-chunk-tokens");
-		assert.ok(input.includes('placeholder="8192"'), "the placeholder IS the resolved factory default");
-		assert.ok(!/value="\d/.test(input), "unset renders EMPTY, not a materialized 8192");
-		assert.ok(html.includes(">8192 tok</"), "the hint reports the resolved truth");
+		assert.ok(input.includes('placeholder="4096"'), "the placeholder IS the resolved factory default");
+		assert.ok(!/value="\d/.test(input), "unset renders EMPTY, not a materialized 4096");
+		assert.ok(html.includes(">4096 tok</"), "the hint reports the resolved truth");
 	});
 
 	it("a stored budget shows its value and denominates the hint", () => {

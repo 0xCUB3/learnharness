@@ -11,8 +11,10 @@
  *                      same-source digest (digest-aware, 2026-09-30
  *                      evening: the extractor continues its own source,
  *                      references existing ids verbatim, assembles
- *                      cross-stretch itself). Fully trusted: no stage
- *                      re-checks it.
+ *                      cross-stretch itself). Session propositions carry
+ *                      their passage's messageId (2026-10-13) — the
+ *                      merger's provenance anchor. Fully trusted: no
+ *                      stage re-checks it.
  *   auditor (LLM)    → AuditVerdicts: identity links (local id → an existing
  *                      node, or create) via graph-exploration tools —
  *                      links ONLY (owner, 2026-09-28 evening: the auditor
@@ -109,11 +111,14 @@ export interface MergeSource {
 	coverage?: CoverageEntry[];
 }
 
-/** The run's chat-level provenance point (submit-schema slim, 2026-09-28:
- *  propositions no longer carry message ids — the model never reported
- *  them reliably anyway — so every birth from a run shares one point). */
-function pointOf(chatId: string): ProvenancePoint[] {
-	return [{ chatId, messageId: "" }];
+/** The run's provenance point. Chat-level by default (submit-schema slim,
+ *  2026-09-28 — the run's source key is the whole point); since the anchor
+ *  restore (owner, 2026-10-13) a SESSION birth may carry its passage's
+ *  message id — the extractor-copied messageId, validated at the submit
+ *  seam against the current batch. Chains, notes imports, and
+ *  legacy/core callers lacking an anchor keep "" (chat-level). */
+function pointOf(chatId: string, messageId?: string): ProvenancePoint[] {
+	return [{ chatId, messageId: messageId ?? "" }];
 }
 
 const samePoint = (a: ProvenancePoint, b: ProvenancePoint): boolean =>
@@ -166,7 +171,11 @@ export function mergeFindings(
 	// extractor's findings verbatim; the auditor's links join here by id.
 	for (const p of findings.propositions) {
 		if (mapping.has(p.id)) continue; // duplicate id WITHIN this submit — first resolution stands
-		const points = pointOf(chatId);
+		// The anchor (2026-10-13): a session proposition may carry its
+		// passage's messageId — it rides BOTH the create and the link-append
+		// line (each re-encounter anchors to ITS passage); absent (notes,
+		// legacy/core callers) → "", chat-level as before.
+		const points = pointOf(chatId, p.messageId);
 		const linkTo = linkOf.get(p.id);
 		let graphNodeId: string;
 		if (linkTo !== undefined && existingIds.has(linkTo)) {

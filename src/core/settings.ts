@@ -321,8 +321,11 @@ export interface GraphSettings {
 	 *  carries the whole graph + instructions, so a smaller budget means
 	 *  more, smaller runs — each paying that fixed overhead).
 	 *
-	 *  FACTORY DEFAULT 4096 (the pre-setting constant, config.ts's
-	 *  EXTRACTION.chunkTokens — vision-extraction-coverage.md, 2026-09-15).
+	 *  FACTORY DEFAULT 4096 (owner, 2026-10-13: halved back from the
+	 *  digest-era 8192 — the labeled passages + message anchors made
+	 *  smaller batches worth their overhead again; the pre-setting
+	 *  constant was 4096, vision-extraction-coverage.md, 2026-09-15).
+	 *  Only the FACTORY moves: an explicit user value always wins.
 	 *
 	 *  FLOOR 500 (EXTRACTION_CHUNK_TOKENS_FLOOR, the implementer's call
 	 *  per the owner's dispatch): every run pays the graph-carrying
@@ -402,7 +405,7 @@ export const FACTORY_SETTINGS: FactorySettings = {
 		sessionNameSerif: true,
 		mdRendering: { headingWeight: 900, boldColor: null, italicColor: null },
 	},
-	graph: { enabled: true, rendering: true, extractionChunkTokens: 8192 },
+	graph: { enabled: true, rendering: true, extractionChunkTokens: 4096 },
 	compaction: { thresholdTokens: 150_000 },
 };
 

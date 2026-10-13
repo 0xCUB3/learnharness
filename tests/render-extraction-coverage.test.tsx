@@ -40,8 +40,10 @@ describe("fetchGraphRead — one truth with the extraction trigger (2026-10-02)"
 	// effectiveSettings gate waits for. The old hand-rolled fallback
 	// read the raw delta and guessed `?? 4096` — a stale pre-setting-era
 	// constant — so an unset budget filled the ring at half the truth
-	// (owner repro: 6k shown full, extraction correctly silent at 8192).
-	// Now the raw delta resolves through the SAME core resolver.
+	// (owner repro: 6k shown full, extraction correctly silent at the then-
+	// factory 8192). The 2026-10-13 ruling restored the factory to 4096 (more
+	// frequent graph updates); the LAW is unchanged — the denominator is the
+	// factory the same core resolver serves, never a hand-rolled constant.
 	const stub = (payload: unknown, ok = true) => {
 		const real = globalThis.fetch;
 		globalThis.fetch = (async () =>
@@ -51,25 +53,25 @@ describe("fetchGraphRead — one truth with the extraction trigger (2026-10-02)"
 		};
 	};
 
-	it("an absent graph section denominates at the factory 8192 — never 4096, never a missing ring", async () => {
+	it("an absent graph section denominates at the factory 4096 — never a hand-rolled constant, never a missing ring", async () => {
 		const restore = stub({ settings: { version: 1 } });
 		const read = await fetchGraphRead();
 		restore();
-		assert.deepEqual(read, { enabled: true, chunkTokens: 8192 });
+		assert.deepEqual(read, { enabled: true, chunkTokens: 4096 });
 	});
 
-	it("the owner repro shape — graph section present, budget never written — is 8192", async () => {
+	it("the owner repro shape — graph section present, budget never written — is the factory", async () => {
 		const restore = stub({ settings: { version: 1, graph: { enabled: true } } });
 		const read = await fetchGraphRead();
 		restore();
-		assert.equal(read?.chunkTokens, 8192, "the record lacks the key: factory, not the stale 4096");
+		assert.equal(read?.chunkTokens, 4096, "the record lacks the key: factory, not a stale constant");
 	});
 
 	it("first boot (settings null) resolves factory — the ring shows, at the true budget", async () => {
 		const restore = stub({ settings: null });
 		const read = await fetchGraphRead();
 		restore();
-		assert.deepEqual(read, { enabled: true, chunkTokens: 8192 });
+		assert.deepEqual(read, { enabled: true, chunkTokens: 4096 });
 	});
 
 	it("a custom budget rides through verbatim", async () => {

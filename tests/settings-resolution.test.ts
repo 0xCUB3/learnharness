@@ -43,8 +43,9 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.sessionNameSerif, true);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 900);
 		// wave 7 collapse: the master switch ONLY + the redesign's chunk
-		// budget — absent record resolves the factory 8192 (the 2026-09-30 bump)
-		assert.deepEqual(eff.graph, { enabled: true, rendering: true, extractionChunkTokens: 8192 });
+		// budget — absent record resolves the factory 4096 (halved back
+		// from the digest-era 8192, owner, 2026-10-13)
+		assert.deepEqual(eff.graph, { enabled: true, rendering: true, extractionChunkTokens: 4096 });
 	});
 
 	it("explicit record values win over every factory default", () => {
@@ -76,8 +77,8 @@ describe("resolveSettings", () => {
 		assert.equal(eff.appearance.proseFontSize, 20);
 		assert.equal(eff.appearance.mdRendering.headingWeight, 600);
 		// wave 7 collapse: the section IS the master switch (absent budget
-		// field = factory 8192 — a pre-redesign record resolves cleanly).
-		assert.deepEqual(eff.graph, { enabled: false, rendering: true, extractionChunkTokens: 8192 });
+		// field = factory 4096 — a pre-redesign record resolves cleanly).
+		assert.deepEqual(eff.graph, { enabled: false, rendering: true, extractionChunkTokens: 4096 });
 		// The DISPLAY split (owner, 2026-10-06): extraction off leaves the
 		// rendering switch ON — the data channel and the view are separate.
 		assert.equal(renderingEnabled(eff.graph), true);
