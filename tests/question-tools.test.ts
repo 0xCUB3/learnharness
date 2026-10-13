@@ -21,13 +21,14 @@ import {
 	createTeacherTools,
 	probeQuizTool,
 	probeExplainTool,
+	quizExampleBody,
 	teachExplainToolFor,
 	teachQuizToolFor,
 	type TeacherToolContext,
 } from "../src/agent/tools.ts";
 import { TOGGLEABLE_TOOLS } from "../src/core/pending.ts";
 import { jobStore } from "../src/store/jobs.ts";
-import { probeQuizInputSchema, quizInputObject } from "../src/core/question-core.ts";
+import { probeQuizInputSchema, quizInputObject, quizInputProblems } from "../src/core/question-core.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { PATHS } from "../config.ts";
 
@@ -206,6 +207,47 @@ describe("the prober's quiz: no nodeId field at all", () => {
 		]);
 		const probe = tools.probe as AgentTool<any>;
 		assert.equal(Value.Check(probe.parameters, { ...validQuiz, nodeId: "anything" }), true, "no session check to fail");
+	});
+});
+// ─── the description example (owner, 2026-10-12) ─────────────────────────
+
+describe("quiz tool descriptions carry the complete, phase-correct example", () => {
+	it("the canonical body is schema-valid and authoring-clean (never ship a broken exemplar)", () => {
+		assert.deepEqual(quizInputProblems(quizExampleBody), []);
+		assert.equal(Value.Check(probeQuizInputSchema, quizExampleBody), true);
+		const teachExample = { type: "check", nodeId: "chain-rule", ...quizExampleBody };
+		assert.equal(Value.Check(quizInputObject, teachExample), true);
+	});
+
+	it("probe: the serialized body rides the description with correct JSON escaping, no phase metadata", () => {
+		const desc = probeQuizTool.description;
+		assert.ok(
+			desc.includes("```json\n" + JSON.stringify(quizExampleBody, null, 2) + "\n```"),
+			"the example is the exact JSON.stringify of the canonical body",
+		);
+		// The escaping exemplar must be VISIBLE as wire text — the runtime
+		// string carries literal double backslashes, exactly what the model
+		// must type inside JSON.
+		assert.ok(desc.includes("A signal is $y=\\\\sin(2x)$"), "LaTeX command backslash shows doubled");
+		assert.ok(desc.includes("a LaTeX backslash is \\\\ and a newline is \\n"), "the one-line escaping hint");
+		assert.ok(!desc.includes("nodeId"), "probe example carries no phase metadata");
+	});
+
+	it("quiz: the required pair leads the example, with the plan-id caveat", () => {
+		const chatId = newChat("Teacher: description example");
+		const desc = teachQuizToolFor({ chatId, chatStore }).description;
+		const teachExample = { type: "check", nodeId: "chain-rule", ...quizExampleBody };
+		assert.ok(desc.includes("```json\n" + JSON.stringify(teachExample, null, 2) + "\n```"));
+		// The 2026-10-09 drop-order ruling: type+nodeId LEAD the object —
+		// fields generated first get dropped least.
+		assert.ok(
+			/```json\n\{\n {2}"type": "check",\n {2}"nodeId": "chain-rule",/.test(desc),
+			"type and nodeId lead the serialized example",
+		);
+		assert.ok(
+			desc.includes("illustrative — copy an exact id from this session's plan_init"),
+			"the illustrative-nodeId caveat",
+		);
 	});
 });
 // ─── tool availability (2026-09 settings seam) ───────────────────────────────

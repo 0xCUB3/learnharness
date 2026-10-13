@@ -94,7 +94,7 @@ describe("math delimiter transform (pure unit)", () => {
 	});
 });
 
-describe("render — new math contract (streamdown + KaTeX)", () => {
+describe("render — standard dollar math + legacy compatibility (streamdown + KaTeX)", () => {
 	it("renders \\(...\\) as inline KaTeX", () => {
 		const html = render("The map \\(f(x) = x^2\\) is smooth.");
 		assert.ok(html.includes("katex"), `inline math should render, got: ${html.slice(0, 300)}`);
@@ -121,16 +121,29 @@ describe("render — new math contract (streamdown + KaTeX)", () => {
 		assert.equal(items.length, 2, "both list items render");
 	});
 
-	it("renders bare $ as literal currency — the hazard dies structurally", () => {
-		const html = render("It costs $5 and $10 more.");
-		assert.ok(!html.includes("katex"), "currency must never parse as math");
+	it("keeps escaped currency literal", () => {
+		const html = render("It costs \\$5 and \\$10 more.");
+		assert.ok(!html.includes("katex"), "escaped currency must not parse as math");
 		assert.match(html, /\$5 and \$10/);
 	});
 
-	it("renders old-contract $...$ math as literal text (singleDollarTextMath: false)", () => {
+	it("renders standard $...$ math inline", () => {
 		const html = render("The map $f(x) = x^2$ is smooth.");
-		assert.ok(!html.includes("katex"), "$ can never start math");
-		assert.match(html, /\$f\(x\) = x\^2\$/, "the old form renders verbatim");
+		assert.ok(html.includes("katex"), "single-dollar math renders");
+		assert.ok(!html.includes("katex-display"), "single-dollar math is inline");
+	});
+
+	it("renders standard dollar commands and fenced display math", () => {
+		const html = render("The symbol $\\Omega$ appears here.\n\n$$\nS = k_B \\ln \\Omega\n$$");
+		assert.ok(html.includes("katex-display"), "standalone dollar fences render display math");
+		assert.ok(html.includes("Ω"), "the command renders as the Greek symbol");
+		assert.ok(!html.includes("katex-error"), "both formulas are valid");
+	});
+
+	it("keeps dollar examples in inline code and code fences literal", () => {
+		const html = render("Use `$x$` here.\n\n```text\n$$\ny = x^2\n$$\n```");
+		assert.ok(!html.includes("katex"), "code examples are not math");
+		assert.ok(html.includes("$x$"), "inline code retains its delimiters");
 	});
 
 	it("keeps \\(...\\) inside a code fence literal", () => {

@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { quizInputProblems } from "../src/core/question-core.ts";
 import { Value } from "typebox/value";
+import { restoreMathEscapes } from "../src/core/math-delims.ts";
 import {
 	parseAskInput,
 	parseProbeDoneInput,
@@ -276,6 +277,89 @@ describe("display-math newline rule (Option A, owner ruling 2026-09-27)", () => 
 		});
 		assert.ok(parsed);
 		assert.equal(parsed.question, "Is \\(p \\neq q\\) valid?");
+	});
+});
+
+describe("dollar-delimiter recognition — existing escape restoration rules", () => {
+	it("restores question, option, and explanation debris in dollar math", () => {
+		const parsed = parseQuizInput({
+			question: "What does $\x0corall x$ mean?",
+			options: [{ label: "$\x0barphi$ holds", value: "yes" }, { label: "No", value: "no" }],
+			correctAnswer: "yes",
+			explanation: "Here $p\to q$ is an implication.",
+		});
+		assert.ok(parsed);
+		assert.equal(parsed.question, "What does $\\forall x$ mean?");
+		assert.equal(parsed.options[0]!.label, "$\\varphi$ holds");
+		assert.equal(parsed.explanation, "Here $p\\to q$ is an implication.");
+	});
+
+	it("keeps the same six-character inline recovery map", () => {
+		for (const [debris, command] of [
+			["\beta", "\\beta"], ["\to", "\\to"], ["\neq", "\\neq"],
+			["\x0barphi", "\\varphi"], ["\x0corall", "\\forall"], ["\rho", "\\rho"],
+		]) {
+			assert.equal(restoreMathEscapes(`$${debris}$`), `$${command}$`);
+		}
+	});
+
+	it("preserves display newlines and real LaTeX row breaks", () => {
+		const math = "Compare:\n$$\n\\begin{aligned}\nx &= 1 \\\\\ny &= 2\n\\end{aligned}\n$$";
+		assert.equal(restoreMathEscapes(math), math);
+	});
+
+	it("restores five display debris characters but keeps newline ambiguity unchanged", () => {
+		for (const [debris, command] of [
+			["\beta", "\\beta"], ["\to", "\\to"], ["\x0barphi", "\\varphi"],
+			["\x0corall", "\\forall"], ["\\left(x \right)", "\\left(x \\right)"],
+		]) {
+			assert.equal(
+				restoreMathEscapes(`Compare:\n$$\n${debris}, p \neq q\n$$`),
+				`Compare:\n$$\n${command}, p \neq q\n$$`,
+			);
+		}
+	});
+
+	it("preserves legacy replacement frequency when a span has multiple debris characters", () => {
+		const body = "p\to q, \rho";
+		const legacy = restoreMathEscapes(`\\(${body}\\)`).slice(2, -2);
+		assert.equal(restoreMathEscapes(`$${body}$`), `$${legacy}$`);
+		assert.equal(legacy, "p\\to q, \rho", "the existing first-match-only behavior is unchanged");
+	});
+
+	it("shares dollar recovery with ask and free-recall fields", () => {
+		const ask = parseAskInput({ question: "Goal?", options: [{ label: "$\x0corall$ rigor" }, { label: "Intuition" }] });
+		assert.ok(ask);
+		assert.equal(ask.options![0]!.label, "$\\forall$ rigor");
+		const explain = parseExplainInput({ question: "Explain $p\to q$", correctAnswer: "$p\neq q$ is different." });
+		assert.ok(explain);
+		assert.equal(explain.question, "Explain $p\\to q$");
+		assert.equal(explain.correctAnswer, "$p\\neq q$ is different.");
+	});
+
+	it("leaves non-math debris, escaped opening dollars, and code examples untouched", () => {
+		const prose = "Pasted:\t\x0cb. \\$\x0corall x$. A good $x$.";
+		assert.equal(restoreMathEscapes(prose), prose);
+		const code = "Literal `$\x0corall x$`.\n\n```text\n$\x0barphi$\n```\n\nReal $\x0corall x$.";
+		assert.equal(restoreMathEscapes(code), code.replace("Real $\x0corall x$", "Real $\\forall x$"));
+	});
+
+	it("leaves unbalanced and mismatched delimiter runs untouched", () => {
+		for (const text of ["$\x0corall", "$$\n\x0corall x\n", "$\x0corall$$", "$$\x0corall$"]) {
+			assert.equal(restoreMathEscapes(text), text);
+		}
+	});
+
+	it("recognizes native inline runs and longer display closing fences", () => {
+		assert.equal(restoreMathEscapes("Inline $$p\neq q$$."), "Inline $$p\\neq q$$.");
+		assert.equal(restoreMathEscapes("$$\n\x0corall x\n$$$"), "$$\n\\forall x\n$$$");
+	});
+
+	it("does not add an over-escaping repair or reprocess legacy spans", () => {
+		const overescaped = "$$\n\\\\Omega\n$$";
+		assert.equal(restoreMathEscapes(overescaped), overescaped);
+		const legacy = "\\[\np $a\neq b$\n\\]";
+		assert.equal(restoreMathEscapes(legacy), legacy);
 	});
 });
 

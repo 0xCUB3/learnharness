@@ -35,7 +35,7 @@ import { buildSubagentSteer } from "../src/core/contracts.ts";
 import { abortTurn, runningTurn, settledTurnResponse } from "../src/server/turn-runs.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
-import { buildAnswer, coerceCorrectAnswer, dismissedAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
+import { buildAnswer, dismissedAnswer, normalizeOptions, resolveCorrect, type QuestionData } from "../src/core/question-core.ts";
 import { danglingQuestionOf, endsInDismissal, needsContinuation, newAnswerResult } from "../src/core/native-messages.ts";
 import { projectView } from "../src/core/view.ts";
 import type { PiEngine } from "../src/agent/models.ts";
@@ -113,7 +113,7 @@ function gradedAnswer(input: typeof QUIZ_INPUT, values: string[]) {
 		question: input.question,
 		mode: "single-select",
 		options,
-		correctIndices: resolveCorrect(coerceCorrectAnswer(input.correctAnswer), options).indices,
+		correctIndices: resolveCorrect(input.correctAnswer, options).indices,
 		explanation: input.explanation,
 		createdAt: new Date().toISOString(),
 	};

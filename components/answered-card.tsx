@@ -7,6 +7,7 @@ import { ThinkingBlock } from "@/components/thinking-block";
 import { cn } from "@/lib/utils";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
+import { parseAskInput, parseQuizInput } from "@/src/core";
 
 /**
  * Static rendering of an answered question (tool part in `output-available`).
@@ -18,7 +19,7 @@ import type { QuestionAnswerData } from "@/src/core";
  * client — the card reveals his answer, the committed correct answer, and
  * the explanation, with NO verdict chips (owner ruling 2026-09-27).
  */
-export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
+export function AnsweredCard({ answer, input }: { answer: QuestionAnswerData; input?: unknown }) {
 	const [whyOpen, setWhyOpen] = useState(false); // the tucked explanation (predictions, owner 2026-10-03)
 	if (answer.dismissed) {
 		return (
@@ -32,6 +33,15 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 	const isExplain = answer.kind === "explain";
 	const selectedIdx = new Set(answer.answers.map((a) => a.index));
 	const correctIdx = new Set(answer.correctIndices ?? []);
+	// The question's own context rides the ORIGINAL CALL, not the answer
+	// snapshot (owner, 2026-10-12): the details line — and, for ask
+	// questions, option descriptions — re-render from the persisted
+	// arguments, so every existing transcript shows them too. The lean
+	// snapshot (what the model sees, compactAnswerForModel) is untouched;
+	// any parse failure or absent input renders exactly the older card.
+	const askInput = answer.kind === "ask" ? parseAskInput(input) : undefined;
+	const parsedDetails = askInput?.details ?? (answer.kind === "quiz" ? parseQuizInput(input)?.details : undefined);
+	const descByIndex = new Map((askInput?.options ?? []).map((o, i) => [i + 1, o.description]));
 
 	return (
 		<>
@@ -78,6 +88,13 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 			<div className="mb-3 font-medium">
 				<MessageResponse>{answer.questionText}</MessageResponse>
 			</div>
+			{parsedDetails && (
+				// The details line, same paint as the pending dock (owner,
+				// 2026-10-12): full markdown, LaTeX included.
+				<div className="mb-3 text-sm text-muted-foreground">
+					<MessageResponse>{parsedDetails}</MessageResponse>
+				</div>
+			)}
 
 			{((answer.options?.length ?? 0) > 0 || answer.other) && (
 				<div className="flex flex-col gap-1.5 text-sm">
@@ -115,6 +132,14 @@ export function AnsweredCard({ answer }: { answer: QuestionAnswerData }) {
 								)}
 								<span className={cn(!sel && "text-muted-foreground")}>
 									<MessageResponse>{opt.label}</MessageResponse>
+									{descByIndex.get(opt.index) && (
+										// Ask-option subtext (owner, 2026-10-12): same markdown path
+										// as the pending dock — LaTeX included. Quiz options carry
+										// none (owner ruling 2026-09-26); the map stays empty for them.
+										<MessageResponse className="lh-prose block text-xs text-muted-foreground">
+											{descByIndex.get(opt.index)}
+										</MessageResponse>
+									)}
 								</span>
 							</div>
 						);

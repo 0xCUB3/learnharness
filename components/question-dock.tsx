@@ -9,7 +9,6 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
 	buildAnswer,
-	coerceCorrectAnswer,
 	normalizeQuizType,
 	CONFIDENCE_STOPS,
 	DEFAULT_CONFIDENCE_INDEX,
@@ -170,7 +169,7 @@ function teaserText(q: string): string {
 	return q
 		.replace(/\\\(([\s\S]*?)\\\)/g, "$1") // \(...\) inline math
 		.replace(/\\\[([\s\S]*?)\\\]/g, "$1") // \[...\] display math
-		.replace(/\$\$?([^$]*)\$\$?/g, "$1") // legacy $...$ (pre-switch sessions)
+		.replace(/\$\$?([^$]*)\$\$?/g, "$1") // standard $...$/$$...$$ math
 		.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1/$2")
 		.replace(/\\([a-zA-Z]+)/g, "$1")
 		.replace(/[{}]/g, "")
@@ -293,7 +292,7 @@ function QuestionDockForm({
 			createdAt: new Date().toISOString(),
 		};
 		if (quizInput) {
-			const resolved = resolveCorrect(coerceCorrectAnswer(quizInput.correctAnswer), ordered);
+			const resolved = resolveCorrect(quizInput.correctAnswer, ordered);
 			if (resolved.error) console.error("[quiz] correctAnswer did not resolve:", resolved.error);
 			q.correctIndices = resolved.indices;
 			q.explanation = quizInput.explanation;
@@ -607,8 +606,12 @@ function QuestionDockForm({
 											// the "I don't know" copy stays JetBrains Mono. QUIZ options render
 											// NO description (owner ruling 2026-09-26): the model used them to
 											// telegraph correctness — the schema dropped the field and old
-											// records must not leak either.
-											<span className="lh-prose block text-xs text-muted-foreground">{opt.description}</span>
+											// records must not leak either. Same MessageResponse path as the
+											// label (owner, 2026-10-12): descriptions are full markdown —
+											// LaTeX included — not plain text.
+											<MessageResponse className="lh-prose block text-xs text-muted-foreground">
+												{opt.description}
+											</MessageResponse>
 										)}
 									</span>
 								</button>

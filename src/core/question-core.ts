@@ -116,9 +116,9 @@ export function quizInputProblems(input: {
 }): string[] {
 	const { problems, keys } = optionProblems(input.options);
 
-	// Debris (colons/quotes/whitespace) strips inside coerceCorrectAnswer —
-	// the shared membership seam (boundary, display, grading).
-	const entries = coerceCorrectAnswer(input.correctAnswer);
+	// Preserve exact option keys before trying copy-syntax cleanup — the
+	// same option-aware coercion runs at the display and grading seams.
+	const entries = coerceCorrectAnswer(input.correctAnswer, keys);
 	const unique = [...new Set(entries)];
 	if (unique.length === 0 || unique.some((v) => v.length === 0)) {
 		problems.push("correctAnswer is required — provide the value (or label) of the correct option(s).");
@@ -606,25 +606,34 @@ export function shuffleOptions(options: QuizOption[], rand: () => number = Math.
 
 // ─── quiz grading ───────────────────────────────────────────────────────────
 
-/** The harness sometimes delivers a multi-select correctAnswer array as a
- *  JSON-stringified string because the schema union lists String first.
- *  Every entry carries the MODEL-VALUE DEBRIS STRIP (whitehead,
- *  2026-10-09): glm-5.3 copied option values with the JSON key-value
- *  colon glued on (`[":parmenides"]`); membership comparisons on ALL
- *  three seams (boundary check, display parse, grading) route through
- *  here, so the strip heals new calls AND already-poisoned records. */
-export function coerceCorrectAnswer(correctAnswer: string | string[]): string[] {
-	if (Array.isArray(correctAnswer)) return correctAnswer.map(stripModelValueDebris);
+/** Preserve an exact option key before trying copy-syntax cleanup: a
+ *  label's final period, quotes, or backticks can be CONTENT (calculus
+ *  incident, 2026-10-12), not model debris. The actual option values are
+ *  required so no caller can strip a valid answer before membership.
+ *  Non-matches keep the existing whitehead heal (`[":parmenides"]`) and
+ *  JSON-stringified multi-select coercion. Shared by boundary, display,
+ *  and grading; canonical option keys are never rewritten. */
+export function coerceCorrectAnswer(
+	correctAnswer: string | string[],
+	optionValues: readonly string[],
+): string[] {
+	const clean = (value: string): string => {
+		const trimmed = value.trim();
+		return optionValues.includes(trimmed) ? trimmed : stripModelValueDebris(value);
+	};
+	if (Array.isArray(correctAnswer)) return correctAnswer.map(clean);
 	const trimmed = correctAnswer.trim();
+	// An exact string key can itself look like a JSON array.
+	if (optionValues.includes(trimmed)) return [trimmed];
 	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
 		try {
 			const parsed = JSON.parse(trimmed);
-			if (Array.isArray(parsed)) return parsed.map((v) => stripModelValueDebris(String(v)));
+			if (Array.isArray(parsed)) return parsed.map((v) => clean(String(v)));
 		} catch {
 			// not valid JSON — treat as a single literal value
 		}
 	}
-	return [stripModelValueDebris(correctAnswer)];
+	return [clean(correctAnswer)];
 }
 
 /** Resolve author-supplied value(s) to 1-based display indices. Keying by
@@ -635,7 +644,7 @@ export function resolveCorrect(
 	options: QuizOption[],
 ): { indices: number[]; error?: string } {
 	if (correctAnswer === undefined) return { indices: [], error: "correctAnswer is required" };
-	const arr = coerceCorrectAnswer(correctAnswer);
+	const arr = coerceCorrectAnswer(correctAnswer, options.map((o) => o.value));
 	if (arr.length === 0) return { indices: [], error: "correctAnswer is required" };
 	const byValue = new Map(options.map((o, i) => [o.value, i + 1]));
 	const indices: number[] = [];

@@ -34,6 +34,7 @@ import {
 import { parseQuizInput } from "../src/core/tool-parts.ts";
 import { resolveTargetId } from "../src/core/chains.ts";
 import { bareQuestionTools } from "../src/agent/teacher-agent.ts";
+import { probeQuizTool } from "../src/agent/tools.ts";
 
 /** The incident's exact encoding: the value wrapped in literal quotes. */
 function QUOTED(value: string): string {
@@ -126,9 +127,9 @@ describe("the colon shape — correctAnswer with copy-syntax debris", () => {
 		assert.equal(stripModelValueDebris('["x"]'), '["x"]'); // interior quotes are content (JSON-array strings)
 	});
 
-	it("coerceCorrectAnswer strips every entry (boundary check + grading seam)", () => {
-		assert.deepEqual(coerceCorrectAnswer([":parmenides"]), ["parmenides"]);
-		assert.deepEqual(coerceCorrectAnswer(QUOTED("primary-external")), ["primary-external"]);
+	it("coerceCorrectAnswer cleans non-matching entries (boundary check + grading seam)", () => {
+		assert.deepEqual(coerceCorrectAnswer([":parmenides"], ["parmenides"]), ["parmenides"]);
+		assert.deepEqual(coerceCorrectAnswer(QUOTED("primary-external"), ["primary-external"]), ["primary-external"]);
 	});
 
 	it("the incident's exact call passes the semantic boundary (quizInputProblems)", () => {
@@ -153,6 +154,27 @@ describe("the colon shape — correctAnswer with copy-syntax debris", () => {
 	});
 });
 
+describe("the calculus retry loop — an exact answer was incorrectly stripped", () => {
+	it("the real probe tool accepts a label with its sentence-final period", async () => {
+		const input = {
+			question: "Which claim?",
+			options: [{ label: "The claim holds." }, { label: "The claim need not hold." }],
+			explanation: "The premise does not imply the claim.",
+			correctAnswer: "The claim need not hold.",
+		};
+		const validated = validateToolArguments(probeQuizTool, {
+			type: "toolCall",
+			id: "calculus-period",
+			name: "probe",
+			arguments: probeQuizTool.prepareArguments!(input),
+		});
+		assert.equal(validated.correctAnswer, input.correctAnswer);
+		const result = await probeQuizTool.execute("calculus-period", validated);
+		assert.notEqual(result.isError, true, "an already-exact answer must not trigger a retry");
+		assert.equal(result.terminate, true, "the valid question is posed normally");
+	});
+});
+
 describe("the display mirror — raw records heal on read", () => {
 	it("parseQuizInput renders the incident's persisted raw record (no invisible quiz)", () => {
 		const raw = whiteheadQuiz(QUOTED("predict"), [":parmenides"]);
@@ -163,6 +185,6 @@ describe("the display mirror — raw records heal on read", () => {
 		// which strips the recorded wobble to the intended role.
 		assert.equal(normalizeQuizType(parsed?.type), "predict");
 		// The graded answer resolves to the option despite the recorded colon.
-		assert.deepEqual(parsed ? coerceCorrectAnswer(parsed.correctAnswer) : [], ["parmenides"]);
+		assert.deepEqual(parsed ? coerceCorrectAnswer(parsed.correctAnswer, parsed.options.map((o) => o.value ?? o.label)) : [], ["parmenides"]);
 	});
 });

@@ -1,17 +1,15 @@
 /**
- * Math delimiter preprocessing — the \(...\)/\[...\] contract.
+ * Legacy math delimiter preprocessing — the \(...\)/\[...\] reader.
  *
- * The teacher writes inline math as `\(...\)` and display math as `\[...\]`;
- * a bare `$` is ALWAYS literal currency (system-prompt contract). remark-math
- * expects `$...$`/`$$...$$`, so this pure transform rewrites balanced
- * delimiters before the markdown hits Streamdown. Combined with
- * `singleDollarTextMath: false`, the dollar sign can never start math — the
- * currency hazard dies structurally.
+ * Current authoring uses `$...$` inline and `$$...$$` on separate lines for
+ * display (owner, 2026-10-12). This pure transform keeps correctly formed
+ * old backslash-delimited content readable; dollar math passes through to
+ * Streamdown's native parser. Escape restoration below recognizes both
+ * syntaxes while retaining the existing recovery rules.
  *
  * Rules:
- * - `\(...\)` → `$$...$$` (two-dollar inline: with
- *   `singleDollarTextMath: false` this is the only inline math form micromark
- *   still parses), `\[...\]` → `$$\n...\n$$` (block form: flow math).
+ * - `\(...\)` → `$$...$$` (two-dollar inline, still accepted by micromark),
+ *   `\[...\]` → `$$\n...\n$$` (block form: flow math).
  * - An escaped delimiter (`\\(` = literal backslash + paren) is left alone.
  * - Nothing inside fenced code blocks or inline code spans is touched.
  * - Unbalanced delimiters are left untouched: Streamdown streams chunks, and
@@ -196,8 +194,8 @@ export function transformMathDelimiters(markdown: string): string {
 									closeEndsLine(markdown, afterClose) ? "" : "\n\n";
 							out.push(`${padBefore}$$\n${content}\n$$${padAfter}`);
 						} else {
-							// Two-dollar inline: the only inline math form left with
-							// singleDollarTextMath: false (renders inline, not display).
+							// Preserve the legacy reader's two-dollar inline output
+							// (renders inline, not display).
 							out.push(`$$${content}$$`);
 						}
 						i = closeAt + close.length;
@@ -226,9 +224,9 @@ export function transformMathDelimiters(markdown: string): string {
  * control chars can never be legitimate content, so restoring the two-char
  * escape reconstructs the model's intent byte-perfectly. Outside spans the
  * same chars might be real prose (pasted tables, formatted text), so only
- * balanced `\(…\)` / `\[…\]` spans are touched — the same scanner rules as
- * transformMathDelimiters (escaped delimiters are literal, unbalanced
- * delimiters pass through untouched).
+ * balanced math spans are touched. The legacy `\(…\)` / `\[…\]` pass stays
+ * unchanged; the dollar reader adds `$…$` and fenced `$$…$$` recognition,
+ * excluding code and escaped opening dollars. Unbalanced spans pass through.
  *
  * ASYMMETRIC NEWLINE RULE (owner ruling 2026-09-27, Option A): inline spans
  * restore all six debris chars — real newlines/tabs inside INLINE math
@@ -258,6 +256,12 @@ const DISPLAY_DEBRIS_RE = /[\b\t\v\f\r]/;
 
 export function restoreMathEscapes(text: string): string {
 	if (!DEBRIS_RE.test(text)) return text;
+	return restoreDollarMathEscapes(restoreLegacyMathEscapes(text));
+}
+
+/** Keep legacy recovery byte-for-byte; only the recognized syntax expands. */
+function restoreLegacyMathEscapes(text: string): string {
+	if (!DEBRIS_RE.test(text)) return text;
 	const out: string[] = [];
 	let i = 0;
 	while (i < text.length) {
@@ -279,6 +283,116 @@ export function restoreMathEscapes(text: string): string {
 			}
 		}
 		out.push(ch);
+		i += 1;
+	}
+	return out.join("");
+}
+
+function dollarRun(text: string, i: number): number {
+	let count = 0;
+	while (text[i + count] === "$") count += 1;
+	return count;
+}
+
+/** Native math fences start at a line's block position; one-line $$…$$
+ *  remains inline. A flow opener may have metadata, but never another $. */
+function dollarIsDisplay(text: string, i: number, size: number): boolean {
+	if (size < 2 || !displayIsBlockPositioned(text, i)) return false;
+	const end = text.indexOf("\n", i + size);
+	return !text.slice(i + size, end === -1 ? text.length : end).includes("$");
+}
+
+/** Match micromark's delimiter runs: exact size inline, at least the
+ *  opener's size on an otherwise-empty line for display. Inside math,
+ *  backslashes are TeX data, not Markdown escapes for closing dollars. */
+function findDollarClose(
+	text: string,
+	from: number,
+	size: number,
+	isDisplay: boolean,
+): { at: number; after: number } | undefined {
+	if (isDisplay) {
+		let lineEnd = text.indexOf("\n", from);
+		while (lineEnd !== -1) {
+			const start = lineEnd + 1;
+			lineEnd = text.indexOf("\n", start);
+			const line = text.slice(start, lineEnd === -1 ? text.length : lineEnd);
+			const close = /^([ \t]{0,3})(\$+)[ \t]*\r?$/.exec(line);
+			if (close && close[2]!.length >= size) {
+				const at = start + close[1]!.length;
+				return { at, after: at + close[2]!.length };
+			}
+		}
+		return undefined;
+	}
+	for (let j = from; j < text.length;) {
+		if (text[j] !== "$") {
+			j += 1;
+			continue;
+		}
+		const count = dollarRun(text, j);
+		if (count === size) return { at: j, after: j + count };
+		j += count;
+	}
+	return undefined;
+}
+
+/** Dollar recognition only — the same six/five-character repair maps,
+ *  with no over-escaping normalization or mathematical validation. */
+function restoreDollarMathEscapes(text: string): string {
+	if (!DEBRIS_RE.test(text) || !text.includes("$")) return text;
+	const out: string[] = [];
+	let i = 0;
+	while (i < text.length) {
+		if (atLineStart(text, i) && FENCE_OPEN_RE.test(text.slice(i))) {
+			i = copyFencedBlock(text, i, out);
+			continue;
+		}
+		if (text[i] === "`") {
+			const run = backtickRun(text, i);
+			let j = i + run;
+			while (j < text.length) {
+				const nextRun = backtickRun(text, j);
+				if (nextRun === run) break;
+				j += Math.max(nextRun, 1);
+			}
+			const after = j < text.length ? j + run : i + run;
+			out.push(text.slice(i, after));
+			i = after;
+			continue;
+		}
+		// Legacy spans have already received their own inline/display policy.
+		// Do not reinterpret dollars inside them in this second pass.
+		if (text[i] === "\\" && !isEscaped(text, i)) {
+			const next = text[i + 1];
+			if (next === "(" || next === "[") {
+				const closeAt = findClose(text, i + 2, next === "[" ? DISPLAY_CLOSE : INLINE_CLOSE);
+				if (closeAt !== -1) {
+					out.push(text.slice(i, closeAt + 2));
+					i = closeAt + 2;
+					continue;
+				}
+			}
+		}
+		if (text[i] === "$" && !isEscaped(text, i)) {
+			const size = dollarRun(text, i);
+			const isDisplay = dollarIsDisplay(text, i, size);
+			const close = findDollarClose(text, i + size, size, isDisplay);
+			if (close) {
+				const debris = isDisplay ? DISPLAY_DEBRIS_RE : DEBRIS_RE;
+				out.push(
+					text.slice(i, i + size) +
+					text.slice(i + size, close.at).replace(debris, (c) => ESCAPE_DEBRIS[c]!) +
+					text.slice(close.at, close.after),
+				);
+				i = close.after;
+				continue;
+			}
+			out.push(text.slice(i, i + size));
+			i += size;
+			continue;
+		}
+		out.push(text[i]!);
 		i += 1;
 	}
 	return out.join("");

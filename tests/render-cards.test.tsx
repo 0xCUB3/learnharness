@@ -25,7 +25,6 @@ import type { JobRecord } from "../src/core/contracts.ts";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import {
 	buildAnswer,
-	coerceCorrectAnswer,
 	normalizeOptions,
 	resolveCorrect,
 	questionNeedsReveal,
@@ -47,7 +46,7 @@ function quizQD(): QuestionData {
 		question: quizInput.question,
 		mode: "single-select",
 		options,
-		correctIndices: resolveCorrect(coerceCorrectAnswer(quizInput.correctAnswer), options).indices,
+		correctIndices: resolveCorrect(quizInput.correctAnswer, options).indices,
 		explanation: quizInput.explanation,
 		createdAt: new Date().toISOString(),
 	};
@@ -342,14 +341,13 @@ describe("render smoke tests", () => {
 });
 
 describe("math rendering (streamdown + KaTeX)", () => {
-	// New delimiter contract (W3): the teacher writes \(...\) / \[...\]; a
-	// bare $ is ALWAYS literal currency (singleDollarTextMath: false kills it
-	// structurally). transformMathDelimiters rewrites both to the two-dollar
-	// forms remark-math still parses. Full coverage: render-markdown.test.tsx.
-	it("renders $...$ as LITERAL text — a $ is never math (the currency fix)", () => {
+	// Standard authoring: $...$ inline and $$ on separate lines for display.
+	// The legacy backslash reader remains for existing content.
+	// Full coverage: render-markdown.test.tsx.
+	it("renders standard $...$ as inline math", () => {
 		const html = renderToStaticMarkup(<MessageResponse>{"The map $f(x) = x^2$ is smooth."}</MessageResponse>);
-		assert.ok(!html.includes("katex"), `$-math must not render, got: ${html.slice(0, 300)}`);
-		assert.match(html, /\$f\(x\) = x\^2\$/, "old-contract math renders verbatim");
+		assert.ok(html.includes("katex"), `$-math must render, got: ${html.slice(0, 300)}`);
+		assert.ok(!html.includes("katex-display"), "single-dollar math is inline");
 	});
 
 	it("renders display math ($$ fenced on own lines — the transform's target form)", () => {
@@ -366,10 +364,8 @@ describe("math rendering (streamdown + KaTeX)", () => {
 		assert.ok(html.includes("katex") && !html.includes("katex-display"), "one-liner should render inline");
 	});
 
-	it("does NOT eat escaped currency (\\$5 stays text — belt and suspenders)", () => {
-		// With singleDollarTextMath: false even a bare $5 can't parse as math;
-		// an escaped \$ is doubly safe. The prompt contract still asks the
-		// teacher to prefer plain "$5" (it renders literally now).
+	it("does NOT eat escaped currency (\\$5 stays text)", () => {
+		// With dollar math enabled, Markdown-escaped dollars remain literal.
 		const html = renderToStaticMarkup(<MessageResponse>{"It costs \\$5 and \\$10 more."}</MessageResponse>);
 		assert.ok(!html.includes("katex"), "escaped currency must not parse as math");
 		assert.match(html, /\$5/);
@@ -377,10 +373,10 @@ describe("math rendering (streamdown + KaTeX)", () => {
 
 	it("quiz cards render math in question, options, and explanation", () => {
 		const mathQuiz = {
-			question: "What is \\(\\frac{dy}{dx}\\) of \\(y = x^2\\)?",
-			options: [{ label: "\\(2x\\)" }, { label: "\\(x^2\\)" }, { label: "\\(x\\)" }],
-			correctAnswer: "\\(2x\\)",
-			explanation: "The power rule gives \\(\\frac{dy}{dx} = 2x\\).",
+			question: "What is $\\frac{dy}{dx}$ of $y = x^2$?",
+			options: [{ label: "$2x$" }, { label: "$x^2$" }, { label: "$x$" }],
+			correctAnswer: "$2x$",
+			explanation: "The power rule gives $\\frac{dy}{dx} = 2x$.",
 		};
 		const pendingHtml = renderDock({ toolName: "quiz", toolCallId: "m1", input: mathQuiz as never });
 		assert.ok(pendingHtml.includes("katex"), "pending dock: question/options math renders");
@@ -392,12 +388,12 @@ describe("math rendering (streamdown + KaTeX)", () => {
 			question: mathQuiz.question,
 			mode: "single-select",
 			options,
-			correctIndices: resolveCorrect(coerceCorrectAnswer(mathQuiz.correctAnswer), options).indices,
+			correctIndices: resolveCorrect(mathQuiz.correctAnswer, options).indices,
 			explanation: mathQuiz.explanation,
 			createdAt: new Date().toISOString(),
 		};
 		const answeredHtml = renderToStaticMarkup(
-			<AnsweredCard answer={buildAnswer(qd, { values: ["\\(2x\\)"] })} />,
+			<AnsweredCard answer={buildAnswer(qd, { values: ["$2x$"] })} />,
 		);
 		assert.ok(answeredHtml.includes("katex"), "answered card: option/explanation math renders");
 	});
@@ -690,5 +686,92 @@ describe("predict vs check rendering", () => {
 		const legacy = { ...buildAnswer(quizQD(), { values: ["Mercury"] }), note: "a 2026-09 answer" };
 		const legacyHtml = renderToStaticMarkup(<AnsweredCard answer={legacy} />);
 		assert.ok(legacyHtml.includes("a 2026-09 answer") || legacyHtml.includes('data-testid="your-thinking-trigger"'), "records from before the rename still render");
+	});
+});
+
+// ─── details + option descriptions render as markdown (owner, 2026-10-12) ──
+
+describe("question context renders as markdown everywhere (owner, 2026-10-12)", () => {
+	it("pending dock: ask option descriptions render LaTeX, not plain text", () => {
+		const html = renderDock({
+			toolName: "ask_user_question",
+			toolCallId: "d1",
+			input: {
+				question: "Which tool?",
+				options: [
+					{ label: "Pencil", description: "Wood around $\\text{Pb}_x\\text{C}$ graphite — the classic $x^2$ choice." },
+					{ label: "Pen" },
+				],
+			} as never,
+		});
+		// The description rides the same MessageResponse path as the label:
+		// KaTeX spans render inside the option subtext.
+		const katexCount = (html.match(/class="katex"/g) ?? []).length;
+		assert.ok(katexCount >= 2, `option description math renders (got ${katexCount})`);
+		assert.ok(!html.includes("$\\text"), "raw dollar delimiters do not leak as visible text");
+	});
+
+	it("settled ask card keeps the details line and option descriptions — retroactively from the persisted call", () => {
+		const input = {
+			question: "Which destination?",
+			details: "Inline $a^2+b^2=c^2$ and display:\n$$\nE = mc^2\n$$",
+			options: [
+				{ label: "Classical", description: "Entropy $H(X)$ first." },
+				{ label: "ML toolkit" },
+			],
+		};
+		const qd: QuestionData = {
+			id: "d2",
+			kind: "ask",
+			question: input.question,
+			mode: "single-select",
+			options: normalizeOptions(input.options),
+			createdAt: new Date().toISOString(),
+		};
+		const answer = buildAnswer(qd, { values: ["Classical"] });
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} input={input} />);
+		const katexCount = (html.match(/class="katex"/g) ?? []).length;
+		assert.ok(katexCount >= 3, `details (inline+display) + description math render (got ${katexCount})`);
+		assert.match(html, /Entropy/, "the option description text is present");
+		assert.ok(html.includes("katex-display"), "display math in the details line renders");
+	});
+
+	it("settled quiz card keeps the details line; quiz options stay description-less", () => {
+		const input = {
+			question: "Typical sets?",
+			details: "Recall $2^{nH(X)}$ — the asymptotic equipartition bound.",
+			options: [
+				{ label: "$\\approx 2^{nH(X)}$", value: "a" },
+				{ label: "$nH(X)$", value: "b" },
+			],
+			explanation: "AEP.",
+			correctAnswer: "a",
+		};
+		const options = normalizeOptions(input.options);
+		const qd: QuestionData = {
+			id: "d3",
+			kind: "quiz",
+			question: input.question,
+			mode: "single-select",
+			options,
+			correctIndices: resolveCorrect(input.correctAnswer, options).indices,
+			explanation: input.explanation,
+			createdAt: new Date().toISOString(),
+		};
+		const answer = buildAnswer(qd, { values: ["a"] });
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} input={input} />);
+		const katexCount = (html.match(/class="katex"/g) ?? []).length;
+		assert.ok(katexCount >= 3, `details + option-label math renders (got ${katexCount})`);
+		// Quiz options carry NO description field at all (owner ruling
+		// 2026-09-26) — the desc map is ask-only and stays empty here.
+		assert.ok(!html.includes("lh-prose block text-xs"), "no option-subtext slot on quiz rows");
+	});
+
+	it("legacy settled records (no input prop) render exactly as before", () => {
+		const answer = buildAnswer(askQD(), { values: ["Very"] });
+		const html = renderToStaticMarkup(<AnsweredCard answer={answer} />);
+		assert.match(html, /Very/, "the card renders");
+		assert.equal((html.match(/class="katex"/g) ?? []).length, 0, "no context slot appears from nothing");
+		assert.ok(!html.includes("lh-prose block text-xs"), "no description slot without an ask input");
 	});
 });

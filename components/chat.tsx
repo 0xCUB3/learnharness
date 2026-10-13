@@ -1487,7 +1487,9 @@ export function Chat({
 														// Pending/streaming questions live in the dock, not the
 														// transcript; answered ones render as graded records.
 														if (part.state === "output-available") {
-															return <AnsweredCard key={pi} answer={part.output as QuestionAnswerData} />;
+															return (
+																<AnsweredCard key={pi} answer={part.output as QuestionAnswerData} input={part.input} />
+															);
 														}
 														return null;
 													}

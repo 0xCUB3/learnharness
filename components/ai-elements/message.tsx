@@ -331,10 +331,10 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 // streamdown@2.5 expects shiki@4 types. Both work at runtime (each ships its
 // own highlighter); the cast papers over the .d.ts mismatch.
 //
-// singleDollarTextMath: false — a bare $ is ALWAYS literal currency (the
-// teacher-prompt contract). Inline math arrives as \(...\) and display math
-// as \[...\]; transformMathDelimiters (below) rewrites both to the
-// two-dollar forms remark-math still parses. $ can never start math.
+// Standard dollar authoring (owner, 2026-10-12): $...$ inline, $$ fenced
+// on separate lines for display. transformMathDelimiters stays as the
+// compatibility reader for old \(...\)/\[...\] content; its two-dollar
+// output remains valid alongside native single-dollar math.
 //
 // remark-breaks rides in the cjk plugin's remarkPluginsAfter slot (public
 // PluginConfig API): Streamdown's bare `remarkPlugins` PROP would REPLACE the
@@ -352,16 +352,14 @@ export const streamdownPlugins = {
     remarkPluginsAfter: [...cjk.remarkPluginsAfter, remarkBreaks],
   },
   code,
-  math: createMathPlugin({ singleDollarTextMath: false }),
+  math: createMathPlugin({ singleDollarTextMath: true }),
 } as unknown as PluginConfig;
 
 export const MessageResponse = memo(
   ({ className, children, ...props }: MessageResponseProps) => {
-    // Delimiter preprocessing is a single linear scan (no markdown parsing)
-    // — cheap enough for the render path of this children-memoized
-    // component. Unbalanced delimiters pass through untouched, so mid-stream
-    // chunks render literally until the closing delimiter arrives and the
-    // full text is re-transformed.
+    // Legacy backslash delimiters are converted in a single linear scan;
+    // native dollar math passes through to Streamdown unchanged. Incomplete
+    // legacy spans are left for a later render when their closer arrives.
     const content =
       typeof children === "string"
         ? transformMathDelimiters(children)

@@ -295,8 +295,12 @@ describe("practice prompt composition (own directory + the formatting appendix)"
 
 	it("the SHARED formatting guide composes (owner, 2026-10-04 late): LaTeX delimiters in every setting", () => {
 		const prompt = composeInstructions("practice");
-		// The delimiter law — practice must write \(...\)/\[...\] too.
-		assert.match(prompt, /NEVER `\$` or `\$\$`/);
+		// The standard delimiter law is shared by all three authoring agents.
+		for (const agent of ["practice", "prober", "teacher"] as const) {
+			const instructions = composeInstructions(agent);
+			assert.ok(instructions.includes("Inline `$f(x)$`, display `$$` fenced on its own lines."));
+			assert.ok(!instructions.includes("NEVER `$` or `$$`"));
+		}
 		assert.ok(prompt.indexOf("# The practice session") < prompt.indexOf("## Formatting"), "formatting rides as the appendix");
 	});
 

@@ -231,6 +231,8 @@ The teacher's context window and attention are precious — it has the lesson to
 
 ## 3. Presentation layer (noted, not yet scheduled)
 
+**Current math authoring contract (2026-10-12):** standard `$...$` inline and `$$...$$` on separate lines for display. This supersedes the currency-only dollar rule below; correctly formed backslash-delimited content remains readable. Existing JSON-escape restoration also recognizes the new delimiters, with its recovery rules unchanged. Additional examples, math validation, over-escaping repairs, and transport redesign are deferred. The original W3 decisions below are historical.
+
 - **LaTeX delimiters: switch to the ChatGPT convention.** Inline math `\(...\)`, display math `\[...\]`. The single `$` is retired from math duty and reserved for currency (ending the dollar-sign hazard for good, on both teacher output and eventually user input). Technical path: preprocess `\(...\)`/`\[...\]` → remark-math-compatible form (or a dedicated micromark extension), plus a system-prompt update. The old `$`/`$$` contract dies with this change.
 - **Line breaks bug:** lesson text loses single line breaks (markdown semantics collapse them — likely fix: `remark-breaks`, or prompt-level blank-line discipline; verify and fix).
 - **Lesson-content formatting:** richer, more structured presentation of teaching blocks (headings, callouts, worked examples) — direction noted, specifics TBD.

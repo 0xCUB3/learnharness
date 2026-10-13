@@ -36,6 +36,7 @@ import {
 	toClientQuestion,
 } from "../src/core/question-core.ts";
 import { toolQuestionKind } from "../src/core/pending.ts";
+import { parseQuizInput } from "../src/core/tool-parts.ts";
 
 // ─── the authoring contract (TypeBox schemas + execute-time refinements) ──
 // Schema-valid ⇔ gradeable: a quiz whose correctAnswer can't be resolved
@@ -249,20 +250,28 @@ describe("shuffleOptions", () => {
 // ─── coerceCorrectAnswer ────────────────────────────────────────────────────
 
 describe("coerceCorrectAnswer", () => {
+	const values = ["mercury", "a", "b"];
+
 	it("wraps a single string", () => {
-		assert.deepEqual(coerceCorrectAnswer("mercury"), ["mercury"]);
+		assert.deepEqual(coerceCorrectAnswer("mercury", values), ["mercury"]);
 	});
 
 	it("passes arrays through", () => {
-		assert.deepEqual(coerceCorrectAnswer(["a", "b"]), ["a", "b"]);
+		assert.deepEqual(coerceCorrectAnswer(["a", "b"], values), ["a", "b"]);
 	});
 
 	it("parses a JSON-stringified multi-select array", () => {
-		assert.deepEqual(coerceCorrectAnswer('["a", "b"]'), ["a", "b"]);
+		assert.deepEqual(coerceCorrectAnswer('["a", "b"]', values), ["a", "b"]);
 	});
 
 	it("leaves a non-JSON bracketed string alone", () => {
-		assert.deepEqual(coerceCorrectAnswer("[not json"), ["[not json"]);
+		assert.deepEqual(coerceCorrectAnswer("[not json", values), ["[not json"]);
+	});
+
+	it("preserves an exact key even when it looks like a JSON array", () => {
+		const key = '["a", "b"]';
+		assert.deepEqual(coerceCorrectAnswer(key, [...values, key]), [key]);
+		assert.deepEqual(coerceCorrectAnswer("[]", ["[]"]), ["[]"]);
 	});
 });
 
@@ -299,6 +308,91 @@ describe("resolveCorrect", () => {
 		const r = resolveCorrect(value, shuffled);
 		const displayedIndex = shuffled.findIndex((o) => o.value === value) + 1;
 		assert.deepEqual(r.indices, [displayedIndex]);
+	});
+});
+
+describe("exact answer membership precedes debris cleanup", () => {
+	it("the calculus label's final period survives boundary, display, shuffle, and grading", () => {
+		const correct = "$f$ need not be differentiable at $a$.";
+		const input = {
+			question: "All partial derivatives of $f$ exist at $a$. Must $f$ be differentiable there?",
+			options: [{ label: "$f$ is differentiable at $a$." }, { label: correct }],
+			explanation: "Existing partial derivatives need not give a linear approximation.",
+			correctAnswer: correct,
+		};
+		const before = JSON.stringify(input);
+		assert.ok(boundaryOk(probeQuizInputSchema, input, quizInputProblems(input)));
+		const parsed = parseQuizInput(input);
+		assert.ok(parsed, "the accepted raw call must also render");
+		assert.equal(parsed.correctAnswer, correct);
+		const options = normalizeOptions(parsed.options).reverse();
+		const resolved = resolveCorrect(parsed.correctAnswer, options);
+		assert.deepEqual(resolved, { indices: [1] });
+		const qd: QuestionData = {
+			id: "calculus-period",
+			kind: "quiz",
+			question: parsed.question,
+			mode: "single-select",
+			options,
+			correctIndices: resolved.indices,
+			explanation: parsed.explanation,
+			createdAt: "2026-10-12T00:00:00Z",
+		};
+		assert.equal(buildAnswer(qd, { values: [correct] }).correct, true);
+		assert.equal(buildAnswer(qd, { values: [input.options[0]!.label] }).correct, false);
+		assert.equal(JSON.stringify(input), before, "raw arguments are never rewritten");
+	});
+
+	it("retains punctuation, quotes, colons, and backticks in exact labels and explicit keys", () => {
+		for (const key of ["value.", "value:", '"value"', "'value'", "`value`", ":value"]) {
+			for (const option of [{ label: key }, { label: "A claim", value: key }]) {
+				const input = {
+					question: "Which claim?",
+					options: [option, { label: "Other", value: "other" }],
+					explanation: "The first claim follows.",
+					correctAnswer: key,
+				};
+				assert.deepEqual(quizInputProblems(input), [], key);
+				assert.ok(parseQuizInput(input), key);
+				assert.deepEqual(resolveCorrect(key, normalizeOptions(input.options)), { indices: [1] }, key);
+			}
+		}
+	});
+
+	it("never redirects an exact punctuated key to a different debris-free option", () => {
+		const keys = ["value", "value.", '"value"', "`value`", ":value"];
+		const options = normalizeOptions(keys.map((value, i) => ({ label: `Claim ${i}`, value })));
+		for (const [i, key] of keys.entries()) {
+			assert.deepEqual(resolveCorrect(key, options), { indices: [i + 1] }, key);
+		}
+		assert.deepEqual(options.map((o) => o.value), keys, "canonical keys stay distinct and untouched");
+	});
+
+	it("preserves exact multi-select entries while still healing non-matching copy debris", () => {
+		const input = {
+			question: "Which claims?",
+			options: [{ label: "First." }, { label: "Second", value: "second" }],
+			explanation: "Both claims follow.",
+			multiSelect: true,
+		};
+		for (const correctAnswer of [["First.", ': "second"'], JSON.stringify(["First.", ': "second"'])]) {
+			assert.deepEqual(quizInputProblems({ ...input, correctAnswer }), []);
+			assert.ok(parseQuizInput({ ...input, correctAnswer }));
+			assert.deepEqual(resolveCorrect(correctAnswer, normalizeOptions(input.options)), { indices: [1, 2] });
+		}
+	});
+
+	it("retains an exact JSON-looking option key across validation and grading", () => {
+		const key = '["a", "b"]';
+		const input = {
+			question: "Which literal?",
+			options: [{ label: key }, { label: "Other" }],
+			explanation: "The first literal is intended.",
+			correctAnswer: key,
+		};
+		assert.deepEqual(quizInputProblems(input), []);
+		assert.ok(parseQuizInput(input));
+		assert.deepEqual(resolveCorrect(key, normalizeOptions(input.options)), { indices: [1] });
 	});
 });
 
@@ -692,7 +786,7 @@ describe("the quiz role field (predict | check)", () => {
 			question: valid.question,
 			mode: "single-select",
 			options,
-			correctIndices: resolveCorrect(coerceCorrectAnswer(valid.correctAnswer), options).indices,
+			correctIndices: resolveCorrect(valid.correctAnswer, options).indices,
 			explanation: valid.explanation,
 			createdAt: new Date().toISOString(),
 		};

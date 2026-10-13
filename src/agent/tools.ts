@@ -106,12 +106,42 @@ export const askUserQuestionTool: AgentTool<typeof askInputSchema> = {
 // quiz variants): duplicates stay honest by sharing SCHEMA ATOMS
 // (question-core) + PROMPT CHUNKS, and each tool declares only its
 // mechanical delta.
+//
+// ONE sanctioned exception (owner, 2026-10-12): each quiz tool's
+// description ends with a COMPLETE example call — compact, phase-correct
+// (probe carries no phase metadata; quiz leads with type+nodeId), doubling
+// as the JSON-escaping exemplar (LaTeX backslashes double inside JSON
+// strings). Placement ruling: WITH THE TOOL, beside its exact schema — a
+// shared-prompt example is phase-ambiguous (the models fumbled exactly
+// these metadata fields), per-agent prompt copies would drift. Serialized
+// from ONE canonical body so the variants cannot disagree; craft doctrine
+// stays in the prompts.
+
+/** The canonical example body (owner-approved content, 2026-10-12): a
+ *  compact applied question whose fields exercise the escaping hazards —
+ *  braced commands (\frac, \cos), inline and display math, newlines —
+ *  while doubling as an exemplar of good craft: uniform options, stable
+ *  values, reasoning (explanation) committed before correctAnswer.
+ *  JSON.stringify renders the wire text, so the escaping the model sees
+ *  is by construction the correct one. Exported for the description pins. */
+export const quizExampleBody = {
+	question: "A signal is $y=\\sin(2x)$ and $\\frac{dx}{dt}=3$. What is $\\frac{dy}{dt}$?",
+	options: [
+		{ label: "$6\\cos(2x)$", value: "a" },
+		{ label: "$2\\cos(2x)$", value: "b" },
+		{ label: "$3\\cos(2x)$", value: "c" },
+	],
+	explanation:
+		"The phase changes twice as fast as $x$; multiply by the sine's slope:\n$$\n\\frac{dy}{dt}=\\cos(2x)\\cdot2\\cdot3=6\\cos(2x)\n$$",
+	correctAnswer: "a",
+};
 
 /** The quiz mechanics every variant shares; `delta` appends the variant's
  *  own fields (its NAME among them — the probe-phase tools self-reference
- *  as probe/recall, owner 2026-10-09). All mechanics, zero doctrine. */
+ *  as probe/recall, owner 2026-10-09). All mechanics, zero doctrine — plus
+ *  the one sanctioned example (above). */
 function quizDescription(delta: { name: "quiz" | "probe"; nodeId: boolean; types: boolean }): string {
-	return (
+	const base =
 		"Ask the learner a GRADED question with a known correct answer, then instantly grade and give feedback. " +
 		"Unlike ask_user_question (which collects preferences/decisions with no right answer), " +
 		delta.name +
@@ -129,7 +159,17 @@ function quizDescription(delta: { name: "quiz" | "probe"; nodeId: boolean; types
 			: "") +
 		"ONE question per turn: call a single " +
 		delta.name +
-		", then end your turn — his answer determines the next."
+		", then end your turn — his answer determines the next.";
+	// Phase-correct shape: the teach example LEADS with the required pair
+	// (type, nodeId — the 2026-10-09 drop-order ruling); the probe example
+	// carries no phase metadata at all, exactly like the probe schema.
+	const example = delta.nodeId ? { type: "check" as const, nodeId: "chain-rule", ...quizExampleBody } : quizExampleBody;
+	return (
+		base +
+		"\nExample arguments — copy the escaping exactly: inside JSON strings a LaTeX backslash is \\\\ and a newline is \\n.\n```json\n" +
+		JSON.stringify(example, null, 2) +
+		"\n```" +
+		(delta.nodeId ? " The example's nodeId is illustrative — copy an exact id from this session's plan_init." : "")
 	);
 }
 
