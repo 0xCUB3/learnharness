@@ -53,22 +53,25 @@ export function DeleteNodeBody({
 			onClick={(e) => e.stopPropagation()}
 			className="w-[32rem] max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-5 shadow-xl"
 		>
-			<h2 className="font-title text-2xl tracking-tight text-destructive">
+			<h2 className="text-sm font-semibold text-destructive">
 				{nodes.length === 1 ? "Delete node?" : `Delete ${nodes.length} nodes?`}
 			</h2>
 			{/* The node name(s) below the title in JetBrains Mono (owner,
 			    2026-09-24): the name is the payload — mono suits it, and
-			    NO code-block chrome (the font already says code), sized up
-			    to text-lg so it reads. Same shape as the session dialog.
+			    NO code-block chrome (the font already says code). Owner,
+			    2026-10-13 polish: title loses the serif display look for the
+			    abort-turn look (text-sm font-semibold mono, red kept), and
+			    the names drop the sized-up text-lg for normal text-sm —
+			    still white, still mono. Same shape as the session dialog.
 			    A multi-selection lists its names (capped at 8 + "and K
 			    more" — the count in the title carries the full number). */}
 			<div className="mt-1.5">
 				{nodes.length === 1 ? (
-					<code data-testid="node-name-code" className="font-mono text-lg text-foreground">
+					<code data-testid="node-name-code" className="font-mono text-sm text-foreground">
 						{nodes[0]?.name}
 					</code>
 				) : (
-					<code data-testid="node-names-code" className="font-mono text-lg text-foreground">
+					<code data-testid="node-names-code" className="font-mono text-sm text-foreground">
 						{nodes.slice(0, 8).map((n) => n.name).join(", ")}
 						{nodes.length > 8 ? `, and ${nodes.length - 8} more` : ""}
 					</code>

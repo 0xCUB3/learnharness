@@ -55,13 +55,17 @@ describe("DeleteNodeBody — the minimal screen (owner, 2026-09-30)", () => {
 	it("single: 'Delete node?' title, the name alone in mono, the one permanence line", () => {
 		const html = bodyAt([{ id: "kepler", name: "Kepler's three laws" }]);
 		assert.match(html, /data-testid="delete-node-dialog"/);
-		// (owner, 2026-09-24) the serif title in destructive red; the
-		// NAME rides below in JetBrains Mono, text-lg, NO code-block
-		// chrome — same shape as the session dialog.
+		// (owner, 2026-10-13 polish) the title in the abort-turn look —
+		// text-sm font-semibold (JetBrains Mono via the UI default), red
+		// kept, NO font-title serif; the NAME rides below in JetBrains
+		// Mono at normal text-sm size, NO code-block chrome — same shape
+		// as the session dialog.
 		assert.match(html, /Delete node\?/);
-		assert.match(html, /text-destructive/);
+		const title = html.match(/<h2[^>]*>/)?.[0] ?? "";
+		assert.match(title, /text-sm font-semibold text-destructive/);
+		assert.ok(!title.includes("font-title"), "no serif display title (owner, 2026-10-13)");
 		const name = html.match(/data-testid="node-name-code"[^>]*>/)?.[0] ?? "";
-		assert.match(name, /font-mono text-lg/);
+		assert.match(name, /font-mono text-sm/);
 		assert.ok(!name.includes("bg-muted"), "no code-block chrome — the font already says code");
 		assert.match(html, /data-testid="node-name-code"[^>]*>Kepler&#x27;s three laws</);
 		assert.match(html, /data-testid="node-permanence-line"[^>]*>This permanently deletes the node — this cannot be undone\./);

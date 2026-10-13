@@ -59,7 +59,7 @@ describe("DeleteSessionDialog — the node-dialog shape (owner flow rework 2026-
 		assert.equal(html, "");
 	});
 
-	it("red serif title 'Delete session?', the session name below in mono, sized up, no code-block chrome", () => {
+	it("red mono title 'Delete session?' (abort-turn look), the session name below in mono at normal size, no code-block chrome", () => {
 		const html = renderToStaticMarkup(
 			<DeleteSessionBody
 				chat={{ id: "c1", title: "Orbital mechanics" }}
@@ -72,10 +72,12 @@ describe("DeleteSessionDialog — the node-dialog shape (owner flow rework 2026-
 			/>,
 		);
 		assert.match(html, /Delete session\?/);
-		assert.match(html, /text-destructive[^"]*">Delete session\?</); // the red title
-		// the name: mono, text-lg (sized up), NO bg-muted code-block chrome
+		const title = html.match(/<h2[^>]*>/)?.[0] ?? "";
+		assert.match(title, /text-sm font-semibold text-destructive/); // red, abort-turn look (owner, 2026-10-13)
+		assert.ok(!title.includes("font-title"), "no serif display title");
+		// the name: mono, normal text-sm size (owner, 2026-10-13), NO bg-muted code-block chrome
 		const name = html.match(/data-testid="session-name-code"[^>]*>/)?.[0] ?? "";
-		assert.match(name, /font-mono text-lg/);
+		assert.match(name, /font-mono text-sm/);
 		assert.ok(!name.includes("bg-muted"), "no code-block chrome");
 		assert.match(html, /data-testid="session-name-code"[^>]*>Orbital mechanics</);
 	});

@@ -20,8 +20,11 @@ export const TRACES_COPY = {
  * destructive-confirmation surface, portaled z-50 like the setup dialog,
  * now in the node dialog's shape (the two must read as one design):
  *
- *   - red serif title "Delete session?", the session name below it in
- *     JetBrains Mono, sized up, no code-block chrome;
+ *   - red title "Delete session?" in the abort-turn look (owner, 2026-10-13
+ *     polish: text-sm font-semibold JetBrains Mono via the UI default —
+ *     the serif display title is gone), the session name below it in
+ *     JetBrains Mono at normal text-sm size (was sized-up text-lg), no
+ *     code-block chrome;
  *   - ONE unchecked-by-default checkbox "Also remove its graph traces"
  *     (unchecked = preserve-graph: the session record, its jobs, and its
  *     extraction bookkeeping die; the graph keeps every contribution.
@@ -159,12 +162,14 @@ export function DeleteSessionBody({
 			onClick={(e) => e.stopPropagation()}
 			className="w-[32rem] max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-5 shadow-xl"
 		>
-			<h2 className="font-title text-2xl tracking-tight text-destructive">Delete session?</h2>
+			<h2 className="text-sm font-semibold text-destructive">Delete session?</h2>
 			{/* The session name below the title in JetBrains Mono (owner,
 			    2026-09-24): no code-block chrome — the font already says
-			    code — sized up to text-lg. Same shape as the node dialog. */}
+			    code. Owner, 2026-10-13 polish: normal text-sm size (was
+			    sized-up text-lg), still white. Same shape as the node
+			    dialog. */}
 			<div className="mt-1.5">
-				<code data-testid="session-name-code" className="font-mono text-lg text-foreground">
+				<code data-testid="session-name-code" className="font-mono text-sm text-foreground">
 					{chat.title}
 				</code>
 			</div>
