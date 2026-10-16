@@ -74,3 +74,5 @@ Questions, bug reports, and feature requests: [GitHub Issues](https://github.com
 ## License
 
 [AGPL-3.0](LICENSE)
+
+The app is free and open forever. If we ever charge for anything, it will be for convenience — managed keys, hosting — never for features you can run locally.
