@@ -15,7 +15,7 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { MermaidError } from "../components/mermaid-error.tsx";
-import { transformMathDelimiters } from "../src/core/math-delims.ts";
+import { transformMathDelimiters, healOverescapedCommands } from "../src/core/math-delims.ts";
 
 /** Render through MessageResponse in static mode (no streaming/remend artifacts). */
 function render(md: string): string {
@@ -345,3 +345,102 @@ describe("escaped dollars inside math — rendering", () => {
 		assert.ok(html.includes("$x = \\$5$"), "the literal source stays visible");
 	});
 });
+
+describe("over-escaped command heal — doubled backslashes in tool args (owner ruling 2026-10-15)", () => {
+	// Field evidence: xiaomi/mimo-v2.6-pro and deepseek-v4.1-flash
+	// stochastically DOUBLE LaTeX command backslashes inside JSON tool
+	// arguments — sometimes per-field within one call (the gradient-descent
+	// session's first probe: question doubled, explanation+options clean).
+	// KaTeX reads `\\` as a row break and renders the command name as plain
+	// letters — "renders as LaTeX but reads the word nabla". The heal lives
+	// at the tool-parts argument seam (restoreMathEscapesDeep); these are its
+	// pure units. TS literals: 4 backslashes = 2 real, 6 = 3 real.
+
+	/** The gradient-descent session's probe question (chat_mv7r02og, msg 3)
+	 *  in its CLEAN single-backslash form. */
+	const GD_QUESTION =
+		"Let $f : \\mathbb{R}^n \\to \\mathbb{R}$ be differentiable at $x$, with $\\nabla f(x) \\neq 0$. The directional derivative along a unit direction $u$ is $D_u f(x) = \\nabla f(x)^\\top u$. Among all unit directions $\\|u\\|_2 = 1$, which one makes $D_u f(x) **most negative** (steepest descent)?";
+
+	it("heals a doubled letter command inside $…$", () => {
+		assert.equal(healOverescapedCommands("$\\\\nabla f$"), "$\\nabla f$");
+	});
+
+	it("heals a quadrupled letter command (the agent's over-correction)", () => {
+		assert.equal(healOverescapedCommands("$\\\\\\\\mathbb{R}^n$"), "$\\mathbb{R}^n$");
+	});
+
+	it("heals inside multi-line $$…$$ display spans", () => {
+		assert.equal(
+			healOverescapedCommands("$$\n\\\\nabla f(x)\n$$"),
+			"$$\n\\nabla f(x)\n$$",
+		);
+	});
+
+	it("heals legacy \\(…\\) spans too", () => {
+		assert.equal(healOverescapedCommands("\\(\\\\nabla\\)"), "\\(\\nabla\\)");
+	});
+
+	it("heals the punctuation commands: \\| \\, \\; \\: \\!", () => {
+		assert.equal(healOverescapedCommands("$\\\\|u\\\\|_2$"), "$\\|u\\|_2$");
+		assert.equal(healOverescapedCommands("$a\\\\,b$"), "$a\\,b$");
+		assert.equal(healOverescapedCommands("$a\\\\;b$"), "$a\\;b$");
+		assert.equal(healOverescapedCommands("$a\\\\:b$"), "$a\\:b$");
+		assert.equal(healOverescapedCommands("$a\\\\!b$"), "$a\\!b$");
+	});
+
+	it("KEEPS legitimate \\ row breaks — space, newline, &, [, digits follow", () => {
+		const matrix = "\\begin{pmatrix} 1 \\\\ 2 \\\\\\ 3\\end{pmatrix}"; // \\ then \\\\
+		assert.equal(healOverescapedCommands(matrix), matrix);
+		const aligned = "f(x) \\\\& g(x) \\\\[6pt] h(x)";
+		assert.equal(healOverescapedCommands(aligned), aligned);
+	});
+
+	it("KEEPS odd runs — a row break plus a real command cell", () => {
+		// 3 real backslashes then a letter: \\ row break + \\nabla command.
+		const cell = "$a \\\\\\nabla b$";
+		assert.equal(healOverescapedCommands(cell), cell);
+	});
+
+	it("touches nothing outside math spans (prose, code spans, fences)", () => {
+		assert.equal(healOverescapedCommands("path C:\\\\Users\\\\amos"), "path C:\\\\Users\\\\amos");
+		assert.equal(healOverescapedCommands("`$\\\\nabla$` in code"), "`$\\\\nabla$` in code");
+		assert.equal(
+			healOverescapedCommands("```\n$\\\\nabla$\n```"),
+			"```\n$\\\\nabla$\n```",
+		);
+	});
+
+	it("unbalanced spans pass through untouched (mid-stream safety)", () => {
+		assert.equal(healOverescapedCommands("$\\\\nabla"), "$\\\\nabla");
+	});
+
+	it("the raw doubled gradient-descent question renders the word-signature (the bug this heal exists for)", () => {
+		// The real session record (chat_mv7r02og, msg 3), expressed as the
+		// clean form with every backslash doubled — exactly what mimo emitted.
+		const raw = GD_QUESTION.replace(/\\/g, "\\\\");
+		const html = render(raw);
+		assert.ok(!html.includes("∇"), "doubled form does not produce the glyph");
+		assert.ok(html.includes("katex-error"), "doubled form errors in KaTeX");
+	});
+
+	it("the healed question renders ∇ and ⊤ with zero KaTeX errors", () => {
+		const html = render(healOverescapedCommands(GD_QUESTION.replace(/\\/g, "\\\\")));
+		assert.ok(html.includes("∇"), "nabla glyph renders");
+		assert.ok(html.includes("mathbb"), "mathbb R renders (double-struck class)");
+		assert.ok(html.includes("⊤"), "top renders");
+		assert.ok(!html.includes("katex-error"), "no KaTeX errors");
+	});
+
+	it("the healed inference-runtime question renders ∈ and ×", () => {
+		// The real session record (chat_mv8ybpvs, msg 7) — mimo doubled the
+		// whole field; clean form with every backslash doubled.
+		const ir =
+			"Let $A \\in \\mathbb{R}^{m \\times k}$ and $B \\in \\mathbb{R}^{k \\times n}$, and let $C = AB$ be their matrix product.";
+		const html = render(healOverescapedCommands(ir.replace(/\\/g, "\\\\")));
+		assert.ok(html.includes("∈"), "in renders");
+		assert.ok(html.includes("mathbb"), "mathbb renders (double-struck class)");
+		assert.ok(html.includes("×"), "times renders");
+		assert.ok(!html.includes("katex-error"), "no KaTeX errors");
+	});
+});
+

@@ -400,3 +400,81 @@ describe("parseExplainInput: the dock's display seam for explain calls", () => {
 		assert.equal(parseExplainInput({ question: "q", explanation: "e", correctAnswer: 42 })?.correctAnswer, "42");
 	});
 });
+
+describe("over-escaped command heal at the parse seam (owner ruling 2026-10-15)", () => {
+	// xiaomi/mimo-v2.6-pro and deepseek-v4.1-flash stochastically DOUBLE
+	// LaTeX command backslashes inside JSON tool arguments — per-call and
+	// per-field (gradient-descent msg 3: question doubled, explanation and
+	// options in the SAME call clean). restoreMathEscapesDeep now rides
+	// healOverescapedCommands after the debris restore, so doubled spans
+	// heal at every display parse: live dock, settled cards, old records.
+	const CLEAN =
+		"Let $f : \\mathbb{R}^n \\to \\mathbb{R}$ be differentiable at $x$, with $\\nabla f(x) \\neq 0$. Among all unit directions $\\|u\\|_2 = 1$, which makes $D_u f(x)$ most negative?";
+	const DOUBLE = (s: string): string => s.replace(/\\/g, "\\\\");
+	const BASE = {
+		options: [
+			{ label: "$u^\\star = -\\nabla f(x)$", value: "neg" },
+			{ label: "$u^\\star = \\nabla f(x)$", value: "pos" },
+		],
+		correctAnswer: "neg",
+		explanation: "By Cauchy\u2013Schwarz: $$u^\\star = -\\frac{\\nabla f(x)}{\\|\\nabla f(x)\\|_2}$$",
+	};
+
+	it("parseQuizInput heals a doubled question field (the gradient-descent msg-3 shape)", () => {
+		const parsed = parseQuizInput({ ...BASE, question: DOUBLE(CLEAN) });
+		assert.ok(parsed, "parses");
+		assert.equal(parsed.question, CLEAN);
+		// The CLEAN sibling fields of the same call stay byte-identical.
+		assert.equal(parsed.options[0]!.label, BASE.options[0]!.label);
+		assert.equal(parsed.explanation, BASE.explanation);
+	});
+
+	it("parseQuizInput heals a quadrupled field (the agent's over-correction, msg 6)", () => {
+		const parsed = parseQuizInput({ ...BASE, question: DOUBLE(DOUBLE(CLEAN)) });
+		assert.ok(parsed, "parses");
+		assert.equal(parsed.question, CLEAN);
+	});
+
+	it("doubled option labels and explanations heal too (the inference-runtime msg-7 shape)", () => {
+		const parsed = parseQuizInput({
+			question: "Let $A \\in \\mathbb{R}^{m \\times k}$ and $C = AB$.",
+			options: [
+				{ label: DOUBLE("$mkn$"), value: "mkn" },
+				{ label: DOUBLE("$2mkn$"), value: "2" },
+			],
+			correctAnswer: "mkn",
+			explanation: DOUBLE("$$c_{ij} = \\sum_{\\ell=1}^{k} a_{i\\ell}\\, b_{\\ell j}$$"),
+		});
+		assert.ok(parsed, "parses");
+		assert.equal(parsed.options[0]!.label, "$mkn$");
+		assert.equal(parsed.options[1]!.label, "$2mkn$");
+		assert.equal(parsed.explanation, "$$c_{ij} = \\sum_{\\ell=1}^{k} a_{i\\ell}\\, b_{\\ell j}$$");
+	});
+
+	it("parseAskInput heals doubled ask-option descriptions the same way", () => {
+		const parsed = parseAskInput({
+			question: "Depth?",
+			options: [
+				{ label: "Rigorous", description: DOUBLE("why $-\\nabla f$ is steepest descent") },
+				{ label: "Intuition" },
+			],
+		});
+		assert.ok(parsed, "parses");
+		assert.equal(parsed.options![0]!.description, "why $-\\nabla f$ is steepest descent");
+	});
+
+	it("clean records pass through byte-identical (no over-heal)", () => {
+		const parsed = parseQuizInput({ ...BASE, question: CLEAN });
+		assert.ok(parsed, "parses");
+		assert.equal(parsed.question, CLEAN);
+		assert.equal(parsed.explanation, BASE.explanation);
+	});
+
+	it("legitimate row breaks inside matrices survive the seam", () => {
+		const matrix =
+			"Which matrix matches? $$\\begin{pmatrix} 1 \\ 2 \\\\ 3 \\ 4\\end{pmatrix}$$";
+		const parsed = parseQuizInput({ ...BASE, question: matrix });
+		assert.ok(parsed, "parses");
+		assert.equal(parsed.question, matrix);
+	});
+});

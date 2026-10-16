@@ -468,3 +468,100 @@ function restoreDollarMathEscapes(text: string): string {
 	}
 	return out.join("");
 }
+
+/**
+ * Over-escaped command heal (owner ruling 2026-10-15) — the doubled-
+ * backslash fix.
+ *
+ * Some models stochastically emit DOUBLED backslashes inside JSON tool-call
+ * arguments: the saved record holds `\\nabla` (two real backslashes) where
+ * `\nabla` was meant. KaTeX reads the `\\` as a row break and then renders
+ * the command name as plain letters — the learner sees "the word nabla, not
+ * the symbol". Field evidence (2026-10-15, real data): xiaomi/mimo-v2.6-pro
+ * doubled per-call, per-field (one probe's question doubled while its
+ * explanation and options in the SAME call stayed clean — authoring, not
+ * transport), and deepseek-v4.1-flash once; quadrupling appeared when the
+ * in-session agent "compensated" for its own doubled first attempt.
+ *
+ * THE RULE. Inside a balanced math span ONLY (legacy `\(…\)`/`\[…\]` and
+ * dollar `$…$`/`$$…$$`, code spans and fences excluded), an EVEN-length
+ * backslash run (2, 4, …) immediately followed by a command start — a letter
+ * (any command name; bare letters after a row break are never authored
+ * content) or a punctuation command (`,` `;` `:` `!` `|` — thin spaces,
+ * norm bars) — collapses to a single backslash. Even runs before anything
+ * else (space, newline, `&`, `[`, `$`, digits) are legitimate row breaks and
+ * stay; ODD runs (3, 5, …) are row break(s) plus a real command with its own
+ * backslash — e.g. matrix cells written `a \\\nabla` — and stay untouched,
+ * so matrix content cannot be corrupted. Outside spans nothing is touched:
+ * doubled backslashes in prose or code are not ours to judge. Unbalanced
+ * spans pass through, exactly like the debris passes.
+ */
+const COMMAND_START_CLASS = "[A-Za-z,;:!|]";
+
+/** Collapse even backslash runs before a command start; keep odd runs. */
+function halveOverescapedCommandRuns(inner: string): string {
+	return inner.replace(
+		new RegExp("(\\\\+)(?=" + COMMAND_START_CLASS + ")", "g"),
+		(run: string) => (run.length % 2 === 0 ? "\\" : run),
+	);
+}
+
+export function healOverescapedCommands(text: string): string {
+	if (!text.includes("\\\\")) return text;
+	const out: string[] = [];
+	let i = 0;
+	while (i < text.length) {
+		if (atLineStart(text, i) && FENCE_OPEN_RE.test(text.slice(i))) {
+			i = copyFencedBlock(text, i, out);
+			continue;
+		}
+		if (text[i] === "`") {
+			const run = backtickRun(text, i);
+			let j = i + run;
+			while (j < text.length) {
+				const nextRun = backtickRun(text, j);
+				if (nextRun === run) break;
+				j += Math.max(nextRun, 1);
+			}
+			const after = j < text.length ? j + run : i + run;
+			out.push(text.slice(i, after));
+			i = after;
+			continue;
+		}
+		if (text[i] === "\\" && !isEscaped(text, i)) {
+			const next = text[i + 1];
+			if (next === "(" || next === "[") {
+				const isDisplay = next === "[";
+				const open = isDisplay ? DISPLAY_OPEN : INLINE_OPEN;
+				const close = isDisplay ? DISPLAY_CLOSE : INLINE_CLOSE;
+				const closeAt = findClose(text, i + open.length, close);
+				if (closeAt !== -1) {
+					const inner = text.slice(i + open.length, closeAt);
+					out.push(open + halveOverescapedCommandRuns(inner) + close);
+					i = closeAt + close.length;
+					continue;
+				}
+			}
+		}
+		if (text[i] === "$" && !isEscaped(text, i)) {
+			const size = dollarRun(text, i);
+			const isDisplay = dollarIsDisplay(text, i, size);
+			const close = findDollarClose(text, i + size, size, isDisplay);
+			if (close) {
+				out.push(
+					text.slice(i, i + size) +
+					halveOverescapedCommandRuns(text.slice(i + size, close.at)) +
+					text.slice(close.at, close.after),
+			);
+				i = close.after;
+				continue;
+			}
+			out.push(text.slice(i, i + size));
+			i += size;
+			continue;
+		}
+		out.push(text[i]!);
+		i += 1;
+	}
+	return out.join("");
+}
