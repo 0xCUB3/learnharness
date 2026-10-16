@@ -11,7 +11,7 @@ import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
-import { DumbbellIcon } from "lucide-react";
+import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
 import type { ChatSettings, GraphSnapshot } from "@/src/core";
 
 /** The draft's pick set (owner round 10): the SAME shape the home pick
@@ -97,8 +97,8 @@ export function DraftShell({
 	 *  NewSession, which owns the configured state and the SetupDialog. */
 	setupCta?: ReactNode;
 	/** THE PICK BAR (owner round 10): the SAME pill the home screen
-	 *  carries above its composer — dashed "Pick propositions from the
-	 *  map" when empty, count + Clear when picked. The draft screen has
+	 *  carries above its composer — dashed "Pick nodes" when empty,
+	 *  count + Clear when picked. The draft screen has
 	 *  no graph behind it, so the picker opens the standalone chain-table
 	 *  overlay over fetched snapshot data (owned by NewSession). */
 	picks?: DraftPick[];
@@ -175,7 +175,7 @@ export function DraftShell({
 									title={mode === "practice" ? "New practice session" : "New session"}
 									description={
 										mode === "practice"
-											? "Describe what to practice — propositions, a chain, or a problem you brought."
+											? "Pick nodes from your knowledge graph, describe what you want to practice, or bring your own problem."
 											: "The teacher will open by probing what you already know."
 									}
 								/>
@@ -184,40 +184,12 @@ export function DraftShell({
 						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 						<div className="bg-background pb-4">
 							<div className={DOCK}>
-								{setupCta}
-								{(picks.length > 0 || mode === "practice") && (
-									/* pointer-events-auto: the sticky wrapper is a none-mask
-									 * (953b22b) — every interactive row below it must re-enable
-									 * itself, like the composer box and the CTA row do. */
-									<div className="pointer-events-auto mb-2 flex items-center justify-start gap-1.5">
-										<button
-											type="button"
-											data-testid="practice-props-chip"
-											onClick={onOpenPicker}
-											className={
-												"flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 font-ui text-xs transition-colors " +
-												(picks.length > 0
-													? "border-border bg-card text-foreground hover:bg-accent"
-													: "border-dashed border-border/80 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground")
-											}
-										>
-											<DumbbellIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
-											{picks.length > 0
-												? `${picks.length} ${picks.length === 1 ? "proposition" : "propositions"} selected`
-												: "Pick propositions from the map"}
-										</button>
-										{picks.length > 0 && (
-											<button
-												type="button"
-												data-testid="practice-props-clear"
-												onClick={onClearPicks}
-												className="cursor-pointer rounded-full px-2 py-1 font-ui text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-											>
-												Clear
-											</button>
-										)}
-									</div>
-								)}
+								<ComposerActions
+									picker={(picks.length > 0 || mode === "practice") && (
+										<NodePickerControl count={picks.length} onOpen={onOpenPicker} onClear={onClearPicks} />
+									)}
+									setup={setupCta}
+								/>
 								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 									<Composer
 										busy={busy}
@@ -376,10 +348,9 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 				}
 				setupCta={
 					zeroKeys ? (
-						<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
+						<ZeroKeysPill inline onOpen={() => setSetupOpen(true)} />
 					) : (
 						!configured && (
-						<div className="pointer-events-auto mb-2 flex justify-center">
 							<button
 								type="button"
 								data-testid="setup-cta"
@@ -388,7 +359,6 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 							>
 								Set up your models
 							</button>
-						</div>
 						)
 					)
 				}

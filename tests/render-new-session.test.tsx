@@ -122,7 +122,7 @@ describe("the practice draft (?mode=practice, 2026-10-04)", () => {
 			/>,
 		);
 		assert.match(html, /New practice session/);
-		assert.match(html, /Describe what to practice/);
+		assert.ok(html.includes("Pick nodes from your knowledge graph, describe what you want to practice, or bring your own problem."));
 		assert.match(html, /What do you want to practice\?/);
 	});
 
@@ -136,7 +136,7 @@ describe("the practice draft (?mode=practice, 2026-10-04)", () => {
 				mode="practice"
 			/>,
 		);
-		assert.match(html, /Pick propositions from the map/);
+		assert.match(html, />Pick nodes<\/button>/);
 		// picked: count + Clear, the home register verbatim
 		const picked = renderToStaticMarkup(
 			<DraftShell
@@ -148,13 +148,13 @@ describe("the practice draft (?mode=practice, 2026-10-04)", () => {
 				picks={[{ id: "n_1", name: "Parity", statement: "Odd + odd = even." }]}
 			/>,
 		);
-		assert.match(picked, /1 proposition selected/);
+		assert.match(picked, /1 node selected/);
 		assert.match(picked, /Clear/);
 		// teach mode with nothing picked renders nothing (home's law)
 		const teach = renderToStaticMarkup(
 			<DraftShell busy={false} text="" onChange={() => {}} onSend={() => {}} mode="teach" />,
 		);
-		assert.ok(!teach.includes("Pick propositions from the map"));
+		assert.ok(!teach.includes('data-testid="practice-props-chip"'));
 	});
 
 	it("startDraftSession carries the picks as graphContext (the home practice contract)", async () => {

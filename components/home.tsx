@@ -6,6 +6,7 @@ import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { MinimalHome } from "@/components/minimal-home";
 import { SetupDialog } from "@/components/setup-dialog";
+import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { useFieldCycle } from "@/components/field-cycle";
@@ -217,43 +218,18 @@ export function Home({
 					    send consumes it). Practice mode with nothing picked
 					    shows the pick HINT so the affordance is discoverable;
 					    teaching mode with nothing picked renders nothing. */}
-					{(practiceProps.length > 0 || mode === "practice") && (
-						<div className="mb-2 flex items-center justify-start gap-1.5">
-							<button
-								type="button"
-								data-testid="practice-props-chip"
-								onClick={() => setChainSelectOpen(true)}
-								className={
-									"flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 font-ui text-xs transition-colors " +
-									(practiceProps.length > 0
-										? "border-border bg-card text-foreground hover:bg-accent"
-										: "border-dashed border-border/80 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground")
-								}
-							>
-								<DumbbellIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
-								{practiceProps.length > 0
-									? `${practiceProps.length} ${practiceProps.length === 1 ? "proposition" : "propositions"} selected`
-									: rendering
-										? "Pick propositions from the map"
-										: "Pick propositions"}
-							</button>
-							{practiceProps.length > 0 && (
-								<button
-									type="button"
-									data-testid="practice-props-clear"
-									onClick={() => setPracticeProps([])}
-									className="cursor-pointer rounded-full px-2 py-1 font-ui text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-								>
-									Clear
-								</button>
-							)}
-						</div>
-					)}
-					{zeroKeys ? (
-						<ZeroKeysPill onOpen={() => setSetupOpen(true)} />
-					) : (
-						!configured && (
-							<div className="mb-2 flex justify-center">
+					<ComposerActions
+						picker={(practiceProps.length > 0 || mode === "practice") && (
+							<NodePickerControl
+								count={practiceProps.length}
+								onOpen={() => setChainSelectOpen(true)}
+								onClear={() => setPracticeProps([])}
+							/>
+						)}
+						setup={zeroKeys ? (
+							<ZeroKeysPill inline onOpen={() => setSetupOpen(true)} />
+						) : (
+							!configured && (
 								<button
 									type="button"
 									data-testid="setup-cta"
@@ -262,9 +238,9 @@ export function Home({
 								>
 									Set up your models
 								</button>
-							</div>
-						)
-					)}
+							)
+						)}
+					/>
 					<form
 						className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
 					onSubmit={(e) => {

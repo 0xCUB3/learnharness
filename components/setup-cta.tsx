@@ -61,19 +61,18 @@ export function useZeroKeys(): boolean {
 /** The pill itself — the models CTA's chrome and placement, the keys
  *  chain's copy. testid "setup-cta-keys" (the models CTA keeps
  *  "setup-cta"; probes can tell them apart). */
-export function ZeroKeysPill({ onOpen }: { onOpen: () => void }) {
-	return (
-		<div className="pointer-events-auto mb-2 flex justify-center">
-			<button
-				type="button"
-				data-testid="setup-cta-keys"
-				onClick={onOpen}
-				className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 hover:bg-accent cursor-pointer"
-			>
-				Add a provider key
-			</button>
-		</div>
+export function ZeroKeysPill({ onOpen, inline = false }: { onOpen: () => void; inline?: boolean }) {
+	const button = (
+		<button
+			type="button"
+			data-testid="setup-cta-keys"
+			onClick={onOpen}
+			className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 hover:bg-accent cursor-pointer"
+		>
+			Add a provider key
+		</button>
 	);
+	return inline ? button : <div className="pointer-events-auto mb-2 flex justify-center">{button}</div>;
 }
 /** Pure: the strong slot is pinned to a provider whose key is GONE (owner
  *  interlude, 2026-09-25 — the original deleted-key scenario). The catalog
