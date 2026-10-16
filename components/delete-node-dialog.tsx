@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 
 /** The 409 extraction_running line (owner phrasing, node interlude):
  *  the server's error names the extraction; the ACTIVITY DOCK is the
@@ -146,6 +147,9 @@ export function DeleteNodeDialog({
 	onDeleted: (nodeIds: string[], graphRevision: number) => void;
 }) {
 	const [busy, setBusy] = useState(false);
+	const backdropDismiss = useBackdropDismiss(() => {
+		if (!busy) onClose();
+	});
 	const [failure, setFailure] = useState<{ code: string; error: string } | null>(null);
 
 	// Fresh state per dialog: closing resets.
@@ -214,9 +218,7 @@ export function DeleteNodeDialog({
 	return createPortal(
 		<div
 			className="fixed inset-0 z-50 flex items-center justify-center bg-background/80"
-			onClick={() => {
-				if (!busy) onClose();
-			}}
+			{...backdropDismiss}
 		>
 			<DeleteNodeBody
 				nodes={nodes}

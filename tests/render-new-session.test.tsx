@@ -83,13 +83,15 @@ describe("DraftShell — the sessionless surface", () => {
 				onSend={() => {}}
 				setupCta={
 					<button type="button" data-testid="setup-cta">
-						Set up your models — chats start after the three picks
+						Set up your models
 					</button>
 				}
 			/>,
 		);
 		// The same affordance home carries, above the draft shell's blob.
 		assert.ok(html.includes('data-testid="setup-cta"'));
+		assert.match(html, />Set up your models<\/button>/);
+		assert.doesNotMatch(html, /chats start after/);
 		// Above the composer: the CTA's markup precedes the blob's.
 		const cta = html.indexOf('data-testid="setup-cta"');
 		const blob = html.search(/rounded-2xl[^>]*pointer-events-auto|pointer-events-auto[^>]*rounded-2xl/);

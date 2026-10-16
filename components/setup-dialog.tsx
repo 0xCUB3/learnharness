@@ -34,6 +34,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import type React from "react";
 import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings } from "@/src/core";
 import { prettyModel } from "@/components/usage-format";
@@ -146,9 +147,9 @@ export function SetupKeysBody({
 }) {
 	return (
 		<div className="flex flex-col gap-3 px-6 py-5" data-testid="setup-stage-keys">
-			<p className="text-sm text-foreground">First, add a provider key.</p>
+			<p className="text-sm text-foreground">Add a provider key.</p>
 			<p className="text-xs text-muted-foreground">
-				The model pickers list only what your keys unlock — there is nothing to pick until one exists.
+				Choose your AI provider and paste its API key. You’ll pick your models next.
 			</p>
 			<div className="flex flex-col gap-2">
 				<div ref={menuAnchor} className="relative max-w-96">
@@ -225,6 +226,7 @@ export function SetupDialog({
 	onClose: () => void;
 	onDone: (models: ModelsSettings) => void;
 }) {
+	const backdropDismiss = useBackdropDismiss(onClose);
 	const [body, setBody] = useState<ModelsBody | null>(null);
 	const [failed, setFailed] = useState(false);
 	const [picked, setPicked] = useState<Partial<Record<ModelSlotName, ModelCatalogEntry>>>({});
@@ -315,8 +317,13 @@ export function SetupDialog({
 			else onClose();
 		};
 		const onPointerDown = (e: PointerEvent) => {
+			if (!(e.target instanceof Element)) return;
+			const t = e.target;
+			if (keyMenuOpen) {
+				if (t.closest("[data-lh-menu]") || t.closest('[data-testid="setup-key-provider"]')) return;
+				setKeyMenuOpen(false);
+			}
 			if (openMenu === null) return;
-			const t = e.target as Element;
 			const triggerTestid =
 				openMenu.kind === "model" ? `setup-trigger-${openMenu.slot}` : `setup-thinking-${openMenu.slot}`;
 			if (t.closest("[data-lh-menu]") || t.closest(`[data-testid="${triggerTestid}"]`)) return;
@@ -351,7 +358,7 @@ export function SetupDialog({
 		setKeySaving(false);
 		if (!res || !res.ok) {
 			const body = (await res?.json().catch(() => ({}))) as { error?: string } | undefined;
-			setKeyError(res ? (body?.error ?? `Save failed (${res.status})`) : "Save failed — network");
+			setKeyError(res ? (body?.error ?? `Save failed (${res.status})`) : "Save failed. Check your connection and try again.");
 			return;
 		}
 		setKeyProvider(null);
@@ -378,7 +385,7 @@ export function SetupDialog({
 		}).catch(() => null);
 		if (!res || !res.ok) {
 			setSaving(false);
-			setError(res ? `Save failed: ${(await res.json().catch(() => ({}))).error ?? res.status}` : "Save failed — network");
+			setError(res ? `Save failed: ${(await res.json().catch(() => ({}))).error ?? res.status}` : "Save failed. Check your connection and try again.");
 			return;
 		}
 		notifySettingsSaved("models");
@@ -389,7 +396,7 @@ export function SetupDialog({
 		<div
 			className="fixed inset-0 z-50 flex items-center justify-center bg-background/80"
 			data-testid="setup-backdrop"
-			onClick={onClose}
+			{...backdropDismiss}
 		>
 			<div
 				role="dialog"
@@ -418,7 +425,7 @@ export function SetupDialog({
 					<div className="flex flex-col px-6 py-5">
 						{failed ? (
 							<p className="text-sm text-foreground">
-								Model catalog could not be loaded — check the connection and retry.
+								Model catalog could not be loaded. Check the connection and retry.
 							</p>
 						) : (
 							<SetupKeysBody
@@ -443,7 +450,7 @@ export function SetupDialog({
 				) : (
 					<div className="flex flex-col gap-4 overflow-y-auto px-6 py-5" data-testid="setup-stage-pickers">
 						<p className="text-xs text-muted-foreground">
-							Pick the model for each tier — all three are required before chats can start.
+							Pick the model for each tier. All three are required before chats can start.
 						</p>
 						{SLOT_ORDER.map((slot) => {
 							const entry = picked[slot];
@@ -513,7 +520,7 @@ export function SetupDialog({
 															}));
 															setOpenMenu(null);
 														}}
-														footer={catalog && catalog.length === 0 ? "No image-capable models — widen the provider keys" : undefined}
+														footer={catalog && catalog.length === 0 ? "No image-capable models. Add a provider key with access to a vision model." : undefined}
 													/>
 												</MenuShell>
 											)}

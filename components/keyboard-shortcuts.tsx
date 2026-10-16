@@ -24,6 +24,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import { useRouter } from "next/navigation";
 import {
 	actionForBinding,
@@ -150,6 +151,7 @@ export function KeyboardShortcuts() {
  *  Until the settings milestone ships an editor, this is how shortcuts
  *  stay discoverable. */
 function CheatSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+	const backdropDismiss = useBackdropDismiss(onClose);
 	if (!open) return null;
 	const scopes = ["global", "chat", "graph"] as const;
 	const scopeLabels: Record<(typeof scopes)[number], string> = {
@@ -161,7 +163,7 @@ function CheatSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
 		<div
 			data-testid="cheat-sheet"
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-			onClick={onClose}
+			{...backdropDismiss}
 		>
 			<div
 				className="max-h-[80vh] w-full max-w-[36rem] overflow-y-auto rounded-xl border bg-card p-5 shadow-2xl"

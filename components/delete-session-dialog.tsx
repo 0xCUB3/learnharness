@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import type { ChatDeleteMode, ChatListItem } from "@/src/core";
 
 /** The graph-traces checkbox copy (owner, 2026-09-24 flow rework — was
@@ -51,6 +52,9 @@ export function DeleteSessionDialog({
 }) {
 	const [traces, setTraces] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const backdropDismiss = useBackdropDismiss(() => {
+		if (!busy) onClose();
+	});
 	// Retry IS pressing Delete again: the mode always derives from the
 	// checkbox's current state (a toggle between failure and retry is a
 	// change of intent, honored as such — the checkbox is disabled while
@@ -115,9 +119,7 @@ export function DeleteSessionDialog({
 	return createPortal(
 		<div
 			className="fixed inset-0 z-50 flex items-center justify-center bg-background/80"
-			onClick={() => {
-				if (!busy) onClose();
-			}}
+			{...backdropDismiss}
 		>
 			<DeleteSessionBody
 				chat={chat}

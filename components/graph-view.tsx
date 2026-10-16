@@ -1492,14 +1492,13 @@ export function GraphView({
 	return (
 		<div className="relative h-full w-full">
 			{isEmpty ? (
-				// The original home placeholder — kept verbatim for the empty graph.
+				// The empty graph keeps the first action clear without zero-valued statistics.
 				<div className="flex h-full w-full items-center justify-center px-4">
 					<div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
 						<WaypointsIcon className="size-10 opacity-40" strokeWidth={1.25} />
 						<div className="text-lg font-medium text-foreground">Knowledge graph</div>
 						<p className="max-w-sm text-sm">
-							Every session you complete will map what you know — and where the edge of your
-							understanding is — right here.
+							Start a session or import notes to build your graph.
 						</p>
 					</div>
 				</div>

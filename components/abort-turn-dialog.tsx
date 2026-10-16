@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 
 /**
  * The ESC-abort guard (owner, 2026-10-02): the global Esc → abort chain
@@ -59,6 +60,7 @@ export function AbortTurnBody({
 	 * (owner, 2026-10-04): the line says so. */
 	busy?: boolean;
 }) {
+	const backdropDismiss = useBackdropDismiss(onClose);
 	const copy = COPY[mode];
 	return (
 		<div
@@ -67,10 +69,8 @@ export function AbortTurnBody({
 			aria-label={copy.title}
 			data-testid="abort-turn-dialog"
 			className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm"
-			// A click on the scrim cancels — the cautious default, like Esc.
-			onClick={(e) => {
-				if (e.target === e.currentTarget) onClose();
-			}}
+			// A genuine click on the scrim cancels — the cautious default, like Esc.
+			{...backdropDismiss}
 		>
 			<div
 				className="mx-4 w-full max-w-sm rounded-xl border bg-card p-5 shadow-lg"

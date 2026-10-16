@@ -30,6 +30,7 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import {
 	CURRENT_SETTINGS_VERSION,
 	type AgentSettings,
@@ -113,13 +114,14 @@ function SettingsDialog({
 	/** The keys-section row to unfold (see DialogContext above). */
 	initialRow: string | null;
 }) {
-	// Plain dim backdrop (no blur — nothing decorative); the click
-	// closes, the dialog body stops propagation.
+	const backdropDismiss = useBackdropDismiss(onClose);
+	// Plain dim backdrop (no blur — nothing decorative); a genuine
+	// backdrop click closes, the dialog body stops propagation.
 	return createPortal(
 		<div
 			className="fixed inset-0 z-50 flex items-center justify-center bg-background/80"
 			data-testid="settings-backdrop"
-			onClick={onClose}
+			{...backdropDismiss}
 		>
 			<SettingsDialogBody onClose={onClose} initialSection={initialSection} initialRow={initialRow} />
 		</div>,
