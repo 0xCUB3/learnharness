@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lh_banner_dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/lh_banner_light.svg">
-    <img src="docs/assets/lh_banner_light.svg" alt="LearnHarness" width="640">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lh_banner_dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/lh_banner_light.png">
+    <img src="docs/assets/lh_banner_light.png" alt="LearnHarness" width="640">
   </picture>
 </p>
 
@@ -19,7 +19,7 @@ LearnHarness uses AI agents to plan and teach lessons from your current understa
 
 Instead of just giving you an explanation, it uses your answers and thinking to decide what you need next. Teaching builds understanding one reasoning step at a time. Practice makes it usable. A persistent knowledge graph carries it across sessions.
 
-<!-- Teaching-session screenshot goes here when supplied. -->
+![LearnHarness teaching session](docs/assets/teaching-session.png)
 
 ## How it works
 
@@ -38,7 +38,7 @@ What you are taught accumulates as propositions and reasoning chains: individual
 
 Future teaching sessions can read the graph instead of starting from scratch. Practice sessions can draw their material from it. It stores the ideas and their connections, not ratings of your ability.
 
-<!-- Knowledge-graph screenshot goes here when supplied. -->
+![LearnHarness knowledge graph](docs/assets/knowledge-graph.png)
 
 ## Download and get started
 
