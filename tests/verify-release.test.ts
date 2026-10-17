@@ -312,17 +312,38 @@ describe("release gate — workflow wiring", () => {
 	const workflow = yaml.load(fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8"));
 	const verify = workflow.jobs.verify;
 
-	it("runs read-only after ALL packaging jobs, only on real tag pushes", () => {
+	it("can see drafts after ALL packaging jobs, only on real tag pushes", () => {
 		assert.ok(verify);
 		assert.equal(verify.needs, "package");
 		assert.equal(verify.if, "github.event_name == 'push'");
-		assert.deepEqual(verify.permissions, { contents: "read" });
-		assert.equal(verify.env.GH_TOKEN, "${{ github.token }}");
+		// GitHub's release-list API hides drafts from read-only tokens.
+		assert.deepEqual(verify.permissions, { contents: "write" });
+		assert.equal(verify.env?.GH_TOKEN, undefined);
+	});
+
+	it("exposes the elevated token only to the two API-reading steps", () => {
+		const readers = ["List every release, drafts included", "Download the three update feeds"];
+		for (const step of verify.steps) {
+			if (readers.includes(step.name)) assert.equal(step.env?.GH_TOKEN, "${{ github.token }}");
+			else assert.equal(step.env?.GH_TOKEN, undefined, String(step.name ?? step.uses));
+		}
+		assert.equal(verify.steps.filter((step: any) => step.env?.GH_TOKEN).length, 2);
+	});
+
+	it("uses only implicit GET requests, never release-mutating commands", () => {
+		const calls: string[] = verify.steps.flatMap((step: any) =>
+			(step.run ?? "").split("\n").filter((line: string) => /^\s*gh\s/.test(line)),
+		);
+		assert.equal(calls.length, 2);
+		for (const call of calls) {
+			assert.match(call, /^\s*gh api /);
+			assert.doesNotMatch(call, /(?:\s|^)(?:--(?:method|input|field|raw-field)(?:[=\s]|$)|-[XfF])/);
+		}
 	});
 
 	it("checks out the tagged revision and runs select + verify", () => {
 		const checkout = verify.steps.find((step: any) => step.uses?.startsWith("actions/checkout"));
-		assert.deepEqual(checkout.with, { ref: "${{ github.sha }}" });
+		assert.deepEqual(checkout.with, { ref: "${{ github.sha }}", "persist-credentials": false });
 		const select = verify.steps.find((step: any) => step.run?.includes("verify-release.ts select"));
 		const final = verify.steps.find((step: any) => step.run?.includes("verify-release.ts verify"));
 		assert.ok(select && final);

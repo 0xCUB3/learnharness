@@ -197,21 +197,24 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # GitHub hides drafts from tokens without push access. The commands below
+    # remain GET-only; expose this token only to the two API-reading steps.
     permissions:
-      contents: read
-    env:
-      GH_TOKEN: ${{ github.token }}
+      contents: write
     steps:
       # The tagged revision — verify exactly what was packaged, not a moving default.
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
           cache: npm
       - run: npm ci
       - name: List every release, drafts included
+        env:
+          GH_TOKEN: ${{ github.token }}
         # --slurp wraps the paginated pages into one JSON document
         # ([[release,...],[release,...]]); the validator flattens it.
         run: gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
@@ -219,6 +222,8 @@ jobs:
         # Machine JSON on stdout (release id + asset ids); warnings on stderr.
         run: npx tsx scripts/verify-release.ts select "$RUNNER_TEMP/releases.json" --tag "$GITHUB_REF_NAME" > "$RUNNER_TEMP/draft.json"
       - name: Download the three update feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/metadata"
