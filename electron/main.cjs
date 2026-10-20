@@ -64,7 +64,7 @@ function serverEntry() {
 //   <this binary> --browser-service
 // and connects over CDP (system Chrome stays the fallback). Handshake:
 // the helper prints "BROWSER_SERVICE_CDP <port>" on stdout once the CDP
-// endpoint listens. Lifetime: stdin stays open; parent death = EOF = quit.
+// endpoint listens. Lifetime: parent IPC disconnect/death = quit.
 // MUST run before the single-instance lock — a helper is a second
 // instance of this very binary, and before the LH_DEV_URL redirect — the
 // helper owns no user data at all.
@@ -73,14 +73,15 @@ if (process.argv.includes("--browser-service")) {
 	// Own the helper's entire startup lifetime, including the readiness wait.
 	const lifetime = new AbortController();
 	const parentClosed = () => {
-		lifetime.abort(new Error("browser-service parent stdin closed"));
+		lifetime.abort(new Error("browser-service parent IPC disconnected"));
 		app.quit();
 	};
-	process.stdin.resume();
-	process.stdin.on("end", parentClosed);
-	process.stdin.on("close", parentClosed);
 	(async () => {
 		try {
+			// Full Windows Electron replaces stdin with synthetic EOF. Use the
+			// real Node IPC channel, and refuse to start an unowned helper.
+			if (!process.channel || !process.connected) throw new Error("browser-service requires connected parent IPC");
+			process.once("disconnect", parentClosed);
 			app.dock?.hide();
 			const port = await freePort();
 			// Must land before app-ready for Chromium to pick it up.
@@ -95,7 +96,7 @@ if (process.argv.includes("--browser-service")) {
 			await waitForBrowserService(port, { signal: lifetime.signal });
 			if (!lifetime.signal.aborted) console.log(`BROWSER_SERVICE_CDP ${port}`);
 		} catch (err) {
-			if (lifetime.signal.aborted) return; // EOF is a normal shutdown.
+			if (lifetime.signal.aborted) return; // Parent disconnect is normal.
 			console.error("browser-service failed:", err);
 			app.exit(1);
 		}

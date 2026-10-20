@@ -98,6 +98,46 @@ async function importPayload(standalone) {
 	}
 }
 
+// Explicit IPC disconnect can omit ChildProcess 'close' even after Electron
+// exits. Wait for actual exit, boundedly; never infer shutdown intent from
+// Node's automatic stdin cleanup after an unexpected child exit.
+/** @returns {Promise<{code: number | null, signal: NodeJS.Signals | null, requested: boolean}>} */
+export async function stopBrowserService(helper) {
+	if (!helper.pid || helper.exitCode !== null || helper.signalCode !== null) {
+		return { code: helper.exitCode, signal: helper.signalCode, requested: false };
+	}
+	let onExit, onError;
+	const exited = new Promise((resolve, reject) => {
+		onExit = (code, signal) => resolve({ code, signal });
+		onError = reject;
+		helper.once("exit", onExit);
+		helper.once("error", onError);
+	});
+	const wait = async (ms) => {
+		let timer;
+		try {
+			return await Promise.race([exited, new Promise((resolve) => { timer = setTimeout(() => resolve(null), ms); })]);
+		} finally { clearTimeout(timer); }
+	};
+	try {
+		const requested = helper.connected;
+		if (requested) {
+			console.log("[smoke-demo-runtime] requesting parent IPC disconnect");
+			helper.disconnect();
+		}
+		const result = await wait(5000);
+		if (!result) {
+			helper.kill("SIGKILL");
+			if (!await wait(3000)) throw new Error("browser-service did not exit after forced cleanup");
+			throw new Error("browser-service did not exit after IPC disconnect; force-killed");
+		}
+		return { ...result, requested };
+	} finally {
+		helper.removeListener("exit", onExit);
+		helper.removeListener("error", onError);
+	}
+}
+
 async function browserProbe(puppeteer) {
 	assert.ok(process.versions.electron, "--browser requires a packaged Electron --runtime binary");
 	const home = process.env.HOME;
@@ -109,12 +149,12 @@ async function browserProbe(puppeteer) {
 		"--disable-background-networking", "--disable-component-update", "--no-proxy-server",
 		// Hosted Linux runners disallow Chromium's unprivileged sandbox.
 		...(process.platform === "linux" ? ["--no-sandbox"] : []),
-	], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
+	], { cwd: home, env, stdio: ["ignore", "pipe", "pipe", "ipc"] });
 	let output = "";
 	let errors = "";
 	helper.stderr.on("data", (chunk) => { errors = (errors + chunk).slice(-16_000); });
-	const closed = new Promise((resolve) => helper.once("close", (code, signal) => resolve({ code, signal })));
 	let browser;
+	let failed = false;
 	try {
 		const port = await new Promise((resolve, reject) => {
 			const timer = setTimeout(() => reject(new Error("browser-service handshake timed out")), 15_000);
@@ -152,23 +192,22 @@ async function browserProbe(puppeteer) {
 		assert.deepEqual(failures, [], "demo console/page/network errors");
 		console.log("[smoke-demo-runtime] packaged browser-service: JS button 0 → 1, clean console/page, page reset ok (no Chrome fallback)");
 	} catch (err) {
+		failed = true;
 		throw new Error(`browser-service probe failed at local CDP/browser interaction\n--- browser-service output ---\n${output}\n${errors}`, { cause: err });
 	} finally {
 		browser?.disconnect();
-		helper.stdin.end(); // The shipping lifetime contract: EOF must quit the helper.
-		let timer;
-		const result = await Promise.race([
-			closed,
-			new Promise((resolve) => { timer = setTimeout(() => resolve(null), 5000); }),
-		]);
-		clearTimeout(timer);
-		if (!result) {
-			helper.kill("SIGKILL");
-			await closed;
-			throw new Error("browser-service did not exit on stdin EOF; force-killed");
+		try {
+			const { code, signal, requested } = await stopBrowserService(helper);
+			if (requested) console.log(`[smoke-demo-runtime] observed helper exit after requested IPC disconnect: code=${code}, signal=${signal} (no resident helper)`);
+			else console.log(`[smoke-demo-runtime] helper already exited/disconnected before cleanup: code=${code}, signal=${signal}; no shutdown requested`);
+			if (!failed) {
+				assert.ok(requested, "browser-service exited/disconnected before requested cleanup");
+				assert.deepEqual({ code, signal }, { code: 0, signal: null }, "browser-service shutdown failed");
+			}
+		} catch (error) {
+			if (!failed) throw error;
+			console.error(`[smoke-demo-runtime] cleanup also failed: ${formatProbeError(error)}`);
 		}
-		assert.deepEqual(result, { code: 0, signal: null }, "browser-service shutdown failed");
-		console.log("[smoke-demo-runtime] browser-service exited cleanly on stdin EOF (no resident helper)");
 	}
 }
 
