@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { probeEnv } from "../scripts/smoke-demo-runtime.mjs";
+import { formatProbeError, probeEnv } from "../scripts/smoke-demo-runtime.mjs";
 
 const script = fileURLToPath(new URL("../scripts/smoke-demo-runtime.mjs", import.meta.url));
 
@@ -78,6 +78,19 @@ describe("demo standalone dependency gate", () => {
 			assert.equal(result.status, 1);
 			assert.doesNotMatch(String(result.stdout), /import ok/);
 		});
+	});
+
+	it("preserves nested fetch/socket causes without dumping headers or environment", () => {
+		const socket = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED", address: "127.0.0.1", port: 54321 });
+		const cause = new AggregateError([socket], "connection failed");
+		const error = Object.assign(new TypeError("fetch failed", { cause }), { headers: { authorization: "private-header" }, env: { TOKEN: "private-token" } });
+		const output = formatProbeError(error);
+		assert.match(output, /fetch failed/);
+		assert.match(output, /connection failed/);
+		assert.match(output, /ECONNREFUSED/);
+		assert.match(output, /127\.0\.0\.1/);
+		assert.match(output, /54321/);
+		assert.doesNotMatch(output, /private-header|private-token|authorization|TOKEN/);
 	});
 
 	it("strips secrets and uses only scratch data/auth/profile locations", () => {

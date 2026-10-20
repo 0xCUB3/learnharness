@@ -69,6 +69,16 @@ function serverEntry() {
 // instance of this very binary, and before the LH_DEV_URL redirect — the
 // helper owns no user data at all.
 if (process.argv.includes("--browser-service")) {
+	const { waitForBrowserService } = require("./browser-service-readiness.cjs");
+	// Own the helper's entire startup lifetime, including the readiness wait.
+	const lifetime = new AbortController();
+	const parentClosed = () => {
+		lifetime.abort(new Error("browser-service parent stdin closed"));
+		app.quit();
+	};
+	process.stdin.resume();
+	process.stdin.on("end", parentClosed);
+	process.stdin.on("close", parentClosed);
 	(async () => {
 		try {
 			app.dock?.hide();
@@ -80,13 +90,13 @@ if (process.argv.includes("--browser-service")) {
 			// platform (no window-all-closed handler is installed here).
 			const win = new BrowserWindow({ show: false });
 			await win.loadURL("about:blank");
-			console.log(`BROWSER_SERVICE_CDP ${port}`);
-			// Parent-tied lifetime: the server holds our stdin open.
-			process.stdin.resume();
-			process.stdin.on("end", () => app.quit());
-			process.stdin.on("close", () => app.quit());
+			// Window load is not a DevTools HTTP readiness barrier. Confirm the
+			// endpoint before both production and smoke clients see the handshake.
+			await waitForBrowserService(port, { signal: lifetime.signal });
+			if (!lifetime.signal.aborted) console.log(`BROWSER_SERVICE_CDP ${port}`);
 		} catch (err) {
-			console.error(`browser-service failed: ${err?.stack ?? err}`);
+			if (lifetime.signal.aborted) return; // EOF is a normal shutdown.
+			console.error("browser-service failed:", err);
 			app.exit(1);
 		}
 	})();

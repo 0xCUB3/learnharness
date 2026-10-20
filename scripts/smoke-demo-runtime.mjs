@@ -30,6 +30,22 @@ export function probeEnv(env, home) {
 	};
 }
 
+// Keep fetch's nested cause (including AggregateError socket failures), but
+// never dump arbitrary error properties such as request headers or environment.
+export function formatProbeError(error, depth = 0) {
+	if (depth > 5) return "[cause chain truncated]";
+	if (!error || typeof error !== "object") return String(error);
+	const lines = [typeof error.stack === "string" ? error.stack : `${error.name ?? "Error"}: ${error.message ?? "unknown error"}`];
+	for (const field of ["code", "errno", "syscall", "address", "port"]) {
+		if (["string", "number"].includes(typeof error[field])) lines.push(`${field}: ${error[field]}`);
+	}
+	if (error.cause !== undefined) lines.push(`cause: ${formatProbeError(error.cause, depth + 1)}`);
+	if (Array.isArray(error.errors)) {
+		for (const nested of error.errors.slice(0, 8)) lines.push(`aggregate: ${formatProbeError(nested, depth + 1)}`);
+	}
+	return lines.join("\n");
+}
+
 export function verifyDemoRuntime(standalone, runtime = process.execPath, browser = false) {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "lh-demo-runtime-"));
 	try {
@@ -136,7 +152,7 @@ async function browserProbe(puppeteer) {
 		assert.deepEqual(failures, [], "demo console/page/network errors");
 		console.log("[smoke-demo-runtime] packaged browser-service: JS button 0 → 1, clean console/page, page reset ok (no Chrome fallback)");
 	} catch (err) {
-		throw new Error(`${err.stack ?? err}\n--- browser-service output ---\n${output}\n${errors}`);
+		throw new Error(`browser-service probe failed at local CDP/browser interaction\n--- browser-service output ---\n${output}\n${errors}`, { cause: err });
 	} finally {
 		browser?.disconnect();
 		helper.stdin.end(); // The shipping lifetime contract: EOF must quit the helper.
@@ -175,5 +191,5 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	main().catch((err) => { console.error(`[smoke-demo-runtime] FAIL: ${err.stack ?? err}`); process.exitCode = 1; });
+	main().catch((err) => { console.error(`[smoke-demo-runtime] FAIL: ${formatProbeError(err)}`); process.exitCode = 1; });
 }
