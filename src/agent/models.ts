@@ -11,6 +11,14 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type ModelRole } from "../../config.ts";
 import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
+import packageMetadata from "../../package.json" with { type: "json" };
+
+/** App identity is immutable and shared by Models and every native Agent.
+ * Agent's default Pi attribution otherwise overrides the Models identity. */
+export const APP_IDENTITY = Object.freeze({
+	userAgent: Object.freeze({ custom: `learnharness/${packageMetadata.version}` }),
+	attribution: Object.freeze({ name: packageMetadata.name, url: packageMetadata.homepage }),
+});
 
 /**
  * The one engine factory every agent's model comes from (the pi-ai swap,
@@ -47,7 +55,7 @@ let collection: ReturnType<typeof createModels> | undefined;
  *  keyPresent. */
 export function piModels() {
 	if (!collection) {
-		collection = createModels();
+		collection = createModels({ identity: APP_IDENTITY });
 		for (const provider of builtinProviders()) collection.setProvider(provider);
 	}
 	return collection;

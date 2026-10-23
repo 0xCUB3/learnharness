@@ -25,7 +25,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { after, describe, it } from "node:test";
-import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep, type ToolCall } from "@earendil-works/pi-ai";
+import { createFauxCore, fauxAssistantMessage, fauxToolCall, type FauxResponseStep, type ToolCall, type Usage } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import { newPlanBlockMessage } from "../src/core/native-messages.ts";
@@ -873,21 +873,30 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const verdict: AuditVerdicts = {
 			links: [{ id: FINDINGS.propositions[0]!.id, linkTo: existingId }],
 		};
+		const nativeUsage: Record<"extractor" | "auditor", Usage[]> = { extractor: [], auditor: [] };
+		const recordUsage = (stage: "extractor" | "auditor", engine: PiEngine): PiEngine => ({
+			...engine,
+			streamFn: (model, context, options) => {
+				const stream = engine.streamFn(model, context, options);
+				void stream.result().then((message) => nativeUsage[stage].push(message.usage));
+				return stream;
+			},
+		});
 		const pipeline = createExtractionPipeline({
 			chatStore,
 			graphStore: ledgers,
 			// During the auditor's generate, the registry must already carry
 			// the extractor's fully accumulated live usage (2 steps × 10/5).
-			extractor: submitModel("submit_findings", FINDINGS),
-			auditor: submitModel("submit_review", verdict, () =>
+			extractor: recordUsage("extractor", submitModel("submit_findings", FINDINGS)),
+			auditor: recordUsage("auditor", submitModel("submit_review", verdict, () =>
 				usageSeen.push(extractionStatuses().find((r) => r.chatId === chatId)?.usage.extractor?.steps.at(-1)?.inputTokens),
-			),
+			)),
 		});
 		await pipeline.runExtraction(chatId);
 
 		// Live: mid-audit the extractor's usage was fully accumulated (faux
 		// estimates tokens from the prompt/response text — deterministic,
-		// positive, no cache).
+		// positive, with native first-conversation cache writes in 1.4).
 		assert.equal(usageSeen.length, 1);
 		assert.ok(typeof usageSeen[0] === "number" && usageSeen[0]! > 0, "the extractor's step billed input tokens");
 
@@ -903,8 +912,16 @@ describe("the extraction pipeline (extractor → auditor → merger)", () => {
 		const step = run.stages.extractor.steps[0]!;
 		assert.ok(step.inputTokens! > 0 && step.outputTokens! > 0, "estimated usage captured");
 		assert.equal(step.cacheReadTokens, 0);
-		assert.equal(step.cacheWriteTokens, 0);
+		assert.equal(nativeUsage.extractor.length, 1);
+		assert.ok(nativeUsage.extractor[0]!.cacheWrite > 0, "fresh native conversation writes its cached prefix");
+		assert.equal(step.cacheReadTokens, nativeUsage.extractor[0]!.cacheRead);
+		assert.equal(step.cacheWriteTokens, nativeUsage.extractor[0]!.cacheWrite);
 		assert.equal(step.reasoningTokens, 0);
+		assert.equal(nativeUsage.auditor.length, 1);
+		assert.equal(run.stages.auditor.steps[0]!.cacheReadTokens, 0, "auditor owns a fresh conversation too");
+		assert.ok(nativeUsage.auditor[0]!.cacheWrite > 0);
+		assert.equal(run.stages.auditor.steps[0]!.cacheReadTokens, nativeUsage.auditor[0]!.cacheRead);
+		assert.equal(run.stages.auditor.steps[0]!.cacheWriteTokens, nativeUsage.auditor[0]!.cacheWrite);
 		assert.equal(run.stages.auditor.steps.length, 1);
 		assert.ok(!Number.isNaN(Date.parse(run.at)));
 	});

@@ -14,7 +14,7 @@ import {
 	type JsonObject, type TranscriptContext, type Usage,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { piEngineForSpec, type PiEngine } from "../src/agent/models.ts";
+import { APP_IDENTITY, piEngineForSpec, type PiEngine } from "../src/agent/models.ts";
 import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
 import { runPdfReaderAgent } from "../src/agent/subagents/pdf-reader.ts";
 import type { HeadlessApi } from "../src/agent/subagents/headless.ts";
@@ -35,6 +35,10 @@ interface Transport {
 	origin: string; path: string; authHeader: string;
 }
 const TRANSPORTS: Transport[] = [
+	{ provider: "opencode-go", id: "claude-haiku-5-5", envVar: "OPENCODE_API_KEY", api: "anthropic-messages", origin: "https://opencode.ai", path: "/inference/go/v1/messages", authHeader: "x-api-key" },
+	{ provider: "opencode-go", id: "gemini-4-argon-contributor", envVar: "OPENCODE_API_KEY", api: "google-generative-ai", origin: "https://opencode.ai", path: "/inference/go/v1/models/gemini-4-argon-contributor:streamGenerateContent", authHeader: "x-goog-api-key" },
+	{ provider: "opencode-go", id: "glm-5.3", envVar: "OPENCODE_API_KEY", api: "openai-completions", origin: "https://opencode.ai", path: "/inference/go/v1/chat/completions", authHeader: "authorization" },
+	{ provider: "opencode-go", id: "gpt-6-luna", envVar: "OPENCODE_API_KEY", api: "openai-responses", origin: "https://opencode.ai", path: "/inference/go/v1/responses", authHeader: "authorization" },
 	{ provider: "openrouter", id: "openai/gpt-4o-mini", envVar: "OPENROUTER_API_KEY", api: "openai-completions", origin: "https://openrouter.ai", path: "/api/v1/chat/completions", authHeader: "authorization" },
 	{ provider: "openai", id: "gpt-4o-mini", envVar: "OPENAI_API_KEY", api: "openai-responses", origin: "https://api.openai.com", path: "/v1/responses", authHeader: "authorization" },
 	{ provider: "anthropic", id: "claude-haiku-4-5", envVar: "ANTHROPIC_API_KEY", api: "anthropic-messages", origin: "https://api.anthropic.com", path: "/v1/messages", authHeader: "x-api-key" },
@@ -131,7 +135,7 @@ describe("provider-neutral raw agent loops", { concurrency: false }, () => {
 		it(`${loop}: every actual stream request has NO credential override (recording faux engine)`, async () => {
 			await isolated({ OPENROUTER_API_KEY: OR_KEY, LH_PROVIDER_EVENTS: "1" }, async () => {
 				const faux = createFauxCore({ tokenSize: { min: 64, max: 64 } });
-				faux.setResponses([0, 1, 2].map((round) => {
+				faux.setResponses([0, 1, 2, 0, 1, 2].map((round) => {
 					const calls = callsFor(loop, round);
 					return fauxAssistantMessage(calls.length
 						? calls.map((c, i) => fauxToolCall(c.name, c.args, { id: `call_${round}_${i}` }))
@@ -149,7 +153,11 @@ describe("provider-neutral raw agent loops", { concurrency: false }, () => {
 				const run = await runLoop(loop, engine, signal);
 				assertSuccess(loop, run);
 				assert.equal(requests.length, 3);
+				const sessionId = requests[0]!.options.sessionId;
+				assert.match(String(sessionId), /^[0-9a-f-]{36}$/);
+				assert.notEqual(sessionId, "provider-neutral-offline");
 				for (const { options } of requests) {
+					assert.equal(options.sessionId, sessionId);
 					for (const key of ["apiKey", "getApiKey", "auth", "headers"]) {
 						assert.ok(!Object.hasOwn(options, key), `${loop} stream must not supply ${key}`);
 					}
@@ -159,6 +167,12 @@ describe("provider-neutral raw agent loops", { concurrency: false }, () => {
 				}
 				assert.match(JSON.stringify(requests[2]!.context), /image\/png/);
 				assert.match(JSON.stringify(requests[2]!.context), /toolResult/);
+				const second = await runLoop(loop, engine, signal);
+				assertSuccess(loop, second);
+				assert.equal(requests.length, 6);
+				const secondId = requests[3]!.options.sessionId;
+				assert.notEqual(secondId, sessionId, "a separate unsaved operation must not reuse a conversation");
+				for (const request of requests.slice(3)) assert.equal(request.options.sessionId, secondId);
 			});
 		});
 
@@ -189,6 +203,12 @@ describe("provider-neutral raw agent loops", { concurrency: false }, () => {
 					assertSuccess(loop, run);
 					assert.equal(requests.length, 3);
 					for (const [round, request] of requests.entries()) {
+						assert.equal(request.headers.get("user-agent"), APP_IDENTITY.userAgent.custom);
+						if (transport.provider === "opencode-go") {
+							assert.match(request.headers.get("x-opencode-session") ?? "", /^[0-9a-f-]{36}$/);
+							assert.equal(request.headers.get("x-opencode-session"), requests[0]!.headers.get("x-opencode-session"));
+							assert.equal(request.headers.get("x-opencode-client"), "learnharness");
+						}
 						const url = new URL(request.url);
 						assert.equal(url.origin, transport.origin);
 						assert.equal(url.pathname, transport.path);
@@ -263,29 +283,32 @@ function closedFetch(transport: Transport, loop: Loop, requests: RecordedRequest
 }
 
 function assertPayload(transport: Transport, loop: Loop, round: number, body: Record<string, unknown>) {
-	if (transport.provider !== "google") assert.equal(body.model, transport.id);
-	const tools = JSON.stringify(body.tools);
+	if (transport.api !== "google-generative-ai") assert.equal(body.model, transport.id);
+	// Native Responses models may declare tools in additional_tools input
+	// items rather than top-level tools; assert the SDK's complete payload.
+	const tools = JSON.stringify(body);
 	assert.match(tools, new RegExp(loop === "visual" ? "write_svg" : "pdf_extract"));
 	assert.match(tools, new RegExp(loop === "visual" ? "render_svg" : "pdf_render"));
-	if (transport.provider === "google") assert.ok(Array.isArray(body.contents));
-	else if (transport.provider === "openai") assert.ok(Array.isArray(body.input));
+	if (transport.api === "google-generative-ai") assert.ok(Array.isArray(body.contents));
+	else if (transport.api === "openai-responses") assert.ok(Array.isArray(body.input));
 	else assert.ok(Array.isArray(body.messages));
 	const json = JSON.stringify(body);
 	assert.match(json, new RegExp(loop === "visual" ? "white square" : "Read page 1"));
 	if (round === 2) {
-		assert.ok(json.includes(PNG.toString("base64")), "the actual rendered image must reach the selected provider");
-		assert.match(json, new RegExp(transport.provider === "google" ? "functionResponse" : transport.provider === "openai" ? "function_call_output" : transport.provider === "anthropic" ? "tool_result" : '"role":"tool"'));
+		const supportsImages = piEngineForSpec({ provider: transport.provider, id: transport.id }).model.input.includes("image");
+		assert.equal(json.includes(PNG.toString("base64")), supportsImages, "native modality filtering: only vision models receive rendered images");
+		assert.match(json, new RegExp(transport.api === "google-generative-ai" ? "functionResponse" : transport.api === "openai-responses" ? "function_call_output" : transport.api === "anthropic-messages" ? "tool_result" : '"role":"tool"'));
 		assert.match(json, new RegExp(loop === "visual" ? "Rendered" : "Page 1"));
 	}
 }
 
 function sseResponse(transport: Transport, calls: Call[], round: number): Response {
 	const events: Record<string, unknown>[] = [];
-	if (transport.provider === "openrouter") {
+	if (transport.api === "openai-completions") {
 		events.push({ id: `chatcmpl_offline_${round}`, object: "chat.completion.chunk", created: 1, model: transport.id,
 			choices: [{ index: 0, delta: calls.length ? { role: "assistant", tool_calls: calls.map((c, i) => ({ index: i, id: `call_${round}_${i}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } })) } : { role: "assistant", content: FINAL }, finish_reason: null }] });
 		events.push({ choices: [{ index: 0, delta: {}, finish_reason: calls.length ? "tool_calls" : "stop" }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } });
-	} else if (transport.provider === "openai") {
+	} else if (transport.api === "openai-responses") {
 		const output = calls.length ? calls.map((c, i) => ({ type: "function_call", id: `fc_${round}_${i}`, call_id: `call_${round}_${i}`, name: c.name, arguments: JSON.stringify(c.args), status: "completed" }))
 			: [{ type: "message", id: `msg_${round}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: FINAL, annotations: [] }] }];
 		events.push({ type: "response.created", response: { id: `resp_offline_${round}`, status: "in_progress" } });
@@ -297,7 +320,7 @@ function sseResponse(transport: Transport, calls: Call[], round: number): Respon
 			events.push({ type: "response.output_item.done", output_index: index, item });
 		}
 		events.push({ type: "response.completed", response: { id: `resp_offline_${round}`, status: "completed", output, usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 } } });
-	} else if (transport.provider === "anthropic") {
+	} else if (transport.api === "anthropic-messages") {
 		events.push({ type: "message_start", message: { id: `msg_offline_${round}`, type: "message", role: "assistant", model: transport.id, content: [], stop_reason: null, usage: { input_tokens: 20, output_tokens: 0 } } });
 		const blocks = calls.length ? calls.map((c, i) => ({ type: "tool_use", id: `call_${round}_${i}`, name: c.name, input: {} })) : [{ type: "text", text: "" }];
 		for (const [index, block] of blocks.entries()) {
@@ -310,6 +333,6 @@ function sseResponse(transport: Transport, calls: Call[], round: number): Respon
 	} else {
 		events.push({ responseId: `google_offline_${round}`, candidates: [{ index: 0, content: { role: "model", parts: calls.length ? calls.map((c, i) => ({ functionCall: { id: `call_${round}_${i}`, name: c.name, args: c.args } })) : [{ text: FINAL }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10, totalTokenCount: 30 } });
 	}
-	const data = events.map((event) => `${typeof event.type === "string" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`).join("") + (transport.provider === "openrouter" ? "data: [DONE]\n\n" : "");
+	const data = events.map((event) => `${typeof event.type === "string" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`).join("") + (transport.api === "openai-completions" ? "data: [DONE]\n\n" : "");
 	return new Response(data, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
