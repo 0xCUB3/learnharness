@@ -404,7 +404,6 @@ async function streamOnce(
 	// normalizeContext is the library's only Context→TranscriptContext entry.
 	const stream = engine.streamFn(engine.model, normalizeContext({ systemPrompt, messages, tools }), {
 		reasoning: reasoning && reasoning !== "off" ? reasoning : undefined,
-		apiKey: process.env.OPENROUTER_API_KEY || undefined,
 		signal: abortSignal,
 		onProviderStreamEvent: onProviderStreamEvent as never,
 	} as never);
