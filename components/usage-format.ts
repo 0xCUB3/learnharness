@@ -27,8 +27,10 @@ export function splitQualified(id: string): { provider: string | null; id: strin
 /**
  * "z-ai/glm-5.3-flash" → "glm-5.3-flash" — vendor prefix dropped, the
  * name KEPT EXACTLY as its provider writes it (dashes stay, no
- * auto-caps — owner rounds 4-5, 2026-10-05); a trailing all-digit
- * segment (OpenRouter's date suffix, "qwen3.8-max-0902") is dropped.
+ * auto-caps — owner rounds 4-5, 2026-10-05); a trailing date-like
+ * segment of 4+ digits (OpenRouter's "qwen3.8-max-0902", Anthropic's
+ * "-20250514") is dropped; short numeric segments are version parts
+ * ("claude-sonnet-5-5") and stay.
  * Quiet-chip friendly.
  *
  * With `qualified` (usage stamps are "provider:id", model-slots wave):
@@ -40,7 +42,7 @@ export function prettyModel(id: string, qualified = false): string {
 	const { provider, id: bare } = splitQualified(id);
 	const short = bare.includes("/") ? bare.slice(bare.lastIndexOf("/") + 1) : bare;
 	const parts = short.split("-");
-	const trimmed = /^\d+$/.test(parts[parts.length - 1] ?? "") ? parts.slice(0, -1) : parts;
+	const trimmed = /^\d{4,}$/.test(parts[parts.length - 1] ?? "") ? parts.slice(0, -1) : parts;
 	// No auto-capitalization, dashes KEPT (owner rounds 4-5, 2026-10-05):
 	// model names render exactly as their providers write them.
 	const pretty = trimmed.join("-");
