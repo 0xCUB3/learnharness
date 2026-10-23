@@ -15,11 +15,6 @@ export interface NotesImportResult {
 	provider?: string;
 	slots?: string[];
 }
-export interface NotesImportRow {
-	file: File;
-	pending: boolean;
-	result?: NotesImportResult;
-}
 
 /** Validate the entire response before applying any row: a malformed index
  * must never attribute another file's success to this file (same names included). */
@@ -56,35 +51,26 @@ export async function postNotesImport(files: readonly File[]): Promise<NotesImpo
 	return parseNotesImportResults(body, files);
 }
 
-/** Files live only with the latest selection. Retry submits exactly one captured
- * File, not its basename; no automatic retries or persistent import history. */
+/** Only error text survives a request; selected Files stay request-local. */
 export function useNotesImport(callbacks: { onStart?: () => void; onFinish?: () => void } = {}) {
-	const [rows, setRows] = useState<NotesImportRow[]>([]);
+	const [errors, setErrors] = useState<string[]>([]);
 	const [importing, setImporting] = useState(false);
 	const pending = useRef(false);
-	const submit = async (files: File[], retryIndex?: number) => {
+	const submit = async (files: File[]) => {
 		if (pending.current || files.length === 0) return;
 		pending.current = true;
 		setImporting(true);
-		if (retryIndex === undefined) setRows(files.map((file) => ({ file, pending: true })));
-		else setRows((prev) => prev.map((row, i) => i === retryIndex ? { file: row.file, pending: true } : row));
+		setErrors([]);
 		try {
 			callbacks.onStart?.();
 			const results = await postNotesImport(files);
-			setRows((prev) => {
-				const next = [...prev];
-				for (const result of results) {
-					const index = retryIndex ?? result.requestIndex;
-					next[index] = { file: files[result.requestIndex]!, pending: false, result };
-				}
-				return next;
-			});
+			setErrors(results
+				.filter((result) => !result.ok)
+				.sort((a, b) => a.requestIndex - b.requestIndex)
+				.map((r) => `${r.filePath}: ${r.error}${r.code ? `\n${r.code}${r.provider ? ` — ${r.provider}` : ""}${r.missing?.length ? ` — ${r.missing.join(", ")}` : ""}${r.slots?.length ? ` — ${r.slots.join(", ")}` : ""}` : ""}`));
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			setRows((prev) => prev.map((row, i) => retryIndex === undefined || i === retryIndex ? {
-				file: row.file, pending: false,
-				result: { filePath: row.file.name, requestIndex: retryIndex === undefined ? i : 0, ok: false, outcome: "failed", error: message },
-			} : row));
+			setErrors(files.map((file) => `${file.name}: ${message}`));
 		} finally {
 			pending.current = false;
 			setImporting(false);
@@ -92,33 +78,13 @@ export function useNotesImport(callbacks: { onStart?: () => void; onFinish?: () 
 		}
 	};
 	return {
-		rows, importing,
+		errors, importing,
 		onImportFiles: (files: FileList | null) => { if (files) void submit(Array.from(files)); },
-		retry: (index: number) => { if (rows[index]) void submit([rows[index].file], index); },
-		dismiss: () => { if (!pending.current) setRows([]); },
 	};
 }
 
-export function NotesImportResults({ rows, importing, retry, dismiss }: Pick<ReturnType<typeof useNotesImport>, "rows" | "importing" | "retry" | "dismiss">) {
-	if (rows.length === 0) return null;
-	return (
-		<section aria-label="Notes import results" aria-live="polite" className="w-80 max-w-full max-h-[40vh] overflow-y-auto rounded-xl border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
-			<ul className="space-y-3">
-				{rows.map((row, i) => {
-					const r = row.result;
-					const message = row.pending ? "Importing…" : r?.outcome === "completed" ? `Import complete — ${r.stats!.nodes} new propositions, ${r.stats!.chains ?? 0} new chains.` : r?.outcome === "partial" ? "Some parts completed; others failed. Saved changes were kept." : r?.outcome === "aborted" ? "Import stopped. Any changes already saved were kept." : r?.outcome === "busy" ? "This file is already being imported. Try again when it finishes." : "Import did not complete. Any changes already saved were kept.";
-					return <li key={i} className="min-w-0 break-words">
-						<p className="font-medium">{row.file.name}</p>
-						<p className="text-muted-foreground">{message}</p>
-						{r && !r.ok && <>
-							<p className="whitespace-pre-wrap text-muted-foreground">{r.error}</p>
-							{r.code && <p className="text-muted-foreground">{r.code}{r.provider ? ` — ${r.provider}` : ""}{r.missing?.length ? ` — ${r.missing.join(", ")}` : ""}{r.slots?.length ? ` — ${r.slots.join(", ")}` : ""}</p>}
-							<button type="button" disabled={importing} onClick={() => retry(i)} className="mt-1 rounded-lg px-2 py-1 text-muted-foreground hover:bg-accent disabled:opacity-50">Retry</button>
-						</>}
-					</li>;
-				})}
-			</ul>
-			<button type="button" disabled={importing} onClick={dismiss} className="mt-3 rounded-lg px-2 py-1 text-muted-foreground hover:bg-accent disabled:opacity-50">Dismiss results</button>
-		</section>
-	);
+export function NotesImportErrors({ errors }: { errors: readonly string[] }) {
+	return <>{errors.map((error, i) => (
+		<p key={i} role="alert" className="max-w-full whitespace-pre-wrap break-words text-xs text-red-400">{error}</p>
+	))}</>;
 }
