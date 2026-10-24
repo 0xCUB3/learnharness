@@ -1,3 +1,8 @@
+import { nativeSubscriptionModelIds, refreshNativeSubscriptionModels } from "../agent/native-subscription-bridge.ts";
+import { subscriptionProvider } from "../core/provider-connections.ts";
+import { canonicalSubscriptionProvider, supportsCodexFastMode, modelServiceTier, type ModelServiceTier } from "../core/model-speed.ts";
+import { readCustomProviders } from "../store/custom-providers.ts";
+import { connectionCatalogProviders } from "./provider-runtime.ts";
 /**
  * The model catalog's server surface (model-control wave, 2026-09-12;
  * federated since the model-slots wave, 2026-09-20): pi-ai's catalog for
@@ -23,12 +28,19 @@ import { piModels } from "../agent/models.ts";
 import { chatGPTConnected, chatGPTModel, chatGPTModels, refreshChatGPTModels } from "../agent/chatgpt-bridge.ts";
 
 export async function refreshConnectionCatalog(): Promise<void> {
-	await refreshChatGPTModels(piModels().getModels("openai").filter((m): m is Model<"openai-responses"> => m.api === "openai-responses"));
+	await Promise.all([refreshChatGPTModels(piModels().getModels("openai").filter((m): m is Model<"openai-responses"> => m.api === "openai-responses")), refreshNativeSubscriptionModels()]);
 }
 function connectionModel(provider: string, id: string): Model<Api> | undefined {
+	provider = canonicalSubscriptionProvider(provider);
+	const subscription = subscriptionProvider(provider);
+	if (subscription && !nativeSubscriptionModelIds(subscription.id).has(id)) return undefined;
 	return provider === "chatgpt" ? chatGPTModel(id) : piModels().getModel(provider, id);
 }
-function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt"]; }
+function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt", "subscription-openai-codex"]; }
+function connectionModels(provider: string): Model<Api>[] {
+ const subscription = subscriptionProvider(provider);
+ return piModels().getModels(provider).filter((m) => !subscription || nativeSubscriptionModelIds(subscription.id).has(m.id));
+}
 import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
@@ -69,6 +81,7 @@ export function catalogDefaultsFor(
 	return {
 		model,
 		...(level !== undefined ? { thinkingLevel: level } : {}),
+		...(strong?.serviceTier !== undefined ? { serviceTier: strong.serviceTier } : {}),
 	};
 }
 
@@ -92,6 +105,7 @@ export function rolePinsFor(
 			? {
 					model: { provider: spec.provider, id: spec.id },
 					...(spec.thinkingLevel !== undefined ? { thinkingLevel: spec.thinkingLevel } : {}),
+					...(spec.serviceTier !== undefined ? { serviceTier: spec.serviceTier } : {}),
 				}
 			: null;
 	}
@@ -119,6 +133,7 @@ export function catalogSlots(): SlotPins {
 			? {
 					model: { provider: slot.provider, id: slot.id },
 					...(slot.thinkingLevel !== undefined ? { thinkingLevel: slot.thinkingLevel } : {}),
+					...(slot.serviceTier !== undefined ? { serviceTier: slot.serviceTier } : {}),
 				}
 			: null;
 	}
@@ -130,11 +145,11 @@ export function catalogSlots(): SlotPins {
  *  with keyPresent read env-wins through the keys seam, fresh per call —
  *  saving a key immediately federates the provider into the picker. */
 export function catalogProviders(): CatalogProvider[] {
-	return AUTH_PROVIDER_KEYS.map((p) => ({
+	return [...AUTH_PROVIDER_KEYS.map((p) => ({
 		id: p.id,
 		envVar: p.envVar,
 		keyPresent: keyValue(p.envVar) !== undefined,
-	})).concat([{ id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() }]).sort((a, b) => a.id.localeCompare(b.id));
+	})), ...connectionCatalogProviders(), { id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() }].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** The providers whose key is present — the picker federates exactly
@@ -146,6 +161,10 @@ function keyedProviderIds(): Set<string> {
 
 /** Project one catalog model to the client DTO. */
 export function toModelDto(model: Model<Api>): ModelDto {
+	const subscription = model.provider.startsWith("subscription-");
+	const custom = model.provider.startsWith("custom-");
+	const configuredCost = custom ? readCustomProviders().find((p) => p.id === model.provider)?.models.find((m) => m.id === model.id)?.cost : undefined;
+	const unknown = custom && !configuredCost;
 	return {
 		id: model.id,
 		name: model.name,
@@ -153,12 +172,14 @@ export function toModelDto(model: Model<Api>): ModelDto {
 		reasoning: model.reasoning,
 		input: [...model.input],
 		supportedLevels: getSupportedThinkingLevels(model),
-		cost: {
+		...(subscription ? { pricing: "subscription" as const } : unknown ? { pricing: "unknown" as const } : {}),
+		cost: subscription || unknown ? null : {
 			input: model.cost.input,
 			output: model.cost.output,
 			cacheRead: model.cost.cacheRead,
 			cacheWrite: model.cost.cacheWrite,
 		},
+		...(supportsCodexFastMode(model.provider, model.id) ? { supportsFastMode: true } : {}),
 		contextWindow: model.contextWindow,
 		maxTokens: model.maxTokens,
 	};
@@ -176,7 +197,7 @@ export function catalogContextLimits(): Map<string, number> {
 	const index = new Map<string, number>();
 	for (const provider of piModels().getProviders()) {
 		if (!keyed.has(provider.id)) continue;
-		for (const model of piModels().getModels(provider.id)) {
+		for (const model of connectionModels(provider.id)) {
 			index.set(`${provider.id}:${model.id}`, model.contextWindow);
 		}
 	}
@@ -193,7 +214,7 @@ export function modelCatalog(): ModelCatalogResponse {
 	const models = piModels()
 		.getProviders()
 		.filter((p) => keyed.has(p.id))
-		.flatMap((p) => piModels().getModels(p.id))
+		.flatMap((p) => connectionModels(p.id))
 		.map(toModelDto)
 		.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)))
 		.concat(chatGPTModels().map(toModelDto));
@@ -227,6 +248,7 @@ export function validateChatSettings(settings: ChatSettings): SettingsValidation
 		if (!connectionModel(provider, id)) {
 			return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		}
+		if (settings.serviceTier === "priority" && !supportsCodexFastMode(provider, id)) return { ok: false, error: "Fast mode is only available for supported ChatGPT subscription models" };
 	}
 	// BYOK interlude (owner, 2026-09-22): thinking levels NEVER reject a
 	// write — a model swap with a pinned level JUST WORKS. The WRITE clamps
@@ -247,7 +269,7 @@ export function validateModelsSettings(settings: ModelsSettings): SettingsValida
 	return { ok: true };
 }
 
-function validateSlotSpec(name: ModelSlotName, slot: { model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel }): SettingsValidation {
+function validateSlotSpec(name: ModelSlotName, slot: { model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; serviceTier?: ModelServiceTier }): SettingsValidation {
 	const providers = connectionProviderIds();
 	if (slot.model) {
 		const { provider, id } = slot.model;
@@ -257,6 +279,7 @@ function validateSlotSpec(name: ModelSlotName, slot: { model?: { provider: strin
 		if (!connectionModel(provider, id)) {
 			return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		}
+		if (slot.serviceTier === "priority" && !supportsCodexFastMode(provider, id)) return { ok: false, error: "Fast mode is only available for supported Codex subscription models" };
 	}
 	// BYOK interlude (owner, 2026-09-22): the supported-level verdict is
 	// DEAD — a slot write with a pinned level never rejects; the WRITE
@@ -285,19 +308,16 @@ function clampLevelFor(provider: string, id: string, level: ThinkingLevel): Thin
  *  a model on every slot write — owner, 2026-09-22). Pure: catalog in,
  *  clamped section out; the route applies it after validation. */
 export function clampModelsLevels(settings: ModelsSettings): ModelsSettings {
-	const out: ModelsSettings = {};
-	for (const name of MODEL_SLOTS) {
-		const slot = settings[name];
-		if (!slot?.model) continue;
-		out[name] =
-			slot.thinkingLevel !== undefined
-				? {
-						model: slot.model,
-						thinkingLevel: clampLevelFor(slot.model.provider, slot.model.id, slot.thinkingLevel),
-					}
-				: slot;
-	}
-	return out;
+ const out: ModelsSettings = {};
+ for (const name of MODEL_SLOTS) {
+  const slot = settings[name];
+  if (!slot?.model) continue;
+  const next = { ...slot };
+  if (slot.thinkingLevel !== undefined) next.thinkingLevel = clampLevelFor(slot.model.provider, slot.model.id, slot.thinkingLevel);
+  if (modelServiceTier(slot.model.provider, slot.model.id, slot.serviceTier) === undefined) delete next.serviceTier;
+  out[name] = next;
+ }
+ return out;
 }
 
 /** The chat-section write's level translation: a pinned thinkingLevel
@@ -306,9 +326,11 @@ export function clampModelsLevels(settings: ModelsSettings): ModelsSettings {
  *  would run). No model anywhere → rides unchecked (runtime clamps at
  *  engine build; the turn gate refuses the model-less chat anyway). */
 export function clampChatLevel(settings: ChatSettings, strong: EffectiveSlot | null): ChatSettings {
-	if (settings.thinkingLevel === undefined) return settings;
 	const provider = settings.model?.provider ?? strong?.provider;
 	const id = settings.model?.id ?? strong?.id;
 	if (!provider || !id) return settings;
-	return { ...settings, thinkingLevel: clampLevelFor(provider, id, settings.thinkingLevel) };
+	const out = { ...settings };
+	if (settings.thinkingLevel !== undefined) out.thinkingLevel = clampLevelFor(provider, id, settings.thinkingLevel);
+	if (modelServiceTier(provider, id, settings.serviceTier) === undefined) delete out.serviceTier;
+	return out;
 }
