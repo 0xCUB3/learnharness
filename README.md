@@ -1,3 +1,5 @@
+> Personal fork with subscription/custom-provider support, images and light mode. [Fork updates and switching to upstream](FORK.md).
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lh_banner_dark.png">

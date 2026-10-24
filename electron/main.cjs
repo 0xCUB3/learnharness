@@ -47,6 +47,7 @@ const path = require("node:path");
 const SIDEBAR_AUTOCLOSE = 928;
 
 const PRODUCT_NAME = "LearnHarness";
+const MANUAL_FORK_UPDATES = require("../package.json").lhFork?.updates === "manual";
 
 // APP NAME → userData (owner, 2026-10-10): the Application Support dir is
 // exactly "LearnHarness" in dev AND packaged. Packaged Electron would
@@ -494,6 +495,14 @@ function broadcastUpdateStatus(status) {
 }
 
 function checkForUpdates({ manual = false } = {}) {
+	if (MANUAL_FORK_UPDATES) {
+		if (manual) void dialog.showMessageBox({
+			type: "info", message: "Personal fork updates are manual.",
+			detail: "Pull upstream while keeping your changes with npm run upstream:sync -- --push, then install with npm run fork:install -- --confirm. Switching to an official upstream release is a separate, explicit command.",
+			buttons: ["Update guide", "Close"], cancelId: 1,
+		}).then(({ response }) => { if (response === 0) void shell.openExternal("https://github.com/0xCUB3/learnharness/blob/main/FORK.md"); });
+		return;
+	}
 	if (!autoUpdater) return;
 	autoUpdater
 		.checkForUpdates()
@@ -511,6 +520,7 @@ function checkForUpdates({ manual = false } = {}) {
 }
 
 function installUpdateNow() {
+	if (!autoUpdater) return;
 	// Kill the server BEFORE the quit-and-install (see block comment).
 	try {
 		killServer();
@@ -521,6 +531,10 @@ function installUpdateNow() {
 }
 
 function setupAutoUpdater() {
+	if (MANUAL_FORK_UPDATES) {
+		log("auto-update: personal fork - use the explicit fork/upstream update commands");
+		return;
+	}
 	if (!app.isPackaged) {
 		log("auto-update: dev build — updater disabled");
 		return;
