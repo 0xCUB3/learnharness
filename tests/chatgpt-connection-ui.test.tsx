@@ -17,7 +17,7 @@ const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, CustomEvent: dom.window.CustomEvent, IS_REACT_ACT_ENVIRONMENT: true, localStorage: { getItem: () => null, setItem() {} } });
 const originalFetch = globalThis.fetch;
 let root: Root | undefined, host: HTMLDivElement | undefined;
-const account = (id = "private-registration-id", email = "learner@example.invalid", connected = true) => ({ id, email, registration: "private-issued-client", connected, planEnabled: connected });
+const account = (id = "private-registration-id", email = "learner@example.invalid", connected = true) => ({ id, email, registration: "private-issued-client", connected, planEnabled: connected, canSignInAgain: !connected });
 const disconnected = (allowBackgroundUse = true): ChatGPTStatus => ({ available: true, pending: false, allowBackgroundUse, activeId: null, accounts: [account("signed-out-record", "signed-out@example.invalid", false)], error: null });
 const connected = (allowBackgroundUse = true): ChatGPTStatus => ({ ...disconnected(allowBackgroundUse), activeId: "private-registration-id", accounts: [account(), ...disconnected().accounts] });
 const storageError = "ChatGPT credentials could not be read or saved. Check local file access, then reconnect before making requests.";
@@ -41,6 +41,16 @@ function fixture(initial = disconnected(), overrides: Partial<ChatGPTControlBrid
  };
  window.lh = { expandWindow() {}, chatgpt: bridge };
  return { calls, bridge, push, get status() { return status; }, complete() { push({ ...connected(status.allowBackgroundUse), pending: false }); } };
+}
+function recoveryController({ writeFails = false, tokens = "valid" }: { writeFails?: boolean; tokens?: "valid" | "missing" | "restricted" | "scope" | "expired" } = {}) {
+ const require = createRequire(import.meta.url); const { createChatGPT, SCOPES } = require("../electron/chatgpt.cjs"); const { chatGPTControl } = require("../electron/chatgpt-ipc.cjs");
+ const registration: any = { id: "fixture", clientId: "oaiapp_fixture", issuer: "https://auth.openai.com", subject: "fixture", email: "fixture@example.invalid", tokens: { accessToken: "fake-access", refreshToken: "fake-refresh", idToken: "fake-id", expiresAt: tokens === "expired" ? 0 : Date.now() + 3600000, scopes: tokens === "scope" ? ["openid"] : [...SCOPES] } };
+ if (tokens === "missing") delete registration.tokens; if (tokens === "restricted") registration.reconnectRequired = true;
+ let saved = { version: 1, hostId: "urn:uuid:offline-recovery", activeId: "fixture", allowBackgroundUse: true, registrations: [registration] };
+ let browserAttempts = 0, tokenRequests = 0; const listeners = new Set<() => void>();
+ const service = createChatGPT({ store: { read: async () => structuredClone(saved), write: async (next: typeof saved) => { if (writeFails) throw Object.assign(new Error("fake-storage-failure"), { code: "storage" }); saved = structuredClone(next); } }, openExternal: () => { browserAttempts++; throw new Error("No real browser"); }, fetch: async (url: string) => { tokenRequests++; assert.equal(tokens, "expired"); assert.equal(url, "https://auth.openai.com/api/accounts/oauth/token"); return Response.json({ error: "invalid_grant" }, { status: 401 }); }, onChange: () => { for (const cb of listeners) cb(); } });
+ window.lh = { expandWindow() {}, chatgpt: { status: () => chatGPTControl({ op: "status" }, service), consent: (enabled) => chatGPTControl({ op: "consent", enabled }, service), login: (id) => chatGPTControl({ op: "login", id }, service), cancel: () => chatGPTControl({ op: "cancel" }, service), select: (id) => chatGPTControl({ op: "select", id }, service), disconnect: (id) => chatGPTControl({ op: "disconnect", id }, service), logout: (id) => chatGPTControl({ op: "logout", id }, service), onChange: (cb) => { listeners.add(cb); return () => listeners.delete(cb); } } };
+ return { service, get saved() { return saved; }, get browserAttempts() { return browserAttempts; }, get tokenRequests() { return tokenRequests; } };
 }
 async function mount(children: React.ReactNode = <ChatGPTConnection />) {
  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
@@ -248,6 +258,55 @@ test("ChatGPT Sign in again is reserved for a saved disconnected account and kee
  assert.equal(document.querySelector<HTMLSelectElement>('select[aria-label="Saved ChatGPT account"]')?.value, "signed-out-record"); assert.deepEqual(f.calls.login, []);
  await click(byTest("chatgpt-proceed")); assert.deepEqual(f.calls.login, ["signed-out-record"]); assert.equal(f.status.activeId, "private-registration-id");
  await click(button("Cancel", byTest("chatgpt-account-dialog"))); assert.equal(f.calls.cancel, 1); assert.deepEqual(f.calls.disconnect, []); assert.deepEqual(f.calls.consent, []);
+});
+test("actual controller storage-write failure is not ChatGPT authorization recovery even while available stays true", async () => {
+ const f = recoveryController({ writeFails: true });
+ try {
+  await mount(); await click(button("Manage…")); assert(!button("Sign in again")); await click(toggle());
+  const status = await f.service.status(); assert.equal(status.available, true); assert.equal(status.pending, false); assert.equal(status.accounts[0].connected, false); assert.equal(status.accounts[0].planEnabled, false); assert.equal(status.error, storageError);
+  assert(!button("Sign in again"), "a failed credential write must not offer reauthorization");
+  assert.equal(status.accounts[0].canSignInAgain, false); assert.equal(f.browserAttempts, 0); assert.equal(f.tokenRequests, 0);
+ } finally { await act(async () => f.service.close()); }
+});
+for (const tokens of ["missing", "restricted", "scope"] as const) test(`actual controller ${tokens} authorization permits recovery, but paused/closed state does not`, async () => {
+ const f = recoveryController({ tokens });
+ try {
+  await mount(); await click(byTest("chatgpt-login")); await selectAccount("Saved ChatGPT account", "fixture"); await click(button("Manage…"));
+  assert.equal((await f.service.status()).accounts[0].canSignInAgain, true); assert(button("Sign in again"));
+  assert.equal(f.saved.registrations[0].canSignInAgain, undefined, "eligibility is projected, never persisted");
+  await act(async () => f.service.pause()); assert.equal((await f.service.status()).accounts[0].canSignInAgain, false); assert(!button("Sign in again"));
+  await act(async () => f.service.resume()); assert.equal((await f.service.status()).accounts[0].canSignInAgain, true); assert(button("Sign in again"));
+  await act(async () => f.service.close()); assert.equal((await f.service.status()).accounts[0].canSignInAgain, false); assert(!button("Sign in again"));
+  assert.equal(f.browserAttempts, 0); assert.equal(f.tokenRequests, 0);
+ } finally { await act(async () => f.service.close()); }
+});
+test("storage denial overrides an otherwise eligible remembered ChatGPT authorization recovery", async () => {
+ const f = recoveryController({ tokens: "missing", writeFails: true });
+ try {
+  await mount(); await click(byTest("chatgpt-login")); await selectAccount("Saved ChatGPT account", "fixture"); await click(button("Manage…")); assert(button("Sign in again"));
+  await click(toggle()); const status = await f.service.status(); assert.equal(status.available, true); assert.equal(status.error, storageError); assert.equal(status.accounts[0].canSignInAgain, false); assert(!button("Sign in again"));
+  assert.equal(f.browserAttempts, 0); assert.equal(f.tokenRequests, 0);
+ } finally { await act(async () => f.service.close()); }
+});
+test("actual invalid_grant recovery preserves remembered identity and stages the existing registration flow", async () => {
+ const f = recoveryController({ tokens: "expired" });
+ try {
+  await mount(); await click(button("Manage…")); assert.equal((await f.service.status()).accounts[0].canSignInAgain, false); assert(!button("Sign in again"));
+  await act(async () => { await f.service.models(); });
+  const status = await f.service.status(); assert.equal(status.available, true); assert.equal(status.accounts[0].connected, false); assert.equal(status.accounts[0].canSignInAgain, true);
+  assert.equal(status.accounts[0].id, "fixture"); assert.equal(status.accounts[0].registration, "oaiapp_fixture"); assert.equal(f.saved.registrations[0].tokens, undefined);
+  await click(button("Sign in again")); assert(byTest("chatgpt-privacy-notice")); assert(toggle()); assert.equal(document.querySelector<HTMLSelectElement>('select[aria-label="Saved ChatGPT account"]')?.value, "fixture");
+  assert.equal(f.tokenRequests, 1, "only the injected refresh response was requested"); assert.equal(f.browserAttempts, 0, "staging recovery never starts OAuth");
+ } finally { await act(async () => f.service.close()); }
+});
+test("missing eligibility remains compatible but never implies authorization recovery; malformed eligibility is rejected", async () => {
+ const initial = connected(); initial.accounts = [account()]; const f = fixture(initial); await mount(); await click(button("Manage…"));
+ const legacy: ChatGPTStatus = { ...initial, accounts: initial.accounts.map(({ canSignInAgain: _ignored, ...a }) => ({ ...a, connected: false, planEnabled: false })) };
+ await act(async () => f.push(legacy)); assert(!button("Sign in again")); assert(!document.querySelector('[role="alert"]'));
+ for (const value of [null, "true", 1]) {
+  await act(async () => f.push({ ...legacy, accounts: legacy.accounts.map((a) => ({ ...a, canSignInAgain: value })) } as unknown as ChatGPTStatus));
+  assert(!button("Sign in again")); assert.equal(document.querySelector('[role="alert"]')?.textContent, "The ChatGPT connection could not be changed. Try again.");
+ }
 });
 test("connected setup row retains the email dropdown before muted Manage", async () => {
  fixture(connected()); await mount(<ChatGPTConnection setup />);
