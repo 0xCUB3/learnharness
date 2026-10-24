@@ -1,9 +1,8 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { ChatGPTStatus } from "@/src/core";
-import { useBackdropDismiss } from "@/components/backdrop-dismiss";
+import { ConnectionDialog, ConnectionRow } from "./connection-controls";
 import { Button } from "@/components/ui/button";
 import { Toggle } from "./controls";
 
@@ -324,31 +323,7 @@ function ContinueButton({ onClick, disabled, testid = "chatgpt-login" }: { onCli
 }
 
 function AccountDialog({ children, onClose, busy }: { children: React.ReactNode; onClose: () => void; busy: boolean }) {
-	const ref = useRef<HTMLDivElement>(null);
-	const closeRef = useRef(onClose);
-	closeRef.current = onClose;
-	const backdropDismiss = useBackdropDismiss(onClose);
-	useEffect(() => {
-		const previous = document.activeElement as HTMLElement | null;
-		const focusable = () => [...(ref.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled])') ?? [])];
-		focusable()[0]?.focus();
-		const key = (event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				event.preventDefault(); event.stopImmediatePropagation(); closeRef.current();
-			} else if (event.key === "Tab") {
-				const items = focusable(), first = items[0], last = items.at(-1);
-				if (!first) { event.preventDefault(); return; }
-				if (event.shiftKey && (document.activeElement === first || !ref.current?.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
-				else if (!event.shiftKey && (document.activeElement === last || !ref.current?.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
-			}
-		};
-		// Capture claims the nested dialog's Escape before outer Settings/setup.
-		document.addEventListener("keydown", key, true);
-		return () => { document.removeEventListener("keydown", key, true); if (previous?.isConnected) previous.focus(); };
-	}, []);
-	return createPortal(<div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/80" data-testid="chatgpt-dialog-backdrop" {...backdropDismiss}>
-		<div ref={ref} role="dialog" aria-modal="true" aria-label="ChatGPT account" aria-busy={busy} data-testid="chatgpt-account-dialog" onClick={(event) => event.stopPropagation()} className="settings-dialog-pop mx-4 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-md border border-border bg-card p-5 shadow-xl">{children}</div>
-	</div>, document.body);
+	return <ConnectionDialog label="ChatGPT account" testid="chatgpt-account-dialog" backdropTestid="chatgpt-dialog-backdrop" onClose={onClose} busy={busy}>{children}</ConnectionDialog>;
 }
 
 /** Compact settings row, or setup's secondary action only. */
@@ -357,15 +332,11 @@ export function ChatGPTConnection({ setup = false }: { setup?: boolean }) {
 	const active = ui.status.accounts.find((a) => a.id === ui.status.activeId && a.connected);
 	const accounts = ui.status.accounts.filter((a) => a.connected);
 	return <div className="flex flex-col gap-2" data-testid="chatgpt-connection">
-		<div className="flex flex-wrap items-center gap-3">
-			{!setup && active && <span className="font-ui text-xs text-foreground">ChatGPT</span>}
-			{active && !setup ? <>
-				<select aria-label="ChatGPT account" value={active.id} disabled={ui.busy || ui.status.pending} onChange={(event) => ui.select(event.target.value)} className="min-w-0 rounded-sm border border-border bg-background px-2 py-1 text-xs text-foreground">
-					{accounts.map((a) => <option key={a.id} value={a.id}>{a.email || "ChatGPT account"}</option>)}
-				</select>
-				<Button type="button" size="xs" variant="ghost" disabled={ui.busy} onClick={() => ui.manage(active.id)}>Manage…</Button>
-			</> : <ContinueButton onClick={ui.connect} disabled={!ui.status.available || ui.busy || ui.status.pending} />}
-		</div>
+		<ConnectionRow label="ChatGPT" actionTestid={active ? undefined : "chatgpt-login"} action={active ? "Manage…" : "Connect"} disabled={!ui.status.available || ui.busy || ui.status.pending} onAction={() => active ? ui.manage(active.id) : ui.connect()}>
+			{active && !setup && <select aria-label="ChatGPT account" value={active.id} disabled={ui.busy || ui.status.pending} onChange={(event) => ui.select(event.target.value)} className="min-w-0 rounded-sm border border-border bg-background px-2 py-1 text-xs text-foreground">
+				{accounts.map((a) => <option key={a.id} value={a.id}>{a.email || "ChatGPT account"}</option>)}
+			</select>}
+		</ConnectionRow>
 		{ui.inlineError && <p role="alert" className="text-xs text-red-400">{ui.inlineError}</p>}
 		{ui.warning && <div role="alert" data-testid="chatgpt-revocation-warning" className="rounded-sm border border-border px-3 py-2 text-xs text-muted-foreground">{ui.warning}<button type="button" className="ml-2 cursor-pointer underline underline-offset-2" onClick={ui.dismissWarning}>Dismiss</button></div>}
 	</div>;

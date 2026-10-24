@@ -82,9 +82,9 @@ test("Providers has exactly four ordered sections; unknown variables stay masked
  assert.equal(byTest("unknown-FUTURE_VAR").textContent, "FUTURE_VAR…abcd"); assert(!byTest("unknown-FUTURE_VAR").querySelector("input, button"));
 });
 
-test("disconnected row is only secondary Continue; initial default is ON; cancel discards draft without OAuth/global mutation", async () => {
+test("disconnected row uses shared Connect action; initial default is ON; cancel discards draft without OAuth/global mutation", async () => {
  const f = fixture(); await mount(<ChatGPTConnection setup />);
- assert.equal(byTest("chatgpt-connection").textContent, "Continue with ChatGPT");
+ assert.equal(byTest("chatgpt-connection").textContent, "ChatGPTConnect");
  assert(!document.body.textContent?.includes(CHATGPT_NOTICE)); const trigger = byTest("chatgpt-login");
  assert.match(trigger.className, /cursor-pointer/); assert.match(trigger.className, /hover:bg-accent/); assert.match(trigger.className, /focus-visible:ring/);
  await click(trigger); assert.equal(f.calls.login.length, 0); assert(document.body.textContent?.includes(CHATGPT_NOTICE));
@@ -261,7 +261,7 @@ test("confirmed disconnect preserves identity/pending content until outcome, pre
 });
 
 test("signed-out legacy accounts remain manageable/forgettable without pretending selection is a usable connection", async () => {
- const f = fixture(); await mount(); assert.equal(byTest("chatgpt-connection").textContent, "Continue with ChatGPT");
+ const f = fixture(); await mount(); assert.equal(byTest("chatgpt-connection").textContent, "ChatGPTConnect");
  await click(byTest("chatgpt-login")); await selectAccount("Saved ChatGPT account", "signed-out-record"); await click(button("Manage…"));
  assert(byTest("chatgpt-managed-identity").textContent?.includes("signed-out@example.invalid"));
  assert.deepEqual(f.calls.select, []); assert.equal(f.calls.login.length, 0); await confirmDisconnect();
