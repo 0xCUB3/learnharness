@@ -5,11 +5,11 @@ import {
 	ImageInputError,
 	MAX_IMAGE_BYTES,
 	MAX_IMAGE_DIMENSION,
-	MAX_IMAGE_PIXELS,
 	MAX_IMAGES,
 	MAX_SOURCE_IMAGE_BYTES,
 	MAX_TOTAL_IMAGE_BYTES,
 	type ComposerImage,
+	type InspectedImage,
 } from "../core/images.ts";
 
 /**
@@ -57,29 +57,14 @@ export function readBoundedImageFile(file: string, signal?: AbortSignal): Promis
 	return readBoundedFile(file, MAX_SOURCE_IMAGE_BYTES, () => new ImageInputError(`Image file is too large (${MAX_SOURCE_IMAGE_BYTES / (1024 * 1024)} MiB max).`), signal);
 }
 
-export interface SniffedImage {
-	mimeType: string;
-	width: number;
-	height: number;
-}
-
 export type NormalizedImage = { type: "image"; data: string; mimeType: "image/png" };
 
 function throwIfAborted(signal?: AbortSignal): void {
 	if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
-/** Header-only sniff, a thin alias of Core's single parser. */
-export function sniffImage(b: Uint8Array): SniffedImage | null {
-	return inspectImageBytes(b);
-}
-
-function assertBounds(info: SniffedImage): void {
-	checkImageDimensions(info.width, info.height);
-}
-
 /** Decode with Skia, rejecting anything the header sniff did not predict. */
-async function decode(bytes: Uint8Array, info: SniffedImage) {
+async function decode(bytes: Uint8Array, info: InspectedImage) {
 	const { loadImage } = await import("@napi-rs/canvas");
 	let img;
 	try {
@@ -102,9 +87,9 @@ export async function normalizeImage(bytes: Uint8Array, signal?: AbortSignal): P
 	if (bytes.byteLength > MAX_SOURCE_IMAGE_BYTES) {
 		throw new ImageInputError(`Image file is too large (${MAX_SOURCE_IMAGE_BYTES / (1024 * 1024)} MiB max).`);
 	}
-	const info = sniffImage(bytes);
+	const info = inspectImageBytes(bytes);
 	if (!info) throw new ImageInputError(IMAGE_ERRORS.format);
-	assertBounds(info);
+	checkImageDimensions(info.width, info.height);
 	const img = await decode(bytes, info);
 	throwIfAborted(signal);
 	const { createCanvas } = await import("@napi-rs/canvas");
@@ -138,10 +123,10 @@ export async function validateInputImages(images: readonly ComposerImage[]): Pro
 		if (bytes.byteLength > MAX_IMAGE_BYTES) throw new ImageInputError(IMAGE_ERRORS.size);
 		total += bytes.byteLength;
 		if (total > MAX_TOTAL_IMAGE_BYTES) throw new ImageInputError(IMAGE_ERRORS.total);
-		const info = sniffImage(bytes);
+		const info = inspectImageBytes(bytes);
 		if (!info || info.mimeType === "image/bmp") throw new ImageInputError(IMAGE_ERRORS.format);
 		if (info.mimeType !== image.mimeType) throw new ImageInputError(IMAGE_ERRORS.content);
-		assertBounds(info);
+		checkImageDimensions(info.width, info.height);
 		await decode(bytes, info);
 	}
 }

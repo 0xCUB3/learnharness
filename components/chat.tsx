@@ -589,18 +589,8 @@ export function Chat({
 			.catch(() => {});
 	});
 	const [setupOpen, setSetupOpen] = useState(false);
-	/** The last explicitly-sent draft (composer send): the
-	 *  refusal flow restores it into the composer, where it waits for the
-	 *  learner to re-send (Save never auto-sends, owner 2026-10-09).
-	 *  Auto-continuations (probe answers) never set it — their refusal
-	 *  opens the dialog with no replay. */
-	const draftRef = useRef<string | null>(null);
-	/* The same preserve-and-replay seam for pasted images: a refused send puts
-	 * them back in the composer with the text. */
-	const draftImagesRef = useRef<DraftImage[]>([]);
-	/* The image snapshot whose POST has not been ACKed yet: the strip keeps
-	 * those images until then, so Enter must not send them twice. */
-	const awaitingAckRef = useRef<readonly DraftImage[] | null>(null);
+	/** Pending composer send; images remain in the strip until its ACK. */
+	const draftRef = useRef<{ text: string; images: DraftImage[]; awaitingAck: boolean } | null>(null);
 	/* THE COMPOSER'S IMAGE DRAFT (composer paste): the shared paste, validate,
 	 * read hook. Its own ref mirror is why a send that resumes after an
 	 * await (dictation finish, image reads) still sees the live images. */
@@ -608,24 +598,13 @@ export function Chat({
 	const lightbox = useImageLightbox();
 	const removeImages = imageDraft.removeImages;
 
-	/** ONE learner message out: remembers the draft for the refusal flow's
-	 *  restore, then sends text plus any pictures as one input event. */
 	const sendDraft = useCallback(
 		(text: string, images: readonly DraftImage[]) => {
-			const snapshot = [...images];
-			draftRef.current = text;
-			draftImagesRef.current = snapshot;
-			awaitingAckRef.current = snapshot.length > 0 ? snapshot : null;
-			void send({ type: "text", text, ...(snapshot.length > 0 ? { images: wireImages(snapshot) } : {}) }, () => {
-				// ACK (POST ok, before the stream): the sent images leave the
-				// strip, and ONLY those: pictures added since stay. A stale
-				// success can't touch a newer snapshot's restore refs.
-				if (snapshot.length > 0) removeImages(snapshot.map((i) => i.id));
-				if (awaitingAckRef.current === snapshot) awaitingAckRef.current = null;
-				if (draftImagesRef.current === snapshot) {
-					draftImagesRef.current = [];
-					draftRef.current = null;
-				}
+			const draft = { text, images: [...images], awaitingAck: images.length > 0 };
+			draftRef.current = draft;
+			void send({ type: "text", text, ...(images.length ? { images: wireImages(images) } : {}) }, () => {
+				if (draft.images.length) removeImages(draft.images.map((i) => i.id));
+				if (draftRef.current === draft) draftRef.current = null;
 			});
 		},
 		[send, removeImages],
@@ -642,7 +621,7 @@ export function Chat({
 	// re-sends it (owner ruling 2026-10-09).
 	useEffect(() => {
 		if (!error) return;
-		awaitingAckRef.current = null; // a failed send releases its images
+		if (draftRef.current) draftRef.current.awaitingAck = false;
 		const missing = parseModelsRefusal(error.message);
 		// The key-refusal twin (zero-keys wave): a pinned model whose
 		// provider key is gone gets the SAME treatment — revert-draft and
@@ -655,9 +634,8 @@ export function Chat({
 		if (!missing && !keyRefused && !imageRefusal) {
 			// Before ACK the attachments are still in the strip. Keep the
 			// text too, without replacing anything typed since this send.
-			if (draftRef.current !== null && !textRef.current) applyText(draftRef.current);
+			if (draftRef.current && !textRef.current) applyText(draftRef.current.text);
 			draftRef.current = null;
-			draftImagesRef.current = [];
 			return; // a real error keeps the honest banner
 		}
 		// ORDER MATTERS: clearError() flips this effect's own dep (`error`)
@@ -672,13 +650,11 @@ export function Chat({
 				if (Array.isArray(record?.messages)) setMessages(record.messages);
 			}
 			if (cancelled) return;
-			if (draftRef.current !== null) {
-				applyText(draftRef.current);
+			if (draftRef.current) {
+				applyText(draftRef.current.text);
+				imageDraft.restoreSent(draftRef.current.images);
 				draftRef.current = null;
 			}
-			// Merged, never replaced: pictures pasted since the send stay.
-			imageDraft.restoreSent(draftImagesRef.current);
-			draftImagesRef.current = [];
 			clearError();
 			if (imageRefusal) imageDraft.setError(imageRefusal);
 			else setSetupOpen(true);
@@ -1216,7 +1192,7 @@ export function Chat({
 		const imgs = imageDraft.imagesRef.current;
 		if (!t && imgs.length === 0) return;
 		// An image send still awaiting its ACK owns these images already.
-		if (awaitingAckRef.current) return;
+		if (draftRef.current?.awaitingAck) return;
 		// An explicit retry must re-arm the model after a prior send error.
 		if (error) clearError();
 		applyText("");

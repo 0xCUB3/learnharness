@@ -4,7 +4,8 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute, type ImageFileResult } from "../tool-execute.ts";
 import { MAX_SOURCE_IMAGE_BYTES } from "../../core/images.ts";
-import { normalizeImage, readBoundedImageFile, sniffImage } from "../image-media.ts";
+import { inspectImageBytes } from "../../core/images.ts";
+import { normalizeImage, readBoundedImageFile } from "../image-media.ts";
 import { resolveSourcePath } from "./fs-shared.ts";
 
 /**
@@ -129,7 +130,7 @@ export const readTool: AgentTool<typeof readInput> = {
 				throw new Error(`Image file is too large (${formatSize(stat.size)}; max ${MAX_SOURCE_IMAGE_BYTES / (1024 * 1024)}MiB).`);
 			}
 			const bytes = await readBoundedImageFile(absolute, signal);
-			const sniffed = sniffImage(bytes);
+			const sniffed = inspectImageBytes(bytes);
 			if (!sniffed) throw new Error(`${path.basename(absolute)} is not a readable PNG, JPEG, GIF, WebP or BMP image.`);
 			const image = await normalizeImage(bytes, signal);
 			return {

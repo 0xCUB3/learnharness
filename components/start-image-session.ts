@@ -1,23 +1,8 @@
 import { wireImages, type DraftImage, type ModelCatalogResponse } from "@/src/core";
-import { firstMessageUrl } from "@/components/draft-images";
 
-/**
- * THE FIRST MESSAGE OF A NEW SESSION, text or pictures (home and /chat/new).
- *
- * Text only: the legacy `/chat/<id>?prompt=<text>` handoff (minimal scope).
- * With images: bytes never ride a URL, sessionStorage or an in-memory map.
- * The session is created (POST /api/chats), then the NORMAL turn request is
- * posted (POST /api/chat {chatId, input:{type:"text", text, images}}) and its
- * ACK is awaited, i.e. the response headers. The server gates (422 for a
- * model that cannot read images) BEFORE it persists, then write-aheads the
- * message and runs the turn in the background, so once the ACK arrives the
- * plain `/chat/<id>` page reads the persisted message and reattaches to the
- * in-flight turn. The SSE body is not consumed (it is cancelled, never
- * aborted via the request), and nothing here aborts on view teardown.
- *
- * A failed image start keeps the chat id so a retry reuses the SAME fresh
- * chat (no pile of empty sessions) as long as the create body is unchanged.
- */
+/** Image-first sessions wait for the normal write-ahead ACK before navigation.
+ * Text-only sessions keep their existing prompt URL. Only known pre-write
+ * refusals can reuse an empty session with the same model selection. */
 
 /** The model identity a fresh chat is stamped with (strong slot, else the
  *  default, thinking level included): part of the retry key, so a changed
@@ -98,7 +83,7 @@ export async function startFirstMessage(args: {
 		chatId = created.id;
 	}
 	// No settings PUT on create: the SERVER stamps the newborn.
-	if (images.length === 0) return { ok: true, chatId, target: firstMessageUrl(chatId, text) };
+	if (images.length === 0) return { ok: true, chatId, target: `/chat/${chatId}?prompt=${encodeURIComponent(text)}` };
 
 	const reuse: StartReuse = { key, chatId };
 	let ack: Response;

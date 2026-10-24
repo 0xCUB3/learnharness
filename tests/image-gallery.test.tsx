@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ImageGallery, galleryItemsFromBlocks, isRasterDataUrl } from "../components/image-gallery.tsx";
+import { imageFileName, isRasterDataUrl, rasterMimeOf } from "../src/core/images.ts";
+import { ImageGallery, galleryItemsFromBlocks } from "../components/image-gallery.tsx";
 import { ToolCallCard } from "../components/artifacts/tool-call-card.tsx";
 import { UserMessageParts } from "../components/user-message-parts.tsx";
 import { artifactRenderers } from "../components/artifacts/index.ts";
@@ -104,4 +105,13 @@ describe("useImageLightbox", () => {
 		assert.equal(r!.lightbox, null);
 		assert.equal(typeof r!.open, "function");
 	});
+});
+
+it("shared raster helpers retain MIME types and download filenames", () => {
+	for (const [mime, ext] of [["png", "png"], ["jpeg", "jpg"], ["gif", "gif"], ["webp", "webp"]]) {
+		const url = "data:image/" + mime + ";base64,AAAAAAAAAAAAAAAA";
+		assert.equal(rasterMimeOf(url), "image/" + mime);
+		assert.equal(imageFileName(url), "image." + ext);
+	}
+	assert.equal(rasterMimeOf("data:image/svg+xml;base64,AAAAAAAAAAAAAAAA"), null);
 });

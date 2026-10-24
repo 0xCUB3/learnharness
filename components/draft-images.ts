@@ -13,27 +13,9 @@ import {
 	type DraftImage,
 } from "@/src/core";
 
-/**
- * THE IMAGE DRAFT: the paste / file-picker / drop path every sending surface
- * shares (home, the /chat/new draft, a live session), as ONE hook.
- *
- * Shape: a plain controller (no React, so the ordering and stale-async rules
- * are testable in node) wrapped by useImageDraft. Source files are decoded in
- * the browser (first frame, via canvas) and normalized: PNG/JPEG already inside
- * the limits pass through byte-for-byte; everything else (GIF, WebP, oversized)
- * becomes a PNG, shrunk as needed. What the draft holds IS what the wire
- * carries (wireImages strips only the client id); the server validates, it
- * never rewrites.
- *
- * Rules the controller owns:
- *  - files are processed in the order given, one at a time (bounded memory,
- *    stable thumbnail order); a read followed at once by Enter waits via
- *    awaitReads;
- *  - clear() and unmount bump an epoch, so a decode finishing late can never
- *    resurrect a cleared draft;
- *  - restoreSent puts a refused send's images back FIRST without dropping the
- *    ones added since.
- */
+/** Shared draft controller with serial decoding and stale-read cancellation.
+ * Normalized browser bytes are sent unchanged. The plain controller keeps
+ * async ordering testable without a DOM harness. */
 
 /** What a composer needs to show and edit the draft: one object, so the
  *  surfaces pass the draft through as a unit. */
@@ -298,14 +280,9 @@ export function useImageDraft() {
 		[state, hasImages, c],
 	);
 	return {
-		images: state.images,
 		imagesRef,
 		hasImages,
-		error: state.error,
 		setError: c.setError,
-		addFiles: c.addFiles,
-		setImages: c.setImages,
-		clear: c.clear,
 		restoreSent: c.restoreSent,
 		removeImages: c.removeImages,
 		awaitReads: c.awaitReads,
@@ -366,10 +343,4 @@ function clipboardImageFiles(data: DataTransfer | null): File[] {
 		.filter((item) => item.kind === "file" && item.type.startsWith("image/"))
 		.map((item) => item.getAsFile())
 		.filter((f): f is File => f !== null);
-}
-
-/** Where a newborn TEXT-ONLY session opens with its first message. Image
- *  first messages never use a URL (see start-image-session.ts). */
-export function firstMessageUrl(chatId: string, text: string): string {
-	return `/chat/${chatId}?prompt=${encodeURIComponent(text)}`;
 }

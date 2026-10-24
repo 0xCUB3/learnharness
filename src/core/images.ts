@@ -43,17 +43,7 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 /** Whole-message decoded size: the record is JSON, keep the write bounded. */
 export const MAX_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024;
 
-/**
- * The accepted formats and the bytes each file starts with (its signature,
- * as [offset, expected bytes] pairs). The declared MIME type is the
- * client's claim; the signature is the content's.
- */
-const SIGNATURES: Readonly<Record<string, ReadonlyArray<readonly [number, string]>>> = {
-	"image/png": [[0, "\x89PNG"]],
-	"image/jpeg": [[0, "\xff\xd8\xff"]],
-	"image/gif": [[0, "GIF8"]],
-	"image/webp": [[0, "RIFF"], [8, "WEBP"]],
-};
+const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 /** The refusal wording, single-sourced: the composer's inline line and the
  *  server's 400 read the same text. */
@@ -91,17 +81,33 @@ export function imageUrl(image: ComposerImage): string {
 	return `data:${image.mimeType};base64,${image.data}`;
 }
 
+const RASTER_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,[A-Za-z0-9+/]{16,}/;
+
+/** Inspect only the header, not a multi-megabyte payload, on render. */
+export function rasterMimeOf(url: string): string | null {
+	return RASTER_DATA_URL.exec(url.slice(0, 160))?.[1] ?? null;
+}
+
+export function isRasterDataUrl(url: unknown): url is string {
+	return typeof url === "string" && url.length <= 40_000_000 && rasterMimeOf(url) !== null;
+}
+
+export function imageFileName(url: string): string {
+	const mime = rasterMimeOf(url) ?? "image/png";
+	return "image." + (mime === "image/jpeg" ? "jpg" : mime.slice(6));
+}
+
 /** The pre-read check for WIRE images (what the composer sends after any
  *  resize): the declared format and the decoded size, 5 MB max. */
 export function checkImageMeta(mimeType: string, bytes: number): void {
-	if (!(mimeType in SIGNATURES)) throw new ImageInputError(IMAGE_ERRORS.format);
+	if (!IMAGE_MIMES.has(mimeType)) throw new ImageInputError(IMAGE_ERRORS.format);
 	if (bytes > MAX_IMAGE_BYTES) throw new ImageInputError(IMAGE_ERRORS.size);
 }
 
 /** The pre-read check for a raw SOURCE file (before the composer resizes or
  *  re-encodes it for the wire): same formats, 20 MB max. */
 export function checkSourceImageMeta(mimeType: string, bytes: number): void {
-	if (!(mimeType in SIGNATURES)) throw new ImageInputError(IMAGE_ERRORS.format);
+	if (!IMAGE_MIMES.has(mimeType)) throw new ImageInputError(IMAGE_ERRORS.format);
 	if (bytes > MAX_SOURCE_IMAGE_BYTES) throw new ImageInputError(IMAGE_ERRORS.source);
 }
 
@@ -289,17 +295,19 @@ function checkContent(image: ComposerImage): ComposerImage {
 
 // ─── text projections (summary + export) ─────────────────────────────────────
 
+const IMAGE_MIME = /^image\/[\w.+-]{1,32}$/;
+
 /** The informative placeholder for an image in summaries and logs: the type
  *  only, NEVER the base64. */
 export function imageMarker(image: { mimeType?: unknown }): string {
-	return `[Image ${typeof image.mimeType === "string" && /^image\/[\w.+-]{1,32}$/.test(image.mimeType) ? image.mimeType : "unknown"}]`;
+	return `[Image ${typeof image.mimeType === "string" && IMAGE_MIME.test(image.mimeType) ? image.mimeType : "unknown"}]`;
 }
 
 /** An image as markdown (`![alt](data:...)`). Falls back to the plain marker
  *  when the block is not a well-formed image (nothing unsafe in a link). */
 export function imageDataUrlMarkdown(image: { mimeType?: unknown; data?: unknown }, alt = "Image"): string {
 	const { mimeType, data } = image;
-	if (typeof mimeType === "string" && typeof data === "string" && /^image\/[\w.+-]{1,32}$/.test(mimeType) && /^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+	if (typeof mimeType === "string" && typeof data === "string" && IMAGE_MIME.test(mimeType) && BASE64_CHARS.test(data)) {
 		return `![${alt.replace(/[[\]\n]/g, " ")}](data:${mimeType};base64,${data})`;
 	}
 	return imageMarker(image);

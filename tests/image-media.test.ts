@@ -4,7 +4,8 @@ import { createCanvas } from "@napi-rs/canvas";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { normalizeImage, readBoundedFile, providerSafePng, sniffImage, validateInputImages } from "../src/agent/image-media.ts";
+import { inspectImageBytes } from "../src/core/images.ts";
+import { normalizeImage, readBoundedFile, providerSafePng, validateInputImages } from "../src/agent/image-media.ts";
 import { ImageInputError, imageBlock, MAX_IMAGE_BYTES } from "../src/core/images.ts";
 
 async function raster(w: number, h: number, fmt: "png" | "jpeg" | "webp" = "png"): Promise<Buffer> {
@@ -45,7 +46,7 @@ describe("normalizeImage", () => {
 		bmp.writeInt32LE(4, 22);
 		bmp.writeUInt16LE(1, 26);
 		bmp.writeUInt16LE(24, 28);
-		assert.equal(sniffImage(bmp)?.mimeType, "image/bmp");
+		assert.equal(inspectImageBytes(bmp)?.mimeType, "image/bmp");
 		const out = await normalizeImage(bmp);
 		assert.deepEqual(dims(Buffer.from(out.data, "base64")), { w: 4, h: 4 });
 	});
@@ -81,7 +82,7 @@ function withOrientation6(jpeg: Buffer): Buffer {
 describe("EXIF-rotated JPEG", () => {
 	it("normalizes and validates with the rotated (decoded) geometry", async () => {
 		const jpeg = withOrientation6(await raster(32, 16, "jpeg"));
-		assert.deepEqual({ w: sniffImage(jpeg)!.width, h: sniffImage(jpeg)!.height }, { w: 32, h: 16 });
+		assert.deepEqual({ w: inspectImageBytes(jpeg)!.width, h: inspectImageBytes(jpeg)!.height }, { w: 32, h: 16 });
 		const out = await normalizeImage(jpeg);
 		assert.deepEqual(dims(Buffer.from(out.data, "base64")), { w: 16, h: 32 });
 		await validateInputImages([imageBlock("image/jpeg", jpeg.toString("base64"))]);

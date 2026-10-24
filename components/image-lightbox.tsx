@@ -9,36 +9,17 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
+import { imageFileName, rasterMimeOf } from "@/src/core";
 import { useEscapeClaim } from "@/components/escape-claim";
 import { fitGraphView, fitZoomFor, zoomedGraphView, type Viewport } from "@/components/pan-zoom";
 import { DownloadIcon, MaximizeIcon, XIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 
-/**
- * THE IMAGE FOCUS: clicking a picture (a composer draft, a sent picture, a
- * tool's image) opens it over the session area with fit/reset, zoom, pan
- * and download.
- *
- * Same shell law as MermaidOverlay (session-overlay.tsx): the overlay
- * mounts ABSOLUTE inside the session area (never `fixed inset-0`), so the
- * 60px drag bar stays sharp and draggable. The surface owns the open state
- * (useImageLightbox below); the overlay claims its own Esc (useEscapeClaim,
- * the one-Esc law). Only raster data: URLs are shown.
- */
-
-const RASTER = /^data:(image\/(?:png|jpeg|webp|gif));base64,[A-Za-z0-9+/]{16,}/;
-const EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
-
-/** The raster MIME of a data URL (header + first chars only), or null. */
-function rasterMime(url: string): string | null {
-	return RASTER.exec(url.slice(0, 160))?.[1] ?? null;
-}
-
+/** Mount inside the session area so the app chrome stays usable. */
 const STEP = 1.25;
 
 function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
 	useEscapeClaim(onClose);
-	const mime = rasterMime(url);
-	const rootRef = useRef<HTMLDivElement>(null);
+	const mime = rasterMimeOf(url);
 	const closeRef = useRef<HTMLButtonElement>(null);
 	const stageRef = useRef<HTMLDivElement>(null);
 	const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
@@ -121,7 +102,7 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
 	const download = () => {
 		const a = document.createElement("a");
 		a.href = url;
-		a.download = `image.${EXT[mime ?? "image/png"]}`;
+		a.download = imageFileName(url);
 		a.click();
 	};
 	const onKeyDown = (e: React.KeyboardEvent) => {
@@ -137,7 +118,6 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
 	if (!mime) return null;
 	return (
 		<div
-			ref={rootRef}
 			role="dialog"
 			aria-modal="true"
 			aria-label="Image"
@@ -208,7 +188,7 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
 export function useImageLightbox(): { open: (url: string) => void; lightbox: ReactNode } {
 	const [url, setUrl] = useState<string | null>(null);
 	const close = useCallback(() => setUrl(null), []);
-	const open = useCallback((u: string) => setUrl(rasterMime(u) ? u : null), []);
+	const open = useCallback((u: string) => setUrl(rasterMimeOf(u) ? u : null), []);
 	return {
 		open,
 		lightbox: url === null ? null : <ImageLightbox url={url} onClose={close} />,
