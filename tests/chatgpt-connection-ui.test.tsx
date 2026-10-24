@@ -120,6 +120,60 @@ test("Cancel after initial IPC promise ends cancels actual OAuth; late completio
  await act(async () => f.complete()); assert.deepEqual(f.calls.consent, []); assert(byTest("chatgpt-account-dialog") === dialog); assert.equal(f.calls.login.length, 1);
 });
 
+test("review: late cancel acknowledgement must not roll back newer global authority", async () => {
+ const held = deferred<ChatGPTStatus>();
+ const f = fixture(disconnected(true), { cancel: async () => { f.calls.cancel++; return held.promise; } });
+ await mount(); await begin(); await click(button("Cancel", byTest("chatgpt-account-dialog")));
+ await act(async () => f.push(disconnected(false)));
+ await act(async () => held.resolve(disconnected(true)));
+ assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]'));
+ assert.equal(f.status.allowBackgroundUse, false, "backend truth remains OFF");
+ await click(byTest("chatgpt-login"));
+ assert.equal(toggle().getAttribute("aria-checked"), "false", "new disclosure must use the newer authoritative global OFF, not the old cancellation snapshot");
+});
+
+test("late cancel acknowledgement cannot roll newer global ON back to OFF", async () => {
+ const held = deferred<ChatGPTStatus>(); const f = fixture(disconnected(false), { cancel: () => held.promise });
+ await mount(); await begin(); await click(button("Cancel", byTest("chatgpt-account-dialog")));
+ await act(async () => f.push(disconnected(true))); await act(async () => held.resolve(disconnected(false)));
+ assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]')); assert.equal(f.status.allowBackgroundUse, true);
+ await click(byTest("chatgpt-login")); assert.equal(toggle().getAttribute("aria-checked"), "true"); assert.deepEqual(f.calls.consent, []);
+});
+
+test("cancel reconciliation read is itself fenced when a newer status arrives before that read returns", async () => {
+ const held = deferred<ChatGPTStatus>(), current = deferred<ChatGPTStatus>();
+ const f = fixture(disconnected(), { cancel: () => held.promise }); let reads = 0;
+ await mount(); await begin(); await click(button("Cancel", byTest("chatgpt-account-dialog")));
+ await act(async () => f.push(disconnected(false)));
+ f.bridge.status = () => { reads++; return current.promise; };
+ await act(async () => held.resolve(disconnected(true))); assert.equal(reads, 1);
+ f.bridge.status = async () => f.status;
+ await act(async () => f.push(disconnected(true))); await act(async () => current.resolve(disconnected(false)));
+ assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]'));
+ await click(byTest("chatgpt-login")); assert.equal(toggle().getAttribute("aria-checked"), "true"); assert.deepEqual(f.calls.consent, []);
+});
+
+test("late cancellation preserves newer availability and error instead of dismissing an unrelated failure", async () => {
+ const held = deferred<ChatGPTStatus>(); const f = fixture(disconnected(), { cancel: () => held.promise });
+ await mount(); await begin(); await click(button("Cancel", byTest("chatgpt-account-dialog")));
+ await act(async () => f.push({ ...disconnected(false), available: false, error: storageError }));
+ await act(async () => held.resolve(disconnected(true)));
+ assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]'));
+ assert.equal(document.querySelector('[role="alert"]')?.textContent, storageError); assert((byTest("chatgpt-login") as HTMLButtonElement).disabled);
+});
+
+test("error-only cancellation reconciliation keeps last valid authority and leaves cancellation recoverable", async () => {
+ const held = deferred<ChatGPTStatus>(); const f = fixture(disconnected(), { cancel: () => held.promise });
+ await mount(); await begin(); await click(button("Cancel", byTest("chatgpt-account-dialog")));
+ await act(async () => f.push(disconnected(false)));
+ f.bridge.status = async () => errorReply(); await act(async () => held.resolve(disconnected(true)));
+ assert(byTest("chatgpt-account-dialog")); assert.equal(document.querySelector('[role="alert"]')?.textContent, storageError);
+ assert.equal((button("Cancel", byTest("chatgpt-account-dialog")) as HTMLButtonElement).disabled, false);
+ f.bridge.status = async () => f.status; f.bridge.cancel = async () => f.status;
+ await click(button("Cancel", byTest("chatgpt-account-dialog")));
+ await click(byTest("chatgpt-login")); assert.equal(toggle().getAttribute("aria-checked"), "false"); assert.deepEqual(f.calls.consent, []);
+});
+
 test("email-only connected selector and Manage remain responsive; account selection never changes global OFF", async () => {
  const initial = connected(false); initial.accounts.push(account("second", "second@example.invalid"), account("missing", ""));
  const f = fixture(initial); await mount();
@@ -203,6 +257,32 @@ test("error-only disconnect reply preserves coherent status/confirmation and per
  assert.equal((byTest("chatgpt-confirm-disconnect") as HTMLButtonElement).disabled, false); assert(byTest("chatgpt-disconnect-confirmation"));
  f.bridge.disconnect = async () => { const next = { ...disconnected(), accounts: [] }; f.push(next); return next; };
  await click(byTest("chatgpt-confirm-disconnect")); assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]')); assert(byTest("chatgpt-login"));
+});
+
+for (const value of [true, false]) test(`global toggle keeps its normal cursor while saving ${!value}, without accepting duplicate clicks`, async () => {
+ const held = deferred<ChatGPTStatus>();
+ const f = fixture(connected(value), { consent: (enabled) => { f.calls.consent.push(enabled); return held.promise; } });
+ await mount(); await click(button("Manage…")); await click(toggle());
+ await act(async () => f.push(connected(!value)));
+ assert((toggle() as HTMLButtonElement).disabled);
+ assert(byTest("chatgpt-global-background").className.includes("[&>button:disabled]:cursor-auto"));
+ assert.equal(toggle().getAttribute("aria-checked"), String(!value));
+ await click(toggle()); assert.deepEqual(f.calls.consent, [!value]);
+ await act(async () => held.resolve(connected(!value)));
+ assert.equal((toggle() as HTMLButtonElement).disabled, false);
+ assert(!byTest("chatgpt-global-background").className.includes("cursor-auto"));
+});
+
+test("global toggle retains the unavailable cursor if secure availability is lost during a save", async () => {
+ const held = deferred<ChatGPTStatus>(); const f = fixture(connected(), { consent: () => held.promise });
+ await mount(); await click(button("Manage…")); await click(toggle());
+ const denied = connected(false); denied.available = false; denied.error = storageError;
+ denied.accounts = denied.accounts.map((a) => ({ ...a, connected: false, planEnabled: false }));
+ await act(async () => f.push(denied));
+ assert((toggle() as HTMLButtonElement).disabled); assert.match(toggle().className, /cursor-not-allowed/);
+ assert(!byTest("chatgpt-global-background").className.includes("cursor-auto"));
+ await act(async () => held.resolve(connected(false)));
+ assert((toggle() as HTMLButtonElement).disabled); assert(!byTest("chatgpt-global-background").className.includes("cursor-auto"));
 });
 
 test("error-only global consent reply keeps saved state visible and a recoverable error", async () => {

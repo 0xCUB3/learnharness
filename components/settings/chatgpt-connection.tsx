@@ -161,11 +161,19 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 		if (cancel) {
 			// Keep cancellation serialized even after login's pending IPC reply.
 			operation.current = "cancel"; setBusy(true);
-			void window.lh?.chatgpt?.cancel().then((value: unknown) => {
+			const request = ++statusSequence.current;
+			void window.lh?.chatgpt?.cancel().then(async (value: unknown) => {
 				if (!mounted.current || generation.current !== intent) return;
-				const next = publishStatus(value);
+				if (!isStatus(value)) { setError(replyError(value)); return; }
+				let next: ChatGPTStatus | null;
+				if (request !== statusSequence.current) {
+					const refresh = ++statusSequence.current;
+					const current: unknown = await window.lh!.chatgpt!.status();
+					if (!mounted.current || generation.current !== intent) return;
+					next = refresh === statusSequence.current ? publishStatus(current) : statusRef.current;
+				} else next = publishStatus(value);
 				if (next && !next.pending) {
-					setDismissedError(next.error);
+					setDismissedError(value.error); // Dismiss only this cancellation's error, not a newer failure.
 					if (dialogRef.current === owner) showDialog(null);
 				} else if (next) setError(CONTROL_ERROR);
 			}).catch(() => { if (mounted.current && generation.current === intent) setError(CONTROL_ERROR); }).finally(() => {
@@ -281,7 +289,7 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 						<Button variant="ghost" size="xs" className="cursor-pointer text-red-400 hover:bg-red-500/10 hover:text-red-300" data-testid="chatgpt-disconnect" disabled={busy || status.pending || !managedPresent} onClick={() => dialog.kind === "manage" && showDialog({ ...dialog, confirm: true })}>Disconnect account</Button>
 					</div>
 				</>}
-				<div className="mt-4 flex items-center gap-3 text-xs text-foreground" data-testid="chatgpt-global-background">
+				<div className={`mt-4 flex items-center gap-3 text-xs text-foreground ${busy && operation.current === "change" && status.available && !status.pending ? "[&>button:disabled]:cursor-auto" : ""}`} data-testid="chatgpt-global-background">
 					<Toggle label={BACKGROUND_LABEL} checked={dialog.kind === "connect" ? background : status.allowBackgroundUse} disabled={busy || status.pending || !status.available} onChange={(enabled) => {
 						if (dialog.kind === "connect") { setBackground(enabled); setBackgroundDirty(true); }
 						else if (bridge) void control("change", () => bridge.consent(enabled));
