@@ -15,12 +15,10 @@
  * its own save), the same re-read pattern chat.tsx uses for "models".
  */
 
-import { useCallback, useEffect, useState } from "react";
 import type { AuthKeyStatus } from "@/src/core";
 import { classifyKeys, type ProviderKeyInfo } from "@/components/settings/keys-section";
 import { useModelCatalog } from "@/components/model-picker";
 import type { ModelCatalogResponse } from "@/src/core";
-import { useSettingsSaved } from "@/components/settings-signal";
 
 /** Pure: does a MODEL-PROVIDER key exist among the statuses? Reuses
  *  classifyKeys (the keys section's own classification — no drift):
@@ -46,25 +44,8 @@ export function hasAvailableProvider(providers: readonly { keyPresent: boolean }
  *  failed read claiming "zero keys" would be a lie the CTA flow then
  *  leans on). Re-reads on the keys signal. */
 export function useZeroKeys(): boolean {
-	const [zeroKeys, setZeroKeys] = useState(false);
-	const read = useCallback(() => {
-		// /api/models availability covers keys, connected subscriptions and
-		// custom providers (keyless included). A failed read changes nothing.
-		fetch("/api/models")
-			.then((r) => (r.ok ? r.json() : Promise.reject(new Error("read"))))
-			.then((body: { providers?: { keyPresent: boolean }[] }) => {
-				if (!Array.isArray(body.providers)) return;
-				setZeroKeys(!hasAvailableProvider(body.providers));
-			})
-			.catch(() => {});
-	}, []);
-	useEffect(() => {
-		read();
-	}, [read]);
-	useSettingsSaved((section) => {
-		if (section === "keys" || section === "models") read();
-	});
-	return zeroKeys;
+	const { catalog } = useModelCatalog();
+	return catalog ? !hasAvailableProvider(catalog.providers) : false;
 }
 
 /** The pill itself — the models CTA's chrome and placement, the keys
@@ -102,9 +83,6 @@ export function strongKeyless(catalog: ModelCatalogResponse | undefined): boolea
  *  (a provider key saved or deleted) and "models" (the strong slot
  *  re-pinned). Live-updates with the page, never mid-send. */
 export function useStrongKeyless(): boolean {
-	const { catalog, refresh } = useModelCatalog();
-	useSettingsSaved((section) => {
-		if (section === "keys" || section === "models") refresh();
-	});
+	const { catalog } = useModelCatalog();
 	return strongKeyless(catalog);
 }

@@ -13,6 +13,9 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type ModelRole } from "../../config.ts";
 import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
+import { chatGPTModel } from "./chatgpt-bridge.ts";
+import { chatGPTStream } from "./chatgpt-stream.ts";
+import type { ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 
 /** App identity is immutable and shared by Models and every native Agent.
  * Agent's default Pi attribution otherwise overrides the Models identity. */
@@ -116,9 +119,9 @@ function defaultThinkingLevel(model: Model<Api>): ThinkingLevel {
  *  key is resolved by pi-ai itself from the environment per request (the
  *  keys seam reflects file-saved keys into env), so the engine never
  *  hardcodes OpenRouter's. */
-export function piEngineForSpec(spec: ResolvedModelSpec): PiEngine {
+export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle): PiEngine {
 	const models: Models = piModels();
-	const model = models.getModel(spec.provider, spec.id);
+	const model = spec.provider === "chatgpt" ? chatGPTModel(spec.id) : models.getModel(spec.provider, spec.id);
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
@@ -137,7 +140,8 @@ export function piEngineForSpec(spec: ResolvedModelSpec): PiEngine {
 		streamFn: (requestModel, context, options) => {
 			const connected = spec.provider.startsWith("subscription-") || spec.provider.startsWith("custom-");
 			const cleanOptions = connected ? { ...options, apiKey: undefined, env: undefined, headers: undefined } : options;
-			return models.streamSimple(requestModel, context, {
+			const stream = spec.provider === "chatgpt" ? chatGPTStream(typeof background === "function" ? background : () => background, lifecycle) : models.streamSimple.bind(models);
+			return stream(requestModel, context, {
 				...cleanOptions,
 				// A failed subscription request must not be retried as a different billing source.
 				...(connected ? { maxRetries: 0 } : {}),

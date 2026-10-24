@@ -45,6 +45,7 @@ import { Hint } from "@/components/ui/hint";
 import { useSettingsDialog } from "@/components/settings/settings-dialog";
 import { type ProviderKeyInfo } from "@/components/settings/keys-section";
 import { ProviderMenuList } from "@/components/settings/model-menu";
+import { ChatGPTBackgroundAccess, ChatGPTConnection } from "@/components/settings/chatgpt-connection";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
 import { ThinkingMenuList } from "@/components/settings/model-menu";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -151,7 +152,6 @@ export function SetupKeysBody({
 }) {
 	return (
 		<div className="flex flex-col gap-3 px-6 py-5" data-testid="setup-stage-keys">
-			<p className="text-sm text-foreground">Add a provider key.</p>
 			<p className="text-xs text-muted-foreground">
 				Choose your AI provider and paste its API key. You’ll pick your models next.
 			</p>
@@ -229,6 +229,7 @@ export function SetupKeysBody({
 					</p>
 				)}
 			</div>
+			<div className="mt-2 border-t border-border/60 pt-4"><ChatGPTConnection setup /></div>
 		</div>
 	);
 }
@@ -284,16 +285,19 @@ export function SetupDialog({
 	// moment ago (stage 1's own screen) widens the pickers immediately.
 	useEffect(() => {
 		if (!open) return;
+		let cancelled = false;
+		setBody(null);
 		setPicked({});
 		setLevels({});
 		setError(null);
 		fetch("/api/keys")
 			.then((r) => r.json())
-			.then((b: { providers?: ProviderKeyInfo[] }) => setKeyProviders(b.providers ?? []))
-			.catch(() => setKeyProviders([]));
+			.then((b: { providers?: ProviderKeyInfo[] }) => { if (!cancelled) setKeyProviders(b.providers ?? []); })
+			.catch(() => { if (!cancelled) setKeyProviders([]); });
 		fetch("/api/models")
-			.then((r) => r.json())
+			.then((r) => { if (!r.ok) throw new Error("Catalog unavailable"); return r.json(); })
 			.then((b: ModelsBody) => {
+				if (cancelled) return;
 				setBody(b);
 				setFailed(false);
 				// Prefill (owner, 2026-09-22): each pinned tier opens with its
@@ -311,7 +315,8 @@ export function SetupDialog({
 				}
 				setLevels(preLevels);
 			})
-			.catch(() => setFailed(true));
+			.catch(() => { if (!cancelled) setFailed(true); });
+		return () => { cancelled = true; };
 	}, [open, keysTick]);
 
 	// Esc + outside-click — layered dismissal, closable WITHOUT
@@ -495,6 +500,7 @@ export function SetupDialog({
 										)}
 									</span>
 									<span className="text-xs text-muted-foreground/70">{SLOT_META[slot].roster}</span>
+									{slot !== "strong" && <ChatGPTBackgroundAccess provider={entry?.provider} />}
 									<div className="flex items-center gap-2">
 										<div className="relative flex-1">
 											<button

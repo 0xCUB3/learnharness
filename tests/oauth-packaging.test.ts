@@ -15,6 +15,6 @@ describe("desktop OAuth runtime payload", () => {
 		}
 	});
 	it("keeps connection data under the existing excluded data tree", () => {
-		assert.ok(config.outputFileTracingExcludes?.["*"]?.includes("data/**/*"));
+		assert.ok(config.outputFileTracingExcludes?.["*"]?.includes("**/data/**/*"));
 	});
 });
