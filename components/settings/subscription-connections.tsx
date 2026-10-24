@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { NATIVE_SUBSCRIPTIONS, type NativeSubscriptionProviderId, type NativeSubscriptionStatus } from "@/src/core";
 import { Button } from "@/components/ui/button";
 import { notifySettingsSaved } from "@/components/settings-signal";
-import { ConnectionDialog, ConnectionRow } from "./connection-controls";
+import { ConnectionDialog, ConnectionFooter, ConnectionRow } from "./connection-controls";
 import { ChatGPTConnection } from "./chatgpt-connection";
 import { Toggle } from "./controls";
 
@@ -18,12 +18,14 @@ const CONTROL_ERROR = "The connection could not be changed. Try again.";
 export function NativeSubscriptionUIProvider({ children }: { children: React.ReactNode }) {
 	const [statuses, setStatuses] = useState<NativeSubscriptionStatus[]>([]);
 	const [dialog, setDialog] = useState<NativeSubscriptionProviderId | null>(null);
+	const [view, setView] = useState<"notice" | "connection" | "manage">("notice");
 	const [confirm, setConfirm] = useState(false), [background, setBackground] = useState(true), [backgroundDirty, setBackgroundDirty] = useState(false), [promptValue, setPromptValue] = useState("");
 	const [operation, setOperation] = useState<"login" | "control" | null>(null), [error, setError] = useState<string | null>(null);
 	const mounted = useRef(false), sequence = useRef(0), generation = useRef(0), statusesRef = useRef(statuses);
 	const descriptor = NATIVE_SUBSCRIPTIONS.find((p) => p.providerId === dialog);
 	const status = statuses.find((s) => s.providerId === dialog) ?? (dialog ? emptySubscriptionStatus(dialog) : undefined);
 	const interaction = status?.interaction, prompt = interaction?.prompt;
+	const management = view === "manage";
 	const busy = operation === "control" || status?.committing === true;
 	async function refresh() {
 		const request = ++sequence.current;
@@ -47,7 +49,8 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 	function open(providerId: NativeSubscriptionProviderId) {
 		if (operation || statusesRef.current.some((s) => s.pending)) return;
 		generation.current++; setError(null); setConfirm(false); setBackgroundDirty(false);
-		setBackground(statusesRef.current.find((s) => s.providerId === providerId)?.allowBackgroundUse ?? true); setDialog(providerId);
+		const current = statusesRef.current.find((s) => s.providerId === providerId);
+		setBackground(current?.allowBackgroundUse ?? true); setView(current?.connectionId ? "manage" : "notice"); setDialog(providerId);
 	}
 	async function control(action: () => Promise<void>, close = false) {
 		if (busy) return;
@@ -63,6 +66,10 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 		if ((status?.pending || operation === "login") && bridge) { void control(() => bridge.cancel(dialog), true); return; }
 		generation.current++; setDialog(null); setError(null);
 	}
+	function beginSignIn() {
+		if (operation || busy || !status) return;
+		generation.current++; setError(null); setConfirm(false); setBackground(status.allowBackgroundUse); setBackgroundDirty(false); setView("notice");
+	}
 	async function login() {
 		const bridge = window.lh?.subscriptions;
 		if (!dialog || !bridge || operation || !status?.available) return;
@@ -74,18 +81,21 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 	const bridge = typeof window === "undefined" ? undefined : window.lh?.subscriptions;
 	return <Context.Provider value={{ statuses, busy: !!operation, open }}>
 		{children}
-		{dialog && descriptor && status && <ConnectionDialog label={`${descriptor.label} connection`} testid="subscription-connection-dialog" backdropTestid="subscription-dialog-backdrop" busy={busy} onClose={close}>
-			<h2 className={`text-sm font-semibold ${confirm ? "text-red-400" : "text-foreground"}`}>{confirm ? `Disconnect ${descriptor.label}?` : status.connectionId ? descriptor.label : `Connect to ${descriptor.label}`}</h2>
-			{confirm ? <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{subscriptionDisconnectCopy(descriptor.label)}</p> : <>
+		{dialog && descriptor && status && <ConnectionDialog key={`${dialog}:${view}:${confirm}`} label={`${descriptor.label} connection`} testid="subscription-connection-dialog" backdropTestid="subscription-dialog-backdrop" busy={busy} onClose={close}>
+			<h2 className="text-sm font-semibold text-foreground">{descriptor.label}</h2>
+			{confirm ? <>
+				<p className="mt-3 text-sm font-semibold text-red-400">Disconnect {descriptor.label}?</p>
+				<p className="mt-3 text-xs leading-relaxed text-muted-foreground">{subscriptionDisconnectCopy(descriptor.label)}</p>
+			</> : view === "notice" ? <>
 				<p className="mt-3 text-xs leading-relaxed text-muted-foreground" data-testid="subscription-privacy-notice">{subscriptionNotice(descriptor.label)}</p>
 				{dialog === "github-copilot" && <p className="mt-3 text-xs leading-relaxed text-muted-foreground" data-testid="copilot-policy-notice">{COPILOT_POLICY_NOTICE}</p>}
+			</> : <>
 				<div className="mt-4 flex items-center gap-3 text-xs text-foreground">
-					<Toggle label="Allow background use" checked={status.connectionId ? status.allowBackgroundUse : background} disabled={busy || !!operation || status.pending || !status.available} onChange={(enabled) => { setBackground(enabled); if (status.connectionId && bridge) void control(() => bridge.consent(dialog, enabled)); else setBackgroundDirty(true); }} />
+					<Toggle label="Allow background use" checked={management ? status.allowBackgroundUse : background} disabled={busy || !!operation || status.pending || !status.available} onChange={(enabled) => { setBackground(enabled); if (management && bridge) void control(() => bridge.consent(dialog, enabled)); else setBackgroundDirty(true); }} />
 					<span>Allow background use<span className="mt-1 block leading-relaxed text-muted-foreground">{SUBSCRIPTION_BACKGROUND_HINT}</span></span>
 				</div>
 				{!status.available && <p className="mt-3 text-xs text-muted-foreground">Subscription sign-in requires the desktop app's private server connection. API-key connections remain available here.</p>}
-				{status.connected && <p className="mt-3 text-xs text-muted-foreground">Connected</p>}
-				{interaction && <div className="mt-3 space-y-3 text-xs" data-testid="subscription-login-interaction">
+				{view === "connection" && interaction && <div className="mt-3 space-y-3 text-xs" data-testid="subscription-login-interaction">
 					{interaction.progress && <p role="status" className="text-muted-foreground">{interaction.progress}</p>}
 					{interaction.userCode && <p>Device code: <code className="select-text font-mono">{interaction.userCode}</code></p>}
 					{interaction.browser && <Button variant="outline" size="sm" disabled={busy} onClick={() => bridge && void bridge.open(dialog, interaction.attemptId, interaction.browser!.id).catch(() => setError("The browser could not be opened. Try again."))}>Open browser</Button>}
@@ -97,15 +107,14 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 				</div>}
 			</>}
 			{(error || status.error) && <p role="alert" className="mt-3 text-xs text-red-400">{error || status.error}</p>}
-			<div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-				{!confirm && status.connectionId && !status.pending && <>
-					<Button variant="ghost" size="sm" disabled={busy || !!operation} onClick={() => setConfirm(true)}>Disconnect</Button>
+			<ConnectionFooter testid="subscription-connection-footer" leading={!confirm && management && status.connectionId && !status.pending && <Button variant="ghost" size="sm" className="cursor-pointer text-red-400 hover:bg-red-500/10 hover:text-red-300" disabled={busy || !!operation} onClick={() => setConfirm(true)}>Disconnect</Button>}>
+				{!confirm && management && status.connectionId && status.available && !status.connected && !!status.error && !status.pending && <>
 					{status.error && <Button variant="outline" size="sm" disabled={busy || !!operation} onClick={() => bridge && void control(() => bridge.retry(dialog))}>Retry</Button>}
-					<Button variant="outline" size="sm" disabled={!status.available || busy || !!operation} onClick={() => void login()}>Reconnect</Button>
+					<Button variant="outline" size="sm" disabled={!status.available || busy || !!operation} onClick={beginSignIn}>Sign in again</Button>
 				</>}
-				<Button variant="ghost" size="sm" disabled={busy} onClick={close}>{confirm || !status.connectionId || status.pending ? "Cancel" : "Close"}</Button>
-				{confirm ? <Button variant="destructive" size="sm" disabled={busy} onClick={() => bridge && void control(() => bridge.disconnect(dialog), true)}>Disconnect</Button> : !status.connectionId && <Button variant="outline" size="sm" disabled={!status.available || !!operation || status.pending} onClick={() => void login()}>Connect</Button>}
-			</div>
+				<Button variant={!confirm && management ? "outline" : "ghost"} size="sm" disabled={busy} onClick={close}>{confirm || !management ? "Cancel" : "Close"}</Button>
+				{confirm ? <Button variant="destructive" size="sm" disabled={busy} onClick={() => bridge && void control(() => bridge.disconnect(dialog), true)}>Disconnect</Button> : view === "notice" ? <Button variant="outline" size="sm" disabled={!status.available || !!operation} onClick={() => setView("connection")}>Continue</Button> : view === "connection" && <Button variant="outline" size="sm" disabled={!status.available || !!operation || status.pending} onClick={() => void login()}>Connect</Button>}
+			</ConnectionFooter>
 		</ConnectionDialog>}
 	</Context.Provider>;
 }
@@ -114,9 +123,7 @@ export function NativeSubscriptionConnection({ providerId }: { providerId: Nativ
 	const ui = useContext(Context), descriptor = NATIVE_SUBSCRIPTIONS.find((p) => p.providerId === providerId)!;
 	const status = ui.statuses.find((s) => s.providerId === providerId) ?? emptySubscriptionStatus(providerId);
 	return <div className="flex flex-col gap-2" data-testid={`${providerId}-connection`}>
-		<ConnectionRow label={descriptor.label} action={status.connectionId ? "Manage…" : "Connect"} disabled={ui.busy || !status.available || ui.statuses.some((s) => s.pending)} onAction={() => ui.open(providerId)}>
-			{status.connected && <span className="text-xs text-muted-foreground">Connected</span>}
-		</ConnectionRow>
+		<ConnectionRow label={descriptor.label} action={status.connectionId ? "Manage…" : "Connect"} disabled={ui.busy || !status.available || ui.statuses.some((s) => s.pending)} onAction={() => ui.open(providerId)} />
 		{status.error && <p role="alert" className="text-xs text-red-400">{status.error}</p>}
 	</div>;
 }
