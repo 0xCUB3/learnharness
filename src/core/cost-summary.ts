@@ -106,6 +106,9 @@ function stageDollars(model: string, steps: readonly CallUsage[], price: CallPri
 /** Merge one step-set's tokens into an accumulating CallUsage. */
 function mergeTokens(into: CallUsage, steps: readonly CallUsage[]): void {
 	const summed = sumSteps(steps);
+	// Fold this before updating total writes, so an older write-bearing
+	// aggregate with a missing split remains unknown even after fresh data.
+	into.cacheWrite1hTokens = sumSteps([into, summed]).cacheWrite1hTokens;
 	into.inputTokens = (into.inputTokens ?? 0) + (summed.inputTokens ?? 0);
 	into.outputTokens = (into.outputTokens ?? 0) + (summed.outputTokens ?? 0);
 	into.cacheReadTokens = (into.cacheReadTokens ?? 0) + (summed.cacheReadTokens ?? 0);
