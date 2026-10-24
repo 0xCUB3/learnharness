@@ -77,3 +77,9 @@ export * from "./coverage.ts";
 // ONE session→markdown formatter — the extractor's view and the user-facing
 // export share it. Pure, browser-safe.
 export * from "./session-markdown.ts";
+
+export * from "./provider-connections.ts";
+
+export * from "./model-speed.ts";
+
+export * from "./contracts/native-subscriptions.ts";

@@ -46,16 +46,19 @@ import type { ModelsSettings } from "@/src/core";
 import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/menu-shell";
 import { notifySettingsSaved } from "@/components/settings-signal";
 import { KeysSection } from "./keys-section.tsx";
+import { ConnectionsSection } from "./connections-section.tsx";
 import { Hint } from "@/components/ui/hint";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 import { ChatGPTUIProvider } from "./chatgpt-connection.tsx";
+import { NativeSubscriptionsUIProvider } from "./subscription-connections.tsx";
 
 /** Owner (2026-09-20): hints earn their place — mechanics-explaining
  *  prose is out; only the keyboard note stays (storage location is a
  *  real question users ask). */
 const SECTIONS = [
 	{ id: "keys", label: "Providers" },
+	{ id: "connections", label: "Connections" },
 	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance" },
 	{ id: "graph", label: "Graph" },
@@ -92,12 +95,12 @@ export function SettingsDialogProvider({
 		setShow(true);
 	}, []);
 	return (
-		<ChatGPTUIProvider><DialogContext.Provider value={{ open }}>
+		<ChatGPTUIProvider><NativeSubscriptionsUIProvider><DialogContext.Provider value={{ open }}>
 			{children}
 			{show && (
 				<SettingsDialog onClose={() => setShow(false)} initialSection={landOn} initialRow={landOnRow} />
 			)}
-		</DialogContext.Provider></ChatGPTUIProvider>
+		</DialogContext.Provider></NativeSubscriptionsUIProvider></ChatGPTUIProvider>
 	);
 }
 
@@ -231,6 +234,7 @@ export function SettingsDialogBody({
 			body: object,
 		) => {
 			setError(null);
+			try {
 			const res = await fetch(`/api/settings/${section}`, {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
@@ -258,6 +262,9 @@ export function SettingsDialogBody({
 			notifySettingsSaved(section);
 			if (section === "appearance")
 				onAppearanceChange(body as AppearanceSettings);
+			} catch {
+				setError(`Could not save ${section} — check your connection and try again.`);
+			}
 		},
 		[onAppearanceChange],
 	);
@@ -376,6 +383,11 @@ export function SettingsDialogBody({
 									</SettingsRow>
 								</SettingsSection>
 							)}
+							{active === "connections" && (
+								<SettingsSection title="Connections" testid="section-connections">
+									<ConnectionsSection />
+								</SettingsSection>
+							)}
 							{active === "keys" && (
 								<SettingsSection title="Providers" testid="section-keys">
 									<KeysSection initialRow={initialRow ?? undefined} />
@@ -392,7 +404,7 @@ export function SettingsDialogBody({
 										graph={record.graph}
 										compaction={record.compaction}
 										onModelsChange={(next: ModelsSettings) =>
-											void write("models", next)
+											write("models", next)
 										}
 										onSectionChange={(next: AgentSettings) =>
 											void write("agent", next)
