@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse, ModelServiceTier, ModelsSettings, UserSettings } from "@/src/core";
+import { canonicalSubscriptionProvider } from "@/src/core";
 import { ModelSpeedControl, offersFastMode, tierForModel } from "@/components/model-speed-control";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
@@ -145,7 +146,7 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 			}
 		: strong;
 	const effectiveId = override?.model?.id;
-	const effectiveProvider = override?.model?.provider;
+	const effectiveProvider = override?.model?.provider ? canonicalSubscriptionProvider(override.model.provider) : undefined;
 	useEffect(() => {
 		onModelChange?.(effectiveProvider && effectiveId ? `${effectiveProvider}:${effectiveId}` : undefined);
 	}, [effectiveProvider, effectiveId, onModelChange]);

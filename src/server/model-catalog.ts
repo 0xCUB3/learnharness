@@ -1,4 +1,6 @@
-import { supportsCodexFastMode, modelServiceTier, type ModelServiceTier } from "../core/model-speed.ts";
+import { nativeSubscriptionModelIds, refreshNativeSubscriptionModels } from "../agent/native-subscription-bridge.ts";
+import { subscriptionProvider } from "../core/provider-connections.ts";
+import { canonicalSubscriptionProvider, supportsCodexFastMode, modelServiceTier, type ModelServiceTier } from "../core/model-speed.ts";
 import { readCustomProviders } from "../store/custom-providers.ts";
 import { connectionCatalogProviders } from "./provider-runtime.ts";
 /**
@@ -26,12 +28,19 @@ import { piModels } from "../agent/models.ts";
 import { chatGPTConnected, chatGPTModel, chatGPTModels, refreshChatGPTModels } from "../agent/chatgpt-bridge.ts";
 
 export async function refreshConnectionCatalog(): Promise<void> {
-	await refreshChatGPTModels(piModels().getModels("openai").filter((m): m is Model<"openai-responses"> => m.api === "openai-responses"));
+	await Promise.all([refreshChatGPTModels(piModels().getModels("openai").filter((m): m is Model<"openai-responses"> => m.api === "openai-responses")), refreshNativeSubscriptionModels()]);
 }
 function connectionModel(provider: string, id: string): Model<Api> | undefined {
+	provider = canonicalSubscriptionProvider(provider);
+	const subscription = subscriptionProvider(provider);
+	if (subscription && !nativeSubscriptionModelIds(subscription.id).has(id)) return undefined;
 	return provider === "chatgpt" ? chatGPTModel(id) : piModels().getModel(provider, id);
 }
-function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt"]; }
+function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt", "subscription-openai-codex"]; }
+function connectionModels(provider: string): Model<Api>[] {
+ const subscription = subscriptionProvider(provider);
+ return piModels().getModels(provider).filter((m) => !subscription || nativeSubscriptionModelIds(subscription.id).has(m.id));
+}
 import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
@@ -188,7 +197,7 @@ export function catalogContextLimits(): Map<string, number> {
 	const index = new Map<string, number>();
 	for (const provider of piModels().getProviders()) {
 		if (!keyed.has(provider.id)) continue;
-		for (const model of piModels().getModels(provider.id)) {
+		for (const model of connectionModels(provider.id)) {
 			index.set(`${provider.id}:${model.id}`, model.contextWindow);
 		}
 	}
@@ -205,7 +214,7 @@ export function modelCatalog(): ModelCatalogResponse {
 	const models = piModels()
 		.getProviders()
 		.filter((p) => keyed.has(p.id))
-		.flatMap((p) => piModels().getModels(p.id))
+		.flatMap((p) => connectionModels(p.id))
 		.map(toModelDto)
 		.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)))
 		.concat(chatGPTModels().map(toModelDto));
@@ -239,7 +248,7 @@ export function validateChatSettings(settings: ChatSettings): SettingsValidation
 		if (!connectionModel(provider, id)) {
 			return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		}
-		if (settings.serviceTier === "priority" && !supportsCodexFastMode(provider, id)) return { ok: false, error: "Fast mode is only available for supported Codex subscription models" };
+		if (settings.serviceTier === "priority" && !supportsCodexFastMode(provider, id)) return { ok: false, error: "Fast mode is only available for supported ChatGPT subscription models" };
 	}
 	// BYOK interlude (owner, 2026-09-22): thinking levels NEVER reject a
 	// write — a model swap with a pinned level JUST WORKS. The WRITE clamps

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createModels, InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
+import { createModels, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { customProvider, endpointFetch, subscriptionAliases } from "../src/agent/connected-providers.ts";
 import type { CustomProviderDefinition } from "../src/core/provider-connections.ts";
@@ -11,35 +11,28 @@ function definition(api: CustomProviderDefinition["api"] = "openai-completions")
 }
 
 describe("subscription provider isolation", () => {
-	it("exposes the native SDK subscription flows under distinct IDs, with no API-key handler", () => {
+	it("exposes distinct subscription IDs; Claude and Grok have neither API-key nor OAuth handlers in Models", () => {
 		const originals = builtinProviders();
 		const aliases = subscriptionAliases(originals);
-		assert.deepEqual(aliases.map((p) => p.id), ["subscription-openai-codex", "subscription-anthropic", "subscription-xai"]);
+		assert.deepEqual(aliases.map((p) => p.id), ["subscription-anthropic", "subscription-xai"]);
 		for (const provider of aliases) {
-			assert.equal(provider.auth.apiKey, undefined);
-			assert.ok(provider.auth.oauth?.isSubscription);
+			// Credentials for Claude/Grok come only from the native bridge lease, never from Models.getAuth.
+			assert.equal(provider.auth.apiKey, undefined); assert.equal(provider.auth.oauth, undefined);
 			assert.ok(provider.getModels().length > 0);
 			assert.ok(provider.getModels().every((m) => m.provider === provider.id && m.name.endsWith("· subscription")));
 		}
 	});
-	it("API keys and another provider's stored credential cannot authenticate a subscription alias", async () => {
+	it("API keys and legacy OAuth credentials are never consumed by Models.getAuth for Claude/Grok aliases", async () => {
 		const credentials = new InMemoryCredentialStore();
 		await credentials.modify("anthropic", async () => ({ type: "api_key", key: "not-a-subscription" }));
-		const models = createModels({ credentials, authContext: { env: async () => "ambient-api-key", fileExists: async () => false } });
+		await credentials.modify("subscription-anthropic", async () => ({ type: "oauth", access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 3600000 }));
+		await credentials.modify("subscription-xai", async () => ({ type: "oauth", access: "legacy-access", refresh: "legacy-refresh", expires: 0 }));
+		let ambientReads = 0;
+		const models = createModels({ credentials, authContext: { env: async () => { ambientReads++; return "ambient-api-key"; }, fileExists: async () => false } });
 		for (const provider of subscriptionAliases(builtinProviders())) {
 			models.setProvider(provider);
 			assert.equal(await models.getAuth(provider.id), undefined);
 		}
-	});
-	it("failed OAuth refresh never falls back to an ambient key", async () => {
-		const credentials = new InMemoryCredentialStore();
-		await credentials.modify("subscription-anthropic", async () => ({ type: "oauth", access: "expired", refresh: "refresh", expires: 0 }));
-		let ambientReads = 0;
-		const models = createModels({ credentials, authContext: { env: async () => { ambientReads++; return "paid-key"; }, fileExists: async () => false } });
-		const original = subscriptionAliases(builtinProviders()).find((p) => p.id === "subscription-anthropic")!;
-		const provider: Provider = { ...original, auth: { oauth: { ...original.auth.oauth!, refresh: async () => { throw new Error("revoked"); } } } };
-		models.setProvider(provider);
-		await assert.rejects(models.getAuth(provider.id), /OAuth refresh failed/);
 		assert.equal(ambientReads, 0);
 	});
 });
@@ -118,26 +111,4 @@ describe("custom endpoint auth and transport", () => {
 			assert.equal(provider.getModels()[0]!.baseUrl, definition().baseUrl);
 		}
 	});
-});
-
-it("Grok subscription preserves native xAI reasoning request fields and alias provenance", async () => {
-	const credentials = new InMemoryCredentialStore();
-	const provider = subscriptionAliases(builtinProviders()).find((p) => p.id === "subscription-xai")!;
-	await credentials.modify(provider.id, async () => ({ type: "oauth", access: "grok-fixture-token", refresh: "fixture-refresh", expires: Date.now() + 3600000 }));
-	const models = createModels({ credentials });
-	models.setProvider(provider);
-	const model = models.getModels(provider.id).find((m) => m.reasoning) ?? models.getModels(provider.id)[0]!;
-	let calls = 0;
-	const result = await models.completeSimple(model, { messages: [{ role: "user", content: "OK", timestamp: 1 }] }, { fetch: async (input, init) => {
-		calls++;
-		const req = new Request(input, init);
-		assert.equal(new URL(req.url).origin, "https://api.x.ai");
-		assert.equal(req.headers.get("authorization"), "Bearer grok-fixture-token");
-		const body = await req.json() as { include: string[] };
-		assert.ok(body.include.includes("reasoning.encrypted_content"));
-		return new Response('data: {"type":"response.created","response":{"id":"response-test","status":"in_progress","model":"test","output":[]}}\n\ndata: {"type":"response.completed","response":{"id":"response-test","status":"completed","model":"test","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n', { headers: { "content-type": "text/event-stream" } });
-	} });
-	assert.equal(calls, 1);
-	assert.equal(result.provider, "subscription-xai");
-	assert.equal(result.stopReason, "stop", result.errorMessage);
 });

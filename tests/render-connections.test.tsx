@@ -7,20 +7,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
 	ConnectionsSection,
 	CustomProviderEditor,
-	LoginAttemptPanel,
-	LoginPromptForm,
 	buildCustomRequest,
-	cancelPendingLogins,
 	draftFromStatus,
 	emptyCustomDraft,
 	namespaceCustomId,
-	safeExternalUrl,
-	subscriptionLine,
 } from "../components/settings/connections-section.tsx";
 import { SettingsDialogBody } from "../components/settings/settings-dialog.tsx";
+import { ChatGPTConnection, ChatGPTUIProvider } from "../components/settings/chatgpt-connection.tsx";
+import { NativeSubscriptionConnection, NativeSubscriptionsUIProvider } from "../components/settings/subscription-connections.tsx";
 import { SetupKeysBody } from "../components/setup-dialog.tsx";
 import { hasAvailableProvider, hasProviderKey } from "../components/setup-cta.tsx";
-import type { LoginAttemptView } from "../src/core/index.ts";
 
 const noop = () => {};
 
@@ -39,15 +35,6 @@ describe("connections pure helpers", () => {
 		assert.equal(namespaceCustomId("My Proxy"), "custom-my-proxy");
 		assert.equal(namespaceCustomId("custom-x"), "custom-x");
 		assert.equal(namespaceCustomId("  "), "");
-	});
-	it("only http(s) links", () => {
-		assert.equal(safeExternalUrl("javascript:alert(1)"), null);
-		assert.equal(safeExternalUrl("nope"), null);
-		assert.ok(safeExternalUrl("https://example.com/a"));
-	});
-	it("pending status is not disconnected", () => {
-		assert.equal(subscriptionLine(undefined), "checking");
-		assert.equal(subscriptionLine({ id: "subscription-xai", name: "x", connected: false }), "not connected");
 	});
 	it("builds a keyless request without apiKey", () => {
 		const r = buildCustomRequest(validDraft(), false);
@@ -105,33 +92,14 @@ describe("connections pure helpers", () => {
 	});
 });
 
-describe("unmount cancel", () => {
-	it("cancels only pending attempts with keepalive DELETE", () => {
-		const calls: [string, RequestInit][] = [];
-		const base = { providerId: "subscription-xai" as const, events: [] as LoginAttemptView["events"] };
-		const ids = cancelPendingLogins(
-			{
-				a: { ...base, id: "p1", state: "pending" },
-				b: { ...base, id: "f1", state: "failed" },
-			},
-			async (u, i) => void calls.push([u, i]),
-		);
-		assert.deepEqual(ids, ["p1"]);
-		assert.equal(calls.length, 1);
-		assert.equal(calls[0]![0], "/api/connections/login/p1");
-		assert.equal(calls[0]![1].method, "DELETE");
-		assert.equal(calls[0]![1].keepalive, true);
-		assert.equal((calls[0]![1].headers as Record<string, string>)["X-LearnHarness-Connections"], "1");
-	});
-});
-
 describe("connections SSR", () => {
-	it("section lists the three subscriptions in a checking state", () => {
+	it("section is custom providers only, no subscription login flow", () => {
 		const html = renderToStaticMarkup(<ConnectionsSection />);
-		for (const p of ["openai-codex", "anthropic", "xai"]) assert.ok(html.includes(`subscription-${p}-status`));
-		assert.ok(html.includes("checking"));
-		assert.ok(!html.includes("not connected"));
+		assert.ok(html.includes('data-testid="connections-section"'));
+		assert.ok(html.includes('data-testid="connections-custom"'));
 		assert.ok(html.includes('data-testid="custom-add"'));
+		assert.ok(!html.includes("connections-subscriptions"));
+		assert.ok(!/codex|subscription|login|Sign-in|Connect</i.test(html.replace(/Add custom provider/g, "")));
 	});
 	it("settings nav has Connections", () => {
 		const html = renderToStaticMarkup(<SettingsDialogBody onClose={noop} initialSection="connections" />);
@@ -144,42 +112,24 @@ describe("connections SSR", () => {
 		assert.ok(html.includes('data-testid="custom-model-0"'));
 		assert.ok(html.includes("anthropic-messages"));
 	});
-	it("attempt panel: external links, device code, error", () => {
-		const attempt: LoginAttemptView = {
-			id: "a",
-			providerId: "subscription-xai",
-			state: "pending",
-			events: [
-				{ type: "auth_url", url: "https://auth.example/x" },
-				{ type: "device_code", userCode: "ABCD-1234", verificationUri: "https://example.com/device" },
-			],
-		};
-		const html = renderToStaticMarkup(<LoginAttemptPanel attempt={attempt} busy={false} onAnswer={noop} onCancel={noop} />);
-		assert.ok(html.includes('target="_blank"') && html.includes('rel="noopener noreferrer"'));
-		assert.ok(html.includes("ABCD-1234"));
-		assert.ok(html.includes('data-testid="login-cancel"'));
-		const bad = renderToStaticMarkup(
-			<LoginAttemptPanel attempt={{ ...attempt, events: [{ type: "auth_url", url: "javascript:alert(1)" }] }} busy={false} onAnswer={noop} onCancel={noop} />,
-		);
-		assert.ok(!bad.includes("javascript:"));
-		const failed = renderToStaticMarkup(
-			<LoginAttemptPanel attempt={{ ...attempt, state: "failed", events: [], error: "Sign-in failed." }} busy={false} onAnswer={noop} onCancel={noop} />,
-		);
-		assert.ok(failed.includes('data-testid="login-error"'));
-	});
-	it("prompt types", () => {
-		const secret = renderToStaticMarkup(<LoginPromptForm prompt={{ id: "p", type: "secret", message: "Token" }} busy={false} onSubmit={noop} />);
-		assert.ok(secret.includes('type="password"'));
-		const sel = renderToStaticMarkup(
-			<LoginPromptForm prompt={{ id: "p", type: "select", message: "Pick", options: [{ id: "o", label: "Opt" }] }} busy={false} onSubmit={noop} />,
-		);
-		assert.ok(sel.includes("<select") && sel.includes("Opt"));
-		const manual = renderToStaticMarkup(<LoginPromptForm prompt={{ id: "p", type: "manual_code", message: "Code" }} busy={false} onSubmit={noop} />);
-		assert.ok(manual.includes("Paste the code"));
-	});
-	it("setup first-key screen links to Connections", () => {
+	it("Providers subscriptions group shows native ChatGPT/Claude/Grok buttons", () => {
+		// KeysSection renders a loading state under SSR, so mount the exact
+		// components its Subscriptions group uses.
 		const html = renderToStaticMarkup(
-			<SetupKeysBody
+			<ChatGPTUIProvider>
+				<NativeSubscriptionsUIProvider>
+					<ChatGPTConnection />
+					<NativeSubscriptionConnection provider="subscription-anthropic" />
+					<NativeSubscriptionConnection provider="subscription-xai" />
+				</NativeSubscriptionsUIProvider>
+			</ChatGPTUIProvider>,
+		);
+		for (const k of ["chatgpt-login", "native-claude-login", "native-grok-login"]) assert.ok(html.includes(`data-testid="${k}"`), k);
+		assert.ok(html.includes("Continue with ChatGPT") && html.includes("Continue with Claude") && html.includes("Continue with Grok"));
+	});
+	it("setup first-key screen links to Connections and shows native buttons", () => {
+		const html = renderToStaticMarkup(
+			<NativeSubscriptionsUIProvider><SetupKeysBody
 				providers={[]}
 				provider={null}
 				value=""
@@ -192,8 +142,10 @@ describe("connections SSR", () => {
 				onSave={noop}
 				menuAnchor={{ current: null }}
 				onOpenConnections={noop}
-			/>,
+			/></NativeSubscriptionsUIProvider>,
 		);
 		assert.ok(html.includes('data-testid="setup-open-connections"'));
+		for (const k of ["chatgpt-login", "native-claude-login", "native-grok-login"]) assert.ok(html.includes(`data-testid="${k}"`), k);
+		assert.ok(html.includes("Continue with ChatGPT") && html.includes("Continue with Claude") && html.includes("Continue with Grok"));
 	});
 });

@@ -1,3 +1,4 @@
+import { nativeSubscriptionConnected } from "../agent/native-subscription-bridge.ts";
 /** Connect app-owned adapters to the framework-free model engine. */
 import { configureModelConnections } from "../agent/models.ts";
 import { SUBSCRIPTION_PROVIDERS, subscriptionProvider } from "../core/provider-connections.ts";
@@ -8,7 +9,8 @@ import { readCustomProviders } from "../store/custom-providers.ts";
 configureModelConnections({ credentials: providerCredentials, customProviders: readCustomProviders });
 
 export function connectionAvailable(id: string): boolean | undefined {
-	if (subscriptionProvider(id)) return providerCredentials.peek(id)?.type === "oauth";
+	const subscription = subscriptionProvider(id);
+	if (subscription) return nativeSubscriptionConnected(subscription.id);
 	if (id.startsWith("custom-")) {
 		const definition = readCustomProviders().find((p) => p.id === id);
 		if (!definition) return false;

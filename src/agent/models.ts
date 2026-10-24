@@ -1,5 +1,4 @@
-import { supportsCodexFastMode, type ModelServiceTier } from "../core/model-speed.ts";
-import { codexServiceTierPayload } from "./codex-fast.ts";
+import { canonicalSubscriptionProvider, type ModelServiceTier } from "../core/model-speed.ts";
 import {
 	clampThinkingLevel,
 	createModels,
@@ -17,6 +16,8 @@ import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { chatGPTModel } from "./chatgpt-bridge.ts";
 import { chatGPTStream } from "./chatgpt-stream.ts";
+import { nativeSubscriptionStream } from "./native-subscription-stream.ts";
+import { subscriptionProvider } from "../core/provider-connections.ts";
 import type { ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 
 /** App identity is immutable and shared by Models and every native Agent.
@@ -123,8 +124,10 @@ function defaultThinkingLevel(model: Model<Api>): ThinkingLevel {
  *  keys seam reflects file-saved keys into env), so the engine never
  *  hardcodes OpenRouter's. */
 export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle): PiEngine {
+	const provider = canonicalSubscriptionProvider(spec.provider);
+	const subscription = subscriptionProvider(provider);
 	const models: Models = piModels();
-	const model = spec.provider === "chatgpt" ? chatGPTModel(spec.id) : models.getModel(spec.provider, spec.id);
+	const model = provider === "chatgpt" ? chatGPTModel(spec.id) : models.getModel(provider, spec.id);
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
@@ -141,14 +144,14 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 		// `reasoning` (undefined = off on pi-ai's scale); the clamp above keeps
 		// the pin honest even when config or settings drift off the map.
 		streamFn: (requestModel, context, options) => {
-			const connected = spec.provider.startsWith("subscription-") || spec.provider.startsWith("custom-");
+			const connected = !!subscription || provider.startsWith("custom-");
 			const cleanOptions = connected ? { ...options, apiKey: undefined, env: undefined, headers: undefined } : options;
-			const stream = spec.provider === "chatgpt" ? chatGPTStream(typeof background === "function" ? background : () => background, lifecycle) : models.streamSimple.bind(models);
+			const purpose = typeof background === "function" ? background : () => background;
+			const stream = provider === "chatgpt" ? chatGPTStream(purpose, lifecycle, spec.serviceTier) : subscription ? nativeSubscriptionStream(subscription.id, purpose) : models.streamSimple.bind(models);
 			return stream(requestModel, context, {
 				...cleanOptions,
 				// A failed subscription request must not be retried as a different billing source.
-				...(connected ? { maxRetries: 0 } : {}),
-				...(spec.provider === "subscription-openai-codex" ? { onPayload: codexServiceTierPayload(spec.serviceTier === "priority" && supportsCodexFastMode(spec.provider, spec.id), cleanOptions?.onPayload) } : {}),
+				...(connected || provider === "chatgpt" ? { maxRetries: 0 } : {}),
 				reasoning: level === "off" ? undefined : level,
 			});
 		},

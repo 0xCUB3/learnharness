@@ -1,47 +1,51 @@
 # Subscription and custom-provider connections
 
-Open Settings → Connections. Existing API keys stay in Settings → Providers.
+Open Settings → Providers for native subscriptions. Custom endpoints stay under Settings → Connections.
 
-![Connections settings in an isolated test instance](assets/connections-settings.png)
+## Native subscriptions
 
-## Subscriptions
+ChatGPT keeps upstream's app-registered OAuth connection. Claude and Grok use the pinned pi-ai SDK's provider-specific flows inside Electron's main process. They share the native account controls with ChatGPT but do not have equivalent LearnHarness client registrations.
 
-Connect Codex, Claude or Grok using the login flow offered by the pinned pi-ai SDK. The app displays the browser link, device code or manual prompt returned by that adapter. Complete sign-in in your normal browser. Closing Connections cancels a pending attempt on a best-effort basis; the server expires abandoned attempts after ten minutes.
+Continue opens a disclosure before sign-in. Claude opens its browser callback flow without a method picker or pasted-code field. Grok opens its device flow; a code, when needed, appears in a native dialog. Authorization URLs and codes never enter the web renderer.
 
-A subscription has its own model-picker entry. For example, `subscription-anthropic` and `anthropic` select different authentication sources even when they name the same model. Connect first, then explicitly pick the desired models for the strong, cheap and vision slots. The same engine path serves teaching and practice; background jobs, extraction and compaction use the configured role or slot.
+Each provider has saved local connections and an active selection. Their labels are local bookkeeping, not verified email addresses or provider identities. Manage lets you reconnect or disconnect after confirmation. The background-use choice is saved with the credential before the first lease. Turning it off later denies new background leases immediately. A request already admitted may still finish.
 
-A failed or disconnected subscription does not fall back to an API key. Disconnect removes the local credential without deleting learning records or changing model selections. It is not provider-side revocation, and a request already admitted may still finish. Existing Pi, Codex and Claude Code credential files are never read or imported.
+Claude and Grok keep separate subscription model identifiers, so selecting one cannot fall back to that provider's API key. Their model lists come from the SDK catalog, not a live entitlement check. Connect first and explicitly choose models for the configured slots. Disconnect removes that saved native connection without deleting learning records or changing model selections. Provider-side revocation is not confirmed.
 
-These flows are SDK capabilities, not a guarantee of account entitlement or provider approval for third-party clients. Codex uses the SDK's legacy route. Provider restrictions and available models may change. The application does not bypass a provider rejection. No account login or live subscription inference was performed as part of the automated tests.
+### Provider restrictions
 
-## Codex Fast mode
+[Anthropic does not permit third-party Claude.ai login or token intermediation](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use). The Claude SDK route is unsupported under that published restriction; the native UI does not make it approved. The xAI SDK uses an existing client registration, and permission to reuse it for LearnHarness has not been established. These experimental flows do not bypass provider rejection. Neither live sign-in was exercised for this refactor.
 
-Use Standard/Fast beside Thinking to change a Codex subscription session's speed. It starts on Standard. Model slots have the same control for defaults and background work, and changing a default does not change existing pinned sessions.
+An earlier PR build's Claude/Grok credentials are not migrated. Reconnect once under Providers. Its unused legacy records are left untouched; disconnecting a new native connection does not remove those older records. No credentials are imported from Pi or other apps. Old Codex selections resolve to upstream ChatGPT instead of retaining a duplicate sign-in. They still need a native ChatGPT connection and a model present in its catalog.
 
-Fast keeps the selected model and reasoning effort. [OpenAI documents](https://developers.openai.com/codex/speed) 2.5x included-limit usage and 2x purchased-credit usage. Account and model availability still apply. The setting is a request for Fast, not evidence of the delivered tier or a measured speedup.
+## ChatGPT Fast mode
 
-The request stays on the Codex subscription path, with no API-key fallback. Fast sends `service_tier: "priority"` before either transport sends the body; Standard sends no tier. Automated tests use synthetic credentials and responses, not live Fast inference.
+Standard/Fast appears beside Thinking for supported ChatGPT models. Standard is the default. Slots and role overrides have the same control; changing a default does not alter existing pinned sessions.
+
+Fast does not change the selected model or reasoning effort. [OpenAI documents](https://developers.openai.com/codex/speed) 2.5x included-limit usage and 2x purchased-credit usage. Account and model availability still apply. The setting requests Fast; it is not evidence of the delivered tier or a measured speedup.
+
+The request uses upstream's native ChatGPT account and private credential lease. Fast sends `service_tier: "priority"`; Standard omits the field even if a caller hook adds it. There is no API-key fallback. Automated tests use synthetic credentials and responses, not live Fast inference.
 
 ## Custom endpoints
 
-Add a provider with a unique `custom-` identifier and its base URL. Supported protocols are OpenAI Chat Completions, OpenAI Responses and Anthropic Messages. Add the exact upstream model IDs and their capabilities. No model discovery request runs automatically.
+Add a provider with a unique `custom-` identifier and its base URL. Choose the protocol exposed by that server. OpenAI Chat Completions and Responses are supported, as is Anthropic Messages. Enter exact model IDs and their capabilities; no discovery request runs automatically.
 
-For a local CLIProxyAPI-compatible server, an example is `http://127.0.0.1:8317/v1` with the protocol that server exposes. Enter that proxy's dedicated client key, or explicitly select keyless if that local server requires none. This only configures the client connection; it does not install a proxy or authenticate its upstream accounts.
+For a local CLIProxyAPI-compatible server, an example is `http://127.0.0.1:8317/v1`. Enter that proxy's dedicated client key or explicitly choose keyless. This configures the client connection; it does not install a proxy or authenticate upstream accounts.
 
-Each custom key is bound to that entry's normalized endpoint and protocol. Changing either requires a new key or explicit keyless configuration. Leaving the key blank while editing an unchanged endpoint retains its existing bound key. A failed metadata update cannot make that key authenticate the previous endpoint. Keys are write-only and are not copied from another provider or the process environment. Shell commands, environment substitutions and arbitrary header configuration are not supported.
+Each key is bound to its endpoint and protocol. Changing either requires a new key or explicit keyless configuration. A blank key preserves the existing binding only when the endpoint and protocol are unchanged. A failed metadata update cannot make the new key authenticate the old endpoint. Keys are write-only and never borrowed from another provider or the environment. Shell commands and arbitrary headers are not supported.
 
-Remote endpoints require HTTPS; HTTP is accepted for canonical loopback addresses. URL credentials, query strings and fragments are rejected. Literal metadata and link-local destinations are blocked. The application does not resolve DNS during validation, so this is not a complete SSRF sandbox. Only add endpoints you trust. Requests cannot leave the configured origin or follow redirects. Ambient OpenAI organization/project identifiers are removed from custom requests.
+Remote endpoints require HTTPS. HTTP is accepted for canonical loopback addresses only. URL credentials and query strings are rejected, as are fragments. Literal metadata and link-local destinations are blocked, but validation does not resolve DNS and is not a complete SSRF sandbox. Add only endpoints you trust. Requests cannot leave the configured origin or follow redirects. Ambient OpenAI organization/project identifiers are removed.
 
 ## Storage and access boundary
 
-OAuth credentials and custom keys live in `connections/provider-credentials.json` under `LH_DATA_DIR`, separate from the existing API-key file. They are plaintext at rest, protected by owner-only POSIX permissions rather than a keychain. Windows deployments must protect the data directory using their own ACLs. Do not include the connections directory in support bundles or public backups.
+ChatGPT retains its upstream credential file. Claude/Grok credentials live in separate files under Electron userData's `subscription-credentials/` directory. Refresh tokens stay in main, with serialized rotation persisted before a request receives a scoped access-token lease over inherited IPC. The renderer has no lease or token method. Account changes invalidate outstanding authority.
 
-Credential updates use atomic replacement and a shared filesystem lock. Only one active LearnHarness instance should use a data directory. An unknown or abandoned acquisition guard fails closed and requires recovery after stopping every process using that directory. Do not remove a lock based on its age.
+Custom keys are stored in `connections/provider-credentials.json` under `LH_DATA_DIR`. Credentials are unencrypted at rest. New native directories are created as 0700 and files as 0600 on POSIX; ownership and symlinks are checked. Windows needs appropriate filesystem ACLs. Never include credential files in public support bundles. Native records use atomic writes; custom key updates keep the shared filesystem lock. Use one active app instance per data directory and stop all writers before recovering an abandoned lock.
 
-The new connection-management routes are loopback-only and reject cross-site requests. Mutations require a matching Origin and `X-LearnHarness-Connections: 1`. These checks are not user authentication. Do not expose the server publicly, and do not assume they protect the application's older routes. Remote connection management is outside this change's scope.
+Native authentication is desktop-only and has no HTTP login route. Browser-only and externally launched development servers cannot use its private IPC. Custom management stays loopback-only with matching Origin and `X-LearnHarness-Connections: 1` on mutations. Those browser-only checks are not user authentication. Do not expose the server publicly.
 
-Subscription models are labeled Subscription in the picker, not priced as API usage. A custom model without configured rates is labeled Unpriced. Current historical cost aggregation leaves these new provider IDs unpriced; it does not report subscription quota, a subscription charge, or a zero-dollar bill. Optional custom rates describe picker metadata and do not price historical usage.
+Subscription entries are not API bills. Custom models without configured rates are Unpriced. Optional custom rates describe picker metadata and do not price historical usage. Historical aggregation does not report subscription quota or a zero-dollar subscription charge.
 
 ## Validation boundaries
 
-Tests use fake OAuth providers, isolated credential files and synthetic streaming responses. They cover refresh serialization, cancellation/disconnect races, auth-source separation and custom key binding. The production standalone build must include the SDK's dynamically loaded OAuth modules and callback page. A successful build or fake-provider request does not establish real-account entitlement, real refresh-token rotation or every supplier's multimodal/tool behavior.
+Tests use fake OAuth providers and isolated stores, with synthetic streams for request checks. They cover cancellation and account changes, including refresh rotation and background-consent races. The standalone runtime gate loads the pinned Claude/Grok OAuth modules and renders their callback page helpers without making authentication requests. These checks do not establish real account eligibility or real refresh-token behavior. Question-answer refusals use the structured `provider_key_missing` envelope so reconnect setup does not depend on error wording.

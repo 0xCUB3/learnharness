@@ -1,58 +1,76 @@
 import assert from "node:assert/strict";
-import zlib from "node:zlib";
-import { describe, it } from "node:test";
-import { InMemoryCredentialStore, type Api, type Model } from "@earendil-works/pi-ai";
+import { after, before, describe, it } from "node:test";
 import { resolveConversationSpec, resolveModelSpec, resolveSettings, resolveSlot } from "../src/core/settings-resolution.ts";
 import { sanitizeUserSettings } from "../src/core/settings.ts";
 import { parseAgentSettingsBody, parseModelsSettingsBody, parseSettingsBody } from "../src/server/settings-body.ts";
 import { clampModelsLevels, catalogDefaultsFor, rolePinsFor, toModelDto, validateChatSettings, validateModelsSettings } from "../src/server/model-catalog.ts";
-import { supportsCodexFastMode } from "../src/core/model-speed.ts";
-import { codexServiceTierPayload } from "../src/agent/codex-fast.ts";
-import { configureModelConnections, piEngineForSpec, piModels } from "../src/agent/models.ts";
+import { canonicalSubscriptionProvider, supportsCodexFastMode } from "../src/core/model-speed.ts";
+import { piModels } from "../src/agent/models.ts";
+import { chatGPTModels, refreshChatGPTModels } from "../src/agent/chatgpt-bridge.ts";
 
-// Fast mode (service_tier) contract tests. Fully offline: no network, no
-// user credentials; the runtime test uses an in-memory OAuth credential with
-// a synthetic JWT and a mock fetch behind the real SDK SSE transport.
-//
+// Fast mode (service_tier) policy tests. Fully offline. Runtime request tests
+// for native ChatGPT live in native-chatgpt-fast.test.ts.
 
-const CODEX = "subscription-openai-codex";
+const CODEX = "chatgpt";
+const LEGACY = "subscription-openai-codex";
+const FAST_ID = "gpt-6-sol";
 
-/** A catalog model the predicate accepts (discovered, so the test does not
- *  hardcode the parent's allowlist). */
-function fastId(): string {
-	const supports = supportsCodexFastMode;
-		const found = piModels().getModels(CODEX).find((m) => supports(CODEX, m.id));
-	assert.ok(found, "at least one subscription-openai-codex catalog model must support fast mode");
-	return found!.id;
-}
-/** A real codex catalog model the predicate rejects, if any. */
-function slowCodexId(): string | undefined {
-	const supports = supportsCodexFastMode;
-		return piModels().getModels(CODEX).find((m) => !supports(CODEX, m.id))?.id;
-}
+/** Known fast-capable native model id (private allowlist, docs checked 2026-10-24). */
+function fastId(): string { return FAST_ID; }
+/** A native model id outside the allowlist. */
+function slowCodexId(): string | undefined { return "gpt-5"; }
+// Synthetic ChatGPT IPC catalog so connectionModel("chatgpt", id) resolves offline.
+const originalSend = Object.getOwnPropertyDescriptor(process, "send");
+const originalConnected = Object.getOwnPropertyDescriptor(process, "connected");
+const desktopMarker = process.env.LH_DESKTOP_SERVER, desktopSecret = process.env.LH_DESKTOP_API_SECRET;
+const ipc = (value: unknown) => (process.emit as (name: string, value: unknown) => boolean)("message", value);
+const status = { available: true, pending: false, allowBackgroundUse: false, activeId: "scratch-account", accounts: [{ id: "scratch-account", email: "dummy@example.invalid", registration: "oaiapp_scratch", connected: true, planEnabled: true, background: false }], error: null };
+before(async () => {
+	process.env.LH_DESKTOP_SERVER = "1"; process.env.LH_DESKTOP_API_SECRET = "d".repeat(64);
+	Object.defineProperty(process, "connected", { configurable: true, value: true });
+	Object.defineProperty(process, "send", { configurable: true, value: (message: any, callback?: () => void) => {
+		queueMicrotask(() => ipc({ channel: "lh:chatgpt", id: message.id, op: message.op, ok: true, value: { epoch: 1, authorityRevision: 1, revision: 1, status, accountId: "scratch-account", models: [{ id: FAST_ID, name: "Fast" }, { id: "gpt-5", name: "Standard" }] } }));
+		callback?.(); return true;
+	} });
+	const base = piModels().getModel("openai", "gpt-5") as any;
+	await refreshChatGPTModels([base, { ...base, id: FAST_ID }]);
+});
+after(() => {
+	if (desktopMarker === undefined) delete process.env.LH_DESKTOP_SERVER; else process.env.LH_DESKTOP_SERVER = desktopMarker;
+	if (desktopSecret === undefined) delete process.env.LH_DESKTOP_API_SECRET; else process.env.LH_DESKTOP_API_SECRET = desktopSecret;
+	if (originalSend) Object.defineProperty(process, "send", originalSend); else delete process.send;
+	if (originalConnected) Object.defineProperty(process, "connected", originalConnected); else delete (process as { connected?: boolean }).connected;
+});
 const OTHER = { provider: "openrouter", id: "z-ai/glm-5.3-flash" };
 process.env.OPENROUTER_API_KEY ??= "test-key-codex-fast";
 
 // ─── predicate ───────────────────────────────────────────────────────────────
 
 describe("supportsCodexFastMode", () => {
-	it("is true only for known subscription-openai-codex models", () => {
+	it("is true only for known native chatgpt models", () => {
 		const supports = supportsCodexFastMode;
 		const id = fastId();
 		assert.equal(supports(CODEX, id), true);
 		assert.equal(supports(CODEX, "no-such-model"), false);
 		assert.equal(supports(CODEX, ""), false);
-		for (const provider of ["openai-codex", "openai", "chatgpt", "subscription-anthropic", "subscription-xai", "custom-local", "openrouter", ""]) {
+		for (const provider of ["openai-codex", "openai", "subscription-anthropic", "subscription-xai", "custom-local", "openrouter", ""]) {
 			assert.equal(supports(provider, id), false, `${provider}/${id}`);
 		}
 	});
-	it("is reflected on the picker DTO and never true for other providers", () => {
-		const supports = supportsCodexFastMode;
-		const fast = piModels().getModel(CODEX, fastId())!;
-		assert.equal(toModelDto(fast).supportsFastMode, true);
+	it("recognizes the retired duplicate id only through the canonical alias", () => {
+		assert.equal(canonicalSubscriptionProvider(LEGACY), "chatgpt");
+		assert.equal(canonicalSubscriptionProvider("chatgpt"), "chatgpt");
+		assert.equal(canonicalSubscriptionProvider("openai"), "openai");
+		assert.equal(supportsCodexFastMode(LEGACY, fastId()), true);
+		assert.equal(supportsCodexFastMode(LEGACY, "no-such-model"), false);
+	});
+	it("is reflected on the picker DTO and never true for other providers", async () => {
+				const native = chatGPTModels().find((m) => m.id === fastId());
+		assert.ok(native, "synthetic catalog exposes the fast model");
+		assert.equal(toModelDto(native!).supportsFastMode, true);
 		const other = piModels().getModel(OTHER.provider, OTHER.id)!;
 		assert.notEqual(toModelDto(other).supportsFastMode, true);
-		assert.equal(supports(OTHER.provider, OTHER.id), false);
+		assert.equal(supportsCodexFastMode(OTHER.provider, OTHER.id), false);
 	});
 });
 
@@ -224,165 +242,5 @@ describe("catalog", () => {
 		assert.equal(clampModelsLevels({ strong: { model: { provider: CODEX, id }, serviceTier: "priority" } }).strong?.serviceTier, "priority");
 		const slow = slowCodexId();
 		if (slow) assert.equal(validateChatSettings({ model: { provider: CODEX, id: slow }, serviceTier: "priority" }).ok, false);
-	});
-});
-
-// ─── payload hook ────────────────────────────────────────────────────────────
-
-/** Run the hook as the SDK does: a returned value replaces the body. */
-const MODEL = {} as Model<Api>;
-async function run(hook: (payload: unknown, model: Model<Api>) => unknown, body: unknown): Promise<Record<string, unknown>> {
-	const next = await hook(body, MODEL);
-	return (next === undefined ? body : next) as Record<string, unknown>;
-}
-
-describe("codexServiceTierPayload", () => {
-	it("Fast sets priority; Standard removes any tier", async () => {
-		const helper = codexServiceTierPayload;
-		assert.equal((await run(helper(true), { input: [] })).service_tier, "priority");
-		assert.equal((await run(helper(true), { service_tier: "default" })).service_tier, "priority");
-		const standard = await run(helper(false), { service_tier: "priority", input: [] });
-		assert.equal("service_tier" in standard, false);
-		assert.deepEqual(standard.input, []);
-	});
-	it("chains upstream in-place mutation and keeps its changes", async () => {
-		const helper = codexServiceTierPayload;
-		const out = await run(helper(true, (p) => { (p as Record<string, unknown>).extra = 1; }), { a: 1 });
-		assert.deepEqual(out, { a: 1, extra: 1, service_tier: "priority" });
-	});
-	it("chains upstream replacement and applies the tier to the replacement", async () => {
-		const helper = codexServiceTierPayload;
-		const original: Record<string, unknown> = { a: 1 };
-		const out = await run(helper(true, () => ({ replaced: true })), original);
-		assert.deepEqual(out, { replaced: true, service_tier: "priority" });
-		assert.equal("service_tier" in original, false, "the discarded original body is not touched");
-	});
-	it("Standard wins over an upstream hook that asks for priority (replacement or mutation)", async () => {
-		const helper = codexServiceTierPayload;
-		assert.equal("service_tier" in (await run(helper(false, (p) => { (p as Record<string, unknown>).service_tier = "priority"; }), {})), false);
-		assert.equal("service_tier" in (await run(helper(false, () => ({ service_tier: "priority" })), {})), false);
-		assert.equal((await run(helper(true, () => ({ service_tier: "default" })), {})).service_tier, "priority");
-	});
-	it("passes the model to upstream and awaits async upstream hooks", async () => {
-		const helper = codexServiceTierPayload;
-		const seen: unknown[] = [];
-		const hook = helper(true, async (p, m) => { seen.push(m); return { ...(p as object), async: true }; });
-		const model = { id: "x" } as unknown as Model<Api>;
-		const next = (await hook({ a: 1 }, model)) as Record<string, unknown>;
-		assert.deepEqual(seen, [model]);
-		assert.deepEqual(next, { a: 1, async: true, service_tier: "priority" });
-	});
-	it("rejects non-object bodies, before or after upstream", async () => {
-		const helper = codexServiceTierPayload;
-		for (const fast of [true, false]) {
-			for (const bad of [null, undefined, "x", 3, true, [] as unknown[]]) {
-				await assert.rejects(Promise.resolve().then(() => helper(fast)(bad, MODEL)), undefined as never, `${fast}/${JSON.stringify(bad)}`);
-			}
-			await assert.rejects(Promise.resolve().then(() => helper(fast, () => "nope")({}, MODEL)));
-			await assert.rejects(Promise.resolve().then(() => helper(fast, () => [])({}, MODEL)));
-		}
-	});
-	it("does not retain state between calls", async () => {
-		const helper = codexServiceTierPayload;
-		const hook = helper(true);
-		const a = await run(hook, { n: 1 });
-		const b = await run(hook, { n: 2 });
-		assert.deepEqual(a, { n: 1, service_tier: "priority" });
-		assert.deepEqual(b, { n: 2, service_tier: "priority" });
-	});
-});
-
-// ─── production engine over real SDK SSE transport ──────────────────────────
-
-function fixtureJwt(): string {
-	const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-	return `${b64({ alg: "none" })}.${b64({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-fixture" } })}.sig`;
-}
-
-const SSE = 'data: {"type":"response.created","response":{"id":"r1","status":"in_progress","model":"t","output":[]}}\n\n'
-	+ 'data: {"type":"response.completed","response":{"id":"r1","status":"completed","model":"t","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n';
-
-interface Captured { url: string; headers: Headers; body: Record<string, unknown> }
-
-/** Drive one turn through piEngineForSpec's real streamFn with a mock fetch. */
-async function turn(
-	spec: { provider: string; id: string; serviceTier?: "default" | "priority" },
-	options: Record<string, unknown> = {},
-): Promise<Captured[]> {
-	const calls: Captured[] = [];
-	const engine = piEngineForSpec(spec as never, true);
-	const stream = engine.streamFn(engine.model, { messages: [{ role: "user", content: "hi", timestamp: 1 }] } as never, {
-		transport: "sse",
-		cacheRetention: "none",
-		maxRetries: 0,
-		fetch: (async (input: unknown, init?: RequestInit) => {
-			const headers = new Headers(init?.headers);
-			let raw = Buffer.from(init?.body as Uint8Array);
-			if (headers.get("content-encoding") === "zstd") raw = Buffer.from(zlib.zstdDecompressSync(raw));
-			calls.push({ url: String(input), headers, body: JSON.parse(raw.toString("utf8")) });
-			return new Response(SSE, { headers: { "content-type": "text/event-stream" } });
-		}) as typeof fetch,
-		...options,
-	} as never);
-	const result = await (stream as { result(): Promise<{ stopReason: string; errorMessage?: string }> }).result();
-	assert.equal(result.stopReason, "stop", result.errorMessage);
-	return calls;
-}
-
-describe("piEngineForSpec codex wiring (offline SSE)", () => {
-	const credentials = new InMemoryCredentialStore();
-	let ready = false;
-	async function setup() {
-		if (ready) return;
-		await credentials.modify(CODEX, async () => ({ type: "oauth", access: fixtureJwt(), refresh: "fixture-refresh", expires: Date.now() + 3_600_000 }));
-		configureModelConnections({ credentials, customProviders: () => [] });
-		ready = true;
-	}
-
-	it("priority tier sends service_tier priority; keys/env/headers from the caller are stripped", async () => {
-		await setup();
-		const calls = await turn({ provider: CODEX, id: fastId(), serviceTier: "priority" }, {
-			apiKey: "leaked-api-key", env: { OPENAI_API_KEY: "leaked-env" }, headers: { "x-leak": "1", authorization: "Bearer leaked-api-key" },
-		});
-		assert.equal(calls.length, 1);
-		assert.equal(calls[0]!.body.service_tier, "priority");
-		assert.equal(calls[0]!.headers.get("x-leak"), null);
-		assert.ok(!(calls[0]!.headers.get("authorization") ?? "").includes("leaked"));
-		assert.equal(calls[0]!.headers.get("authorization"), `Bearer ${fixtureJwt()}`);
-	});
-	it("default and absent tiers send no service_tier", async () => {
-		await setup();
-		for (const serviceTier of ["default", undefined] as const) {
-			const calls = await turn({ provider: CODEX, id: fastId(), ...(serviceTier ? { serviceTier } : {}) });
-			assert.equal("service_tier" in calls[0]!.body, false, String(serviceTier));
-		}
-	});
-	it("a stray caller onPayload cannot enable priority on a Standard turn, and its other edits survive", async () => {
-		await setup();
-		const calls = await turn({ provider: CODEX, id: fastId() }, {
-			onPayload: (p: Record<string, unknown>) => { p.service_tier = "priority"; p.caller_marker = true; },
-		});
-		assert.equal("service_tier" in calls[0]!.body, false);
-		assert.equal(calls[0]!.body.caller_marker, true);
-	});
-	it("chains a caller onPayload ahead of the priority tier", async () => {
-		await setup();
-		const calls = await turn({ provider: CODEX, id: fastId(), serviceTier: "priority" }, {
-			onPayload: () => undefined,
-		});
-		assert.equal(calls[0]!.body.service_tier, "priority");
-	});
-	it("tier is ineligible on a codex model outside the fast list", async () => {
-		await setup();
-		const slow = slowCodexId();
-		if (!slow) return; // every catalog model is fast-capable in this SDK version
-		const calls = await turn({ provider: CODEX, id: slow, serviceTier: "priority" });
-		assert.equal("service_tier" in calls[0]!.body, false);
-	});
-	it("non-codex providers never get the hook (no tier injected)", () => {
-		// No network: just verify engine construction ignores the tier for other providers.
-		const engine = piEngineForSpec({ provider: OTHER.provider, id: OTHER.id, serviceTier: "priority" } as never, true);
-		assert.equal(engine.model.provider, OTHER.provider);
-		assert.equal(typeof engine.streamFn, "function");
 	});
 });

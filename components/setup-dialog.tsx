@@ -36,7 +36,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import type React from "react";
-import { type ModelCatalogEntry, type ModelServiceTier, type ModelSlotName, type ModelsSettings } from "@/src/core";
+import { canonicalSubscriptionProvider, type ModelCatalogEntry, type ModelServiceTier, type ModelSlotName, type ModelsSettings } from "@/src/core";
 import { ModelSpeedControl, offersFastMode, tierForModel } from "@/components/model-speed-control";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
@@ -47,6 +47,7 @@ import { useSettingsDialog } from "@/components/settings/settings-dialog";
 import { type ProviderKeyInfo } from "@/components/settings/keys-section";
 import { ProviderMenuList } from "@/components/settings/model-menu";
 import { ChatGPTBackgroundAccess, ChatGPTConnection } from "@/components/settings/chatgpt-connection";
+import { NativeSubscriptionBackgroundAccess, NativeSubscriptionConnection } from "@/components/settings/subscription-connections";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
 import { ThinkingMenuList } from "@/components/settings/model-menu";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -92,7 +93,7 @@ export function prefillFromSlots(
 	for (const slot of SLOT_ORDER) {
 		const pin = slots?.[slot];
 		const entry = pin?.model
-			? models.find((m) => m.provider === pin.model!.provider && m.id === pin.model!.id)
+			? models.find((m) => canonicalSubscriptionProvider(m.provider) === canonicalSubscriptionProvider(pin.model!.provider) && m.id === pin.model!.id)
 			: undefined;
 		if (entry) pre[slot] = entry;
 	}
@@ -249,7 +250,7 @@ export function SetupKeysBody({
 					</p>
 				)}
 			</div>
-			<div className="mt-2 border-t border-border/60 pt-4"><ChatGPTConnection setup /></div>
+			<div className="mt-2 border-t border-border/60 pt-4"><div className="flex flex-wrap items-start gap-3"><ChatGPTConnection setup /><NativeSubscriptionConnection provider="subscription-anthropic" setup /><NativeSubscriptionConnection provider="subscription-xai" setup /></div></div>
 		</div>
 	);
 }
@@ -532,7 +533,7 @@ export function SetupDialog({
 										)}
 									</span>
 									<span className="text-xs text-muted-foreground/70">{SLOT_META[slot].roster}</span>
-									{slot !== "strong" && <ChatGPTBackgroundAccess provider={entry?.provider} />}
+									{slot !== "strong" && <><ChatGPTBackgroundAccess provider={entry?.provider} /><NativeSubscriptionBackgroundAccess provider={entry?.provider} /></>}
 									<div className="flex items-center gap-2">
 										<div className="relative flex-1">
 											<button

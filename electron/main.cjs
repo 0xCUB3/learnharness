@@ -24,8 +24,11 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog, clipboard } = require("electron");
 const { createChatGPT, fileStore } = require("./chatgpt.cjs");
+const { createSubscription, subscriptionFileStore } = require("./subscriptions.cjs");
+const { attachSubscriptionChild, subscriptionControl } = require("./subscriptions-ipc.cjs");
+const { pathToFileURL } = require("node:url");
 const { attachChatGPTChild, trustedSender, chatGPTControl } = require("./chatgpt-ipc.cjs");
 const { desktopAPIHeaders } = require("./desktop-api.cjs");
 const { randomBytes } = require("node:crypto");
@@ -134,6 +137,40 @@ if (process.argv.includes("--browser-service")) {
 let serverProcess = null;
 let chatgpt = null;
 let chatgptChild = null;
+const subscriptions = new Map();
+let subscriptionsChild = null;
+const subscriptionSDK = new Map();
+const deviceCodeDialogs = new Map();
+
+/** Load only this app's pinned SDK, never another app's installation or auth store. */
+async function nativeSubscriptionSDK(provider) {
+	const native = provider === "subscription-anthropic" ? "anthropic" : provider === "subscription-xai" ? "xai" : null;
+	if (!native) throw new Error("Unsupported subscription provider");
+	if (!subscriptionSDK.has(native)) subscriptionSDK.set(native, (async () => {
+		const entry = path.join(path.dirname(serverEntry()), "node_modules", "@earendil-works", "pi-ai", "dist", "providers", native + ".js");
+		const module = await import(pathToFileURL(entry).href);
+		return module[native + "Provider"]();
+	})());
+	return subscriptionSDK.get(native);
+}
+
+/** Device codes, when needed, live in a trusted native dialog, not the web renderer. */
+async function showSubscriptionDeviceCode({ provider, label, userCode }) {
+	const focused = BrowserWindow.getFocusedWindow();
+	const win = focused && trustedAppWindows.has(focused) ? focused : [...trustedAppWindows].find((w) => !w.isDestroyed());
+	if (!win || win.isDestroyed()) return;
+	deviceCodeDialogs.get(provider)?.abort();
+	const controller = new AbortController();
+	deviceCodeDialogs.set(provider, controller);
+	try {
+		const result = await dialog.showMessageBox(win, { type: "info", title: "Sign in to " + label,
+			message: "Enter this code in the sign-in page", detail: userCode,
+			buttons: ["Copy code", "Close"], defaultId: 0, cancelId: 1, signal: controller.signal });
+		if (result.response === 0 && !controller.signal.aborted) clipboard.writeText(userCode);
+	} finally {
+		if (deviceCodeDialogs.get(provider) === controller) deviceCodeDialogs.delete(provider);
+	}
+}
 // Per-launch request capability, never OAuth tokens and never renderer state.
 let desktopAPISecret = null;
 const trustedAppWindows = new Set();
@@ -218,6 +255,7 @@ function startServer(port) {
 		);
 		serverProcess = child;
 		chatgptChild = attachChatGPTChild(child, chatgpt);
+		subscriptionsChild = attachSubscriptionChild(child, subscriptions);
 		const fwd = (buf) => buf.toString().trimEnd().split("\n").forEach((l) => l && log(`server: ${l}`));
 		child.stdout.on("data", fwd);
 		child.stderr.on("data", fwd);
@@ -226,6 +264,9 @@ function startServer(port) {
 			serverProcess = null;
 			chatgptChild?.dispose();
 			chatgptChild = null;
+			subscriptionsChild?.dispose();
+			subscriptionsChild = null;
+			for (const connection of subscriptions.values()) connection.close();
 			chatgpt?.close();
 		});
 		resolve(child);
@@ -251,6 +292,8 @@ function waitUntilUp(url, tries = 150) {
 
 function killServer() {
 	chatgpt?.close();
+	for (const connection of subscriptions.values()) connection.close();
+	for (const controller of deviceCodeDialogs.values()) controller.abort();
 	if (!serverProcess) return;
 	const child = serverProcess;
 	serverProcess = null;
@@ -565,6 +608,7 @@ function installMenu() {
 async function main() {
 	app.on("window-all-closed", () => {
 		chatgpt?.pause();
+		for (const connection of subscriptions.values()) connection.pause();
 		// macOS convention: the app stays resident, reactivated from the Dock.
 		if (process.platform !== "darwin") app.quit();
 	});
@@ -596,6 +640,20 @@ async function main() {
 				for (const win of BrowserWindow.getAllWindows()) win.webContents.send("lh:chatgpt:changed");
 			},
 		});
+		for (const [provider, label] of [["subscription-anthropic", "Claude"], ["subscription-xai", "Grok"]]) {
+			subscriptions.set(provider, createSubscription({ provider, label,
+				store: subscriptionFileStore(path.join(app.getPath("userData"), "subscription-credentials", provider + ".json"), provider),
+				getOAuth: async () => (await nativeSubscriptionSDK(provider)).auth.oauth,
+				getModels: async () => (await nativeSubscriptionSDK(provider)).getModels().map(({ id, name }) => ({ id, name })),
+				openExternal: (target) => shell.openExternal(target),
+				showDeviceCode: showSubscriptionDeviceCode,
+				onChange: (value) => {
+					if (!value.status.pending) deviceCodeDialogs.get(provider)?.abort();
+					subscriptionsChild?.send(value);
+					for (const win of trustedAppWindows) if (!win.isDestroyed()) win.webContents.send("lh:subscriptions:changed");
+				},
+			}));
+		}
 		log(`starting server: ${serverEntry()}`);
 		log(`data dir: ${DATA_DIR()}${fs.existsSync(AUTH_FILE()) ? " · auth.json: present" : " · auth.json: ABSENT (no BYOK keys yet)"}`);
 		await startServer(new URL(url).port);
@@ -611,6 +669,12 @@ async function main() {
 		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return { error: "Untrusted desktop request." };
 		if (!chatgpt || !serverProcess?.connected) return { available: false, pending: false, activeId: null, accounts: [], error: "ChatGPT sign-in requires the desktop app's private server connection. Browser-only and externally launched development servers keep API-key connections." };
 		return chatGPTControl(command, chatgpt);
+	});
+
+	ipcMain.handle("lh:subscriptions:control", async (event, command) => {
+		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return { error: "Untrusted desktop request." };
+		if (!subscriptions.size || !serverProcess?.connected) return { available: false, pending: false, allowBackgroundUse: true, activeId: null, accounts: [], error: "Subscription sign-in requires the desktop app's private server connection." };
+		return subscriptionControl(command, subscriptions);
 	});
 
 	installMenu();
@@ -638,7 +702,7 @@ async function main() {
 		if (width < target) win.setBounds({ x, y, width: target, height });
 	});
 	app.on("activate", () => {
-		if (BrowserWindow.getAllWindows().length === 0) { chatgpt?.resume(); createWindow(url); }
+		if (BrowserWindow.getAllWindows().length === 0) { chatgpt?.resume(); for (const connection of subscriptions.values()) connection.resume(); createWindow(url); }
 	});
 	createWindow(url);
 	log(`window open: ${url}`);

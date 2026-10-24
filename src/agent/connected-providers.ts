@@ -1,36 +1,21 @@
-import { createProvider, lazyStream, type AssistantMessageEvent, type AssistantMessageEventStream, type Api, type ApiStreamOptions, type CredentialStore, type Model, type Provider, type ProviderStreams } from "@earendil-works/pi-ai";
+import { createProvider, lazyStream, type Api, type ApiStreamOptions, type CredentialStore, type Model, type Provider, type ProviderStreams } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { SUBSCRIPTION_PROVIDERS, type CustomProviderDefinition } from "../core/provider-connections.ts";
 
-/** Separate provider IDs make subscription selection explicit and prevent API-key fallback. */
+/** Catalog aliases only. OAuth and refresh run in Electron, never Models.getAuth. */
 export function subscriptionAliases(builtins: readonly Provider[]): Provider[] {
 	return SUBSCRIPTION_PROVIDERS.map((entry) => {
 		const original = builtins.find((p) => p.id === entry.provider);
-		if (!original?.auth.oauth) throw new Error(`Subscription adapter unavailable: ${entry.id}`);
+		if (!original) throw new Error("Subscription adapter unavailable: " + entry.id);
+		const refused = (model: Model<Api>) => lazyStream(model, async () => { throw new Error("Use the native subscription connection"); });
 		return {
-			id: entry.id,
-			name: entry.name,
-			baseUrl: original.baseUrl,
-			auth: { oauth: original.auth.oauth },
-			getModels: () => original.getModels().map((model) => ({ ...model, provider: entry.id, name: `${model.name} · subscription` })),
-			stream: (model, context, options) => aliasStream(model, original.stream({ ...model, provider: entry.provider }, context, options)),
-			streamSimple: (model, context, options) => aliasStream(model, original.streamSimple({ ...model, provider: entry.provider }, context, options)),
+			id: entry.id, name: entry.name, baseUrl: original.baseUrl, auth: {},
+			getModels: () => original.getModels().map((model) => ({ ...model, provider: entry.id, name: model.name + " · subscription" })),
+			stream: refused, streamSimple: refused,
 		};
 	});
-}
-
-/** Preserve SDK provider-specific request semantics without losing the selected auth source in history. */
-function aliasStream(model: Model<Api>, inner: AssistantMessageEventStream): AssistantMessageEventStream {
-	async function* remap(): AsyncGenerator<AssistantMessageEvent> {
-		for await (const event of inner) {
-			if (event.type === "done") yield { ...event, message: { ...event.message, provider: model.provider } };
-			else if (event.type === "error") yield { ...event, error: { ...event.error, provider: model.provider } };
-			else yield { ...event, partial: { ...event.partial, provider: model.provider } };
-		}
-	}
-	return lazyStream(model, async () => remap());
 }
 
 /** Never follow redirects with a dedicated endpoint key, even to another compatible server. */

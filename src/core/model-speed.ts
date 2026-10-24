@@ -8,7 +8,8 @@ const CODEX_FAST_MODELS = new Set([
  "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol",
 ]);
 export function supportsCodexFastMode(provider: string, id: string): boolean {
- return provider === "subscription-openai-codex" && CODEX_FAST_MODELS.has(id);
+ // Native upstream ChatGPT only; the retired duplicate Codex id is accepted solely via the canonical alias.
+ return canonicalSubscriptionProvider(provider) === "chatgpt" && CODEX_FAST_MODELS.has(id);
 }
 export function isModelServiceTier(value: unknown): value is ModelServiceTier {
  return value === "default" || value === "priority";
@@ -16,4 +17,9 @@ export function isModelServiceTier(value: unknown): value is ModelServiceTier {
 /** Unsupported providers never inherit or dispatch a Codex speed override. */
 export function modelServiceTier(provider: string, id: string, value: unknown): ModelServiceTier | undefined {
  return supportsCodexFastMode(provider, id) && isModelServiceTier(value) ? value : undefined;
+}
+
+/** Older local builds used a duplicate Codex sign-in; use upstream ChatGPT instead. */
+export function canonicalSubscriptionProvider(provider: string): string {
+ return provider === "subscription-openai-codex" ? "chatgpt" : provider;
 }

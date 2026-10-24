@@ -1,4 +1,4 @@
-import { modelServiceTier, type ModelServiceTier } from "./model-speed.ts";
+import { canonicalSubscriptionProvider, modelServiceTier, type ModelServiceTier } from "./model-speed.ts";
 /**
  * THE SETTINGS RESOLUTION LAYER (settings-storage wave, 2026-09-19): pure
  * projection of the delta record (core/settings.ts UserSettings) into
@@ -110,7 +110,7 @@ export function resolveConversationSpec(
 	const model = chat?.model ?? (strong ? { provider: strong.provider, id: strong.id } : undefined);
 	if (!model) return null;
 	return {
-		provider: model.provider,
+		provider: canonicalSubscriptionProvider(model.provider),
 		id: model.id,
 		thinkingLevel: chat?.thinkingLevel ?? strong?.thinkingLevel,
 		...speedSetting(model.provider, model.id, chat?.model ? chat.serviceTier : chat?.serviceTier ?? strong?.serviceTier),
@@ -135,7 +135,7 @@ export function resolveRoleSpec(role: ModelRole, record: UserSettings | null): E
  *  to ride without the factory floor). */
 export function resolveSlot(slot: ModelSlot | undefined): EffectiveSlot | null {
 	if (!slot?.model) return null;
-	return { provider: slot.model.provider, id: slot.model.id, thinkingLevel: slot.thinkingLevel, ...speedSetting(slot.model.provider, slot.model.id, slot.serviceTier) };
+	return { provider: canonicalSubscriptionProvider(slot.model.provider), id: slot.model.id, thinkingLevel: slot.thinkingLevel, ...speedSetting(slot.model.provider, slot.model.id, slot.serviceTier) };
 }
 
 /** Resolve one role's spec — the BYOK chain (owner 2026-09-22): role
@@ -154,7 +154,7 @@ export function resolveModelSpec(
 	const model = override?.model ?? slot?.model;
 	if (!model) return undefined;
 	return {
-		provider: model.provider,
+		provider: canonicalSubscriptionProvider(model.provider),
 		id: model.id,
 		thinkingLevel: override?.thinkingLevel ?? slot?.thinkingLevel,
 		...speedSetting(model.provider, model.id, override?.serviceTier ?? slot?.serviceTier),

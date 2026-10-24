@@ -68,6 +68,7 @@ import {
 	type ModelSlotName,
 	type ModelsSettings,
 	supportsCodexFastMode,
+	canonicalSubscriptionProvider,
 } from "@/src/core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
@@ -75,6 +76,7 @@ import { cn } from "@/lib/utils";
 import { SettingsGroup, SettingsRow, Toggle, CommitInput } from "./controls.tsx";
 import { ModelMenuList, ThinkingMenuList } from "./model-menu";
 import { ChatGPTBackgroundAccess } from "./chatgpt-connection";
+import { NativeSubscriptionBackgroundAccess } from "./subscription-connections";
 import { ModelSpeedControl, offersFastMode } from "@/components/model-speed-control";
 
 /** One slot's display identity — the tier's roster as the row hint rides
@@ -646,13 +648,13 @@ export function AgentSection({
 					// override, else the resolved pin (when it's in the federated
 					// catalog); the standard ladder as the last fallback.
 					const coord = override?.model ?? pin?.model;
-					const chosen = coord ? catalog?.find((m) => m.id === coord.id && m.provider === coord.provider) : undefined;
+					const chosen = coord ? catalog?.find((m) => m.id === coord.id && canonicalSubscriptionProvider(m.provider) === canonicalSubscriptionProvider(coord.provider)) : undefined;
 					const levels = chosen ? chosen.supportedLevels : THINKING_LEVELS;
 					const thisMenuOpen = openMenu?.target === slot ? openMenu.kind : null;
 					// Speed rides the OVERRIDE's own model only (a pin fallback has no
 					// stored slot to write the tier into). Absent tier = Standard.
 					const overrideEntry = override?.model
-						? catalog?.find((m) => m.id === override.model!.id && m.provider === override.model!.provider)
+						? catalog?.find((m) => m.id === override.model!.id && canonicalSubscriptionProvider(m.provider) === canonicalSubscriptionProvider(override.model!.provider))
 						: undefined;
 					const showSpeed = offersFastMode(overrideEntry);
 					// Vision slots pick from image-capable models only.
@@ -671,7 +673,7 @@ export function AgentSection({
 								ref={thisMenuOpen ? menuAnchorRef : undefined}
 								className="relative flex items-center gap-2"
 							>
-								{slot !== "strong" && <ChatGPTBackgroundAccess provider={coord?.provider} />}
+								{slot !== "strong" && <><ChatGPTBackgroundAccess provider={coord?.provider} /><NativeSubscriptionBackgroundAccess provider={coord?.provider} /></>}
 								<MenuTrigger
 									value={modelId ? prettyModel(modelId) : ""}
 									emptyLabel="—"

@@ -21,7 +21,7 @@ afterEach(async () => {
 	globalThis.fetch = originalFetch;
 });
 
-const CODEX = { provider: "subscription-openai-codex", id: "gpt-6-sol" };
+const CODEX = { provider: "chatgpt", id: "gpt-6-sol" };
 const entry = (over: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry => ({
 	provider: CODEX.provider, id: CODEX.id, supportedLevels: ["low", "high"], input: ["text"], contextWindow: 1000, cost: null, supportsFastMode: true, ...over,
 } as ModelCatalogEntry);
