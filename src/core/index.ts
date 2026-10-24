@@ -78,3 +78,5 @@ export * from "./coverage.ts";
 export * from "./session-markdown.ts";
 
 export * from "./provider-connections.ts";
+
+export * from "./model-speed.ts";

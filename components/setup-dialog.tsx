@@ -36,7 +36,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import type React from "react";
-import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings } from "@/src/core";
+import { type ModelCatalogEntry, type ModelServiceTier, type ModelSlotName, type ModelsSettings } from "@/src/core";
+import { ModelSpeedControl, offersFastMode, tierForModel } from "@/components/model-speed-control";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
 import { MenuShell } from "@/components/menu-shell";
@@ -66,7 +67,7 @@ interface ModelsBody {
 	/** The three tiers' RESOLVED pins (BYOK: NULL per unset tier) — the
 	 *  PREFILL + "needed" marks (owner, 2026-09-22): pinned tiers open
 	 *  with their pick, unpinned tiers carry the mark. */
-	slots?: Record<ModelSlotName, { model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel } | null>;
+	slots?: Record<ModelSlotName, { model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; serviceTier?: ModelServiceTier } | null>;
 }
 
 /** Pure: which stage the flow opens at — no keyed provider = keys first
@@ -108,6 +109,25 @@ export function prefillLevelFromPin(
 	pin: { thinkingLevel?: ThinkingLevel } | null | undefined,
 ): ThinkingLevel {
 	return populateLevel(pin?.thinkingLevel, entry.supportedLevels);
+}
+
+/** Speed prefill: an eligible pinned model opens with its stored tier
+ *  (absent = Standard); an ineligible one carries no tier. Exported pure
+ *  for tests. */
+export function prefillTierFromPin(
+	entry: ModelCatalogEntry,
+	pin: { serviceTier?: ModelServiceTier } | null | undefined,
+): ModelServiceTier | undefined {
+	return offersFastMode(entry) ? (pin?.serviceTier ?? "default") : undefined;
+}
+
+/** The tier a fresh model pick carries: kept across eligible models,
+ *  Standard for a first eligible pick, cleared for an unsupported model. */
+export function tierAfterPick(
+	entry: ModelCatalogEntry,
+	prev: ModelServiceTier | undefined,
+): ModelServiceTier | undefined {
+	return tierForModel(entry, prev ?? "default");
 }
 
 /** Stage 1's pure body — exported for SSR pins (the delete/settings
@@ -253,6 +273,8 @@ export function SetupDialog({
 	/** Per-slot thinking level (chunk 2): populated from the ordering on
 	 *  every fresh model pick, editable — an explicit pick always wins. */
 	const [levels, setLevels] = useState<Partial<Record<ModelSlotName, ThinkingLevel>>>({});
+	/** Per-slot speed (Standard/Fast), only for eligible models. */
+	const [tiers, setTiers] = useState<Partial<Record<ModelSlotName, ModelServiceTier>>>({});
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [openMenu, setOpenMenu] = useState<{ slot: ModelSlotName; kind: "model" | "thinking" } | null>(null);
@@ -289,6 +311,7 @@ export function SetupDialog({
 		setBody(null);
 		setPicked({});
 		setLevels({});
+		setTiers({});
 		setError(null);
 		fetch("/api/keys")
 			.then((r) => r.json())
@@ -309,11 +332,17 @@ export function SetupDialog({
 				// Levels prefill with the pins (chunk 2): stored level if still
 				// supported, else the ordering's level for the pinned model.
 				const preLevels: Partial<Record<ModelSlotName, ThinkingLevel>> = {};
+				const preTiers: Partial<Record<ModelSlotName, ModelServiceTier>> = {};
 				for (const slot of SLOT_ORDER) {
 					const entry = pre[slot];
-					if (entry) preLevels[slot] = prefillLevelFromPin(entry, b.slots?.[slot]);
+					if (entry) {
+						preLevels[slot] = prefillLevelFromPin(entry, b.slots?.[slot]);
+						const tier = prefillTierFromPin(entry, b.slots?.[slot]);
+						if (tier) preTiers[slot] = tier;
+					}
 				}
 				setLevels(preLevels);
+				setTiers(preTiers);
 			})
 			.catch(() => { if (!cancelled) setFailed(true); });
 		return () => { cancelled = true; };
@@ -397,9 +426,12 @@ export function SetupDialog({
 		const models: ModelsSettings = {};
 		for (const slot of SLOT_ORDER) {
 			const level = levels[slot];
+			// Each eligible slot stores its tier explicitly (Standard = 'default').
+			const tier = offersFastMode(picked[slot]) ? (tiers[slot] ?? "default") : undefined;
 			models[slot] = {
 				model: { provider: picked[slot]!.provider, id: picked[slot]!.id },
 				...(level ? { thinkingLevel: level } : {}),
+				...(tier ? { serviceTier: tier } : {}),
 			};
 		}
 		const res = await fetch("/api/settings/models", {
@@ -543,6 +575,13 @@ export function SetupDialog({
 															// everywhere"): no explicit level → the
 															// ordering's level for the fresh pick; an
 															// explicit one rides (Save clamps server-side).
+															// Speed is independent of reasoning: kept across eligible
+															// models, cleared for an unsupported one.
+															setTiers((prevTiers) => {
+																const { [slot]: _old, ...rest } = prevTiers;
+																const tier = tierAfterPick(m, prevTiers[slot]);
+																return tier ? { ...rest, [slot]: tier } : rest;
+															});
 															setLevels((prev) => ({
 																...prev,
 																[slot]: populateLevel(prev[slot], m.supportedLevels),
@@ -592,6 +631,15 @@ export function SetupDialog({
 												</MenuShell>
 											)}
 										</div>
+										{offersFastMode(entry) && (
+											<ModelSpeedControl
+												value={tiers[slot]}
+												ariaLabel={`${SLOT_META[slot].label} speed`}
+												testid={`setup-speed-${slot}`}
+												disabled={saving}
+												onChange={(tier) => setTiers((prev) => ({ ...prev, [slot]: tier }))}
+											/>
+										)}
 									</div>
 								</div>
 							);

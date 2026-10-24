@@ -1,3 +1,4 @@
+import type { ModelServiceTier } from "../model-speed.ts";
 /**
  * Model-catalog contracts (model-control wave, 2026-09-12) — the client-safe
  * shapes of GET /api/models and PUT /api/chats/[id]/settings responses.
@@ -24,6 +25,8 @@ export interface ModelCatalogEntry {
 	/** null means unpriced or subscription access, never a zero-dollar bill. */
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number } | null;
 	pricing?: "subscription" | "unknown";
+	/** Model capability only; account availability is checked by the provider. */
+	supportsFastMode?: boolean;
 	contextWindow: number;
 	maxTokens: number;
 }
@@ -35,6 +38,8 @@ export interface ModelCatalogEntry {
 export interface CatalogDefaults {
 	model: { provider: string; id: string };
 	thinkingLevel?: ThinkingLevel;
+	/** Requested Codex speed; absent means Standard (or inherited for role overrides). */
+	serviceTier?: ModelServiceTier;
 }
 
 /** One background role's RESOLVED pin (BYOK, owner 2026-09-22): what that
@@ -43,7 +48,7 @@ export interface CatalogDefaults {
  *  settings UI shows "not configured" from it. */
 export type RolePins = Record<
 	BackgroundModelRole,
-	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel } | null
+	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; serviceTier?: ModelServiceTier } | null
 >;
 
 /** One slot tier's RESOLVED pin (BYOK, owner 2026-09-22): NULL = the tier
@@ -51,7 +56,7 @@ export type RolePins = Record<
  *  picker pre-fills from it. */
 export type SlotPins = Record<
 	ModelSlotName,
-	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel } | null
+	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; serviceTier?: ModelServiceTier } | null
 >;
 
 /** GET /api/models response. */

@@ -1,3 +1,4 @@
+import { modelServiceTier, type ModelServiceTier } from "./model-speed.ts";
 /**
  * THE SETTINGS RESOLUTION LAYER (settings-storage wave, 2026-09-19): pure
  * projection of the delta record (core/settings.ts UserSettings) into
@@ -52,6 +53,7 @@ export interface EffectiveSlot {
 	provider: string;
 	id: string;
 	thinkingLevel?: ThinkingLevel;
+	serviceTier?: ModelServiceTier;
 }
 
 /** A fully-resolved model pin for one role — same shape/level semantics
@@ -61,6 +63,7 @@ export interface EffectiveModelSpec {
 	provider: string;
 	id: string;
 	thinkingLevel?: ThinkingLevel;
+	serviceTier?: ModelServiceTier;
 }
 
 /** The concrete appearance view — same shape as the factory's. */
@@ -110,6 +113,7 @@ export function resolveConversationSpec(
 		provider: model.provider,
 		id: model.id,
 		thinkingLevel: chat?.thinkingLevel ?? strong?.thinkingLevel,
+		...speedSetting(model.provider, model.id, chat?.model ? chat.serviceTier : chat?.serviceTier ?? strong?.serviceTier),
 	};
 }
 
@@ -131,7 +135,7 @@ export function resolveRoleSpec(role: ModelRole, record: UserSettings | null): E
  *  to ride without the factory floor). */
 export function resolveSlot(slot: ModelSlot | undefined): EffectiveSlot | null {
 	if (!slot?.model) return null;
-	return { provider: slot.model.provider, id: slot.model.id, thinkingLevel: slot.thinkingLevel };
+	return { provider: slot.model.provider, id: slot.model.id, thinkingLevel: slot.thinkingLevel, ...speedSetting(slot.model.provider, slot.model.id, slot.serviceTier) };
 }
 
 /** Resolve one role's spec — the BYOK chain (owner 2026-09-22): role
@@ -153,6 +157,7 @@ export function resolveModelSpec(
 		provider: model.provider,
 		id: model.id,
 		thinkingLevel: override?.thinkingLevel ?? slot?.thinkingLevel,
+		...speedSetting(model.provider, model.id, override?.serviceTier ?? slot?.serviceTier),
 	};
 }
 
@@ -254,3 +259,8 @@ export function graphToolsEnabled(effective: {
 }
 
 
+
+function speedSetting(provider: string, id: string, tier: unknown): { serviceTier?: ModelServiceTier } {
+ const serviceTier = modelServiceTier(provider, id, tier);
+ return serviceTier === undefined ? {} : { serviceTier };
+}

@@ -64,8 +64,10 @@ import {
 	type CompactionSettings,
 	type GraphSettings,
 	type ModelCatalogEntry,
+	type ModelServiceTier,
 	type ModelSlotName,
 	type ModelsSettings,
+	supportsCodexFastMode,
 } from "@/src/core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
@@ -73,6 +75,7 @@ import { cn } from "@/lib/utils";
 import { SettingsGroup, SettingsRow, Toggle, CommitInput } from "./controls.tsx";
 import { ModelMenuList, ThinkingMenuList } from "./model-menu";
 import { ChatGPTBackgroundAccess } from "./chatgpt-connection";
+import { ModelSpeedControl, offersFastMode } from "@/components/model-speed-control";
 
 /** One slot's display identity — the tier's roster as the row hint rides
  *  with the resolved default (owner: the hint ALWAYS names the default). */
@@ -142,6 +145,7 @@ export function composeSlotModel(
 	provider: string,
 	id: string,
 	thinking: string,
+	serviceTier?: ModelServiceTier | null,
 ): ModelsSettings {
 	const prev = models?.[slot];
 	const next = { ...models };
@@ -149,9 +153,17 @@ export function composeSlotModel(
 		delete next[slot];
 		return next;
 	}
+	const model = provider && id ? { provider, id } : prev?.model;
+	// Speed (Standard/Fast): undefined = keep the slot's stored tier, null =
+	// clear it, a value = write it (an explicit 'default' is stored as such:
+	// field presence matters). The tier only survives on a model that
+	// supports it, so a swap to an unsupported provider/model clears it.
+	const wanted = serviceTier === null ? undefined : (serviceTier ?? prev?.serviceTier);
+	const tier = model && supportsCodexFastMode(model.provider, model.id) ? wanted : undefined;
 	next[slot] = {
-		...(provider && id ? { model: { provider, id } } : prev?.model ? { model: prev.model } : {}),
+		...(model ? { model } : {}),
 		...(thinking ? { thinkingLevel: thinking as ThinkingLevel } : {}),
+		...(tier ? { serviceTier: tier } : {}),
 	};
 	return next;
 }
@@ -255,6 +267,7 @@ function MenuTrigger({
 			aria-label={ariaLabel}
 			aria-expanded={open}
 			data-testid={testid}
+			disabled={disabled}
 			onClick={() => {
 				if (!disabled) onClick();
 			}}
@@ -297,8 +310,10 @@ export function AgentSection({
 	compaction: CompactionSettings | undefined;
 	/** Writes the composed WHOLE agent section (replace-PUT discipline). */
 	onSectionChange: (next: AgentSettings) => void;
-	/** Writes the composed models section (slots — replace-PUT discipline). */
-	onModelsChange: (next: ModelsSettings) => void;
+	/** Writes the composed models section (slots — replace-PUT discipline).
+	 *  May return the write's promise: the speed control stays disabled until
+	 *  it settles (no racing writes). */
+	onModelsChange: (next: ModelsSettings) => void | Promise<void>;
 	/** Writes the whole compaction section (replace-PUT discipline). */
 	onCompactionChange: (next: CompactionSettings) => void;
 }) {
@@ -319,6 +334,8 @@ export function AgentSection({
 	 *  row), which kind. */
 	const [openMenu, setOpenMenu] = useState<{ target: ModelSlotName | "search"; kind: "model" | "thinking" | "engine" } | null>(null);
 	const menuAnchorRef = useRef<HTMLSpanElement>(null);
+	/** A speed write in flight (promise-returning onModelsChange only). */
+	const [speedPending, setSpeedPending] = useState(false);
 
 	const refreshSearch = () =>
 		fetch("/api/search")
@@ -632,6 +649,12 @@ export function AgentSection({
 					const chosen = coord ? catalog?.find((m) => m.id === coord.id && m.provider === coord.provider) : undefined;
 					const levels = chosen ? chosen.supportedLevels : THINKING_LEVELS;
 					const thisMenuOpen = openMenu?.target === slot ? openMenu.kind : null;
+					// Speed rides the OVERRIDE's own model only (a pin fallback has no
+					// stored slot to write the tier into). Absent tier = Standard.
+					const overrideEntry = override?.model
+						? catalog?.find((m) => m.id === override.model!.id && m.provider === override.model!.provider)
+						: undefined;
+					const showSpeed = offersFastMode(overrideEntry);
 					// Vision slots pick from image-capable models only.
 					const slotCatalog =
 						slot === "vision" ? catalog?.filter((m) => m.input.includes("image")) : catalog;
@@ -657,6 +680,7 @@ export function AgentSection({
 									open={thisMenuOpen === "model"}
 									onClick={() => setOpenMenu(thisMenuOpen === "model" ? null : { target: slot, kind: "model" })}
 									widthClass="min-w-20"
+									disabled={speedPending}
 								/>
 								<MenuTrigger
 									// Legacy display (chunk 2 item 4): no stored level + a known
@@ -669,7 +693,24 @@ export function AgentSection({
 									open={thisMenuOpen === "thinking"}
 									onClick={() => setOpenMenu(thisMenuOpen === "thinking" ? null : { target: slot, kind: "thinking" })}
 									widthClass="w-20"
+									disabled={speedPending}
 								/>
+								{showSpeed && (
+									<ModelSpeedControl
+										value={override?.serviceTier}
+										ariaLabel={`${SLOT_META[slot].label} speed`}
+										testid={`slot-speed-${slot}`}
+										disabled={speedPending}
+										onChange={(tier) => {
+											setOpenMenu(null);
+											const result = onModelsChange(composeSlotModel(models, slot, provider, modelId, thinking, tier));
+											if (result && typeof (result as Promise<void>).then === "function") {
+												setSpeedPending(true);
+												void Promise.resolve(result).catch(() => {}).finally(() => setSpeedPending(false));
+											}
+										}}
+									/>
+								)}
 								{thisMenuOpen === "model" && (
 									<MenuShell
 										preferredSide="down"

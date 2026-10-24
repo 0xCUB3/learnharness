@@ -233,6 +233,7 @@ export function SettingsDialogBody({
 			body: object,
 		) => {
 			setError(null);
+			try {
 			const res = await fetch(`/api/settings/${section}`, {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
@@ -260,6 +261,9 @@ export function SettingsDialogBody({
 			notifySettingsSaved(section);
 			if (section === "appearance")
 				onAppearanceChange(body as AppearanceSettings);
+			} catch {
+				setError(`Could not save ${section} — check your connection and try again.`);
+			}
 		},
 		[onAppearanceChange],
 	);
@@ -399,7 +403,7 @@ export function SettingsDialogBody({
 										graph={record.graph}
 										compaction={record.compaction}
 										onModelsChange={(next: ModelsSettings) =>
-											void write("models", next)
+											write("models", next)
 										}
 										onSectionChange={(next: AgentSettings) =>
 											void write("agent", next)

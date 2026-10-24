@@ -1,6 +1,6 @@
 # Subscription and custom-provider connections
 
-Open Settings → Connections. Existing API keys stay in Settings → Keys.
+Open Settings → Connections. Existing API keys stay in Settings → Providers.
 
 ![Connections settings in an isolated test instance](assets/connections-settings.png)
 
@@ -13,6 +13,14 @@ A subscription has its own model-picker entry. For example, `subscription-anthro
 A failed or disconnected subscription does not fall back to an API key. Disconnect removes the local credential without deleting learning records or changing model selections. It is not provider-side revocation, and a request already admitted may still finish. Existing Pi, Codex and Claude Code credential files are never read or imported.
 
 These flows are SDK capabilities, not a guarantee of account entitlement or provider approval for third-party clients. Codex uses the SDK's legacy route. Provider restrictions and available models may change. The application does not bypass a provider rejection. No account login or live subscription inference was performed as part of the automated tests.
+
+## Codex Fast mode
+
+Use Standard/Fast beside Thinking to change a Codex subscription session's speed. It starts on Standard. Model slots have the same control for defaults and background work, and changing a default does not change existing pinned sessions.
+
+Fast keeps the selected model and reasoning effort. [OpenAI documents](https://developers.openai.com/codex/speed) 2.5x included-limit usage and 2x purchased-credit usage. Account and model availability still apply. The setting is a request for Fast, not evidence of the delivered tier or a measured speedup.
+
+The request stays on the Codex subscription path, with no API-key fallback. Fast sends `service_tier: "priority"` before either transport sends the body; Standard sends no tier. Automated tests use synthetic credentials and responses, not live Fast inference.
 
 ## Custom endpoints
 

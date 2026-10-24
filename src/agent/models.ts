@@ -1,3 +1,5 @@
+import { supportsCodexFastMode, type ModelServiceTier } from "../core/model-speed.ts";
+import { codexServiceTierPayload } from "./codex-fast.ts";
 import {
 	clampThinkingLevel,
 	createModels,
@@ -101,6 +103,7 @@ export interface ResolvedModelSpec {
 	provider: string;
 	id: string;
 	thinkingLevel?: ThinkingLevel;
+	serviceTier?: ModelServiceTier;
 }
 
 /** The first entry of the baked default order the model supports (owner,
@@ -145,6 +148,7 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 				...cleanOptions,
 				// A failed subscription request must not be retried as a different billing source.
 				...(connected ? { maxRetries: 0 } : {}),
+				...(spec.provider === "subscription-openai-codex" ? { onPayload: codexServiceTierPayload(spec.serviceTier === "priority" && supportsCodexFastMode(spec.provider, spec.id), cleanOptions?.onPayload) } : {}),
 				reasoning: level === "off" ? undefined : level,
 			});
 		},
