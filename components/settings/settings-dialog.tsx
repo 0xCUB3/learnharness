@@ -55,12 +55,12 @@ import { ChatGPTUIProvider } from "./chatgpt-connection.tsx";
  *  prose is out; only the keyboard note stays (storage location is a
  *  real question users ask). */
 const SECTIONS = [
-	{ id: "keys", label: "Model providers" },
-	{ id: "general", label: "General" },
+	{ id: "keys", label: "Providers" },
 	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance" },
 	{ id: "graph", label: "Graph" },
 	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
+	{ id: "general", label: "General" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
 
@@ -87,7 +87,7 @@ export function SettingsDialogProvider({
 	const [landOn, setLandOn] = useState<SectionId>("keys");
 	const [landOnRow, setLandOnRow] = useState<string | null>(null);
 	const open = useCallback((section?: string, row?: string) => {
-		if (section) setLandOn(section as SectionId);
+		setLandOn(section ? section as SectionId : "keys");
 		setLandOnRow(row ?? null);
 		setShow(true);
 	}, []);
@@ -377,7 +377,7 @@ export function SettingsDialogBody({
 								</SettingsSection>
 							)}
 							{active === "keys" && (
-								<SettingsSection title="Model providers" testid="section-keys">
+								<SettingsSection title="Providers" testid="section-keys">
 									<KeysSection initialRow={initialRow ?? undefined} />
 								</SettingsSection>
 							)}

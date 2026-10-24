@@ -13,6 +13,7 @@ const AUTHORIZE = `${ISSUER}/api/accounts/authorize`;
 const TOKEN = `${ISSUER}/api/accounts/oauth/token`;
 const JWKS = `${ISSUER}/.well-known/jwks.json`;
 const SCOPES = ["openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct"];
+const REVOCATION_WARNING = "Account disconnected locally. Remote revocation could not be confirmed.";
 const random = () => crypto.randomBytes(32).toString("base64url");
 const fail = (code) => Object.assign(new Error(code), { code });
 const publicError = (err) => ({
@@ -22,10 +23,10 @@ const publicError = (err) => ({
 	storage: "ChatGPT credentials could not be saved securely. Reconnect before making requests.",
 	identity: "ChatGPT sign-in could not be verified. Select the intended saved account and try again.",
 	scope: "ChatGPT plan permission is missing. Reconnect and authorize ChatGPT plan use.",
-	disconnected: "This ChatGPT connection is disconnected. Reconnect in Model providers.",
-	background: "Background use is off for this ChatGPT account. Enable Allow background use in Model providers, or explicitly select an API-key model for that workload.",
+	disconnected: "This ChatGPT connection is disconnected. Reconnect in Providers.",
+	background: "ChatGPT background use is off in this app. Enable Allow background use for all ChatGPT accounts in Providers, or explicitly select an API-key model for that workload.",
 	catalog: "The ChatGPT account model catalog is unavailable. Retry the connection; no API-key fallback was used.",
-	expired: "The ChatGPT session expired. Reconnect in Model providers.",
+	expired: "The ChatGPT session expired. Reconnect in Providers.",
 	network: "ChatGPT could not be reached. Check your connection and try again.",
 	pending: "A ChatGPT sign-in is already pending.",
 	unavailable: "ChatGPT sign-in is unavailable in browser-only mode.",
@@ -36,9 +37,10 @@ const planScopes = (tokens) => !!tokens?.accessToken && SCOPES.every((scope) => 
 /** Reject the entire encrypted record. Encryption is not schema validation. */
 function validateState(state) {
 	if (!state || state.version !== 1 || !nonempty(state.hostId) || !Array.isArray(state.registrations) || !(state.activeId === null || nonempty(state.activeId))) throw fail("storage");
+	if (Object.hasOwn(state, "allowBackgroundUse") && typeof state.allowBackgroundUse !== "boolean") throw fail("storage");
 	const ids = new Set(); const clients = new Set();
 	for (const r of state.registrations) {
-		if (!r || !nonempty(r.id) || ids.has(r.id) || !nonempty(r.clientId) || r.clientId === "dynamic_agent_client" || clients.has(r.clientId) || r.issuer !== ISSUER || !nonempty(r.subject) || typeof r.background !== "boolean" || (r.email !== undefined && typeof r.email !== "string") || (Object.hasOwn(r, "reconnectRequired") && r.reconnectRequired !== true)) throw fail("storage");
+		if (!r || !nonempty(r.id) || ids.has(r.id) || !nonempty(r.clientId) || r.clientId === "dynamic_agent_client" || clients.has(r.clientId) || r.issuer !== ISSUER || !nonempty(r.subject) || (Object.hasOwn(r, "background") && typeof r.background !== "boolean") || (r.email !== undefined && typeof r.email !== "string") || (Object.hasOwn(r, "reconnectRequired") && r.reconnectRequired !== true)) throw fail("storage");
 		ids.add(r.id); clients.add(r.clientId);
 		if (r.tokens !== undefined) {
 			const t = r.tokens;
@@ -115,7 +117,7 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 	let storageDenied = false;
 	let secureAvailable = true;
 	const stamp = () => ({ epoch, authorityRevision, revision });
-	const backgroundIntent = new Map();
+	let backgroundIntent;
 	let pending;
 	let catalog = [];
 	let catalogError = null;
@@ -132,7 +134,17 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 		return next;
 	};
 	const active = () => !storageDenied && !suspended && !closed && !paused ? state?.registrations.find((r) => r.id === state.activeId && r.tokens && !r.reconnectRequired) : undefined;
-	const backgroundAllowed = (account) => account.background === true && backgroundIntent.get(account.id)?.enabled !== false;
+	// These fields are validated/verified before storage. Email is never identity.
+	const sameAccount = (a, b) => a.issuer === b.issuer && a.subject === b.subject;
+	function accountGroups() {
+		const groups = [];
+		for (const record of state?.registrations || []) {
+			const group = groups.find((members) => sameAccount(members[0], record));
+			if (group) group.push(record); else groups.push([record]);
+		}
+		return groups;
+	}
+	const backgroundAllowed = () => state?.allowBackgroundUse !== false && backgroundIntent?.enabled !== false;
 	const notify = (invalidate = "none") => { revision++; onChange({ channel: "lh:chatgpt", kind: "state", stamp: stamp(), status: snapshot(), invalidate }); };
 	function stop(backgroundOnly = false) {
 		if (backgroundOnly) {
@@ -185,15 +197,21 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 		return {
 			available: !!state && secureAvailable && !closed && !paused,
 			pending: !!pending,
+			allowBackgroundUse: backgroundAllowed(),
 			activeId: state?.activeId ?? null,
-			accounts: (state?.registrations || []).map((r) => ({
-				id: r.id,
-				email: r.email || "ChatGPT account",
-				registration: r.clientId,
-				connected: !storageDenied && !closed && !paused && !suspended && !r.reconnectRequired && planScopes(r.tokens),
-				planEnabled: !storageDenied && !r.reconnectRequired && planScopes(r.tokens),
-				background: backgroundAllowed(r),
-			})),
+			accounts: accountGroups().map((members) => {
+				// Preserve the actual active registration ID at the private transport
+				// boundary; inactive groups prefer a usable registration, then a
+				// remembered one. No credential/client records are merged or deleted.
+				const r = members.find((r) => r.id === state.activeId) ?? members.find((r) => !r.reconnectRequired && planScopes(r.tokens)) ?? members[0];
+				return {
+					id: r.id,
+					email: r.email || "ChatGPT account",
+					registration: r.clientId,
+					connected: !storageDenied && !closed && !paused && !suspended && !r.reconnectRequired && planScopes(r.tokens),
+					planEnabled: !storageDenied && !r.reconnectRequired && planScopes(r.tokens),
+				};
+			}),
 			error: lastError,
 			catalogError,
 		};
@@ -308,7 +326,7 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 						if (closed || abort.signal.aborted || epoch !== attemptEpoch) throw fail("cancelled");
 						const existing = state.registrations.find((r) => r.clientId === clientId);
 						if (existing && existing.subject !== verified.subject) throw fail("identity");
-						const record = { id: existing?.id ?? crypto.randomUUID(), clientId, issuer: ISSUER, ...verified, background: existing?.background === true, tokens };
+						const record = { id: existing?.id ?? crypto.randomUUID(), clientId, issuer: ISSUER, ...verified, tokens };
 						const next = structuredClone(state);
 						next.registrations = next.registrations.filter((r) => r.id !== record.id).concat(record);
 						next.activeId = record.id;
@@ -352,7 +370,7 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 		if (!account || (capturedEpoch !== undefined && capturedEpoch !== epoch)) throw fail("disconnected");
 		if (!planScopes(account.tokens)) throw fail("scope");
 		if (expected && (expected.expectedAccountId !== account.id || expected.expectedAuthorityRevision !== authorityRevision || !catalog.some((m) => m.id === expected.selectedModelId))) throw fail("catalog");
-		if (background && !backgroundAllowed(account)) throw fail("background");
+		if (background && !backgroundAllowed()) throw fail("background");
 		return account;
 	}
 	async function credential(background, expected) {
@@ -450,23 +468,62 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 			return snapshot();
 		});
 	}
-	async function consent(id, enabled) {
+	async function consent(enabled) {
 		if (typeof enabled !== "boolean") throw fail("identity");
-		const intent = { enabled: false, version: (backgroundIntent.get(id)?.version ?? 0) + 1 };
-		backgroundIntent.set(id, intent);
-		if (!enabled) {
-			const account = state?.registrations.find((r) => r.id === id);
-			if (account) account.background = false;
-			stop(true); // Revoke background calls immediately; foreground stays usable.
-		}
+		// One app-owned intent, independent of account/registration lifetime.
+		const intent = { enabled: false };
+		backgroundIntent = intent; // ON cannot grant until its durable save.
+		if (!enabled) stop(true); // Revoke all ChatGPT background streams only.
 		await ready();
 		return serial(async () => {
+			await save({ ...structuredClone(state), allowBackgroundUse: enabled });
+			if (backgroundIntent === intent && enabled) backgroundIntent = undefined;
+			notify();
+			return snapshot();
+		});
+	}
+	async function revoke(account) {
+		let revoked = false;
+		try {
+			if (account.tokens?.refreshToken) {
+				const config = await json(`${ISSUER}/.well-known/openid-configuration`);
+				if (config.issuer !== ISSUER || !allowedAuthEndpoint(config.revocation_endpoint)) throw fail("identity");
+				for (let attempt = 0; attempt < 2; attempt++) {
+					if (attempt) await new Promise((resolve) => setTimeout(resolve, 200));
+					try {
+						const response = await request(config.revocation_endpoint, { method: "POST", redirect: "error", signal: AbortSignal.timeout(5000), headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: account.tokens.refreshToken, token_type_hint: "refresh_token", client_id: account.clientId }) });
+						revoked = response.status === 200;
+						if (revoked || response.status < 500) break;
+					} catch { /* retry only while the refresh token is still in memory */ }
+				}
+			}
+		} catch { /* local action is mandatory even when revocation is unavailable */ }
+		return revoked;
+	}
+	async function disconnect(id) {
+		// Explicit local forgetting: a visible account represents every retained
+		// registration with this exact verified issuer/subject, never its email.
+		pending?.cancel();
+		const initial = state?.registrations.find((r) => r.id === id);
+		let stopped = !!initial && state.registrations.some((r) => r.id === state.activeId && sameAccount(r, initial));
+		if (stopped) stop();
+		await ready();
+		return serial(async () => {
+			const target = state.registrations.find((r) => r.id === id);
+			if (!target) throw fail("identity");
+			const members = state.registrations.filter((r) => sameAccount(r, target));
+			const activeGroup = members.some((r) => r.id === state.activeId);
+			if (activeGroup && !stopped) { stop(); stopped = true; }
+			const disconnectEpoch = epoch;
+			let revoked = true;
+			for (const member of members) { const confirmed = await revoke(member); revoked = confirmed && revoked; }
 			const next = structuredClone(state);
-			const account = next.registrations.find((r) => r.id === id);
-			if (!account) throw fail("identity");
-			account.background = enabled;
+			next.registrations = next.registrations.filter((r) => !sameAccount(r, target));
+			if (activeGroup) next.activeId = null; // Never silently select another account.
 			await save(next);
-			if (backgroundIntent.get(id) === intent && enabled) backgroundIntent.delete(id);
+			if (members.some((r) => r.clientId === retryRegistration?.clientId)) retryRegistration = undefined;
+			if (stopped && !closed && epoch === disconnectEpoch) suspended = false;
+			lastError = revoked ? null : REVOCATION_WARNING;
 			notify();
 			return snapshot();
 		});
@@ -478,28 +535,14 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 		return serial(async () => {
 			const account = state.registrations.find((r) => r.id === id);
 			if (!account) throw fail("identity");
-			let revoked = false;
-			try {
-				if (account.tokens?.refreshToken) {
-					const config = await json(`${ISSUER}/.well-known/openid-configuration`);
-					if (config.issuer !== ISSUER || !allowedAuthEndpoint(config.revocation_endpoint)) throw fail("identity");
-					for (let attempt = 0; attempt < 2; attempt++) {
-						if (attempt) await new Promise((resolve) => setTimeout(resolve, 200));
-						try {
-							const response = await request(config.revocation_endpoint, { method: "POST", redirect: "error", signal: AbortSignal.timeout(5000), headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: account.tokens.refreshToken, token_type_hint: "refresh_token", client_id: account.clientId }) });
-							revoked = response.status === 200;
-							if (revoked || response.status < 500) break;
-						} catch { /* retry only while the refresh token is still in memory */ }
-					}
-				}
-			} catch { /* local sign-out is mandatory even when revocation is unavailable */ }
+			const revoked = await revoke(account);
 			const next = structuredClone(state);
 			delete next.registrations.find((r) => r.id === id).tokens;
 			if (next.activeId === id) next.activeId = null;
 			const logoutEpoch = epoch;
 			await save(next);
 			if (!closed && epoch === logoutEpoch) suspended = false;
-			lastError = revoked ? null : "Signed out locally. Remote revocation was not confirmed; disconnect LearnHarness in ChatGPT Settings.";
+			lastError = revoked ? null : REVOCATION_WARNING;
 			notify();
 			return snapshot();
 		});
@@ -507,7 +550,7 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 	function close() { closed = true; pending?.cancel(); stop(); }
 	function pause() { paused = true; pending?.cancel(); stop(); notify(); }
 	function resume() { paused = false; if (!storageDenied) suspended = false; notify(); }
-	return { status, login, cancelLogin, lease, models, select, consent, logout, close, pause, resume, stamp };
+	return { status, login, cancelLogin, lease, models, select, consent, disconnect, logout, close, pause, resume, stamp };
 }
 
 module.exports = { createChatGPT, encryptedStore, publicError, allowedAuthEndpoint, SCOPES, validateState };

@@ -82,12 +82,15 @@ test("PKCE/state/nonce/host identity and exact ephemeral 127.0.0.1 callback; no 
 		assert.equal(createHash("sha256").update(form.get("code_verifier")!).digest("base64url"), params.get("code_challenge"));
 		assert.equal(form.get("resource"), "https://api.openai.com/v1");
 		const status = await f.service.status();
-		assert.equal(status.accounts[0].background, false);
+		assert.equal(status.allowBackgroundUse, true);
+		assert.equal(f.saved.registrations[0].background, undefined, "new registrations do not store obsolete per-account preferences");
 		assert.equal(status.activeId, f.saved.activeId);
 		assert(!JSON.stringify(status).includes("scratch-oauth-token"));
 		assert(!JSON.stringify(status).includes("scratch-refresh"));
 		assert(!JSON.stringify(status).includes("idToken"));
 		assert.equal((await f.service.lease(false)).accessToken, "scratch-oauth-token");
+		assert.equal((await f.service.lease(true)).accessToken, "scratch-oauth-token");
+		await f.service.consent(false);
 		await assert.rejects(f.service.lease(true), /background/);
 	} finally { f.service.close(); }
 });
@@ -243,7 +246,7 @@ test("invalid rotating replacement is durably revocation-only; verified mapping 
 		try {
 			await restarted.service.status();
 			await restarted.service.select(restricted.id);
-			restarted.service.resume(); await restarted.service.consent(restricted.id, true);
+			restarted.service.resume(); await restarted.service.consent(true);
 			await assert.rejects(restarted.service.lease(false));
 			assert.equal((await restarted.service.status()).accounts[0].connected, false);
 			assert.deepEqual((await restarted.service.models()).models, []);
@@ -268,7 +271,7 @@ test("detected secure backend loss emits full invalidation, denies all leases an
 		assert.equal((await f.service.status()).available, false);
 		assert(pushes.some((p) => p.invalidate === "all" && p.stamp.epoch > epoch));
 		await assert.rejects(f.service.lease(false)); await assert.rejects(f.service.lease(true));
-		lost = false; f.service.resume(); await f.service.consent(f.saved.activeId, true);
+		lost = false; f.service.resume(); await f.service.consent(true);
 		await assert.rejects(f.service.lease(false));
 		assert.equal((await f.service.status()).accounts[0].connected, false);
 	} finally { f.service.close(); }
@@ -280,7 +283,7 @@ test("strict encrypted schema rejects malformed marker/duplicates/token/active i
 	const file = path.join(dir, "credentials.enc.json");
 	const secure = { isEncryptionAvailable: () => true, encryptString: (s: string) => Buffer.from(s), decryptString: (b: Buffer) => b.toString() };
 	try {
-		for (const mutate of [(s: any) => s.registrations[0].reconnectRequired = false, (s: any) => s.registrations[0].reconnectRequired = "true", (s: any) => s.registrations.push(s.registrations[0]), (s: any) => s.activeId = "missing", (s: any) => s.registrations[0].tokens.scopes = "not-array", (s: any) => s.registrations[0].tokens.expiresAt = -1]) {
+		for (const mutate of [(s: any) => s.registrations[0].reconnectRequired = false, (s: any) => s.registrations[0].reconnectRequired = "true", (s: any) => s.registrations.push(s.registrations[0]), (s: any) => s.activeId = "missing", (s: any) => s.registrations[0].tokens.scopes = "not-array", (s: any) => s.registrations[0].tokens.expiresAt = -1, (s: any) => s.allowBackgroundUse = "true", (s: any) => s.allowBackgroundUse = null, (s: any) => s.registrations[0].background = "false"]) {
 			const state = structuredClone(f.saved); mutate(state);
 			const bytes = JSON.stringify({ version: 1, encrypted: Buffer.from(JSON.stringify(state)).toString("base64") });
 			await fs.writeFile(file, bytes);
@@ -293,15 +296,15 @@ test("strict encrypted schema rejects malformed marker/duplicates/token/active i
 
 test("consent OFF wins an older ON save; foreground catalog authority remains unchanged", async () => {
 	let hold = false; const entered = deferred(); const release = deferred();
-	const f = await loggedIn({ write: async (next) => { if (hold && next.registrations[0]?.background) { entered.resolve(); await release.promise; } } });
+	const f = await loggedIn({ write: async (next) => { if (hold && next.allowBackgroundUse === true) { entered.resolve(); await release.promise; } } });
 	try {
 		const catalog = await f.service.models(); const id = f.saved.activeId;
 		hold = true;
-		const on = f.service.consent(id, true); await entered.promise;
-		const off = f.service.consent(id, false);
-		assert.equal((await f.service.status()).accounts[0].background, false);
+		const on = f.service.consent(true); await entered.promise;
+		const off = f.service.consent(false);
+		assert.equal((await f.service.status()).allowBackgroundUse, false);
 		release.resolve(); await on; await off;
-		assert.equal(f.saved.registrations[0].background, false);
+		assert.equal(f.saved.allowBackgroundUse, false);
 		assert.equal(f.service.stamp().authorityRevision, catalog.authorityRevision);
 		assert.equal((await f.rawLease(false, { expectedAccountId: id, expectedAuthorityRevision: catalog.authorityRevision, selectedModelId: "gpt-5" })).accountId, id);
 		await assert.rejects(f.rawLease(true, { expectedAccountId: id, expectedAuthorityRevision: catalog.authorityRevision, selectedModelId: "gpt-5" }), /background/);
@@ -325,9 +328,175 @@ test("scope-disabled credentials remain revocable and unconfirmed revoke never c
 	try {
 		await assert.rejects(f.service.lease(false));
 		const status = await f.service.logout(f.saved.activeId);
-		assert.match(status.error, /Remote revocation was not confirmed/);
+		assert.equal(status.error, "Account disconnected locally. Remote revocation could not be confirmed.");
 		assert.equal(f.requests.filter((r) => r.form?.get("token") === "scope-disabled-refresh").length, 2);
 		assert.equal(f.saved.registrations[0].tokens, undefined);
+	} finally { f.service.close(); }
+});
+
+test("repeated real verified sign-in creates one visible account while preserving separately bound registrations until explicit forgetting", async () => {
+	const f = await loggedIn();
+	try {
+		const original = f.saved.registrations[0];
+		await f.service.login(); await f.callback({ client_id: "oaiapp_repeat" });
+		for (let i = 0; i < 100 && (await f.service.status()).pending; i++) await new Promise((r) => setImmediate(r));
+		const status = await f.service.status();
+		assert.equal(f.saved.registrations.length, 2); assert.equal(status.accounts.length, 1);
+		assert.equal(status.activeId, status.accounts[0].id); assert.notEqual(status.activeId, original.id);
+		assert.equal(f.saved.registrations[0].clientId, original.clientId); assert.equal(f.saved.registrations[1].clientId, "oaiapp_repeat");
+		await f.service.disconnect(status.activeId);
+		assert.deepEqual(f.saved.registrations, []); assert.equal((await f.service.status()).accounts.length, 0);
+		assert.equal(f.requests.filter((r) => r.form?.has("token_type_hint")).length, 2);
+	} finally { f.service.close(); }
+});
+
+test("verified identity grouping hides legacy duplicate registrations without merging client credentials or matching emails", async () => {
+	const first = await loggedIn(); first.service.close();
+	const state = structuredClone(first.saved);
+	const original = state.registrations[0];
+	const duplicate = { ...structuredClone(original), id: "legacy-duplicate", clientId: "oaiapp_legacy" };
+	duplicate.tokens.idToken = await signed(duplicate.clientId, "legacy-nonce", original.subject);
+	const distinct = { ...structuredClone(original), id: "different-subject", clientId: "oaiapp_distinct", subject: "different-verified-subject" };
+	distinct.tokens.idToken = await signed(distinct.clientId, "legacy-nonce", distinct.subject);
+	state.registrations.push(duplicate, distinct);
+	state.activeId = duplicate.id;
+	const f = fixture({ state });
+	try {
+		const status = await f.service.status();
+		assert.equal(status.accounts.length, 2, "same issuer+subject groups; equal emails alone do not");
+		assert.equal(status.activeId, duplicate.id, "private transport keeps the actual active registration");
+		assert(status.accounts.some((a: any) => a.id === duplicate.id));
+		assert(status.accounts.some((a: any) => a.id === distinct.id));
+		assert.equal(f.saved.registrations.length, 3, "a status read never purges or merges stored credential handles");
+		assert.deepEqual(f.saved, state);
+		await f.service.select(distinct.id);
+		assert.equal((await f.service.status()).activeId, distinct.id);
+		assert.equal((await f.service.status()).accounts.length, 2);
+	} finally { f.service.close(); }
+});
+
+test("explicit disconnect forgets all exact-identity registrations/handles, aborts active leases, and never auto-selects a same-email distinct account", async () => {
+	const first = await loggedIn(); first.service.close();
+	const state = structuredClone(first.saved), original = state.registrations[0];
+	const duplicate = { ...structuredClone(original), id: "duplicate-client", clientId: "oaiapp_duplicate", tokens: { ...original.tokens, refreshToken: "duplicate-refresh" } };
+	duplicate.tokens.idToken = await signed(duplicate.clientId, "historical", original.subject);
+	const other = { ...structuredClone(original), id: "distinct-account", clientId: "oaiapp_other", subject: "other-subject" };
+	other.tokens.idToken = await signed(other.clientId, "historical", other.subject);
+	state.registrations.push(duplicate, other);
+	const pushes: any[] = [], entered = deferred(), release = deferred();
+	let held = false;
+	const f = fixture({ state, change: (push) => pushes.push(push), provider: async (url) => {
+		if (url.endsWith("/revoke") && !held) { held = true; entered.resolve(); await release.promise; }
+		return undefined;
+	} });
+	try {
+		await f.service.status(); const catalog = await f.service.models();
+		const expected = { expectedAccountId: state.activeId, expectedAuthorityRevision: catalog.authorityRevision, selectedModelId: "gpt-5" };
+		await f.rawLease(false, expected);
+		const removing = f.service.disconnect(original.id); await entered.promise;
+		assert(pushes.some((push) => push.invalidate === "all"));
+		assert.equal((await f.service.status()).accounts.find((a: any) => a.id === original.id).connected, false);
+		release.resolve(); const result = await removing;
+		assert.equal(result.activeId, null); assert.equal(result.accounts.length, 1); assert.equal(result.accounts[0].id, other.id);
+		assert.deepEqual(f.saved.registrations, [other], "all duplicate handles gone; other verified subject untouched");
+		const revocations = f.requests.filter((r) => r.form?.has("token_type_hint"));
+		assert.equal(revocations.length, 2); assert(revocations.some((r) => r.form!.get("client_id") === duplicate.clientId && r.form!.get("token") === "duplicate-refresh"));
+		await assert.rejects(f.rawLease(false, expected));
+		await assert.rejects(f.service.select(original.id));
+		assert.equal(f.saved.activeId, null, "no automatic account/provider fallback");
+	} finally { release.resolve(); f.service.close(); }
+});
+
+test("disconnecting an inactive identity preserves the active identity/credentials/catalog authority", async () => {
+	const first = await loggedIn(); first.service.close();
+	const state = structuredClone(first.saved), original = state.registrations[0];
+	const other = { ...structuredClone(original), id: "inactive-account", clientId: "oaiapp_inactive", subject: "inactive-subject" };
+	other.tokens.idToken = await signed(other.clientId, "historical", other.subject);
+	state.registrations.push(other); const f = fixture({ state });
+	try {
+		await f.service.status(); const catalog = await f.service.models(); const before = f.service.stamp();
+		await f.service.disconnect(other.id);
+		assert.equal(f.saved.activeId, original.id); assert.deepEqual(f.saved.registrations, [original]);
+		assert.equal(f.service.stamp().epoch, before.epoch); assert.equal(f.service.stamp().authorityRevision, before.authorityRevision);
+		assert.equal((await f.rawLease(false, { expectedAccountId: original.id, expectedAuthorityRevision: catalog.authorityRevision, selectedModelId: "gpt-5" })).accountId, original.id);
+	} finally { f.service.close(); }
+});
+
+test("signed-out legacy registrations can be explicitly forgotten; failed revocation never retains forgotten handles", async () => {
+	const first = await loggedIn(); await first.service.logout(first.saved.activeId); first.service.close();
+	const state = structuredClone(first.saved), duplicate = { ...structuredClone(state.registrations[0]), id: "signed-out-duplicate", clientId: "oaiapp_old" };
+	state.registrations.push(duplicate);
+	const f = fixture({ state });
+	try {
+		const status = await f.service.status(); assert.equal(status.accounts.length, 1); assert.equal(status.accounts[0].connected, false);
+		const result = await f.service.disconnect(status.accounts[0].id);
+		assert.equal(result.accounts.length, 0); assert.equal(result.activeId, null); assert.equal(f.saved.registrations.length, 0);
+		assert.equal(result.error, "Account disconnected locally. Remote revocation could not be confirmed.");
+	} finally { f.service.close(); }
+	const unconfirmed = await loggedIn({ provider: async (url) => url.endsWith("/revoke") ? new Response(null, { status: 400 }) : undefined });
+	try {
+		const result = await unconfirmed.service.disconnect(unconfirmed.saved.activeId);
+		assert.equal(result.error, "Account disconnected locally. Remote revocation could not be confirmed."); assert.deepEqual(unconfirmed.saved.registrations, []);
+		assert.equal(unconfirmed.saved.activeId, null); assert.equal(JSON.stringify(unconfirmed.saved).includes("scratch-refresh"), false);
+	} finally { unconfirmed.service.close(); }
+});
+
+test("disconnect racing refresh revokes the latest rotated handle before forgetting, never its stale predecessor", async () => {
+	const entered = deferred(), release = deferred();
+	const f = await loggedIn({ token: async (form, url) => {
+		if (form.get("grant_type") === "refresh_token") {
+			entered.resolve(); await release.promise;
+			return Response.json({ access_token: "latest-access", refresh_token: "latest-refresh", token_type: "Bearer", expires_in: 3600, scope: SCOPES.join(" ") });
+		}
+		return Response.json({ access_token: "scratch-access", refresh_token: "scratch-refresh", id_token: await signed(form.get("client_id")!, url.searchParams.get("nonce")!), token_type: "Bearer", expires_in: 1, scope: SCOPES.join(" ") });
+	} });
+	try {
+		const lease = f.service.lease(false); const rejected = assert.rejects(lease); await entered.promise;
+		const forgetting = f.service.disconnect(f.saved.activeId); release.resolve(); await rejected; await forgetting;
+		const revoked = f.requests.filter((r) => r.form?.has("token_type_hint"));
+		assert.equal(revoked.length, 1); assert.equal(revoked[0]!.form!.get("token"), "latest-refresh");
+		assert.deepEqual(f.saved.registrations, []); assert.equal(f.saved.activeId, null);
+	} finally { release.resolve(); f.service.close(); }
+});
+
+test("disconnect persistence failure is not reported as local forgetting and leaves encrypted state fail-closed", async () => {
+	let failWrite = false;
+	const f = await loggedIn({ write: async () => { if (failWrite) throw Object.assign(new Error("storage"), { code: "storage" }); } });
+	try {
+		const before = structuredClone(f.saved); failWrite = true;
+		await assert.rejects(f.service.disconnect(f.saved.activeId));
+		assert.deepEqual(f.saved, before); assert.equal((await f.service.status()).accounts[0].connected, false);
+		await assert.rejects(f.service.lease(false));
+	} finally { f.service.close(); }
+});
+
+test("one app-wide background preference defaults ON over legacy OFF, persists with zero accounts, and never changes on auth/account operations", async () => {
+	const first = await loggedIn(); first.service.close();
+	const legacy = structuredClone(first.saved); legacy.registrations[0].background = false;
+	const f = fixture({ state: legacy });
+	try {
+		assert.equal((await f.service.status()).allowBackgroundUse, true, "absent new setting ignores legacy per-account OFF");
+		await f.service.lease(true);
+		await f.service.consent(false);
+		assert.equal(f.saved.allowBackgroundUse, false); assert.equal(f.saved.registrations[0].background, false);
+		await assert.rejects(f.service.lease(true), /background/);
+		await f.service.lease(false);
+		const id = f.saved.activeId;
+		await f.service.select(id); assert.equal((await f.service.status()).allowBackgroundUse, false);
+		await f.service.login(id); await f.callback();
+		for (let i = 0; i < 100 && (await f.service.status()).pending; i++) await new Promise((r) => setImmediate(r));
+		assert.equal(f.saved.allowBackgroundUse, false, "reconnecting cannot overwrite app preference");
+		assert.equal(f.saved.registrations[0].background, undefined, "new verified registrations omit obsolete per-account preference");
+		await f.service.disconnect(f.saved.activeId);
+		assert.deepEqual(f.saved.registrations, []); assert.equal(f.saved.allowBackgroundUse, false);
+		const restarted = fixture({ state: f.saved });
+		try {
+			assert.equal((await restarted.service.status()).allowBackgroundUse, false, "zero-account restart preserves global OFF");
+			await restarted.service.login(); await restarted.callback();
+			for (let i = 0; i < 100 && (await restarted.service.status()).pending; i++) await new Promise((r) => setImmediate(r));
+			assert.equal(restarted.saved.allowBackgroundUse, false);
+			await restarted.service.consent(true); assert.equal(restarted.saved.allowBackgroundUse, true);
+		} finally { restarted.service.close(); }
 	} finally { f.service.close(); }
 });
 

@@ -209,7 +209,7 @@ export async function handleChatInput(
 	if (conversation.provider === "chatgpt") {
 		await refreshConnectionCatalog();
 		if (input.type === "steers" && !chatGPTBackgroundAllowed()) {
-			return Response.json({ error: "Background use is off for this ChatGPT account. Automatic follow-up remains deferred in its queue." }, { status: 403 });
+			return Response.json({ error: "ChatGPT background use is off in this app. Automatic follow-up remains deferred in its queue." }, { status: 403 });
 		}
 	}
 	if (!providerKeyPresent(conversation.provider)) {

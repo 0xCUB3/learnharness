@@ -19,7 +19,7 @@ const { persistTurn } = await import("../src/server/turn-service.ts");
 const ipc = (value: unknown) => (process.emit as (name: string, value: unknown) => boolean)("message", value);
 let revision = 1;
 function connection(background: boolean) {
-	ipc({ channel: "lh:chatgpt", kind: "state", stamp: { epoch: 1, authorityRevision: 1, revision: revision++ }, invalidate: background ? "none" : "background", status: { available: true, pending: false, activeId: "scratch-account", accounts: [{ id: "scratch-account", connected: true, planEnabled: true, background }], error: null } });
+	ipc({ channel: "lh:chatgpt", kind: "state", stamp: { epoch: 1, authorityRevision: 1, revision: revision++ }, invalidate: background ? "none" : "background", status: { available: true, pending: false, allowBackgroundUse: background, activeId: "scratch-account", accounts: [{ id: "scratch-account", connected: true, planEnabled: true, background: !background }], error: null } });
 }
 after(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 

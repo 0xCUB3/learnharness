@@ -69,6 +69,16 @@ test("all methods fail closed for desktop missing/wrong secret; API-only matcher
 	}
 });
 
+test("renderer controls route explicit account forgetting and account-independent boolean consent only", async () => {
+	const forgotten: string[] = [], changes: boolean[] = [];
+	const connection = { disconnect: async (id: string) => { forgotten.push(id); return { ok: true }; }, consent: async (enabled: boolean) => { changes.push(enabled); return { ok: true }; } };
+	assert.deepEqual(await chatGPTControl({ op: "disconnect", id: "fixture-account" }, connection), { ok: true });
+	assert.deepEqual(await chatGPTControl({ op: "consent", enabled: false }, connection), { ok: true });
+	assert.deepEqual(forgotten, ["fixture-account"]); assert.deepEqual(changes, [false]);
+	for (const command of [{ op: "disconnect" }, { op: "disconnect", id: 7 }, { op: "consent", enabled: "false" }]) assert.deepEqual(await chatGPTControl(command, connection), { error: "Unsupported ChatGPT control." });
+	assert.deepEqual(changes, [false]);
+});
+
 test("renderer controls have no lease or general token bridge, and require the trusted main frame", async () => {
 	let leased = false;
 	const connection = { lease: async () => { leased = true; return { accessToken: "scratch-private-token" }; } };

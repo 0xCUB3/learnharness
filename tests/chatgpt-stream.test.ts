@@ -15,7 +15,7 @@ let requests: { authorization: string | null; body: Record<string, any>; url: st
 let responseEvents: unknown[] = [];
 const ipc = (value: unknown) => (process.emit as (name: string, value: unknown) => boolean)("message", value);
 const model = piModels().getModel("openai", "gpt-5") as Model<"openai-responses">;
-const status = { available: true, pending: false, activeId: "scratch-account", accounts: [{ id: "scratch-account", email: "dummy@example.invalid", registration: "oaiapp_scratch", connected: true, planEnabled: true, background: false }], error: null };
+const status = { available: true, pending: false, allowBackgroundUse: false, activeId: "scratch-account", accounts: [{ id: "scratch-account", email: "dummy@example.invalid", registration: "oaiapp_scratch", connected: true, planEnabled: true, background: false }], error: null };
 before(async () => {
 	assert(model);
 	process.env.OPENAI_API_KEY = "sk-scratch-must-never-be-used";

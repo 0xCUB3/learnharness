@@ -6,7 +6,7 @@ const send = Object.getOwnPropertyDescriptor(process, "send"), connected = Objec
 const pending: any[] = [];
 const model = piModels().getModels("openai").find((m) => m.api === "openai-responses")!;
 const ipc = (m: unknown) => (process.emit as (name: string, value: unknown) => boolean)("message", m);
-const status = (account: string, background = true) => ({ available: true, pending: false, activeId: account, accounts: [{ id: account, connected: true, background, planEnabled: true }], error: null });
+const status = (account: string, background = true) => ({ available: true, pending: false, allowBackgroundUse: background, activeId: account, accounts: [{ id: account, connected: true, background: !background, planEnabled: true }], error: null });
 const value = (name: string, revision: number, account = "A", authorityRevision = 1) => ({ epoch: account === "A" ? 1 : 2, authorityRevision, revision, status: status(account), accountId: account, models: [{ id: model.id, name }] });
 function reply(request: any, v: unknown) { ipc({ channel: "lh:chatgpt", id: request.id, op: request.op, ok: true, value: v }); }
 before(() => {
@@ -27,7 +27,7 @@ test("consent-only status does not discard current-authority catalog or overwrit
  const refresh = refreshChatGPTModels([model as never]); const request = pending.at(-1);
  ipc({ channel: "lh:chatgpt", kind: "state", stamp: { epoch: 1, authorityRevision: 1, revision: 3 }, status: status("A", false), invalidate: "background" });
  reply(request, value("same authority", 2)); await refresh;
- assert.equal(chatGPTModels()[0]?.name, "same authority"); assert.equal(chatGPTStatus().accounts[0]?.background, false);
+ assert.equal(chatGPTModels()[0]?.name, "same authority"); assert.equal(chatGPTStatus().allowBackgroundUse, false);
  const scope = chatGPTScope(model.id); assert(chatGPTScopeCurrent(scope));
  const foreground = chatGPTAbortController(false), background = chatGPTAbortController(true);
  ipc({ channel: "lh:chatgpt", kind: "state", stamp: { epoch: 1, authorityRevision: 1, revision: 4 }, status: status("A", false), invalidate: "background" });

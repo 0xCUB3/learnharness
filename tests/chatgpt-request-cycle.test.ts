@@ -24,7 +24,7 @@ const model = piModels().getModel("openai", "gpt-5") as Model<"openai-responses"
 let epoch = 1, revision = 1, background = true;
 let cut: "lease" | "payload" | "full" | "afterFetch" | "none" = "none";
 let leases: boolean[] = [], fetches = 0, toolFirst = false;
-const status = () => ({ available: true, pending: false, activeId: "scratch", accounts: [{ id: "scratch", registration: "oaiapp_scratch", email: "dummy@example.invalid", connected: true, planEnabled: true, background }], error: null });
+const status = () => ({ available: true, pending: false, allowBackgroundUse: background, activeId: "scratch", accounts: [{ id: "scratch", registration: "oaiapp_scratch", email: "dummy@example.invalid", connected: true, planEnabled: true, background: !background }], error: null });
 const ipc = (m: unknown) => (process.emit as (name: string, m: unknown) => boolean)("message", m);
 function revoke(full = false) {
  background = false; if (full) epoch++;

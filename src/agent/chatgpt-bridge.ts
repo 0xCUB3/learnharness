@@ -12,7 +12,7 @@ interface BridgeState {
  pending: Map<string, Pending>; controllers: Map<AbortController, boolean>; listeners: Set<() => void>; counter: number; catalogRequest: number;
 }
 const key = Symbol.for("lh.chatgpt.bridge");
-const unavailable = (): ChatGPTStatus => ({ available: false, pending: false, activeId: null, accounts: [], error: null });
+const unavailable = (): ChatGPTStatus => ({ available: false, pending: false, allowBackgroundUse: true, activeId: null, accounts: [], error: null });
 const validStamp = (s: Stamp) => s && [s.epoch, s.authorityRevision, s.revision].every((v) => Number.isSafeInteger(v) && v >= 0);
 function bridge(): BridgeState {
  const global = globalThis as typeof globalThis & { [key]?: BridgeState };
@@ -69,7 +69,7 @@ export function chatGPTRequest<T>(op: "status" | "models" | "lease", fields: Rec
 }
 export function chatGPTStatus(): ChatGPTStatus { return bridge().status; }
 export function chatGPTConnected(): boolean { const s = chatGPTStatus(); return s.available && s.accounts.some((a) => a.id === s.activeId && a.connected && a.planEnabled === true); }
-export function chatGPTBackgroundAllowed(): boolean { const s = chatGPTStatus(); return chatGPTConnected() && s.accounts.some((a) => a.id === s.activeId && a.background); }
+export function chatGPTBackgroundAllowed(): boolean { const s = chatGPTStatus(); return chatGPTConnected() && s.allowBackgroundUse === true; }
 export function onChatGPTChange(listener: () => void): () => void { bridge().listeners.add(listener); return () => { bridge().listeners.delete(listener); }; }
 export function chatGPTModels(): Model<"openai-responses">[] { return bridge().models; }
 export function chatGPTModel(id: string): Model<"openai-responses"> | undefined { return chatGPTModels().find((m) => m.id === id); }

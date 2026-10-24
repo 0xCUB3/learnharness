@@ -34,8 +34,9 @@ contextBridge.exposeInMainWorld("lh", {
 		login: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "login", id }),
 		cancel: () => ipcRenderer.invoke("lh:chatgpt:control", { op: "cancel" }),
 		select: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "select", id }),
+		disconnect: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "disconnect", id }),
 		logout: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "logout", id }),
-		consent: (id, enabled) => ipcRenderer.invoke("lh:chatgpt:control", { op: "consent", id, enabled }),
+		consent: (enabled) => ipcRenderer.invoke("lh:chatgpt:control", { op: "consent", enabled }),
 		onChange: (cb) => {
 			const listener = () => cb();
 			ipcRenderer.on("lh:chatgpt:changed", listener);
