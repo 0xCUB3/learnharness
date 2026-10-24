@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant light (&:is(.light *));
 
 /*
  * THE SKIN — wave 5. Design tokens, the single place to restyle the app.
@@ -67,7 +68,7 @@
 	--lh-heading-weight: 900;
 }
 
-/* The app is always dark (<html class="dark">); mirror the same values so
+/* Dark is the default (<html class="dark">); mirror the same values so
    the block stays coherent under Tailwind's variant. */
 .dark {
 	--background: #141414;
@@ -100,6 +101,34 @@
 	--lh-prose-leading: 1.5;
 	/* Markdown heading weight (appearance settings; 900 = the Black cut). */
 	--lh-heading-weight: 900;
+}
+
+/* Light mode (<html class="light">, seeded server-side from the saved
+   appearance.mode): off-white page, white raised surfaces, dark ink,
+   subdued gray edges. Body text #1a1a1a on #f7f7f5 is ~16:1; the muted
+   gray #5c5c5c is ~6:1. Emphasis inks keep following --foreground.
+   Keep the page color in sync with LIGHT_BACKGROUND in
+   components/settings/appearance.tsx and electron/theme.cjs. */
+.light {
+	color-scheme: light;
+	--background: #f7f7f5;
+	--foreground: #1a1a1a;
+	--card: #ffffff;
+	--card-foreground: #1a1a1a;
+	--popover: #ffffff;
+	--popover-foreground: #1a1a1a;
+	--primary: #1a1a1a;
+	--primary-foreground: #f7f7f5;
+	--secondary: #ffffff;
+	--secondary-foreground: #1a1a1a;
+	--muted: #ffffff;
+	--muted-foreground: #5c5c5c;
+	--accent: #ebebe7;
+	--accent-foreground: #1a1a1a;
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: #d4d4cf;
+	--input: #d4d4cf;
+	--ring: #8a8a8a;
 }
 
 /* CMU Serif bold (titles) — bundled local file, no CDN dependency. */
@@ -246,7 +275,7 @@ body {
 	line-height: 1.25;
 }
 
-/* Thin dark native scrollbar (app-wide): dark thumb, transparent track. */
+/* Thin native scrollbar (app-wide): border-colored thumb, transparent track. */
 * {
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-border) transparent;
