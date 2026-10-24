@@ -13,7 +13,9 @@ import { StatsBar } from "@/components/stats-bar";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
 import { useImageLightbox } from "@/components/image-lightbox";
-import { firstMessageUrl, useImageDraft, type ImageDraftProps } from "@/components/draft-images";
+import { useImageDraft, type ImageDraftProps } from "@/components/draft-images";
+import { modelCannotReadImages, modelKeyOf, startFirstMessage, StartSessionError, type StartReuse } from "@/components/start-image-session";
+import { useModelCatalog } from "@/components/model-picker";
 import { IMAGE_ONLY_TITLE, type DraftImage } from "@/src/core";
 import type { ChatSettings, GraphSnapshot } from "@/src/core";
 
@@ -49,6 +51,8 @@ export async function startDraftSession(
 	mode?: "practice",
 	picks?: readonly DraftPick[],
 	images: readonly DraftImage[] = [],
+	reuse?: StartReuse | null,
+	modelKey?: string,
 ): Promise<string | null> {
 	const t = text.trim();
 	if (!t && images.length === 0) return null;
@@ -56,19 +60,22 @@ export async function startDraftSession(
 	// from the pick bar creates its session WITH the graph context — the
 	// same contract as the home screen's practice send (the marker with
 	// [id] name: statement lines, target validation's truth set).
-	const res = await fetchLike("/api/chats", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(
+	// Pictures never ride the URL: with images the first turn is POSTed to
+	// /api/chat and its ACK awaited before the plain /chat/<id> is returned
+	// (start-image-session.ts). Failure throws StartSessionError.
+	const result = await startFirstMessage({
+		createBody:
 			mode === "practice"
 				? { title: t || IMAGE_ONLY_TITLE, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
 				: { title: t || IMAGE_ONLY_TITLE },
-		),
+		text: t,
+		images,
+		fetchLike,
+		reuse,
+		modelKey,
 	});
-	const { id } = (await res.json()) as { id: string };
-	// No settings PUT on create (per-session models, owner 2026-09-28):
-	// the SERVER stamps the newborn from the strong slot.
-	return firstMessageUrl(id, t, images);
+	if (!result.ok) throw new StartSessionError(result.error, result.reuse);
+	return result.target;
 }
 
 /** The pure shell (no router) — the render-test seam: the draft view's
@@ -252,9 +259,13 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 	};
 	const [busy, setBusy] = useState(false);
 	/* THE IMAGE DRAFT (composer paste): the pasted pictures ride the first
-	 * message. `?prompt=` cannot carry them, so a send with images stashes
-	 * them for the chat page (draft-images.ts) and pushes the plain URL. */
+	 * message. A URL cannot carry them, so a send with images POSTs the first
+	 * turn itself and navigates to the plain URL after the ACK
+	 * (start-image-session.ts). */
 	const imageDraft = useImageDraft();
+	const { catalog } = useModelCatalog();
+	/** A failed image start keeps its fresh chat for the retry. */
+	const retryChat = useRef<StartReuse | null>(null);
 	const lightbox = useImageLightbox();
 	// THE PICK BAR (owner round 10): the draft's lifted pick set + the
 	// snapshot the standalone chain-table picker reads. Lazy — the graph
@@ -299,13 +310,13 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 	const [setupOpen, setSetupOpen] = useState(false);
 
 	const { awaitReads, imagesRef } = imageDraft;
-	const send = useCallback(async () => {
+	const sendInner = useCallback(async (): Promise<boolean> => {
 		await awaitReads(); // a paste followed by Enter must not race its own read
 		const draft = textRef.current.trim();
-		if ((!draft && imagesRef.current.length === 0) || busy) return;
+		if ((!draft && imagesRef.current.length === 0) || busy) return false;
 		if (!configured) {
 			setSetupOpen(true);
-			return;
+			return false;
 		}
 		// The pre-send KEY guards (owner interlude, no-orphan-chats): guard
 		// BEFORE startDraftSession creates the record — a refused first
@@ -314,22 +325,60 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 		// server's 503 gate remains the belt for /chat/[id] sessions.
 		if (zeroKeys || strongKeyless) {
 			setSetupOpen(true);
-			return;
+			return false;
+		}
+		// Vision guard BEFORE any chat is created (no empty-chat piles).
+		if (imagesRef.current.length > 0) {
+			const refusal = modelCannotReadImages(catalog);
+			if (refusal) {
+				imageDraft.setError(refusal);
+				return false;
+			}
 		}
 		setBusy(true);
-		void startDraftSession(
-			draft,
-			fetch,
-			mode === "practice" ? "practice" : undefined,
-			mode === "practice" ? picksRef.current : undefined,
-			imagesRef.current,
-		)
-			.then((target) => {
-				if (target) router.push(target);
-				else setBusy(false);
-			})
-			.catch(() => setBusy(false));
-	}, [busy, router, configured, zeroKeys, strongKeyless, awaitReads, imagesRef]);
+		try {
+			const target = await startDraftSession(
+				draft,
+				fetch,
+				mode === "practice" ? "practice" : undefined,
+				mode === "practice" ? picksRef.current : undefined,
+				imagesRef.current,
+				retryChat.current,
+				modelKeyOf(catalog),
+			);
+			if (!target) {
+				setBusy(false);
+				return false;
+			}
+			retryChat.current = null;
+			router.push(target);
+			return true;
+		} catch (err: unknown) {
+			// The draft (text + images) stays; the reason shows on its strip.
+			if (err instanceof StartSessionError) {
+				retryChat.current = err.reuse ?? null;
+				imageDraft.setError(err.message);
+			}
+			setBusy(false);
+			return false;
+		}
+	}, [busy, router, configured, zeroKeys, strongKeyless, awaitReads, imagesRef, catalog, imageDraft.setError, mode]);
+
+	/* START LOCK: taken BEFORE awaitReads (repeated Enter while a read is
+	 * unresolved must not resume two closures with busy=false and create two
+	 * chats); held through the start, kept after a navigation, released on
+	 * refusal, failure or an early return. */
+	const startLock = useRef(false);
+	const send = useCallback(async () => {
+		if (startLock.current) return;
+		startLock.current = true;
+		let navigated = false;
+		try {
+			navigated = await sendInner();
+		} finally {
+			if (!navigated) startLock.current = false;
+		}
+	}, [sendInner]);
 
 	return (
 		<>

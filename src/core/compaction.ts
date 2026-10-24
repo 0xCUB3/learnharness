@@ -38,6 +38,7 @@ import { derivePlanStatusesLh, derivedNodeStatus } from "./contracts/plan.ts";
 import { COMPACTED_HISTORY_HEADER } from "./contracts/chat.ts";
 import type { LhMessage, LhMarkerMessage } from "./native-messages.ts";
 import { newMessageId } from "./native-messages.ts";
+import { imageMarker } from "./images.ts";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, SystemMessage } from "@earendil-works/pi-ai";
 
@@ -311,7 +312,7 @@ function userSummaryText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	return (content as Array<{ type?: string; text?: string; mimeType?: string }>)
-		.map((b) => (b.type === "image" ? `[image: ${b.mimeType ?? "image"}]` : (b.text ?? "")))
+		.map((b) => (b.type === "image" ? imageMarker(b) : (b.text ?? "")))
 		.filter((t) => t.length > 0)
 		.join("\n");
 }
@@ -337,8 +338,9 @@ export function serializeForSummary(messages: readonly LhMessage[]): string {
 			if (blocks.length > 0) lines.push(`[TUTOR] ${blocks.join("\n")}`);
 		} else if (role === "toolResult") {
 			const result = m as ToolResultMessage;
-			const text = result.content
-				.map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
+			// Images become the base64-free marker, in block order.
+			const text = (result.content as Array<{ type: string; text?: string; mimeType?: string }>)
+				.map((c) => (c.type === "text" ? (c.text ?? "") : c.type === "image" ? imageMarker(c) : JSON.stringify(c)))
 				.join("\n");
 			lines.push(
 				`[RESULT for ${result.toolName}${result.isError ? " (error)" : ""}] ${

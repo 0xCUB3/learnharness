@@ -21,6 +21,7 @@ import { LiveToolCard } from "@/components/artifacts/live-tool-card";
 import { Separator } from "@/components/ui/separator";
 import { AnsweredCard } from "@/components/answered-card";
 import { artifactRenderers } from "@/components/artifacts";
+import { ToolCallCard } from "@/components/artifacts/tool-call-card";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { useEnterSubmits } from "@/components/enter-submits";
@@ -48,7 +49,7 @@ import { PlanBlock, PlanPopup, latestTree } from "@/components/plan-block";
 import { PlanMarginalia, planExists } from "@/components/plan-window";
 import { MermaidOverlay, SessionMermaidContext } from "@/components/session-overlay";
 import { useImageLightbox } from "@/components/image-lightbox";
-import { takeFirstMessage, useImageDraft } from "@/components/draft-images";
+import { useImageDraft } from "@/components/draft-images";
 import { UserMessageParts } from "@/components/user-message-parts";
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
 import { ArrowRightIcon, DumbbellIcon, WaypointsIcon } from "lucide-react";
@@ -597,35 +598,38 @@ export function Chat({
 	/* The same preserve-and-replay seam for pasted images: a refused send puts
 	 * them back in the composer with the text. */
 	const draftImagesRef = useRef<DraftImage[]>([]);
+	/* The image snapshot whose POST has not been ACKed yet: the strip keeps
+	 * those images until then, so Enter must not send them twice. */
+	const awaitingAckRef = useRef<readonly DraftImage[] | null>(null);
 	/* THE COMPOSER'S IMAGE DRAFT (composer paste): the shared paste, validate,
 	 * read hook. Its own ref mirror is why a send that resumes after an
 	 * await (dictation finish, image reads) still sees the live images. */
 	const imageDraft = useImageDraft();
 	const lightbox = useImageLightbox();
+	const removeImages = imageDraft.removeImages;
 
 	/** ONE learner message out: remembers the draft for the refusal flow's
 	 *  restore, then sends text plus any pictures as one input event. */
 	const sendDraft = useCallback(
 		(text: string, images: readonly DraftImage[]) => {
+			const snapshot = [...images];
 			draftRef.current = text;
-			draftImagesRef.current = [...images];
-			void send({ type: "text", text, ...(images.length > 0 ? { images: wireImages(images) } : {}) });
+			draftImagesRef.current = snapshot;
+			awaitingAckRef.current = snapshot.length > 0 ? snapshot : null;
+			void send({ type: "text", text, ...(snapshot.length > 0 ? { images: wireImages(snapshot) } : {}) }, () => {
+				// ACK (POST ok, before the stream): the sent images leave the
+				// strip, and ONLY those: pictures added since stay. A stale
+				// success can't touch a newer snapshot's restore refs.
+				if (snapshot.length > 0) removeImages(snapshot.map((i) => i.id));
+				if (awaitingAckRef.current === snapshot) awaitingAckRef.current = null;
+				if (draftImagesRef.current === snapshot) {
+					draftImagesRef.current = [];
+					draftRef.current = null;
+				}
+			});
 		},
-		[send],
+		[send, removeImages],
 	);
-
-	/* THE IMAGE HANDOFF (composer paste): home and the draft create the
-	 * session, stash a first message that carried pictures (a URL cannot),
-	 * and push /chat/<id>. Take it ONCE, into the normal send path, so a
-	 * refusal restores the draft exactly like any other send. */
-	const tookStash = useRef(false);
-	useEffect(() => {
-		if (tookStash.current) return;
-		tookStash.current = true;
-		if (initialPrompt) return; // the ?prompt= path owns that first send
-		const stashed = takeFirstMessage(chatId);
-		if (stashed) sendDraft(stashed.text, stashed.images);
-	}, [chatId, initialPrompt, sendDraft]);
 
 	// THE BYOK REFUSAL (owner, 2026-09-22): a send that lands the server's
 	// 503 models_not_configured envelope renders as the SETUP FLOW, never
@@ -638,6 +642,7 @@ export function Chat({
 	// re-sends it (owner ruling 2026-10-09).
 	useEffect(() => {
 		if (!error) return;
+		awaitingAckRef.current = null; // a failed send releases its images
 		const missing = parseModelsRefusal(error.message);
 		// The key-refusal twin (zero-keys wave): a pinned model whose
 		// provider key is gone gets the SAME treatment — revert-draft and
@@ -647,7 +652,14 @@ export function Chat({
 		// Same revert-draft, but the reason shows on the draft strip, not
 		// the setup dialog (no setup step fixes it; a model swap does).
 		const imageRefusal = parseImageRefusal(error.message);
-		if (!missing && !keyRefused && !imageRefusal) return; // a real error keeps the honest banner
+		if (!missing && !keyRefused && !imageRefusal) {
+			// Before ACK the attachments are still in the strip. Keep the
+			// text too, without replacing anything typed since this send.
+			if (draftRef.current !== null && !textRef.current) applyText(draftRef.current);
+			draftRef.current = null;
+			draftImagesRef.current = [];
+			return; // a real error keeps the honest banner
+		}
 		// ORDER MATTERS: clearError() flips this effect's own dep (`error`)
 		// and would cancel the in-flight work below — so the banner dismiss,
 		// the draft restore, and the dialog open all land TOGETHER after the
@@ -1203,10 +1215,13 @@ export function Chat({
 		const t = textRef.current.trim();
 		const imgs = imageDraft.imagesRef.current;
 		if (!t && imgs.length === 0) return;
+		// An image send still awaiting its ACK owns these images already.
+		if (awaitingAckRef.current) return;
+		// An explicit retry must re-arm the model after a prior send error.
+		if (error) clearError();
 		applyText("");
-		imageDraft.setImages([]);
 		imageDraft.setError(null);
-		sendDraft(t, imgs); // keeps the draft for the refusal flow's restore
+		sendDraft(t, imgs); // images stay in the strip until the ACK; keeps the draft for the refusal flow's restore
 	};
 
 	/* STEER VS SEND (owner arc 2026-10-03): a send while a turn runs steers
@@ -1227,7 +1242,10 @@ export function Chat({
 			// Images are NOT steerable (v1, the steer event has no images). The
 			// draft waits for the turn to settle: send/Enter is a no-op rather
 			// than a drop, and never a Stop (an Enter must not abort a turn).
-			if (imgs.length > 0) return;
+			if (imgs.length > 0) {
+				imageDraft.setError("Images can be sent once the current response finishes. Your draft is kept.");
+				return;
+			}
 			applyText("");
 			void steer(t);
 			return;
@@ -1250,6 +1268,7 @@ export function Chat({
 			value={{
 				openMermaid: setMermaidFocus,
 				openFigure: (svg, inverted) => setFigureFocus({ svg, inverted }),
+				openImage: lightbox.open,
 			}}
 		>
 		<JobsContext.Provider value={jobs}>
@@ -1591,7 +1610,11 @@ export function Chat({
 														// parts and future artifacts render via the
 														// registry — add renderers there, not here.
 														if (part.type.startsWith("tool-")) {
-															const Renderer = artifactRenderers[part.type.slice("tool-".length)];
+															const Renderer =
+																artifactRenderers[part.type.slice("tool-".length)] ??
+																(Array.isArray((part as { images?: unknown }).images) && (part as { images: unknown[] }).images.length > 0
+																	? ToolCallCard
+																	: undefined);
 															if (Renderer) return <Renderer key={pi} part={part as ArtifactPartProps["part"]} />;
 														}
 														return null;

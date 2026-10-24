@@ -3,8 +3,8 @@
 import { ArrowRightIcon, CornerDownLeftIcon, SquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Hint } from "@/components/ui/hint";
-import { DraftImageStrip } from "@/components/draft-image-strip";
-import { handleImagePaste, type ImageDraftProps } from "@/components/draft-images";
+import { DraftImageStrip, ImagePickButton } from "@/components/draft-image-strip";
+import { handleImagePaste, imageDropHandlers, type ImageDraftProps } from "@/components/draft-images";
 
 /**
  * The chat composer — content row ONLY (the persistent rounded shell lives in
@@ -95,8 +95,10 @@ export function Composer({
 				e.preventDefault();
 				act();
 			}}
+			{...(imageDraft ? imageDropHandlers(imageDraft.onPaste) : {})}
 		>
 			{imageDraft && <DraftImageStrip draft={imageDraft} />}
+			{imageDraft && <ImagePickButton draft={imageDraft} />}
 			<textarea
 				ref={inputRef}
 				value={value}

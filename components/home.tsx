@@ -7,8 +7,10 @@ import { GraphView } from "@/components/graph-view";
 import { MinimalHome } from "@/components/minimal-home";
 import { SetupDialog } from "@/components/setup-dialog";
 import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
-import { DraftImageStrip } from "@/components/draft-image-strip";
-import { firstMessageUrl, handleImagePaste, useImageDraft } from "@/components/draft-images";
+import { DraftImageStrip, ImagePickButton } from "@/components/draft-image-strip";
+import { handleImagePaste, imageDropHandlers, useImageDraft } from "@/components/draft-images";
+import { useModelCatalog } from "@/components/model-picker";
+import { modelCannotReadImages, modelKeyOf, startFirstMessage, type StartReuse } from "@/components/start-image-session";
 import { useImageLightbox } from "@/components/image-lightbox";
 import { IMAGE_ONLY_TITLE } from "@/src/core";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
@@ -71,6 +73,9 @@ export function Home({
 	 * `?prompt=` handoff is text-only, so images are stashed for the chat page
 	 * (draft-images.ts) and the push carries only the session id. */
 	const imageDraft = useImageDraft();
+	const { catalog } = useModelCatalog();
+	/** A failed image start keeps its fresh chat for the retry. */
+	const retryChat = useRef<StartReuse | null>(null);
 	const lightbox = useImageLightbox();
 	/* Run end focuses the topic input (owner, 2026-10-01): the hands are on
 	 * the keyboard from the stop. Falling edge only; this surface's only
@@ -119,16 +124,16 @@ export function Home({
 		}
 		void dictation.finish().then(() => begin());
 	};
-	const begin = async () => {
+	const beginInner = async (): Promise<boolean> => {
 		await imageDraft.awaitReads(); // a paste followed by Enter must not race its read
 		const t = topicRef.current.trim();
 		const images = imageDraft.imagesRef.current;
-		if ((!t && images.length === 0) || busy) return;
+		if ((!t && images.length === 0) || busy) return false;
 		// Unconfigured: the send INTERCEPTS into the setup flow (the draft
 		// stays in the textarea; the learner sends it after Save).
 		if (!configured) {
 			setSetupOpen(true);
-			return;
+			return false;
 		}
 		// The pre-send KEY guards (owner interlude, no-orphan-chats): the
 		// models case guards BEFORE creation; the key cases must too — a
@@ -139,31 +144,64 @@ export function Home({
 		// sessions.
 		if (zeroKeys || strongKeyless) {
 			setSetupOpen(true);
-			return;
+			return false;
+		}
+		// Vision guard BEFORE anything is created: the chosen model is known
+		// and text-only, so a picture could only be refused (no empty chat).
+		if (images.length > 0) {
+			const refusal = modelCannotReadImages(catalog);
+			if (refusal) {
+				imageDraft.setError(refusal);
+				return false;
+			}
 		}
 		setBusy(true);
 		try {
 			// The map context (owner, 2026-10-04): picks in EITHER mode ride
 			// the CREATION as graphContext — the server writes a
-			// graph-context marker as message[0] (a separate custom message
-			// before the learner's first user message, propositions + the
-			// chains among them); the prompt stays the learner's own words.
-			const res = await fetch("/api/chats", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
+			// graph-context marker as message[0]; the prompt stays the
+			// learner's own words.
+			const result = await startFirstMessage({
+				createBody: {
 					title: t || IMAGE_ONLY_TITLE,
 					...(mode === "practice" ? { kind: "practice" } : {}),
 					...(practiceProps.length > 0 ? { graphContext: { propositions: practiceProps } } : {}),
-				}),
+				},
+				text: t,
+				images,
+				fetchLike: fetch,
+				reuse: retryChat.current,
+				modelKey: modelKeyOf(catalog),
 			});
-			const { id } = (await res.json()) as { id: string };
-			// No settings PUT on create (per-session models, owner
-			// 2026-09-28): the SERVER stamps the newborn from the strong
-			// slot — the same default this surface's model control edits.
-			router.push(firstMessageUrl(id, t, images));
+			if (!result.ok) {
+				// The draft stays; a retry reuses the fresh chat when possible.
+				retryChat.current = result.reuse ?? null;
+				imageDraft.setError(result.error);
+				setBusy(false);
+				return false;
+			}
+			retryChat.current = null;
+			router.push(result.target);
+			return true;
 		} catch {
 			setBusy(false);
+			return false;
+		}
+	};
+
+	/* START LOCK: taken BEFORE awaitReads, so repeated Enter while a read is
+	 * unresolved cannot resume two closures with busy=false and create two
+	 * chats. Held through the whole start (kept after a navigation, released
+	 * on refusal, failure or an early return). */
+	const startLock = useRef(false);
+	const begin = async () => {
+		if (startLock.current) return;
+		startLock.current = true;
+		let navigated = false;
+		try {
+			navigated = await beginInner();
+		} finally {
+			if (!navigated) startLock.current = false;
 		}
 	};
 
@@ -262,8 +300,10 @@ export function Home({
 						e.preventDefault();
 						void start();
 					}}
+					{...imageDropHandlers(imageDraft.props.onPaste)}
 				>
 					<DraftImageStrip draft={{ ...imageDraft.props, onOpen: lightbox.open }} />
+					<ImagePickButton draft={imageDraft.props} />
 					<textarea
 						ref={topicInputRef}
 						value={topic}

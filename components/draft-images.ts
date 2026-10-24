@@ -1,18 +1,38 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
-import { checkImageMeta, ImageInputError, IMAGE_ERRORS, parseComposerImages, type DraftImage } from "@/src/core";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+	checkImageDimensions,
+	checkSourceImageMeta,
+	ImageInputError,
+	inspectImageBytes,
+	IMAGE_ERRORS,
+	MAX_IMAGE_BYTES,
+	MAX_IMAGE_DIMENSION,
+	parseComposerImages,
+	type DraftImage,
+} from "@/src/core";
 
 /**
- * THE IMAGE DRAFT (composer paste): the paste, validate, read path every
- * sending surface shares (home, the /chat/new draft, a live session). The
- * checks are the core's own (images.ts), so the composer's inline refusal
- * and the server's 400 read the same rules and the same words.
+ * THE IMAGE DRAFT: the paste / file-picker / drop path every sending surface
+ * shares (home, the /chat/new draft, a live session), as ONE hook.
  *
- * State + a REF MIRROR: a send that resumes after an await (dictation
- * finish, image reads) must read the live draft, not a render-time closure.
- * Reads are tracked so a paste followed at once by Enter waits for them
- * instead of sending before the reader has produced the image.
+ * Shape: a plain controller (no React, so the ordering and stale-async rules
+ * are testable in node) wrapped by useImageDraft. Source files are decoded in
+ * the browser (first frame, via canvas) and normalized: PNG/JPEG already inside
+ * the limits pass through byte-for-byte; everything else (GIF, WebP, oversized)
+ * becomes a PNG, shrunk as needed. What the draft holds IS what the wire
+ * carries (wireImages strips only the client id); the server validates, it
+ * never rewrites.
+ *
+ * Rules the controller owns:
+ *  - files are processed in the order given, one at a time (bounded memory,
+ *    stable thumbnail order); a read followed at once by Enter waits via
+ *    awaitReads;
+ *  - clear() and unmount bump an epoch, so a decode finishing late can never
+ *    resurrect a cleared draft;
+ *  - restoreSent puts a refused send's images back FIRST without dropping the
+ *    ones added since.
  */
 
 /** What a composer needs to show and edit the draft: one object, so the
@@ -23,110 +43,282 @@ export interface ImageDraftProps {
 	hasImages: boolean;
 	error: string | null;
 	onChange: (next: DraftImage[]) => void;
+	/** Files from a paste, the picker or a drop: all take this one door. */
 	onPaste: (files: File[]) => void;
 	/** Show a picture full size (its data URL). */
 	onOpen?: (url: string) => void;
 }
 
-export function useImageDraft() {
-	const [images, setImages] = useState<DraftImage[]>([]);
-	const imagesRef = useRef<DraftImage[]>([]);
-	const [error, setError] = useState<string | null>(null);
-	const pending = useRef<Promise<void>[]>([]);
-	// Reads in flight count as draft content: Enter right after a paste must
-	// reach the send (which awaits them), not be gated out as "empty".
-	const [reading, setReading] = useState(0);
+// ── normalization ───────────────────────────────────────────────────────────
 
-	const setDraftImages = useCallback((next: DraftImage[]) => {
-		imagesRef.current = next;
-		setImages(next);
-	}, []);
-
-	/** Put images back after a refused send WITHOUT dropping the ones pasted
-	 *  since: the restored images go first (they were sent first). */
-	const restoreSent = useCallback(
-		(sent: readonly DraftImage[]) => {
-			const ids = new Set(sent.map((i) => i.id));
-			setDraftImages([...sent, ...imagesRef.current.filter((i) => !ids.has(i.id))]);
-		},
-		[setDraftImages],
-	);
-
-	const addFiles = useCallback(
-		(files: File[]) => {
-			setError(null);
-			for (const file of files) {
-				try {
-					checkImageMeta(file.type, file.size);
-				} catch (err) {
-					setError((err as Error).message);
-					continue;
-				}
-				// FileReader hands back a data: URL. Its tail IS the base64 the
-				// native message carries, so nothing is encoded twice.
-				setReading((n) => n + 1);
-				pending.current.push(
-					new Promise<void>((done) => {
-						const resolve = () => {
-							setReading((n) => n - 1);
-							done();
-						};
-						const reader = new FileReader();
-						reader.onload = () => {
-							const url = String(reader.result ?? "");
-							const comma = url.indexOf(",");
-							const candidate: DraftImage = {
-								id: `img_${crypto.randomUUID()}`,
-								type: "image",
-								mimeType: file.type,
-								data: comma < 0 ? "" : url.slice(comma + 1),
-							};
-							const next = [...imagesRef.current, candidate];
-							try {
-								// The server's own rules: count, sizes, and the bytes'
-								// real format (a renamed file is refused here, not later).
-								parseComposerImages(next);
-								setDraftImages(next);
-							} catch (err) {
-								setError(err instanceof ImageInputError ? err.message : IMAGE_ERRORS.unreadable);
-							}
-							resolve();
-						};
-						reader.onerror = () => {
-							setError(IMAGE_ERRORS.unreadable);
-							resolve();
-						};
-						reader.readAsDataURL(file);
-					}),
-				);
-			}
-		},
-		[setDraftImages],
-	);
-
-	/** Await the reads already in flight (a send never races a paste). */
-	const awaitReads = useCallback(async () => {
-		const reads = pending.current;
-		pending.current = [];
-		await Promise.all(reads);
-	}, []);
-
-	/** Anything to send: drafted images, or ones still being read. */
-	const hasImages = images.length > 0 || reading > 0;
-
-	const props = useMemo<Omit<ImageDraftProps, "onOpen">>(
-		() => ({ images, hasImages, error, onChange: setDraftImages, onPaste: addFiles }),
-		[images, hasImages, error, setDraftImages, addFiles],
-	);
-
-	return { images, imagesRef, hasImages, error, setError, addFiles, setImages: setDraftImages, restoreSent, awaitReads, props };
+export interface DecodedRaster {
+	width: number;
+	height: number;
+	/** Draw the first frame at `scale` and encode it as a PNG. */
+	encodePng(scale: number): Promise<Blob>;
+	close(): void;
 }
 
+export interface RasterDeps {
+	/** The file's leading bytes (header inspection, before any decode). */
+	head(file: File): Promise<Uint8Array>;
+	decode(file: File): Promise<DecodedRaster>;
+	toBase64(blob: Blob): Promise<string>;
+}
+
+function readBase64(blob: Blob): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const url = String(reader.result ?? "");
+			const comma = url.indexOf(",");
+			if (comma < 0) reject(new Error("empty"));
+			else resolve(url.slice(comma + 1));
+		};
+		reader.onerror = () => reject(reader.error ?? new Error("read"));
+		reader.readAsDataURL(blob);
+	});
+}
+
+async function decodeInBrowser(file: File): Promise<DecodedRaster> {
+	let source: CanvasImageSource;
+	let width: number;
+	let height: number;
+	let release = () => {};
+	if (typeof createImageBitmap === "function") {
+		// An animated GIF/WebP decodes to its first frame.
+		const bitmap = await createImageBitmap(file);
+		source = bitmap;
+		width = bitmap.width;
+		height = bitmap.height;
+		release = () => bitmap.close();
+	} else {
+		const url = URL.createObjectURL(file);
+		const img = new Image();
+		img.src = url;
+		await img.decode();
+		source = img;
+		width = img.naturalWidth;
+		height = img.naturalHeight;
+		release = () => URL.revokeObjectURL(url);
+	}
+	return {
+		width,
+		height,
+		close: release,
+		encodePng(scale) {
+			const canvas = document.createElement("canvas");
+			canvas.width = Math.max(1, Math.round(width * scale));
+			canvas.height = Math.max(1, Math.round(height * scale));
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return Promise.reject(new Error("canvas"));
+			ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+			return new Promise((resolve, reject) =>
+				canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("encode"))), "image/png"),
+			);
+		},
+	};
+}
+
+async function headOf(file: File): Promise<Uint8Array> {
+	return new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
+}
+
+export const browserRaster: RasterDeps = { head: headOf, decode: decodeInBrowser, toBase64: readBase64 };
+
+/** One source file → the {mimeType, data} the draft (and the wire) carries. */
+export async function normalizeImageFile(file: File, deps: RasterDeps = browserRaster): Promise<{ mimeType: string; data: string }> {
+	checkSourceImageMeta(file.type, file.size); // type + 20 MiB, before any decode
+	// Strict header inspection (core): real format and bounded dimensions
+	// BEFORE the browser is asked to decode anything.
+	const info = inspectImageBytes(await deps.head(file).catch(() => new Uint8Array()));
+	if (!info || info.mimeType !== file.type) throw new ImageInputError(IMAGE_ERRORS.content);
+	checkImageDimensions(info.width, info.height);
+	let raster: DecodedRaster;
+	try {
+		raster = await deps.decode(file);
+	} catch {
+		throw new ImageInputError(IMAGE_ERRORS.unreadable);
+	}
+	try {
+		const { width, height } = raster;
+		checkImageDimensions(width, height);
+		const longest = Math.max(width, height);
+		const keepsBytes = (file.type === "image/png" || file.type === "image/jpeg") && file.size <= MAX_IMAGE_BYTES && longest <= MAX_IMAGE_DIMENSION;
+		if (keepsBytes) return { mimeType: file.type, data: await deps.toBase64(file) };
+		let scale = Math.min(1, MAX_IMAGE_DIMENSION / longest);
+		for (let attempt = 0; attempt < 6; attempt++, scale *= 0.75) {
+			const png = await raster.encodePng(scale);
+			if (png.size <= MAX_IMAGE_BYTES) return { mimeType: "image/png", data: await deps.toBase64(png) };
+		}
+		throw new ImageInputError(IMAGE_ERRORS.size);
+	} catch (err) {
+		throw err instanceof ImageInputError ? err : new ImageInputError(IMAGE_ERRORS.unreadable);
+	} finally {
+		raster.close();
+	}
+}
+
+// ── the controller ──────────────────────────────────────────────────────────
+
+export interface ImageDraftState {
+	images: readonly DraftImage[];
+	reading: number;
+	error: string | null;
+}
+
+export class ImageDraftController {
+	images: DraftImage[] = [];
+	private reading = 0;
+	private error: string | null = null;
+	private epoch = 0;
+	private disposed = false;
+	private queue: Promise<void> = Promise.resolve();
+	private listeners = new Set<() => void>();
+	private snap: ImageDraftState = { images: [], reading: 0, error: null };
+
+	constructor(private readonly normalize: (file: File) => Promise<{ mimeType: string; data: string }> = normalizeImageFile) {}
+
+	subscribe = (fn: () => void): (() => void) => {
+		this.listeners.add(fn);
+		return () => this.listeners.delete(fn);
+	};
+	getState = (): ImageDraftState => this.snap;
+
+	private emit(): void {
+		this.snap = { images: this.images, reading: this.reading, error: this.error };
+		for (const fn of this.listeners) fn();
+	}
+
+	setError = (message: string | null): void => {
+		if (this.disposed) return;
+		this.error = message;
+		this.emit();
+	};
+
+	/** Replace the drafted images (remove a thumbnail, programmatic edit).
+	 *  Reads in flight are NOT cancelled; use clear() for that. */
+	setImages = (next: DraftImage[]): void => {
+		if (this.disposed) return;
+		this.images = next;
+		this.emit();
+	};
+
+	/** Empty the draft (a send took it): pending reads are invalidated. */
+	clear = (): void => {
+		this.epoch++;
+		this.reading = 0;
+		this.images = [];
+		this.error = null;
+		if (!this.disposed) this.emit();
+	};
+
+	/** Unmount: no late decode may touch state or resurrect anything. */
+	dispose = (): void => {
+		this.epoch++;
+		this.disposed = true;
+	};
+
+	/** Strict-mode remount: the same instance is re-armed (its draft was
+	 *  invalidated by the dispose in between). */
+	revive = (): void => {
+		this.disposed = false;
+	};
+
+	/** Drop exactly these images (an ACKed send), keeping any added since. */
+	removeImages = (ids: readonly string[]): void => {
+		const gone = new Set(ids);
+		this.setImages(this.images.filter((i) => !gone.has(i.id)));
+	};
+
+	/** Put a refused send's images back WITHOUT dropping later ones. */
+	restoreSent = (sent: readonly DraftImage[]): void => {
+		const ids = new Set(sent.map((i) => i.id));
+		this.setImages([...sent, ...this.images.filter((i) => !ids.has(i.id))]);
+	};
+
+	addFiles = (files: readonly File[]): void => {
+		if (this.disposed || files.length === 0) return;
+		this.error = null;
+		const epoch = this.epoch;
+		this.reading += files.length;
+		this.emit();
+		const batch = [...files];
+		this.queue = this.queue.then(async () => {
+			for (const file of batch) {
+				if (epoch !== this.epoch) return; // cleared or unmounted: stale
+				let failure: string | null = null;
+				let added: DraftImage | null = null;
+				try {
+					const { mimeType, data } = await this.normalize(file);
+					if (epoch !== this.epoch) return;
+					const candidate: DraftImage = { id: `img_${crypto.randomUUID()}`, type: "image", mimeType, data };
+					// The server's own rules: count, sizes, real format.
+					parseComposerImages([...this.images, candidate]);
+					added = candidate;
+				} catch (err) {
+					if (epoch !== this.epoch) return;
+					failure = err instanceof ImageInputError ? err.message : IMAGE_ERRORS.unreadable;
+				}
+				this.reading = Math.max(0, this.reading - 1);
+				if (added) this.images = [...this.images, added];
+				if (failure) this.error = failure;
+				this.emit();
+			}
+		});
+	};
+
+	/** Await the reads already in flight (a send never races a paste). */
+	awaitReads = async (): Promise<void> => {
+		await this.queue;
+	};
+}
+
+export function useImageDraft() {
+	const ref = useRef<ImageDraftController | null>(null);
+	if (!ref.current) ref.current = new ImageDraftController();
+	const c = ref.current;
+	useEffect(() => {
+		c.revive();
+		return () => c.dispose();
+	}, [c]);
+	const state = useSyncExternalStore(c.subscribe, c.getState, c.getState);
+	// Live mirror: a send resuming after an await reads the draft, not a closure.
+	const imagesRef = useMemo(
+		() => ({
+			get current() {
+				return c.images;
+			},
+		}),
+		[c],
+	);
+	const hasImages = state.images.length > 0 || state.reading > 0;
+	const props = useMemo<Omit<ImageDraftProps, "onOpen">>(
+		() => ({ images: state.images, hasImages, error: state.error, onChange: c.setImages, onPaste: c.addFiles }),
+		[state, hasImages, c],
+	);
+	return {
+		images: state.images,
+		imagesRef,
+		hasImages,
+		error: state.error,
+		setError: c.setError,
+		addFiles: c.addFiles,
+		setImages: c.setImages,
+		clear: c.clear,
+		restoreSent: c.restoreSent,
+		removeImages: c.removeImages,
+		awaitReads: c.awaitReads,
+		props,
+	};
+}
+
+// ── DOM handlers ────────────────────────────────────────────────────────────
+
 /**
- * The paste handler every composer textarea uses: image files (from
- * `files`, or `items` on clipboards that expose only those) go to the
- * draft. A clipboard that also carries text keeps its text: the picture
- * attaches alongside instead of replacing it.
+ * The paste handler every composer textarea uses: image files (from `files`,
+ * or `items` on clipboards that expose only those) go to the draft. A
+ * clipboard that also carries text keeps its text.
  */
 export function handleImagePaste(e: React.ClipboardEvent, onPaste: ((files: File[]) => void) | undefined): void {
 	if (!onPaste) return;
@@ -137,43 +329,35 @@ export function handleImagePaste(e: React.ClipboardEvent, onPaste: ((files: File
 	onPaste(files);
 }
 
-/**
- * THE FIRST-MESSAGE HANDOFF (composer paste): a session is born from its
- * first message, and that message travels as `?prompt=<text>`, a URL that
- * cannot carry image bytes. When the first message holds images the sending
- * surface creates the session, stashes the draft HERE, and pushes the plain
- * `/chat/<id>`. The chat page takes it once, into the normal send path (so
- * a refusal restores the draft exactly like every other send).
- *
- * shortcut: in memory, so a hard reload between the two pages drops the
- * draft (the session exists, empty, nothing partial persisted); move to
- * sessionStorage if learners hit it.
- */
-const firstMessages = new Map<string, { text: string; images: DraftImage[] }>();
-
-function stashFirstMessage(chatId: string, draft: { text: string; images: readonly DraftImage[] }): void {
-	firstMessages.set(chatId, { text: draft.text, images: [...draft.images] });
+function hasFiles(data: DataTransfer | null): boolean {
+	return Array.from(data?.types ?? []).includes("Files");
 }
 
-/** Where a newborn session opens with its first message: `?prompt=` for
- *  text, or the stash (above) when pictures ride along. */
-export function firstMessageUrl(chatId: string, text: string, images: readonly DraftImage[]): string {
-	if (images.length === 0) return `/chat/${chatId}?prompt=${encodeURIComponent(text)}`;
-	stashFirstMessage(chatId, { text, images });
-	return `/chat/${chatId}`;
+/** Drag-over / drop handlers for a composer. EVERY file drop is claimed (the
+ *  browser must never navigate to a dropped file); files go to the draft,
+ *  which refuses unsupported types with its friendly error. */
+export function imageDropHandlers(onFiles: ((files: File[]) => void) | undefined) {
+	return {
+		onDragOver(e: React.DragEvent) {
+			if (hasFiles(e.dataTransfer)) e.preventDefault();
+		},
+		onDrop(e: React.DragEvent) {
+			if (!hasFiles(e.dataTransfer)) return;
+			e.preventDefault();
+			const files = Array.from(e.dataTransfer.files ?? []);
+			if (files.length > 0) onFiles?.(files);
+		},
+	};
 }
 
-export function takeFirstMessage(chatId: string): { text: string; images: DraftImage[] } | null {
-	const draft = firstMessages.get(chatId);
-	if (draft) firstMessages.delete(chatId);
-	return draft ?? null;
+/** The picker's change handler: hand the files over, then reset the input so
+ *  choosing the SAME file again (after removing it) fires change. */
+export function handlePickedFiles(input: { files: FileList | null; value: string }, onFiles: ((files: File[]) => void) | undefined): void {
+	const files = Array.from(input.files ?? []);
+	input.value = "";
+	if (files.length > 0) onFiles?.(files);
 }
 
-/**
- * The clipboard files a paste event carries: `files` covers Chrome's own
- * paste, `items` covers clipboards that expose only item entries (Linux
- * providers, some Electron paths).
- */
 function clipboardImageFiles(data: DataTransfer | null): File[] {
 	if (!data) return [];
 	const fromFiles = Array.from(data.files ?? []).filter((f) => f.type.startsWith("image/"));
@@ -182,4 +366,10 @@ function clipboardImageFiles(data: DataTransfer | null): File[] {
 		.filter((item) => item.kind === "file" && item.type.startsWith("image/"))
 		.map((item) => item.getAsFile())
 		.filter((f): f is File => f !== null);
+}
+
+/** Where a newborn TEXT-ONLY session opens with its first message. Image
+ *  first messages never use a URL (see start-image-session.ts). */
+export function firstMessageUrl(chatId: string, text: string): string {
+	return `/chat/${chatId}?prompt=${encodeURIComponent(text)}`;
 }

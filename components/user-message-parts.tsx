@@ -1,12 +1,13 @@
 "use client";
 
 import type { LhViewPart } from "@/src/core";
+import { ImageGallery } from "@/components/image-gallery";
 
 /**
- * The body of a learner's transcript row: text and pasted pictures in the
- * order the learner sent them (core/view.ts keeps that order). Text renders
- * plain, never through the model's LaTeX pipeline ($ stays $). A picture
- * opens full size on click.
+ * The body of a learner's transcript row: text and pictures in the order
+ * the learner sent them (core/view.ts keeps that order). Text renders
+ * plain, never through the model's LaTeX pipeline ($ stays $). Pictures go
+ * through the shared ImageGallery; a picture opens full size on click.
  */
 export function UserMessageParts({
 	parts,
@@ -15,8 +16,8 @@ export function UserMessageParts({
 	parts: readonly LhViewPart[];
 	onOpenImage: (url: string) => void;
 }) {
-	return parts.map((part) => {
-		const key = part.id;
+	return parts.map((part, i) => {
+		const key = part.id ?? i;
 		if (part.type === "text") {
 			return (
 				<div key={key} className="lh-prose whitespace-pre-wrap text-foreground">
@@ -25,19 +26,13 @@ export function UserMessageParts({
 			);
 		}
 		if (part.type !== "image") return null;
-		const url = String(part.url);
 		return (
-			<button
+			<ImageGallery
 				key={key}
-				type="button"
-				data-testid="user-image"
-				onClick={() => onOpenImage(url)}
-				aria-label="View pasted image in full"
-				className="my-1 block w-fit cursor-zoom-in"
-			>
-				{/* eslint-disable-next-line @next/next/no-img-element */}
-				<img src={url} alt={String(part.alt)} className="max-h-64 w-auto rounded-[6px] border" />
-			</button>
+				inline
+				onOpenImage={onOpenImage}
+				items={[{ url: String(part.url), alt: typeof part.alt === "string" ? part.alt : undefined }]}
+			/>
 		);
 	});
 }

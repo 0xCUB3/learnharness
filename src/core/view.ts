@@ -55,6 +55,7 @@ export interface LhViewPart extends Record<string, unknown> {
 	toolCallId?: string;
 	input?: unknown;
 	output?: unknown;
+	images?: ImageContent[];
 	rawInput?: unknown;
 	errorText?: string;
 	data?: unknown;
@@ -74,6 +75,8 @@ export interface LiveExecution {
 	isError: boolean;
 	/** The clean result's details payload (the card's output). */
 	output?: unknown;
+	/** Native tool-result image blocks, kept separate from presentation metadata. */
+	images?: ImageContent[];
 	/** The failure text (output-error parts). */
 	errorText?: string;
 }
@@ -98,14 +101,28 @@ function textPart(text: string): LhViewPart {
 }
 
 /** Alt text for a learner's pasted picture (the transcript knows no more). */
-const PASTED_ALT = "Pasted from the clipboard";
+const PASTED_ALT = "Attached image";
 
 function imagePart(image: ImageContent, id: string): LhViewPart {
 	return { type: "image", id, url: imageUrl(image), alt: PASTED_ALT };
 }
 
+/** Native image content is already stored in the record. Project references to
+ * those strings, not another base64 copy inside a tool's details object. */
+export function nativeImageContent(content: unknown): ImageContent[] {
+ if (!Array.isArray(content)) return [];
+ return content.flatMap((value) => {
+  const c = value as Partial<ImageContent> | null;
+  return c?.type === "image" && typeof c.data === "string" && c.data.length > 0 && typeof c.mimeType === "string"
+   ? [{ type: "image" as const, data: c.data, mimeType: c.mimeType }] : [];
+ });
+}
+
 /** The result a tool part should show, from a native toolResult. */
 function applyResult(part: LhViewPart, result: ToolResultMessage): void {
+	const images = nativeImageContent(result.content);
+	if (images.length) part.images = images;
+	else delete part.images;
 	if (result.isError) {
 		part.state = "output-error";
 		part.rawInput = part.input;
@@ -113,7 +130,7 @@ function applyResult(part: LhViewPart, result: ToolResultMessage): void {
 		part.errorText = text && text.type === "text" ? text.text : "The tool call failed.";
 	} else {
 		part.state = "output-available";
-		part.output = result.details;
+		part.output = result.details ?? (images.length ? { text: result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n") } : result.details);
 	}
 }
 
@@ -298,6 +315,7 @@ function toolPartOf(
 	const exec = live?.executions.get(block.id);
 	const isQuestion = isPlaceholderResultTool(block.name);
 	if (exec) {
+		if (exec.images?.length && (!isQuestion || exec.isError)) part.images = exec.images;
 		if (exec.isError) {
 			// An invalid call NEVER becomes input-available — the dock's mount
 			// gate keys on the clean execution end (the live modal-realism
