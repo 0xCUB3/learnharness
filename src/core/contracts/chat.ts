@@ -7,6 +7,7 @@ import type { ModelServiceTier } from "../model-speed.ts";
  * master. Pure types + protocol docs + tiny pure helpers. See docs/vision.md.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { LhMessage } from "../native-messages.ts";
 import type { Phase3 } from "../phases.ts";
 import type { PlanNodeStatus, PlanTree } from "./plan.ts";
@@ -313,6 +314,8 @@ export interface ArtifactPartProps {
 		toolCallId: string;
 		input?: unknown;
 		output?: unknown;
+		/** Native result images, separate from the tool's presentation metadata. */
+		images?: ImageContent[];
 		/** The pose-side fold (owner round 17): the whole problem-call
 		 * arguments joined onto the conclude part by projectView — the
 		 * observability drawer's data. */
