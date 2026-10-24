@@ -344,18 +344,23 @@ export function AgentSection({
 	// fetch each per section mount. The models read ALSO re-runs on the
 	// cross-surface signal (fix wave: another surface's write re-reads
 	// into the slot rows live).
-	const readModels = useCallback(() => {
+	const modelsRequest = useRef(0);
+	const modelsMounted = useRef(false);
+	const readModels = useCallback((connectionChanged = false) => {
+		const request = ++modelsRequest.current;
+		if (connectionChanged) setCatalog(null);
 		fetch("/api/models")
-			.then((r) => r.json())
+			.then((r) => { if (!r.ok) throw new Error("Catalog unavailable"); return r.json(); })
 			.then((body: ModelsBody) => {
+				if (!modelsMounted.current || request !== modelsRequest.current) return;
 				setCatalog(body.models);
 				setSlots(body.slots);
 			})
-			.catch(() => setCatalog(null));
+			.catch(() => { if (modelsMounted.current && request === modelsRequest.current) setCatalog(null); });
 	}, []);
 
 	useSettingsSaved((section) => {
-		if (section === "models") readModels();
+		if (section === "models" || section === "keys") readModels(section === "keys");
 		// THE state-echo root cause: the prompt switches write through the
 		// agent section, but this view (the toggles' truth) never re-read —
 		// the settings-saved law (every reader re-reads) was missing this
@@ -364,6 +369,7 @@ export function AgentSection({
 	});
 
 	useEffect(() => {
+		modelsMounted.current = true;
 		readModels();
 		fetch("/api/settings/prompts")
 			.then((r) => r.json())
@@ -380,6 +386,7 @@ export function AgentSection({
 				setEngineKeys(present);
 			})
 			.catch(() => {});
+		return () => { modelsMounted.current = false; modelsRequest.current++; };
 	}, []);
 
 	// The reason line re-reads /api/search AFTER an engine write lands —

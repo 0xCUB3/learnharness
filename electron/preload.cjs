@@ -29,6 +29,19 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("lh", {
 	platform: process.platform,
+	chatgpt: {
+		status: () => ipcRenderer.invoke("lh:chatgpt:control", { op: "status" }),
+		login: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "login", id }),
+		cancel: () => ipcRenderer.invoke("lh:chatgpt:control", { op: "cancel" }),
+		select: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "select", id }),
+		logout: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "logout", id }),
+		consent: (id, enabled) => ipcRenderer.invoke("lh:chatgpt:control", { op: "consent", id, enabled }),
+		onChange: (cb) => {
+			const listener = () => cb();
+			ipcRenderer.on("lh:chatgpt:changed", listener);
+			return () => ipcRenderer.removeListener("lh:chatgpt:changed", listener);
+		},
+	},
 	expandWindow: () => ipcRenderer.send("lh:expand-window"),
 	onZoom: (cb) => {
 		const listener = (_event, factor) => cb(factor);

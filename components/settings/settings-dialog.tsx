@@ -55,7 +55,7 @@ import { KeyboardSection } from "./keyboard-section.tsx";
  *  real question users ask). */
 const SECTIONS = [
 	{ id: "general", label: "General" },
-	{ id: "keys", label: "Keys" },
+	{ id: "keys", label: "Connections" },
 	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance" },
 	{ id: "graph", label: "Graph" },
@@ -376,7 +376,7 @@ export function SettingsDialogBody({
 								</SettingsSection>
 							)}
 							{active === "keys" && (
-								<SettingsSection title="Keys" testid="section-keys">
+								<SettingsSection title="Connections" testid="section-keys">
 									<KeysSection initialRow={initialRow ?? undefined} />
 								</SettingsSection>
 							)}
