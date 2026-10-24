@@ -4,6 +4,7 @@ import { useEscapeClaim } from "@/components/escape-claim";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { MaximizeIcon, MinusIcon, PlusIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAppearance } from "@/components/settings/appearance";
 import { fitGraphView, fitZoomFor, zoomedGraphView, type Viewport } from "@/components/pan-zoom";
 import { renderMermaid } from "@/components/mermaid-render";
 import { MermaidError } from "@/components/mermaid-error";
@@ -90,6 +91,7 @@ export function MermaidOverlay({
 	const [svg, setSvg] = useState<string | null>(rawSvg ?? null);
 	const [error, setError] = useState<string | null>(null);
 	const [attempt, setAttempt] = useState(0);
+	const { mode } = useAppearance().appearance;
 	useEffect(() => {
 		if (rawSvg !== undefined) {
 			setSvg(rawSvg);
@@ -100,7 +102,7 @@ export function MermaidOverlay({
 		let cancelled = false;
 		setSvg(null);
 		setError(null);
-		renderMermaid(chart)
+		renderMermaid(chart, mode)
 			.then((s) => {
 				if (!cancelled) setSvg(s);
 			})
@@ -110,7 +112,7 @@ export function MermaidOverlay({
 		return () => {
 			cancelled = true;
 		};
-	}, [rawSvg, chart, attempt]);
+	}, [rawSvg, chart, attempt, mode]);
 
 	// Esc closes, claimed at the document level (the one-Esc law).
 	useEscapeClaim(onClose);
