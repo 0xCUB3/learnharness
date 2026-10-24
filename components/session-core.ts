@@ -227,7 +227,10 @@ export class SessionModel {
 	/** The in-flight assistant message's client id (see applyWireEvent). */
 	private streamingMessageId: string | null = null;
 	private statusValue: SessionStatus = "ready";
+	/** Request/loop failures are transient; provider failures derive from messages. */
 	private errorValue: { message: string } | null = null;
+	/** A completed failure from THIS consume, not the previous attempt's record. */
+	private liveFailureId: string | null = null;
 	// The single live consume (POST response or reattach stream): a newer
 	// consume cancels the older — one reader at a time.
 	private consumeAbort: AbortController | null = null;
@@ -258,12 +261,22 @@ export class SessionModel {
 			this.statusValue === "submitted" || this.statusValue === "streaming"
 				? { executions: this.executions, inFlight: true, streamingIds: this.streamingIds }
 				: undefined;
+		const messages = [...this.base, ...this.tail];
+		const latest = messages.at(-1);
+		// One rule for live and restored failures: only the final completed
+		// assistant can own the banner. While trying again, hide the old
+		// failure from the first Thinking frame, but show a new failure at end.
+		const providerError =
+			latest?.role === "assistant" && latest.stopReason === "error" &&
+			!this.incompleteUsageIds.has(latest.id) && (!live || latest.id === this.liveFailureId)
+				? { message: latest.errorMessage ?? "An error occurred." }
+				: null;
 		return {
-			messages: projectView([...this.base, ...this.tail], live),
-			nativeMessages: [...this.base, ...this.tail],
-			contextTokens: measuredContextTokens([...this.base, ...this.tail], this.incompleteUsageIds),
+			messages: projectView(messages, live),
+			nativeMessages: messages,
+			contextTokens: measuredContextTokens(messages, this.incompleteUsageIds),
 			status: this.statusValue,
-			error: this.errorValue,
+			error: this.errorValue ?? providerError,
 			steerQueue: this.steerQueueValue,
 		};
 	}
@@ -279,6 +292,7 @@ export class SessionModel {
 	}
 
 	private setStatus(status: SessionStatus): void {
+		if (status === "submitted") this.liveFailureId = null;
 		this.statusValue = status;
 		this.readyRef = status === "ready";
 		this.onChange?.();
@@ -369,8 +383,10 @@ export class SessionModel {
 				// the wire) still wins.
 				const id = message.id ?? this.streamingMessageId ?? localId();
 				const withId = { ...message, id } as LhMessage;
-				if (agent.type === "message_end") this.incompleteUsageIds.delete(id);
-				else this.incompleteUsageIds.add(id);
+				if (agent.type === "message_end") {
+					this.incompleteUsageIds.delete(id);
+					if (message.role === "assistant" && message.stopReason === "error") this.liveFailureId = id;
+				} else this.incompleteUsageIds.add(id);
 				if (agent.type === "message_start") {
 					this.streamingMessageId = id;
 					this.streamingIds.add(id);
@@ -385,15 +401,6 @@ export class SessionModel {
 				}
 				if (agent.type === "message_end") {
 					this.streamingMessageId = null; // slot done — next start mints fresh
-					// (fallthrough: returns true below — the message landed)
-					const stop = (message as { stopReason?: string }).stopReason;
-					if (stop === "error") {
-						// Provider error, verbatim (owner ruling) — the record
-						// persists the same message; no masking anywhere.
-						this.setError(
-							String((message as { errorMessage?: string }).errorMessage ?? "An error occurred."),
-						);
-					}
 				}
 				return true; // a message event is view work, even empty content
 			}
