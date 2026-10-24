@@ -40,7 +40,7 @@ Credential updates use atomic replacement and a shared filesystem lock. Only one
 
 The new connection-management routes are loopback-only and reject cross-site requests. Mutations require a matching Origin and `X-LearnHarness-Connections: 1`. These checks are not user authentication. Do not expose the server publicly, and do not assume they protect the application's older routes. Remote connection management is outside this change's scope.
 
-Subscription models are labeled Subscription in the picker, not priced as API usage. A custom model without configured rates is labeled Unpriced. Current historical cost aggregation leaves these new provider IDs unpriced; it does not report subscription quota, a subscription charge, or a zero-dollar bill. Optional custom rates describe picker metadata and do not change the historical price table.
+Subscription models are labeled Subscription in the picker, not priced as API usage. A custom model without configured rates is labeled Unpriced. Current historical cost aggregation leaves these new provider IDs unpriced; it does not report subscription quota, a subscription charge, or a zero-dollar bill. Optional custom rates describe picker metadata and do not price historical usage.
 
 ## Validation boundaries
 

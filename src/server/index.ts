@@ -48,3 +48,4 @@ export * from "./model-catalog.ts";
 export * from "./connection-guard.ts";
 export * from "./subscriptions.ts";
 export * from "./custom-providers.ts";
+export { sessionCost } from "./pricing.ts";

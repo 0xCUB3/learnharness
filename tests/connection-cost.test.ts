@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { callCost } from "../src/core/prices.ts";
+import { callCost } from "../src/server/pricing.ts";
 it("subscription and custom-provider costs remain unpriced, not a zero subscription bill", () => {
 	for (const model of ["subscription-anthropic:claude-sonnet-5-5", "subscription-openai-codex:gpt-6-luna", "custom-local:test-model"]) {
 		assert.equal(callCost({ inputTokens: 100, outputTokens: 50 }, model), null);
