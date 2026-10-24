@@ -49,13 +49,14 @@ import { KeysSection } from "./keys-section.tsx";
 import { Hint } from "@/components/ui/hint";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
+import { ChatGPTUIProvider } from "./chatgpt-connection.tsx";
 
 /** Owner (2026-09-20): hints earn their place — mechanics-explaining
  *  prose is out; only the keyboard note stays (storage location is a
  *  real question users ask). */
 const SECTIONS = [
+	{ id: "keys", label: "Model providers" },
 	{ id: "general", label: "General" },
-	{ id: "keys", label: "Connections" },
 	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance" },
 	{ id: "graph", label: "Graph" },
@@ -83,7 +84,7 @@ export function SettingsDialogProvider({
 	children: React.ReactNode;
 }) {
 	const [show, setShow] = useState(false);
-	const [landOn, setLandOn] = useState<SectionId>("general");
+	const [landOn, setLandOn] = useState<SectionId>("keys");
 	const [landOnRow, setLandOnRow] = useState<string | null>(null);
 	const open = useCallback((section?: string, row?: string) => {
 		if (section) setLandOn(section as SectionId);
@@ -91,12 +92,12 @@ export function SettingsDialogProvider({
 		setShow(true);
 	}, []);
 	return (
-		<DialogContext.Provider value={{ open }}>
+		<ChatGPTUIProvider><DialogContext.Provider value={{ open }}>
 			{children}
 			{show && (
 				<SettingsDialog onClose={() => setShow(false)} initialSection={landOn} initialRow={landOnRow} />
 			)}
-		</DialogContext.Provider>
+		</DialogContext.Provider></ChatGPTUIProvider>
 	);
 }
 
@@ -133,7 +134,7 @@ function SettingsDialog({
  *  (portals render nothing under renderToStaticMarkup). */
 export function SettingsDialogBody({
 	onClose,
-	initialSection = "general",
+	initialSection = "keys",
 	initialRow = null,
 }: {
 	onClose: () => void;
@@ -376,7 +377,7 @@ export function SettingsDialogBody({
 								</SettingsSection>
 							)}
 							{active === "keys" && (
-								<SettingsSection title="Connections" testid="section-keys">
+								<SettingsSection title="Model providers" testid="section-keys">
 									<KeysSection initialRow={initialRow ?? undefined} />
 								</SettingsSection>
 							)}

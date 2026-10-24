@@ -44,7 +44,7 @@ import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-sig
 import { Hint } from "@/components/ui/hint";
 import { type ProviderKeyInfo } from "@/components/settings/keys-section";
 import { ProviderMenuList } from "@/components/settings/model-menu";
-import { ChatGPTConnection } from "@/components/settings/chatgpt-connection";
+import { ChatGPTBackgroundAccess, ChatGPTConnection } from "@/components/settings/chatgpt-connection";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
 import { ThinkingMenuList } from "@/components/settings/model-menu";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -148,8 +148,6 @@ export function SetupKeysBody({
 }) {
 	return (
 		<div className="flex flex-col gap-3 px-6 py-5" data-testid="setup-stage-keys">
-			<ChatGPTConnection />
-			<p className="border-t border-border pt-3 text-sm text-foreground">Or add an API key.</p>
 			<p className="text-xs text-muted-foreground">
 				Choose your AI provider and paste its API key. You’ll pick your models next.
 			</p>
@@ -213,6 +211,7 @@ export function SetupKeysBody({
 					</p>
 				)}
 			</div>
+			<div className="mt-2 border-t border-border/60 pt-4"><ChatGPTConnection setup /></div>
 		</div>
 	);
 }
@@ -478,6 +477,7 @@ export function SetupDialog({
 										)}
 									</span>
 									<span className="text-xs text-muted-foreground/70">{SLOT_META[slot].roster}</span>
+									{slot !== "strong" && <ChatGPTBackgroundAccess provider={entry?.provider} />}
 									<div className="flex items-center gap-2">
 										<div className="relative flex-1">
 											<button

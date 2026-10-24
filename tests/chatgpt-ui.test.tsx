@@ -8,7 +8,7 @@ import { useModelCatalog, catalogLimits } from "../components/model-picker.tsx";
 import { useZeroKeys, useStrongKeyless } from "../components/setup-cta.tsx";
 import { notifySettingsSaved } from "../components/settings-signal.ts";
 import { SidebarProvider } from "../components/sidebar.tsx";
-import { ChatGPTConnection } from "../components/settings/chatgpt-connection.tsx";
+import { ChatGPTConnection, ChatGPTUIProvider } from "../components/settings/chatgpt-connection.tsx";
 import { GraphCostControl } from "../components/graph-view.tsx";
 import { graphCostSummary } from "../src/core/cost-summary.ts";
 import type { ModelCatalogResponse, ChatGPTStatus } from "../src/core/index.ts";
@@ -71,7 +71,7 @@ test("root-lifetime safe bridge publishes with Connections unmounted; commands/p
  const before = fetches;
  await act(async () => { for (const callback of pushes) callback(); });
  assert.equal(fetches, before + 1);
- await act(async () => root!.render(<SidebarProvider><Reader id="root" /><ChatGPTConnection /></SidebarProvider>));
+ await act(async () => root!.render(<SidebarProvider><Reader id="root" /><ChatGPTUIProvider><ChatGPTConnection /></ChatGPTUIProvider></SidebarProvider>));
  assert.equal(subscriptions, 2);
  const mounted = fetches;
  await act(async () => { for (const callback of pushes) callback(); });

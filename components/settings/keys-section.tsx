@@ -413,7 +413,6 @@ export function KeysSection({
 
 	return (
 		<>
-			<SettingsGroup label="ChatGPT" testid="group-chatgpt"><ChatGPTConnection /></SettingsGroup>
 			<SettingsGroup label="Model providers" testid="group-provider-keys">
 				{providerRows.map((status) => (
 					<KeyTableRow
@@ -448,6 +447,7 @@ export function KeysSection({
 						<AddProviderEditor provider={adding} onSave={(v) => void saveNewProvider(adding, v)} onCancel={() => setAdding(null)} error={addError} />
 					</div>
 				)}
+				<div className="mt-3 border-t border-border/60 pt-3" data-testid="group-chatgpt"><ChatGPTConnection /></div>
 			</SettingsGroup>
 
 			<SettingsGroup label="Tools & services" testid="group-tool-keys">

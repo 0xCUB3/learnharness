@@ -311,7 +311,6 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 
 	return (
 		<div ref={containerRef} className="relative flex items-center gap-1.5" data-testid="model-control">
-			{effectiveProvider === "chatgpt" && <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer" className="text-xs text-muted-foreground underline-offset-2 hover:underline">Using ChatGPT plan</a>}
 			<Hint
 				// Trimmed (owner, subtlety round 2026-09-25): "Model selector"
 				// — the long sentence was way too much. ⌘K opens this same
