@@ -1,3 +1,4 @@
+import { canonicalSubscriptionProvider, type ModelServiceTier } from "../core/model-speed.ts";
 import {
 	clampThinkingLevel,
 	createModels,
@@ -7,6 +8,7 @@ import {
 	type Models,
 	type StreamFunction,
 } from "@earendil-works/pi-ai";
+import { subscriptionAliases, customProvider, type ModelConnections } from "./connected-providers.ts";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type ModelRole } from "../../config.ts";
@@ -14,6 +16,8 @@ import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { chatGPTModel } from "./chatgpt-bridge.ts";
 import { chatGPTStream } from "./chatgpt-stream.ts";
+import { nativeSubscriptionStream } from "./native-subscription-stream.ts";
+import { subscriptionProvider } from "../core/provider-connections.ts";
 import type { ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 
 /** App identity is immutable and shared by Models and every native Agent.
@@ -47,6 +51,18 @@ export interface PiEngine {
 export type { ThinkingLevel };
 
 let collection: ReturnType<typeof createModels> | undefined;
+let connections: ModelConnections | undefined;
+let customSignature = "";
+let customIds: string[] = [];
+
+/** Server composition only: the agent layer never imports filesystem adapters. */
+export function configureModelConnections(configuration: ModelConnections): void {
+	if (connections === configuration) return;
+	connections = configuration;
+	collection = undefined;
+	customSignature = "";
+	customIds = [];
+}
 
 /** The process-wide pi-ai Models collection — EVERY builtin provider's
  *  catalog (model slots wave, 2026-09-20): engines and the picker resolve
@@ -58,8 +74,18 @@ let collection: ReturnType<typeof createModels> | undefined;
  *  keyPresent. */
 export function piModels() {
 	if (!collection) {
-		collection = createModels({ identity: APP_IDENTITY });
-		for (const provider of builtinProviders()) collection.setProvider(provider);
+		collection = createModels({ identity: APP_IDENTITY, credentials: connections?.credentials });
+		const builtins = builtinProviders();
+		for (const provider of builtins) collection.setProvider(provider);
+		for (const provider of subscriptionAliases(builtins)) collection.setProvider(provider);
+	}
+	const definitions = connections?.customProviders() ?? [];
+	const signature = JSON.stringify(definitions);
+	if (signature !== customSignature) {
+		for (const id of customIds) collection.deleteProvider(id);
+		for (const definition of definitions) collection.setProvider(customProvider(definition));
+		customIds = definitions.map((p) => p.id);
+		customSignature = signature;
 	}
 	return collection;
 }
@@ -78,6 +104,7 @@ export interface ResolvedModelSpec {
 	provider: string;
 	id: string;
 	thinkingLevel?: ThinkingLevel;
+	serviceTier?: ModelServiceTier;
 }
 
 /** The first entry of the baked default order the model supports (owner,
@@ -97,8 +124,10 @@ function defaultThinkingLevel(model: Model<Api>): ThinkingLevel {
  *  keys seam reflects file-saved keys into env), so the engine never
  *  hardcodes OpenRouter's. */
 export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (() => boolean) = true, lifecycle?: ChatGPTDispatchLifecycle): PiEngine {
+	const provider = canonicalSubscriptionProvider(spec.provider);
+	const subscription = subscriptionProvider(provider);
 	const models: Models = piModels();
-	const model = spec.provider === "chatgpt" ? chatGPTModel(spec.id) : models.getModel(spec.provider, spec.id);
+	const model = provider === "chatgpt" ? chatGPTModel(spec.id) : models.getModel(provider, spec.id);
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
@@ -115,8 +144,16 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 		// `reasoning` (undefined = off on pi-ai's scale); the clamp above keeps
 		// the pin honest even when config or settings drift off the map.
 		streamFn: (requestModel, context, options) => {
-			const stream = spec.provider === "chatgpt" ? chatGPTStream(typeof background === "function" ? background : () => background, lifecycle) : models.streamSimple.bind(models);
-			return stream(requestModel, context, { ...options, reasoning: level === "off" ? undefined : level });
+			const connected = !!subscription || provider.startsWith("custom-");
+			const cleanOptions = connected ? { ...options, apiKey: undefined, env: undefined, headers: undefined } : options;
+			const purpose = typeof background === "function" ? background : () => background;
+			const stream = provider === "chatgpt" ? chatGPTStream(purpose, lifecycle, spec.serviceTier) : subscription ? nativeSubscriptionStream(subscription.id, purpose) : models.streamSimple.bind(models);
+			return stream(requestModel, context, {
+				...cleanOptions,
+				// A failed subscription request must not be retried as a different billing source.
+				...(connected || provider === "chatgpt" ? { maxRetries: 0 } : {}),
+				reasoning: level === "off" ? undefined : level,
+			});
 		},
 	};
 }
