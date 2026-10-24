@@ -385,7 +385,12 @@ export class SessionModel {
 				const withId = { ...message, id } as LhMessage;
 				if (agent.type === "message_end") {
 					this.incompleteUsageIds.delete(id);
-					if (message.role === "assistant" && message.stopReason === "error") this.liveFailureId = id;
+					if (message.role === "assistant" && message.stopReason === "error") {
+						this.liveFailureId = id;
+						// A newer provider failure replaces an earlier connection/loop
+						// error, just as the live message_end did before restoration.
+						this.errorValue = null;
+					}
 				} else this.incompleteUsageIds.add(id);
 				if (agent.type === "message_start") {
 					this.streamingMessageId = id;
@@ -440,17 +445,18 @@ export class SessionModel {
 
 	/** Consume one SSE body to its [DONE] terminal. The turn-settled
 	 *  terminal (stream-route only) fires the settle hook and ends. */
-	async consumeStream(res: Response): Promise<void> {
+	async consumeStream(res: Response, controller = this.consumeAbort): Promise<void> {
 		if (!res.body) throw new Error("The turn stream body is empty.");
 		const reader = res.body.getReader();
 		let sawEvent = false;
 		try {
 			for await (const event of sseEvents(reader)) {
+				if (this.consumeAbort !== controller) return;
 				if (event.type === "turn-settled") {
 					// The raced-settle terminal: no turn to attach to — the
 					// record is current; the settle hook refetches.
 					await reader.cancel().catch(() => {});
-					this.onReattachSettled?.();
+					if (this.consumeAbort === controller) this.onReattachSettled?.();
 					return;
 				}
 				const acted = this.applyWireEvent(event);
@@ -460,9 +466,13 @@ export class SessionModel {
 				}
 			}
 		} finally {
-			this.streamingIds = new Set();
-			this.executions = new Map();
-			if (this.statusValue !== "error") this.setStatus("ready");
+			// A cancelled consume may finish after its replacement has entered
+			// Thinking. Only the current owner can settle shared state.
+			if (this.consumeAbort === controller) {
+				this.streamingIds = new Set();
+				this.executions = new Map();
+				if (this.statusValue !== "error") this.setStatus("ready");
+			}
 		}
 	}
 
@@ -512,8 +522,10 @@ export class SessionModel {
 				const recordRes = await this.fetch(`/api/chats/${encodeURIComponent(this.chatId)}`, {
 					signal: controller.signal,
 				});
+				if (this.consumeAbort !== controller) return;
 				if (recordRes.ok) {
 					const record = (await recordRes.json()) as { messages?: LhMessage[] };
+					if (this.consumeAbort !== controller) return;
 					if (Array.isArray(record.messages)) {
 						this.mutate(() => {
 							this.base = record.messages!;
@@ -534,10 +546,11 @@ export class SessionModel {
 			const res = await this.fetch(`/api/chats/${encodeURIComponent(this.chatId)}/stream`, {
 				signal: controller.signal,
 			});
+			if (this.consumeAbort !== controller) return;
 			if (!res.ok) throw new Error((await res.text()) || "Failed to attach to the running turn.");
-			await this.consumeStream(res);
+			await this.consumeStream(res, controller);
 		} catch (err) {
-			if ((err as Error).name === "AbortError") return; // a newer consume won
+			if (this.consumeAbort !== controller || (err as Error).name === "AbortError") return; // a newer consume won
 			this.setError((err as Error).message);
 			this.setStatus("error");
 		}

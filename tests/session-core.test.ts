@@ -617,6 +617,57 @@ describe("provider-error banner (live and saved)", () => {
 		assert.equal(m.getState().error?.message, "Google 500: fixture failure");
 	});
 
+	it("a newer live provider failure replaces an earlier attachment error immediately", async () => {
+		let attempts = 0;
+		const seen: Array<{ status: string; error: string | undefined }> = [];
+		const m = model({ fetch: async () => {
+			if (++attempts === 1) return new Response("earlier attach failure", { status: 500 });
+			return sseResponse(
+				{ type: "message_start", message: failed("new", "new provider failure") },
+				{ type: "message_end", message: failed("new", "new provider failure") },
+				"[DONE]",
+			);
+		} });
+		await m.resumeStream(false);
+		assert.equal(m.getState().error?.message, "earlier attach failure");
+		m.onChange = () => { seen.push({ status: m.status, error: m.getState().error?.message }); };
+		await m.resumeStream(false);
+		assert.ok(seen.some((s) => s.status === "streaming" && s.error === "new provider failure"), "new failure wins before stream closure");
+		assert.equal(m.getState().error?.message, "new provider failure");
+		assert.equal(model({ initialMessages: m.getState().nativeMessages }).getState().error?.message, "new provider failure", "live and reopened views agree");
+	});
+
+	it("an aborted older consume cannot restore the old banner during a replacement reattach", async () => {
+		let attempts = 0;
+		let firstRead!: () => void;
+		const reading = new Promise<void>((resolve) => { firstRead = resolve; });
+		let settleReplacement!: (response: Response) => void;
+		const replacement = new Promise<Response>((resolve) => { settleReplacement = resolve; });
+		const m = model({ initialMessages: [failed()], fetch: async (_url, init) => {
+			if (++attempts > 1) return replacement;
+			return new Response(new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode(sse({ type: "agent_start" })));
+					init?.signal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+				},
+				pull() { firstRead(); },
+			}));
+		} });
+		const first = m.resumeStream(false);
+		await reading;
+		const second = m.resumeStream(false);
+		await first;
+		assert.equal(m.getState().status, "submitted", "old cleanup must not settle the replacement attempt");
+		assert.equal(m.getState().error, null, "old saved failure stays hidden during the replacement's Thinking wait");
+		settleReplacement(sseResponse(
+			{ type: "message_start", message: failed("new", "replacement failure") },
+			{ type: "message_end", message: failed("new", "replacement failure") },
+			"[DONE]",
+		));
+		await second;
+		assert.equal(m.getState().error?.message, "replacement failure");
+	});
+
 	it("keeps loop/request errors transient, with the existing precedence and clearError behavior", async () => {
 		const m = model({ initialMessages: [failed()] });
 		m.applyWireEvent({ type: "error", errorText: "loop failure" });
