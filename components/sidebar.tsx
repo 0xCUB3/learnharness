@@ -21,6 +21,7 @@ import { fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { ChatListItem } from "@/src/core";
 import { kbdEventForAction } from "@/src/core";
+import { notifySettingsSaved } from "@/components/settings-signal";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -47,6 +48,7 @@ const STORAGE_KEY = "lh:sidebar-open";
  *
  * Mirrors SIDEBAR_AUTOCLOSE in electron/main.cjs — keep in sync.
  */
+import type { ChatGPTControlBridge, NativeSubscriptionControlBridge } from "@/src/core";
 const SIDEBAR_AUTOCLOSE = 928;
 
 // Module scope, guarded for SSR (the server has no navigator).
@@ -58,6 +60,8 @@ declare global {
 		lh?: {
 			/** Read-only host OS; determines the native-control gutter. */
 			platform?: string;
+			chatgpt?: ChatGPTControlBridge;
+			subscriptions?: NativeSubscriptionControlBridge;
 			expandWindow: () => void;
 			/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
 			onZoom?: (cb: (factor: number) => void) => () => void;
@@ -65,6 +69,8 @@ declare global {
 			/** Auto-update channel (Wave C, 2026-10-10): "lh:update-status" pushes once a staged update exists. */
 			onUpdateStatus?: (cb: (status: { status: string; version: string | null }) => void) => () => void;
 			installUpdate?: () => void;
+			/** Native window theme (electron/theme.cjs validates): mode + effective #rrggbb background. */
+			setTheme?: (theme: { mode: "dark" | "light"; background: string }) => void;
 		};
 	}
 }
@@ -79,6 +85,13 @@ export function useSidebar() {
 }
 
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
+	useEffect(() => {
+		const bridges = [window.lh?.chatgpt, window.lh?.subscriptions].filter((b) => !!b);
+		if (!bridges.length) return;
+		const offs = bridges.map((b) => b.onChange(() => notifySettingsSaved("keys")));
+		notifySettingsSaved("keys"); // cover changes missed before this root-lifetime subscription
+		return () => offs.forEach((off) => off());
+	}, []);
 	// Start closed so server and client first-render agree (no hydration
 	// mismatch); the stored value is applied after mount.
 	const [open, setOpen] = useState(false);

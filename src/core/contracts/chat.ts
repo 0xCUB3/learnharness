@@ -1,3 +1,4 @@
+import type { ModelServiceTier } from "../model-speed.ts";
 /**
  * Chat-session contracts — records, summaries, UI extension points
  *
@@ -6,6 +7,7 @@
  * master. Pure types + protocol docs + tiny pure helpers. See docs/vision.md.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { LhMessage } from "../native-messages.ts";
 import type { Phase3 } from "../phases.ts";
 import type { PlanNodeStatus, PlanTree } from "./plan.ts";
@@ -78,6 +80,8 @@ export interface ChatSettings {
 	/** pi thinking level — must be in the chosen model's supported list
 	 *  (getSupportedThinkingLevels; enforced by the settings route). */
 	thinkingLevel?: ThinkingLevel;
+	/** Requested Codex speed; absent means Standard (or inherited for role overrides). */
+	serviceTier?: ModelServiceTier;
 }
 
 
@@ -87,8 +91,8 @@ export interface ChatSettings {
  *  billed (CallUsage per agent step). Steps, not a sum: cost and context
  *  folds happen at read time (core/prices.ts). */
 export interface ExtractionStageUsage {
-	/** The model that ran this stage, provider-qualified ("provider:id" —
-	 *  model slots wave, 2026-09-20; matches PRICES' uniform keys). */
+	/** The model that ran this stage, provider-qualified ("provider:id")
+	 * for key-independent Pi catalog lookup at read time. */
 	model: string;
 	steps: CallUsage[];
 }
@@ -118,7 +122,7 @@ export interface ExtractionRunUsage {
  * flattened to the fields we persist (undefined = provider didn't report;
  * renderers show absent, never zero). */
 export interface CallUsage {
-	/** Total input (prompt) tokens, cached portion included. */
+	/** Pi-normalized fresh input tokens; cache buckets are disjoint. */
 	inputTokens: number | undefined;
 	outputTokens: number | undefined;
 	/** Cached input tokens READ (billed at the cache-read rate, if any). */
@@ -126,6 +130,9 @@ export interface CallUsage {
 	/** Input tokens written to the cache this call (OpenRouter bills writes
 	 * for some providers; undefined = not reported/not billed). */
 	cacheWriteTokens: number | undefined;
+	/** Subset of cacheWriteTokens written with one-hour retention. Missing
+	 * on older logs; new native captures explicitly record zero if absent. */
+	cacheWrite1hTokens?: number;
 	/** The reasoning portion of the output tokens. */
 	reasoningTokens: number | undefined;
 }
@@ -144,8 +151,8 @@ export interface TurnUsage {
 	 *  entry to the transcript (the block this turn "belongs" to). */
 	messageId: string;
 	at: string;
-	/** The model that ran the turn, provider-qualified ("provider:id" —
-	 *  model slots wave, 2026-09-20; matches PRICES' uniform keys). */
+	/** The model that ran the turn, provider-qualified ("provider:id")
+	 * for key-independent Pi catalog lookup at read time. */
 	model: string;
 	/** One entry per agent step (model call) in this turn. */
 	steps: CallUsage[];
@@ -307,6 +314,8 @@ export interface ArtifactPartProps {
 		toolCallId: string;
 		input?: unknown;
 		output?: unknown;
+		/** Native result images, separate from the tool's presentation metadata. */
+		images?: ImageContent[];
 		/** The pose-side fold (owner round 17): the whole problem-call
 		 * arguments joined onto the conclude part by projectView — the
 		 * observability drawer's data. */

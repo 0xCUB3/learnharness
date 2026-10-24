@@ -1,14 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse, ModelsSettings, UserSettings } from "@/src/core";
+import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse, ModelServiceTier, ModelsSettings, UserSettings } from "@/src/core";
+import { canonicalSubscriptionProvider } from "@/src/core";
+import { ModelSpeedControl, offersFastMode, tierForModel } from "@/components/model-speed-control";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
 import { composeSlotModel } from "@/components/settings/agent-section";
 import { MenuShell } from "@/components/menu-shell";
 import { Hint } from "@/components/ui/hint";
-import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-signal";
+import { notifySettingsSaved, onSettingsSaved, useSettingsSaved } from "@/components/settings-signal";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
 
 /** GET /api/models is cached per page load for instant menu opens, but
@@ -17,51 +19,40 @@ import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/t
  *  every model-menu open (stale-while-revalidate: the cached list shows
  *  instantly, the fresh one swaps in while the menu is open). */
 let catalogCache: ModelCatalogResponse | undefined;
-let catalogInflight: Promise<ModelCatalogResponse> | undefined;
-
-function fetchCatalog(force = false): Promise<ModelCatalogResponse> {
-	if (force) {
-		catalogCache = undefined;
-		catalogInflight = undefined;
-	}
-	catalogInflight ??= fetch("/api/models")
-		.then((r) => {
-			if (!r.ok) throw new Error(`catalog request failed: ${r.status}`);
-			return r.json() as Promise<ModelCatalogResponse>;
-		})
-		.then((c) => {
-			catalogCache = c;
-			return c;
-		})
-		.catch((err) => {
-			catalogInflight = undefined; // retry on next mount/open
-			throw err;
-		});
-	return catalogInflight;
+let catalogInflight: Promise<void> | undefined;
+let catalogGeneration = 0;
+let stopCatalogSignals: (() => void) | undefined;
+const catalogReaders = new Set<() => void>();
+const publishCatalog = () => { for (const reader of catalogReaders) reader(); };
+function fetchCatalog(revalidate = false): void {
+	if (revalidate) { catalogGeneration++; catalogInflight = undefined; }
+	if (catalogInflight) return;
+	const generation = catalogGeneration;
+	catalogInflight = fetch("/api/models")
+		.then((r) => { if (!r.ok) throw new Error(`catalog request failed: ${r.status}`); return r.json() as Promise<ModelCatalogResponse>; })
+		.then((c) => { if (generation === catalogGeneration) { catalogCache = c; publishCatalog(); } })
+		.catch(() => { /* existing unavailable/usage-only posture, no retry timer */ })
+		.finally(() => { if (generation === catalogGeneration) catalogInflight = undefined; });
 }
-
 export function useModelCatalog(): { catalog: ModelCatalogResponse | undefined; refresh: () => void } {
 	const [catalog, setCatalog] = useState(catalogCache);
 	useEffect(() => {
-		if (catalogCache) return;
-		let alive = true;
-		fetchCatalog()
-			.then((c) => alive && setCatalog(c))
-			.catch(() => {
-				/* the picker stays closed on failure; the buttons still
-				   display the strong slot from the record fetch */
+		const first = catalogReaders.size === 0;
+		const read = () => setCatalog(catalogCache);
+		catalogReaders.add(read);
+		if (first) {
+			stopCatalogSignals = onSettingsSaved((section) => {
+				if (section === "keys") {
+					catalogGeneration++; catalogInflight = undefined; catalogCache = undefined;
+					publishCatalog(); fetchCatalog();
+				} else if (section === "models") fetchCatalog(true);
 			});
-		return () => {
-			alive = false;
-		};
+			fetchCatalog(true);
+		} else fetchCatalog();
+		read();
+		return () => { catalogReaders.delete(read); if (!catalogReaders.size) { stopCatalogSignals?.(); stopCatalogSignals = undefined; } };
 	}, []);
-	const refresh = useCallback(() => {
-		fetchCatalog(true)
-			.then(setCatalog)
-			.catch(() => {
-				/* refresh is best-effort: the cached list stays on failure */
-			});
-	}, []);
+	const refresh = useCallback(() => fetchCatalog(true), []);
 	return { catalog, refresh };
 }
 
@@ -92,12 +83,16 @@ export function catalogLimits(catalog: Pick<ModelCatalogResponse, "models">): Ma
  * changing the new-session default. Unpicked reads "—" (the
  * no-factory-fallback language: the UI never presents a default model).
  */
-export function ModelControl({ chatId }: { chatId?: string }) {
+export function ModelControl({ chatId, onModelChange }: { chatId?: string; onModelChange?: (model: string | undefined) => void }) {
 	const { catalog, refresh } = useModelCatalog();
 	const [models, setModels] = useState<ModelsSettings | undefined>();
 	const [session, setSession] = useState<ChatSettings | undefined>();
 	const [open, setOpen] = useState<"model" | "thinking" | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	/** A write in flight: speed (and every other pick) waits for it so two
+	 *  whole-object replaces can never race. */
+	const [pending, setPending] = useState(false);
+	const pendingRef = useRef(false);
 	const containerRef = useRef<HTMLDivElement>(null);
 
 	// The record read — BOTH mount and the cross-surface signal land
@@ -139,19 +134,29 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 	// EXACTLY what resolveConversationSpec runs. Draft mode is the strong
 	// slot itself.
 	const strong = models?.strong;
+	// Speed follows the same split, with one guard: a session that is
+	// PINNED (has its own model) but carries no serviceTier shows Standard
+	// — a later new-session default must not retroactively change it. Only
+	// a truly unpinned legacy session inherits the strong slot's tier.
 	const override: ChatSettings | undefined = chatId
 		? {
 				model: session?.model ?? strong?.model,
 				thinkingLevel: session?.thinkingLevel ?? strong?.thinkingLevel,
+				serviceTier: session?.model ? session.serviceTier : strong?.serviceTier,
 			}
 		: strong;
 	const effectiveId = override?.model?.id;
-	const effectiveProvider = override?.model?.provider;
+	const effectiveProvider = override?.model?.provider ? canonicalSubscriptionProvider(override.model.provider) : undefined;
+	useEffect(() => {
+		onModelChange?.(effectiveProvider && effectiveId ? `${effectiveProvider}:${effectiveId}` : undefined);
+	}, [effectiveProvider, effectiveId, onModelChange]);
 	const storedLevel = override?.thinkingLevel;
 	const entry = catalog?.models.find(
 		(m) => m.id === effectiveId && m.provider === effectiveProvider,
 	);
 	const levels = entry?.supportedLevels ?? [];
+	const showSpeed = offersFastMode(entry);
+	const effectiveTier: ModelServiceTier | undefined = showSpeed ? (override?.serviceTier ?? "default") : undefined;
 	// Legacy display (chunk 2 item 4, owner): a record with a model but no
 	// stored level shows the RESOLVED level — the ordering's first supported
 	// — because that is exactly what the engine build would run. Display-
@@ -197,6 +202,9 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 	const save = useCallback(
 		async (next: ModelsSettings) => {
 			setError(null);
+			pendingRef.current = true;
+			setPending(true);
+			setOpen(null); // a save begins: close any open menu
 			try {
 				const res = await fetch("/api/settings/models", {
 					method: "PUT",
@@ -219,6 +227,9 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 				notifySettingsSaved("models");
 			} catch {
 				setError("Could not reach the server — try again.");
+			} finally {
+				pendingRef.current = false;
+				setPending(false);
 			}
 		},
 		[],
@@ -232,6 +243,9 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 	const saveChat = useCallback(
 		async (next: ChatSettings) => {
 			setError(null);
+			pendingRef.current = true;
+			setPending(true);
+			setOpen(null); // a save begins: close any open menu
 			try {
 				const res = await fetch(`/api/chats/${chatId}/settings`, {
 					method: "PUT",
@@ -248,6 +262,9 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 				setOpen(null);
 			} catch {
 				setError("Could not reach the server — try again.");
+			} finally {
+				pendingRef.current = false;
+				setPending(false);
 			}
 		},
 		[chatId],
@@ -258,15 +275,27 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 	// draft mode composes the strong slot (siblings preserved,
 	// replace-whole-section discipline).
 	const apply = useCallback(
-		(provider: string, id: string, level: ThinkingLevel | undefined) => {
+		(provider: string, id: string, level: ThinkingLevel | undefined, tier?: ModelServiceTier) => {
+			if (pendingRef.current) return; // one write at a time
 			if (chatId) {
-				void saveChat({ model: { provider, id }, thinkingLevel: level });
+				// The composer replaces the WHOLE session object: carry every
+				// other stored field, and drop serviceTier for an unsupported
+				// model (a pinned session writes its tier explicitly).
+				const { serviceTier: _prev, ...rest } = session ?? {};
+				void saveChat({
+					...rest,
+					model: { provider, id },
+					thinkingLevel: level,
+					...(tier ? { serviceTier: tier } : {}),
+				});
 			} else {
 				// composeSlotModel's empty-string convention: no level = unset.
-				void save(composeSlotModel(models, "strong", provider, id, level ?? ""));
+				// A tier-less pick keeps the stored tier (compose clears it for
+				// an unsupported model).
+				void save(composeSlotModel(models, "strong", provider, id, level ?? "", tier));
 			}
 		},
-		[chatId, models, save, saveChat],
+		[chatId, models, session, save, saveChat],
 	);
 
 	// Shortcut seams (keyboard wave A): ⌘K opens the model menu (the
@@ -275,6 +304,7 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 	// tab-focus. Both work from any focus, including mid-typing.
 	useEffect(() => {
 		const onOpenPicker = () => {
+			if (pendingRef.current) return;
 			setOpen("model");
 			setError(null);
 			refresh(); // mid-session key changes widen the menu (cache fix)
@@ -289,11 +319,11 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 			const idx = effectiveLevel === undefined ? -1 : levels.indexOf(effectiveLevel);
 			const next = levels[(idx + 1) % levels.length];
 			if (next === undefined) return;
-			apply(effectiveProvider ?? "", effectiveId ?? "", next);
+			apply(effectiveProvider ?? "", effectiveId ?? "", next, effectiveTier);
 		};
 		window.addEventListener("lh:kbd-cycle-thinking", onCycleThinking);
 		return () => window.removeEventListener("lh:kbd-cycle-thinking", onCycleThinking);
-	}, [levels, effectiveLevel, effectiveProvider, effectiveId, apply]);
+	}, [levels, effectiveLevel, effectiveProvider, effectiveId, effectiveTier, apply]);
 
 	// Selecting a model (click and Enter share one path): keep the
 	// thinking level only when the new model supports it — otherwise
@@ -308,13 +338,17 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 		// rides — it belongs to the OLD model; the fresh pick's level comes
 		// from the fresh model's own ladder.)
 		const nextLevel = populateLevel(storedLevel, m.supportedLevels);
-		apply(m.provider, m.id, nextLevel);
+		// Speed is independent of reasoning: it rides to another eligible
+		// model and clears on an unsupported one. A pinned session or the
+		// strong slot with no stored tier writes Standard explicitly.
+		apply(m.provider, m.id, nextLevel, tierForModel(m, override?.serviceTier ?? (offersFastMode(m) ? "default" : undefined)));
 	};
 
 	// Stale-while-revalidate on manual open too (⌘K covers the keyboard
 	// path above): the cached list shows instantly, the fresh federation
 	// swaps in when it lands.
 	const openMenu = (kind: "model" | "thinking") => {
+		if (pendingRef.current) return;
 		setOpen((o) => (o === kind ? null : kind));
 		setError(null);
 		if (kind === "model") refresh();
@@ -333,6 +367,7 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 				<button
 				type="button"
 				data-testid="stats-model"
+				disabled={pending}
 				onClick={() => openMenu("model")}
 				aria-expanded={open === "model"}
 				// Chrome look (owner, fix wave round 3): matches the graph
@@ -356,6 +391,7 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 				<button
 				type="button"
 				data-testid="stats-thinking"
+				disabled={pending}
 				onClick={() => {
 					// No model picked → nothing to set a level FOR: the click
 					// is a no-op, never an empty menu.
@@ -377,6 +413,19 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>
 			</Hint>
+			{showSpeed && (
+				<ModelSpeedControl
+					value={effectiveTier}
+					disabled={pending}
+					testid="stats-speed"
+					onChange={(tier) => apply(effectiveProvider ?? "", effectiveId ?? "", effectiveLevel, tier)}
+				/>
+			)}
+			{error && !open && (
+				<span role="alert" data-testid="model-control-error" className="text-xs text-destructive">
+					{error}
+				</span>
+			)}
 
 			{/* The shared dropdown body (extracted 2026-09-20): the agent
 			    settings' slot selects and the setup dialog use the exact same
@@ -415,7 +464,7 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 					<ThinkingMenuList
 						levels={catalog ? levels : []}
 						effectiveLevel={effectiveLevel}
-						onPick={(level) => apply(effectiveProvider ?? "", effectiveId ?? "", level as ThinkingLevel)}
+						onPick={(level) => apply(effectiveProvider ?? "", effectiveId ?? "", level as ThinkingLevel, effectiveTier)}
 						empty={catalog ? (effectiveId ? `${prettyModel(effectiveId)} has no thinking levels.` : "Pick a model first.") : "Loading…"}
 						footer="Levels this model actually supports"
 					/>

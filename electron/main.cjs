@@ -24,7 +24,15 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog, clipboard, nativeTheme } = require("electron");
+const { createChatGPT, fileStore } = require("./chatgpt.cjs");
+const { createSubscription, subscriptionFileStore } = require("./subscriptions.cjs");
+const { attachSubscriptionChild, subscriptionControl } = require("./subscriptions-ipc.cjs");
+const { pathToFileURL } = require("node:url");
+const { attachChatGPTChild, trustedSender, chatGPTControl } = require("./chatgpt-ipc.cjs");
+const { desktopAPIHeaders } = require("./desktop-api.cjs");
+const { DARK_THEME, parseTheme, readSavedTheme, symbolColor } = require("./theme.cjs");
+const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -36,6 +44,7 @@ const path = require("node:path");
 const SIDEBAR_AUTOCLOSE = 928;
 
 const PRODUCT_NAME = "LearnHarness";
+const MANUAL_FORK_UPDATES = require("../package.json").lhFork?.updates === "manual";
 
 // APP NAME → userData (owner, 2026-10-10): the Application Support dir is
 // exactly "LearnHarness" in dev AND packaged. Packaged Electron would
@@ -128,6 +137,56 @@ if (process.argv.includes("--browser-service")) {
 }
 
 let serverProcess = null;
+let chatgpt = null;
+let chatgptChild = null;
+const subscriptions = new Map();
+let subscriptionsChild = null;
+const subscriptionSDK = new Map();
+const deviceCodeDialogs = new Map();
+
+/** Load only this app's pinned SDK, never another app's installation or auth store. */
+async function nativeSubscriptionSDK(provider) {
+	const native = provider === "subscription-anthropic" ? "anthropic" : provider === "subscription-xai" ? "xai" : null;
+	if (!native) throw new Error("Unsupported subscription provider");
+	if (!subscriptionSDK.has(native)) subscriptionSDK.set(native, (async () => {
+		const entry = path.join(path.dirname(serverEntry()), "node_modules", "@earendil-works", "pi-ai", "dist", "providers", native + ".js");
+		const module = await import(pathToFileURL(entry).href);
+		return module[native + "Provider"]();
+	})());
+	return subscriptionSDK.get(native);
+}
+
+/** Device codes, when needed, live in a trusted native dialog, not the web renderer. */
+async function showSubscriptionDeviceCode({ provider, label, userCode }) {
+	const focused = BrowserWindow.getFocusedWindow();
+	const win = focused && trustedAppWindows.has(focused) ? focused : [...trustedAppWindows].find((w) => !w.isDestroyed());
+	if (!win || win.isDestroyed()) return;
+	deviceCodeDialogs.get(provider)?.abort();
+	const controller = new AbortController();
+	deviceCodeDialogs.set(provider, controller);
+	try {
+		const result = await dialog.showMessageBox(win, { type: "info", title: "Sign in to " + label,
+			message: "Enter this code in the sign-in page", detail: userCode,
+			buttons: ["Copy code", "Close"], defaultId: 0, cancelId: 1, signal: controller.signal });
+		if (result.response === 0 && !controller.signal.aborted) clipboard.writeText(userCode);
+	} finally {
+		if (deviceCodeDialogs.get(provider) === controller) deviceCodeDialogs.delete(provider);
+	}
+}
+// Per-launch request capability, never OAuth tokens and never renderer state.
+let desktopAPISecret = null;
+const trustedAppWindows = new Set();
+
+/** The saved appearance as the native shell sees it: seeded from settings.json
+ *  at startup (packaged), then kept current by the renderer's "lh:theme:set". */
+let nativeThemeState = { ...DARK_THEME };
+function applyWindowTheme(win) {
+	if (win.isDestroyed()) return;
+	win.setBackgroundColor(nativeThemeState.background);
+	if (process.platform !== "darwin" && typeof win.setTitleBarOverlay === "function") {
+		win.setTitleBarOverlay({ color: nativeThemeState.background, symbolColor: symbolColor(nativeThemeState.background) });
+	}
+}
 
 // A GUI shell must never die to a stray exception (EPIPE dialogs, a race
 // in an event handler): the window + child server are the product, and
@@ -201,17 +260,27 @@ function startServer(port) {
 					// (no env injection anymore: a spawn-time copy would shadow every
 					// settings-page key change until restart; env wins over file).
 					LH_AUTH_FILE: AUTH_FILE(),
+					LH_DESKTOP_SERVER: "1",
+					LH_DESKTOP_API_SECRET: desktopAPISecret,
 				},
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: ["ignore", "pipe", "pipe", "ipc"],
 			},
 		);
 		serverProcess = child;
+		chatgptChild = attachChatGPTChild(child, chatgpt);
+		subscriptionsChild = attachSubscriptionChild(child, subscriptions);
 		const fwd = (buf) => buf.toString().trimEnd().split("\n").forEach((l) => l && log(`server: ${l}`));
 		child.stdout.on("data", fwd);
 		child.stderr.on("data", fwd);
 		child.on("exit", (code, signal) => {
 			log(`server exited (code=${code} signal=${signal})`);
 			serverProcess = null;
+			chatgptChild?.dispose();
+			chatgptChild = null;
+			subscriptionsChild?.dispose();
+			subscriptionsChild = null;
+			for (const connection of subscriptions.values()) connection.close();
+			chatgpt?.close();
 		});
 		resolve(child);
 	});
@@ -235,6 +304,9 @@ function waitUntilUp(url, tries = 150) {
 }
 
 function killServer() {
+	chatgpt?.close();
+	for (const connection of subscriptions.values()) connection.close();
+	for (const controller of deviceCodeDialogs.values()) controller.abort();
 	if (!serverProcess) return;
 	const child = serverProcess;
 	serverProcess = null;
@@ -277,7 +349,7 @@ function createWindow(url) {
 				// height. Do not force the zoom-invariant native overlay to match
 				// the renderer's 60 CSS px bar: zooming out would cover its border.
 				// The renderer reserves the actual width via env(titlebar-area-*).
-				titleBarOverlay: { color: "#141414", symbolColor: "#e5e5e5" },
+				titleBarOverlay: { color: nativeThemeState.background, symbolColor: symbolColor(nativeThemeState.background) },
 				// Keep the custom bar alone; Alt reveals the native menu.
 				autoHideMenuBar: true,
 			}),
@@ -294,7 +366,7 @@ function createWindow(url) {
 		// The app background (#141414) fills the lag instead. `show: false` +
 		// ready-to-show is the same treatment for first paint: the window
 		// appears only once the page has actually rendered.
-		backgroundColor: "#141414",
+		backgroundColor: nativeThemeState.background,
 		show: false,
 		// Narrow-window behavior (owner, 2026-09-17): 640px is the floor —
 		// below it even a wrapped chrome row gets cramped and the chat header
@@ -306,6 +378,8 @@ function createWindow(url) {
 		minHeight: 600,
 	});
 
+	trustedAppWindows.add(win);
+	win.once("closed", () => trustedAppWindows.delete(win));
 	const allowedOrigin = () => new URL(url).origin;
 	// Deny-by-default; the ONLY grants are media (mic/STT groundwork) and
 	// clipboard-sanitized-write — the copy affordances in the transcript
@@ -417,6 +491,14 @@ function broadcastUpdateStatus(status) {
 }
 
 function checkForUpdates({ manual = false } = {}) {
+	if (MANUAL_FORK_UPDATES) {
+		if (manual) void dialog.showMessageBox({
+			type: "info", message: "Personal fork updates are manual.",
+			detail: "Pull upstream while keeping your changes with npm run upstream:sync -- --push, then install with npm run fork:install -- --confirm. Switching to an official upstream release is a separate, explicit command.",
+			buttons: ["Update guide", "Close"], cancelId: 1,
+		}).then(({ response }) => { if (response === 0) void shell.openExternal("https://github.com/0xCUB3/learnharness/blob/main/FORK.md"); });
+		return;
+	}
 	if (!autoUpdater) return;
 	autoUpdater
 		.checkForUpdates()
@@ -434,6 +516,7 @@ function checkForUpdates({ manual = false } = {}) {
 }
 
 function installUpdateNow() {
+	if (!autoUpdater) return;
 	// Kill the server BEFORE the quit-and-install (see block comment).
 	try {
 		killServer();
@@ -444,6 +527,10 @@ function installUpdateNow() {
 }
 
 function setupAutoUpdater() {
+	if (MANUAL_FORK_UPDATES) {
+		log("auto-update: personal fork - use the explicit fork/upstream update commands");
+		return;
+	}
 	if (!app.isPackaged) {
 		log("auto-update: dev build — updater disabled");
 		return;
@@ -546,6 +633,8 @@ function installMenu() {
 
 async function main() {
 	app.on("window-all-closed", () => {
+		chatgpt?.pause();
+		for (const connection of subscriptions.values()) connection.pause();
 		// macOS convention: the app stays resident, reactivated from the Dock.
 		if (process.platform !== "darwin") app.quit();
 	});
@@ -561,8 +650,42 @@ async function main() {
 	// spawn, no packaging, full HMR. The rest of this shell still applies
 	// (guards, menu, single instance).
 	const devUrl = process.env.LH_DEV_URL;
+	// Dev servers keep their own data dir, so only the packaged app can read
+	// the saved mode before first paint; the renderer corrects dev on load.
+	if (!devUrl) {
+		nativeThemeState = readSavedTheme(path.join(DATA_DIR(), "settings.json"));
+		nativeTheme.themeSource = nativeThemeState.mode;
+	}
 	const url = devUrl ?? `http://127.0.0.1:${await freePort()}`;
 	if (!devUrl) {
+		desktopAPISecret = randomBytes(32).toString("hex");
+		const ownedOrigin = new URL(url).origin;
+		// All URLs, not only /api: remove the header again on external redirects.
+		session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["<all_urls>"] }, (details, callback) => {
+			callback({ requestHeaders: desktopAPIHeaders(details, ownedOrigin, desktopAPISecret, [...trustedAppWindows]) });
+		});
+		chatgpt = createChatGPT({
+			store: fileStore(path.join(app.getPath("userData"), "chatgpt-credentials.json")),
+			openExternal: (target) => shell.openExternal(target),
+			onChange: (value) => {
+				chatgptChild?.send(value);
+				for (const win of BrowserWindow.getAllWindows()) win.webContents.send("lh:chatgpt:changed");
+			},
+		});
+		for (const [provider, label] of [["subscription-anthropic", "Claude"], ["subscription-xai", "Grok"]]) {
+			subscriptions.set(provider, createSubscription({ provider, label,
+				store: subscriptionFileStore(path.join(app.getPath("userData"), "subscription-credentials", provider + ".json"), provider),
+				getOAuth: async () => (await nativeSubscriptionSDK(provider)).auth.oauth,
+				getModels: async () => (await nativeSubscriptionSDK(provider)).getModels().map(({ id, name }) => ({ id, name })),
+				openExternal: (target) => shell.openExternal(target),
+				showDeviceCode: showSubscriptionDeviceCode,
+				onChange: (value) => {
+					if (!value.status.pending) deviceCodeDialogs.get(provider)?.abort();
+					subscriptionsChild?.send(value);
+					for (const win of trustedAppWindows) if (!win.isDestroyed()) win.webContents.send("lh:subscriptions:changed");
+				},
+			}));
+		}
 		log(`starting server: ${serverEntry()}`);
 		log(`data dir: ${DATA_DIR()}${fs.existsSync(AUTH_FILE()) ? " · auth.json: present" : " · auth.json: ABSENT (no BYOK keys yet)"}`);
 		await startServer(new URL(url).port);
@@ -571,6 +694,34 @@ async function main() {
 	} else {
 		log(`dev mode: ${devUrl}`);
 	}
+
+	// Renderer controls contain no token/URL/code operation. The separate server
+	// child is the only recipient of credential leases over inherited IPC.
+	ipcMain.handle("lh:chatgpt:control", async (event, command) => {
+		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return { error: "Untrusted desktop request." };
+		if (!chatgpt || !serverProcess?.connected) return { available: false, pending: false, activeId: null, accounts: [], error: "ChatGPT sign-in requires the desktop app's private server connection. Browser-only and externally launched development servers keep API-key connections." };
+		return chatGPTControl(command, chatgpt);
+	});
+
+	ipcMain.handle("lh:subscriptions:control", async (event, command) => {
+		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return { error: "Untrusted desktop request." };
+		if (!subscriptions.size || !serverProcess?.connected) return { available: false, pending: false, allowBackgroundUse: true, activeId: null, accounts: [], error: "Subscription sign-in requires the desktop app's private server connection." };
+		return subscriptionControl(command, subscriptions);
+	});
+
+	// Native theme: the renderer reports the saved mode + effective page color
+	// (components/settings/appearance.tsx). Same gate as the ChatGPT control:
+	// an owned window's main frame at the app origin, and a strictly validated
+	// payload — no arbitrary channel, colors or strings reach the native APIs.
+	ipcMain.on("lh:theme:set", (event, command) => {
+		const win = BrowserWindow.fromWebContents(event.sender);
+		if (!win || !trustedAppWindows.has(win) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return;
+		const theme = parseTheme(command);
+		if (!theme) return;
+		nativeThemeState = theme;
+		nativeTheme.themeSource = theme.mode;
+		for (const w of trustedAppWindows) applyWindowTheme(w);
+	});
 
 	installMenu();
 
@@ -597,7 +748,7 @@ async function main() {
 		if (width < target) win.setBounds({ x, y, width: target, height });
 	});
 	app.on("activate", () => {
-		if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
+		if (BrowserWindow.getAllWindows().length === 0) { chatgpt?.resume(); for (const connection of subscriptions.values()) connection.resume(); createWindow(url); }
 	});
 	createWindow(url);
 	log(`window open: ${url}`);

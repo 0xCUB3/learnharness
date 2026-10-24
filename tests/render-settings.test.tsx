@@ -41,7 +41,7 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 		assert.ok(!html.includes("settings-dialog"));
 	});
 
-	it("the dialog frame: role=dialog + the ✕ + the six-section nav, General active", () => {
+	it("the dialog frame: role=dialog + the ✕ + the six-section nav, Providers first and General last", () => {
 		const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} />);
 		assert.ok(html.includes('role="dialog"'));
 		assert.ok(html.includes('aria-modal="true"'));
@@ -49,8 +49,9 @@ describe("SettingsDialog (the designed surface, SSR)", () => {
 		for (const id of ["general", "keys", "agent", "appearance", "graph", "keyboard"]) {
 			assert.ok(html.includes(`data-testid="settings-nav-${id}"`), id);
 		}
-		// General is the landing section; the others are not current.
-		assert.ok(tagOf(html, "settings-nav-general").includes('aria-current="true"'));
+		// Providers is the first landing section; internal keys deep links survive.
+		assert.ok(tagOf(html, "settings-nav-keys").includes('aria-current="true"'));
+		assert.ok(html.indexOf('data-testid="settings-nav-keys"') < html.indexOf('data-testid="settings-nav-general"'));
 		assert.ok(tagOf(html, "settings-nav-keyboard").includes('aria-current="false"'));
 		// Fetches don't run under SSR — the loading state IS the SSR state.
 		assert.ok(html.includes("Loading settings…"));
@@ -225,12 +226,20 @@ describe("KeysSection (thin SSR)", () => {
 });
 
 describe("AppearanceSection (thin SSR)", () => {
-	it("mode is rendered DISABLED — dark-only this wave, no lying control", () => {
+	it("mode is a live Dark | Light select, Dark by default", () => {
 		const html = renderToStaticMarkup(<AppearanceSection appearance={undefined} onSectionChange={() => {}} />);
-		assert.ok(tagOf(html, "select-mode").includes("disabled"), "mode select disabled");
-		assert.ok(html.includes("Coming soon"));
-		// The whole row dims, graph-view style (the control never adds its own).
-		assert.ok(tagOf(html, "row-mode").includes("opacity-40"), "mode row dims whole");
+		const tag = tagOf(html, "select-mode");
+		assert.ok(!tag.includes("disabled"), "mode select enabled");
+		assert.ok(html.includes('<option value="dark" selected="">Dark</option>') || html.includes('value="dark"'));
+		assert.ok(html.includes('<option value="light">Light</option>') || html.includes('value="light"'));
+		assert.ok(!html.includes("Coming soon"));
+		assert.ok(!html.includes("system"), "no system theme option");
+	});
+
+	it("a saved light mode selects Light and the background placeholder follows the mode", () => {
+		const html = renderToStaticMarkup(<AppearanceSection appearance={{ mode: "light" }} onSectionChange={() => {}} />);
+		assert.ok(/<option value="light"[^>]*selected/.test(html));
+		assert.ok(html.includes('placeholder="#f7f7f5"'));
 	});
 
 	it("hex inputs carry the factory placeholders; prose size resolves against the factory", () => {

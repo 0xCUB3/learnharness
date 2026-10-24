@@ -40,6 +40,7 @@ export * from "./math-delims.ts";
 // and the input-events contract — all
 // pure logic, browser-safe.
 export * from "./native-messages.ts";
+export * from "./images.ts";
 export * from "./compaction.ts";
 export * from "./input-events.ts";
 // Wave D (owner-approved 2026-09-26): the client view model — the grouping
@@ -48,12 +49,15 @@ export * from "./input-events.ts";
 export * from "./view.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
+export * from "./context-usage.ts";
+export type { ChatGPTStatus, ChatGPTControlBridge } from "./contracts/chatgpt.ts";
 export * from "./cost-summary.ts";
 export * from "./fuzzy.ts";
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved
 // view. Browser-safe — the Wave-4 panel imports these directly.
 export * from "./settings.ts";
+export * from "./appearance.ts";
 // graph-deletion.ts (wave 6): the whole module is PURE but storage-port
 // driven — the deletion RUNS server-side only. The shell needs exactly one
 // two type-only things from it: the ChatDeleteMode union (the delete
@@ -75,3 +79,9 @@ export * from "./coverage.ts";
 // ONE session→markdown formatter — the extractor's view and the user-facing
 // export share it. Pure, browser-safe.
 export * from "./session-markdown.ts";
+
+export * from "./provider-connections.ts";
+
+export * from "./model-speed.ts";
+
+export * from "./contracts/native-subscriptions.ts";

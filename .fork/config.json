@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "upstream": "amosblomqvist/learnharness",
+  "fork": "0xCUB3/learnharness",
+  "upstreamBranch": "main",
+  "mainBranch": "main",
+  "mirrorBranch": "upstream-main",
+  "customBranch": "fork/customizations",
+  "customBase": "a509e53896fa224a9fa6c3d954bcf6e8fbff47b9",
+  "pulls": [
+    {
+      "number": 13,
+      "branch": "feat/subscription-auth"
+    },
+    {
+      "number": 66,
+      "branch": "feat/chat-images"
+    }
+  ],
+  "retiredPatches": []
+}

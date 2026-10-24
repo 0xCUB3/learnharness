@@ -30,7 +30,6 @@ npm run desktop:dist   # local signed/notarized macOS arm64 build (LH_NOTARY key
 npx tsx --env-file=.env.local scripts/import-notes.ts <dir>   # bulk-import notes → graph
 npx tsx --env-file=.env.local scripts/backfill-graph.ts       # wipe + re-extract every chat
 npx tsx --env-file=.env.local scripts/replay-layout.ts        # re-derive layout from the ledgers
-npx tsx scripts/sync-pricing.ts                               # regenerate core/prices.ts tables
 ```
 
 For Windows/Linux packages and the three-OS CI/release flow, see [`desktop-release.md`](desktop-release.md). Native renderer binaries are traced per platform, so release builds run on the target OS, not as cross-builds from macOS.
@@ -144,13 +143,17 @@ src/
 electron/                       desktop launcher + security guard (spawns the standalone
                                 server; 1 IPC channel; LH_DATA_DIR + BYOK env)
 scripts/                        build-server.mjs (packaging guards), import-notes,
-                                backfill-graph, replay-layout, sync-pricing
+                                backfill-graph, replay-layout
 data/                           chats/ · graph/ (nodes/chains/sessions/coverage
                                 ledgers + positions/sources/render-settings maps) ·
                                 jobs/ · settings.json — runtime state, git-ignored
 ```
 
 ## Key mechanisms
+
+See [compaction and accounting](compaction-accounting.md) for the local Pi cutoff port,
+measurement-only context meter, and server-side current-catalog pricing. There is no
+pricing-generation step: Pi AI's catalog and public calculator are the authority.
 
 **Client-side question tools.** `quiz` and `ask_user_question` have no server `execute`: the tool call streams to the browser, the learner answers in the dock, the client grades via `question-core` and returns the verdict with `addToolOutput` — which fires the SDK continuation so the teacher resumes mid-turn. Options are shuffled deterministically (seeded by toolCallId) so server and client renders match. A pending quiz persisted in the chat record is exactly what makes **resume mid-question free**.
 
@@ -166,13 +169,14 @@ data/                           chats/ · graph/ (nodes/chains/sessions/coverage
 
 ## Testing
 
-All deterministic, no LLM, no network (engines are injected — pi-ai's faux provider scripted per test; `globalThis.fetch` stubbed where transport matters):
+`npm test` is all deterministic, no LLM, no network (engines are injected: pi-ai's faux provider scripted per test; `globalThis.fetch` stubbed where transport matters). The browser stratum (6, below) runs separately with `npm run test:e2e`:
 
 1. **Pure core units** — merger (via the real fs adapters, backup-and-restored), derivation, coverage, question grading, plan tree, phases, clusters, layout, tool-parts, prices.
 2. **Server flows** — `handleChatRequest` driven end-to-end with scripted engines: persistence, liveness, steer claiming, the wake pipeline (409 retry, quiz deferral, idempotency), crash recovery, the data-dir seam (including a fresh child process).
 3. **Sub-agent loops** — researcher/demo-builder/visual-maker with fake headless APIs; the extraction pipeline end-to-end (audit drops, failure-checkpoints-nothing, single-flight, abort).
 4. **Render tests** — transcript, cards, docks, composer, sidebar, coverage via React server-side rendering.
 5. **Golden fixtures** (`tests/fixtures/golden-data/`) — a REAL data dir (real records produced by the app, never hand-edited), copied to a temp dir and read through the production paths via the `LH_DATA_DIR` seam. Pins that real data parses, flattens to a legal LLM wire, derives the graph end-to-end, covers every custom-marker kind, and that reads never write. **The fixture law:** an intentional on-disk format change updates the fixtures in the same commit — see the fixture README.
+6. **Browser end-to-end** (`tests/e2e/*.e2e.mjs`, `npm run test:e2e` after `npm run build`): a production `next start` on a throwaway `LH_DATA_DIR`, driven by real Chrome through `puppeteer-core`, for behavior only a browser has (clipboard paste, the image draft, the lightbox). The provider key is fake, so no turn reaches a model; set `LH_E2E_CHROME` for a non-default Chrome.
 
 ## Lineage
 

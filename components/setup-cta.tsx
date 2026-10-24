@@ -8,19 +8,17 @@
  * keys unlock). Click opens the SetupDialog, whose stage derives to
  * the first-key screen on its own.
  *
- * Truth: GET /api/keys — a PROVIDER key present (env or file; tool keys
- * like Deepgram do not count — they unlock no models). Live updates ride
+ * Truth: GET /api/models availability (provider key, connected
+ * subscription, or keyless custom provider; tool keys do not count). Live updates ride
  * the lh:settings-saved "keys" signal (keys-section dispatches after
  * save AND delete; the setup dialog's first-key screen dispatches on
  * its own save), the same re-read pattern chat.tsx uses for "models".
  */
 
-import { useCallback, useEffect, useState } from "react";
 import type { AuthKeyStatus } from "@/src/core";
 import { classifyKeys, type ProviderKeyInfo } from "@/components/settings/keys-section";
 import { useModelCatalog } from "@/components/model-picker";
 import type { ModelCatalogResponse } from "@/src/core";
-import { useSettingsSaved } from "@/components/settings-signal";
 
 /** Pure: does a MODEL-PROVIDER key exist among the statuses? Reuses
  *  classifyKeys (the keys section's own classification — no drift):
@@ -34,28 +32,20 @@ export function hasProviderKey(
 	return classifyKeys(statuses, providers).providerRows.some((s) => s.present);
 }
 
+/** Pure: is any provider available (key present, subscription connected,
+ *  or keyless custom)? The catalog reports all of those as keyPresent. */
+export function hasAvailableProvider(providers: readonly { keyPresent: boolean }[]): boolean {
+	return providers.some((p) => p.keyPresent);
+}
+
 /** The zero-keys truth for the calling page: TRUE only after a
  *  successful read says no provider key exists (pending and failed
  *  reads render nothing — the pill must never flash on a gap, and a
  *  failed read claiming "zero keys" would be a lie the CTA flow then
  *  leans on). Re-reads on the keys signal. */
 export function useZeroKeys(): boolean {
-	const [zeroKeys, setZeroKeys] = useState(false);
-	const read = useCallback(() => {
-		fetch("/api/keys")
-			.then((r) => r.json())
-			.then((body: { keys?: AuthKeyStatus[]; providers?: ProviderKeyInfo[] }) => {
-				setZeroKeys(!hasProviderKey(body.keys ?? [], body.providers));
-			})
-			.catch(() => {});
-	}, []);
-	useEffect(() => {
-		read();
-	}, [read]);
-	useSettingsSaved((section) => {
-		if (section === "keys") read();
-	});
-	return zeroKeys;
+	const { catalog } = useModelCatalog();
+	return catalog ? !hasAvailableProvider(catalog.providers) : false;
 }
 
 /** The pill itself — the models CTA's chrome and placement, the keys
@@ -93,9 +83,6 @@ export function strongKeyless(catalog: ModelCatalogResponse | undefined): boolea
  *  (a provider key saved or deleted) and "models" (the strong slot
  *  re-pinned). Live-updates with the page, never mid-send. */
 export function useStrongKeyless(): boolean {
-	const { catalog, refresh } = useModelCatalog();
-	useSettingsSaved((section) => {
-		if (section === "keys" || section === "models") refresh();
-	});
+	const { catalog } = useModelCatalog();
 	return strongKeyless(catalog);
 }

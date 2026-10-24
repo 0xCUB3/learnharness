@@ -10,6 +10,7 @@ import { describe, it } from "node:test";
 const require = createRequire(import.meta.url);
 const mainFile = fileURLToPath(new URL("../electron/main.cjs", import.meta.url));
 const mainSource = readFileSync(mainFile, "utf8");
+const mainRequire = createRequire(mainFile);
 
 /** Decline the single-instance lock so normal boot never spawns a server.
  * Then call the REAL createWindow with a stub Electron API and inspect its
@@ -27,7 +28,7 @@ function windowOptions(platform: string) {
 		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
 	};
 	const context = {
-		require: (id: string) => id === "electron" ? electron : require(id),
+		require: (id: string) => id === "electron" ? electron : mainRequire(id),
 		process: { platform, argv: [], env: {}, on() {} },
 		__dirname: dirname(mainFile),
 	};
@@ -60,6 +61,24 @@ describe("desktop window chrome", () => {
 		});
 	}
 
+	it("device-code dialog keeps an owned parent after the system browser takes focus", async () => {
+		const ownedWindow = { isDestroyed: () => false };
+		const calls: unknown[] = [];
+		const electron = {
+			app: { setName() {}, requestSingleInstanceLock: () => false, quit() {} },
+			BrowserWindow: { getFocusedWindow: () => null },
+			session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
+			dialog: { showMessageBox: async (win: unknown) => { calls.push(win); return { response: 1 }; } },
+			clipboard: { writeText() { throw new Error("Close must not copy"); } },
+		};
+		const context = { require: (id: string) => id === "electron" ? electron : mainRequire(id),
+			process: { platform: "darwin", argv: [], env: {}, on() {} }, __dirname: dirname(mainFile), AbortController, ownedWindow };
+		runInNewContext(mainSource, context, { filename: mainFile });
+		runInNewContext("trustedAppWindows.add(ownedWindow)", context);
+		await runInNewContext('showSubscriptionDeviceCode({provider:"subscription-xai",label:"Grok",userCode:"SYNTHETIC"})', context);
+		assert.deepEqual(calls, [ownedWindow]);
+	});
+
 	it("preload exposes OS identity without exposing Node/Electron to the renderer", () => {
 		let bridge: Record<string, unknown> = {};
 		const context = {
@@ -76,8 +95,9 @@ describe("desktop window chrome", () => {
 		};
 		runInNewContext(readFileSync(new URL("../electron/preload.cjs", import.meta.url), "utf8"), context);
 		assert.equal(bridge.platform, "win32");
+		assert.deepEqual(Object.keys(bridge.subscriptions as object).sort(), ["cancel", "consent", "disconnect", "login", "logout", "onChange", "select", "status"]);
 		assert.deepEqual(Object.keys(bridge).sort(), [
-			"expandWindow", "getZoom", "installUpdate", "onUpdateStatus", "onZoom", "platform",
+			"chatgpt", "expandWindow", "getZoom", "installUpdate", "onUpdateStatus", "onZoom", "platform", "setTheme", "subscriptions",
 		]);
 	});
 });
@@ -109,7 +129,7 @@ describe("desktop packaging policy", () => {
 		const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 		assert.equal(pkg.author.name, "Amos Blomqvist");
 		assert.equal(pkg.author.email, "255718537+amosblomqvist@users.noreply.github.com");
-		assert.equal(pkg.homepage, "https://github.com/amosblomqvist/learnharness");
+		assert.equal(pkg.homepage, "https://github.com/0xCUB3/learnharness");
 		assert.equal(pkg.desktopName, "learnharness.desktop");
 	});
 });

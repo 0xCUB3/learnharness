@@ -17,12 +17,14 @@ import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
 	needsContinuation,
+	measuredContextTokens,
 	newAnswerResult,
 	newNextMessage,
 	newProblemDismissedMarker,
 	newThinkingMessage,
 	newUserMessage,
 	projectView,
+	nativeImageContent,
 	type ChatInput,
 	type LhMarkerMessage,
 	type LhMessage,
@@ -125,7 +127,7 @@ export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
 	if (role === "user") {
 		const content = (m as { content?: unknown }).content;
 		return record.some(
-			(r) => (r as { role?: string }).role === "user" && (r as { content?: unknown }).content === content,
+			(r) => (r as { role?: string }).role === "user" && sameJson((r as { content?: unknown }).content, content),
 		);
 	}
 	if (role === "toolResult") {
@@ -148,21 +150,24 @@ export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
 			(r) =>
 				(r as { role?: string }).role === "custom" &&
 				(r as LhMarkerMessage).customType === marker.customType &&
-				sameDetails((r as LhMarkerMessage).details, marker.details),
+				sameJson((r as LhMarkerMessage).details, marker.details),
 		);
 	}
 	return false;
 }
 
-/** Structural deep-equal for marker details (JSON-stable payloads — the
+/** Structural deep-equal for JSON-stable payloads (marker details, and user
+ *  content, which is a string or, with pasted images, a block array: the
  *  constructors mint plain data). */
-function sameDetails(a: unknown, b: unknown): boolean {
+function sameJson(a: unknown, b: unknown): boolean {
 	return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export interface SessionState {
 	messages: LhViewMessage[];
 	nativeMessages: LhMessage[];
+	/** Completed conversation usage; null after compaction or before first usage. */
+	contextTokens: number | null;
 	status: SessionStatus;
 	error: { message: string } | null;
 	/** Steers sent but not yet drained (composer steering, 2026-10-03):
@@ -220,6 +225,7 @@ export class SessionModel {
 	// The live turn's execution layer (view model mid-turn states):
 	private executions = new Map<string, LiveExecution>();
 	private streamingIds = new Set<string>();
+	private incompleteUsageIds = new Set<string>();
 	/** The in-flight assistant message's client id (see applyWireEvent). */
 	private streamingMessageId: string | null = null;
 	private statusValue: SessionStatus = "ready";
@@ -257,6 +263,7 @@ export class SessionModel {
 		return {
 			messages: projectView([...this.base, ...this.tail], live),
 			nativeMessages: [...this.base, ...this.tail],
+			contextTokens: measuredContextTokens([...this.base, ...this.tail], this.incompleteUsageIds),
 			status: this.statusValue,
 			error: this.errorValue,
 			steerQueue: this.steerQueueValue,
@@ -364,6 +371,8 @@ export class SessionModel {
 				// the wire) still wins.
 				const id = message.id ?? this.streamingMessageId ?? localId();
 				const withId = { ...message, id } as LhMessage;
+				if (agent.type === "message_end") this.incompleteUsageIds.delete(id);
+				else this.incompleteUsageIds.add(id);
 				if (agent.type === "message_start") {
 					this.streamingMessageId = id;
 					this.streamingIds.add(id);
@@ -394,13 +403,15 @@ export class SessionModel {
 				// The execution layer: clean question placeholders are IGNORED
 				// downstream (view.ts fork 2); errors keep their validation text.
 				const result = agent.result as
-					| { content?: Array<{ type?: string; text?: string }>; details?: unknown }
+					| { content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; details?: unknown }
 					| null;
 				const text = result?.content?.find((c) => c.type === "text")?.text ?? "The tool call failed.";
+				const images = nativeImageContent(result?.content);
 				this.mutate(() => {
 					this.executions = new Map(this.executions).set(agent.toolCallId, {
 						isError: agent.isError,
-						output: result?.details,
+						output: result?.details ?? (images.length ? { text: result?.content?.filter((c) => c.type === "text").map((c) => c.text).join("\n") } : result?.details),
+						...(images.length ? { images } : {}),
 						errorText: text,
 					});
 				});
@@ -487,6 +498,7 @@ export class SessionModel {
 		// every path that actually replays onto a stale tail).
 		if (!refetchRecordFirst) {
 			this.mutate(() => {
+				this.incompleteUsageIds.clear();
 				this.tail = [];
 				this.streamingMessageId = null;
 			});
@@ -502,6 +514,7 @@ export class SessionModel {
 					if (Array.isArray(record.messages)) {
 						this.mutate(() => {
 							this.base = record.messages!;
+							this.incompleteUsageIds.clear();
 							this.tail = [];
 						});
 					}
@@ -509,6 +522,7 @@ export class SessionModel {
 					// The record did not land — restore the clean-slate guard
 					// before the replay (no atomic swap is coming).
 					this.mutate(() => {
+						this.incompleteUsageIds.clear();
 						this.tail = [];
 						this.streamingMessageId = null;
 					});
@@ -532,7 +546,7 @@ export class SessionModel {
 	 * POST + consume. Ready-gated: one turn per client at a time (the
 	 * server's 409 + identity retry covers the wake-race window).
 	 */
-	async send(input: ChatInput): Promise<void> {
+	async send(input: ChatInput, onAccepted?: () => void): Promise<void> {
 		if (!this.readyRef) return;
 		this.consumeAbort?.abort();
 		const controller = new AbortController();
@@ -543,7 +557,7 @@ export class SessionModel {
 		// write-ahead will persist (inputAppends), with LOCAL ids so
 		// adoption can tell them from the record's absorbed copies.
 		const optimistic: LhMessage[] = [];
-		if (input.type === "text") optimistic.push({ ...newUserMessage(input.text), id: localId() });
+		if (input.type === "text") optimistic.push({ ...newUserMessage(input.text, input.images), id: localId() });
 		else if (input.type === "thinking") {
 			// The practice submissions (2026-10-04): the marker lands
 			// optimistically — the card renders from its details the
@@ -585,6 +599,8 @@ export class SessionModel {
 				// page's refusal flow JSON-parses the envelope out of it.
 				throw new Error((await res.text()) || `The send failed (${res.status}).`);
 			}
+			// The write-ahead is accepted even if the later stream disconnects.
+			onAccepted?.();
 			// CONNECTION DIET B (owner, 2026-10-10 — parallel-session freeze
 			// postmortem): the POST acknowledges and closes; there is no stream
 			// on this response to consume. Attach through the SAME reattach wire
@@ -714,6 +730,7 @@ export class SessionModel {
 	setMessages(record: LhMessage[]): void {
 		this.mutate(() => {
 			this.base = record;
+			this.incompleteUsageIds.clear();
 			this.tail = [];
 			this.streamingMessageId = null; // the tail (and its slot) is gone
 		});
@@ -741,5 +758,8 @@ export class SessionModel {
 
 	clearError(): void {
 		this.setError(null);
+		// A failed POST/reattach is settled; allow the learner to retry it.
+		// Clearing a banner during a live stream must not re-arm sends.
+		if (this.statusValue === "error") this.setStatus("ready");
 	}
 }

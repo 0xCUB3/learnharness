@@ -7,7 +7,10 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { appearanceVars, derivedPalette, resolveAppearance, staleVarNames } from "../components/settings/appearance.tsx";
+import { readFileSync } from "node:fs";
+import { mermaidTheme } from "../components/mermaid-render.ts";
+import { confidenceRailStyle } from "../components/confidence-rail.tsx";
+import { appearanceVars, derivedPalette, effectiveBackground, resolveAppearance, staleVarNames } from "../components/settings/appearance.tsx";
 import {
 	PROMPT_IN_USE_HINT,
 	composePromptSwitch,
@@ -15,7 +18,6 @@ import {
 	composeSlotModel,
 	composeTool,
 	composeQuizMechanics,
-	researchToolUnavailable,
 	sectionedSegments,
 } from "../components/settings/agent-section.tsx";
 import { nextOverrides } from "../components/settings/keyboard-section.tsx";
@@ -328,21 +330,6 @@ describe("first-run gate — slotsConfigured + setupStage (model-slots wave)", (
 	});
 });
 
-describe("researchToolUnavailable — the row grays on the registry's own signal", () => {
-	it("research grays exactly when the live search status says unavailable", () => {
-		// the SAME /api/search signal chat-handler's searchAvailable uses —
-		// the row and the registry can never disagree (Teacher flag 2026-09-22)
-		assert.equal(researchToolUnavailable("research", { available: false }), true);
-		assert.equal(researchToolUnavailable("research", { available: true }), false);
-		// loading/failed fetch grays nothing (never a false-negative row)
-		assert.equal(researchToolUnavailable("research", null), false);
-		// only research — the other tools never touch the search port
-		for (const id of ["demo", "visual", "pdf"]) {
-			assert.equal(researchToolUnavailable(id, { available: false }), false);
-		}
-	});
-});
-
 describe("sectionedSegments — the prompts overhaul (2026-09-26)", () => {
 	// The server contract: BOTH per-agent lists include the shared
 	// segments (same paths) — the view must list them ONCE.
@@ -403,5 +390,72 @@ describe("composeQuizMechanics (the segmented control's write)", () => {
 			assert.equal(after.tools?.research, false, "the research toggle carries verbatim");
 			assert.deepEqual(after.prompts, before.prompts, "the prompts map carries verbatim");
 		}
+	});
+});
+
+describe("light mode — palette, persistence, reset", () => {
+	const contrast = (a: string, b: string) => {
+		const lum = (h: string) => {
+			const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+				.map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+			return 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!;
+		};
+		const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
+		return (x! + 0.05) / (y! + 0.05);
+	};
+
+	it("dark stays the default mode and background", () => {
+		const a = resolveAppearance(undefined);
+		assert.equal(a.mode, "dark");
+		assert.equal(effectiveBackground(a), "#141414");
+		assert.deepEqual(appearanceVars(a)["--background"], undefined);
+	});
+
+	it("light resolves from the saved mode and has its own default page color", () => {
+		const a = resolveAppearance({ mode: "light" });
+		assert.equal(a.mode, "light");
+		assert.equal(effectiveBackground(a), "#f7f7f5");
+		assert.equal(appearanceVars(a)["--background"], undefined, "stylesheet .light owns the palette");
+	});
+
+	it("the stylesheet's light palette has >=4.5:1 body contrast and white raised surfaces", () => {
+		const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+		const light = /\.light \{([^}]*)\}/.exec(css)![1]!;
+		const v = (name: string) => new RegExp(`${name}: (#[0-9a-f]{6})`).exec(light)![1]!;
+		assert.ok(contrast(v("--foreground"), v("--background")) >= 4.5);
+		assert.ok(contrast(v("--muted-foreground"), v("--background")) >= 4.5);
+		assert.ok(contrast(v("--muted-foreground"), v("--card")) >= 4.5);
+		assert.equal(v("--card"), "#ffffff");
+		assert.equal(v("--background"), "#f7f7f5");
+	});
+
+	it("derivedPalette(light) lifts surfaces to white and darkens accent/edges; dark curve unchanged", () => {
+		const p = derivedPalette("#f0f0ee", "light");
+		assert.equal(p["--background"], "#f0f0ee");
+		assert.equal(p["--card"], "#ffffff");
+		assert.equal(p["--accent"], "#e4e4e2");
+		assert.equal(p["--border"], "#cececc");
+		assert.equal(derivedPalette("#141414", "dark")["--card"], "#1c1c1c");
+		assert.deepEqual(derivedPalette("#141414"), derivedPalette("#141414", "dark"));
+	});
+
+	it("a custom background survives the mode and derives with that mode's curve; reset removes it", () => {
+		const custom = appearanceVars(resolveAppearance({ mode: "light", background: "#eef" }));
+		assert.equal(custom["--background"], "#eef");
+		assert.equal(custom["--card"], "#ffffff");
+		assert.equal(effectiveBackground(resolveAppearance({ mode: "light", background: "#EEF" })), "#eeeeff");
+		assert.equal(effectiveBackground(resolveAppearance({ mode: "dark", background: "#1a1a2e" })), "#1a1a2e");
+		const reset = appearanceVars(resolveAppearance({ mode: "light", background: null }));
+		assert.deepEqual(staleVarNames(Object.keys(custom), reset).includes("--background"), true);
+		assert.equal(effectiveBackground(resolveAppearance({ mode: "light", background: null })), "#f7f7f5");
+	});
+
+	it("mermaid follows the effective mode; the confidence rail reads theme tokens", () => {
+		assert.equal(mermaidTheme("dark").theme, "dark");
+		assert.equal(mermaidTheme("light").theme, "neutral");
+		const style = confidenceRailStyle(50);
+		assert.equal(style.backgroundColor, "var(--background)");
+		assert.ok(!JSON.stringify(style).includes("#141414"));
+		assert.ok(!JSON.stringify(style).includes("230,230,230"));
 	});
 });

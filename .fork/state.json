@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "previousMain": "6cba9c8c5afe8a63f47ea4ebae6e91d8a205cebb",
+  "upstream": "c5494944885195a5dc67e8aabed84db9ef42aa07",
+  "custom": "95636a82be7a8f3cf1f20553c09d0ac1e1e1846f",
+  "pulls": [
+    {
+      "number": 13,
+      "head": "9aeeb626ad201d8f53d4f38a8116e67e10a76fc8",
+      "apply": true
+    },
+    {
+      "number": 66,
+      "head": "804639253dbace8defce0effd08aecf3cd03d4f2",
+      "apply": true
+    }
+  ],
+  "retired": []
+}

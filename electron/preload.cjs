@@ -23,12 +23,44 @@
  *   asks main to kill the server and quit-and-install. Browser builds:
  *   both absent, the banner never renders.
  *
+ *   window.lh.setTheme({mode, background}) — tells main the saved appearance
+ *   mode and effective #rrggbb page color so the native window background,
+ *   titlebar overlay and nativeTheme follow it. Main validates the shape.
+ *
  * Channel names are mirrored in electron/main.cjs — keep them in sync.
  */
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("lh", {
 	platform: process.platform,
+	chatgpt: {
+		status: () => ipcRenderer.invoke("lh:chatgpt:control", { op: "status" }),
+		login: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "login", id }),
+		cancel: () => ipcRenderer.invoke("lh:chatgpt:control", { op: "cancel" }),
+		select: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "select", id }),
+		disconnect: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "disconnect", id }),
+		logout: (id) => ipcRenderer.invoke("lh:chatgpt:control", { op: "logout", id }),
+		consent: (enabled) => ipcRenderer.invoke("lh:chatgpt:control", { op: "consent", enabled }),
+		onChange: (cb) => {
+			const listener = () => cb();
+			ipcRenderer.on("lh:chatgpt:changed", listener);
+			return () => ipcRenderer.removeListener("lh:chatgpt:changed", listener);
+		},
+	},
+	subscriptions: {
+		status: (provider) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "status" }),
+		login: (provider, id, allowBackgroundUse) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "login", id, allowBackgroundUse }),
+		cancel: (provider) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "cancel" }),
+		select: (provider, id) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "select", id }),
+		disconnect: (provider, id) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "disconnect", id }),
+		logout: (provider, id) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "logout", id }),
+		consent: (provider, enabled) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "consent", enabled }),
+		onChange: (cb) => {
+			const listener = () => cb();
+			ipcRenderer.on("lh:subscriptions:changed", listener);
+			return () => ipcRenderer.removeListener("lh:subscriptions:changed", listener);
+		},
+	},
 	expandWindow: () => ipcRenderer.send("lh:expand-window"),
 	onZoom: (cb) => {
 		const listener = (_event, factor) => cb(factor);
@@ -42,4 +74,5 @@ contextBridge.exposeInMainWorld("lh", {
 		return () => ipcRenderer.removeListener("lh:update-status", listener);
 	},
 	installUpdate: () => ipcRenderer.send("lh:update-install"),
+	setTheme: (theme) => ipcRenderer.send("lh:theme:set", theme),
 });
