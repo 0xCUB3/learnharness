@@ -262,7 +262,7 @@ async function launchApp(app) {
 	for (let i = 0; i < 120; i++) {
 		await sleep(500);
 		const size = logSize();
-		const text = size > 0 ? fs.readFileSync(MAIN_LOG, "utf8").slice(size < offset ? 0 : offset) : "";
+		const text = size > 0 ? fs.readFileSync(MAIN_LOG).subarray(size < offset ? 0 : offset).toString("utf8") : "";
 		const { serverUrl, windowOpen } = parseLaunchLog(text);
 		if (serverUrl && windowOpen && finishedCount() > 0) {
 			const res = await fetch(serverUrl, { signal: AbortSignal.timeout(5000) }).catch(() => null);
