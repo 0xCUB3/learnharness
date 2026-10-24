@@ -182,7 +182,7 @@ test("email-only connected selector and Manage remain responsive; account select
  assert.match(byTest("chatgpt-connection").firstElementChild!.className, /items-center/);
  await selectAccount("ChatGPT account", "second"); assert.deepEqual(f.calls.select, ["second"]); assert.equal(f.status.allowBackgroundUse, false);
  await click(button("Manage…")); assert(byTest("chatgpt-managed-identity").textContent?.includes("second@example.invalid"));
- assert.deepEqual([...byTest("chatgpt-account-footer").querySelectorAll("button")].map((b) => b.textContent), ["Close"]);
+ assert.deepEqual([...byTest("chatgpt-account-footer").querySelectorAll("button")].map((b) => b.textContent), ["Add accounts", "Close"]);
  const dialog = byTest("chatgpt-account-dialog").innerHTML;
  assert(dialog.indexOf('data-testid="chatgpt-managed-identity"') < dialog.indexOf('data-testid="chatgpt-account-actions"'));
  assert(dialog.indexOf('data-testid="chatgpt-account-actions"') < dialog.indexOf('data-testid="chatgpt-global-background"'));
@@ -191,7 +191,7 @@ test("email-only connected selector and Manage remain responsive; account select
  assert.equal(f.calls.logout, 0);
 });
 
-test("Disconnect account is the sole secondary action under identity; confirmation Cancel never forgets; Close is only Manage footer action", async () => {
+test("Disconnect account stays under identity, outside the nondestructive Manage footer; confirmation Cancel never forgets", async () => {
  assert.deepEqual(CHATGPT_DISCONNECT_COPY, { title: "Disconnect account?", body: "This removes the saved account and its credentials from this device." });
  const f = fixture(connected()); await mount(); await click(button("Manage…"));
  assert.equal(byTest("chatgpt-account-actions").textContent, "Disconnect account"); assert.match(byTest("chatgpt-disconnect").className, /text-red/);
@@ -202,6 +202,48 @@ test("Disconnect account is the sole secondary action under identity; confirmati
  assert(!document.body.textContent?.includes("delete your OpenAI"));
  await click(button("Cancel", byTest("chatgpt-disconnect-confirmation"))); assert(byTest("chatgpt-disconnect")); assert.deepEqual(f.calls.disconnect, []);
  await click(button("Close")); assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]'));
+});
+
+for (const count of [1, 3]) test(`Add accounts reuses the actual add flow with ${count} saved accounts; opening and cancelling preserve the connection`, async () => {
+ const initial = connected(count === 3);
+ initial.accounts = [account(), ...Array.from({ length: count - 1 }, (_, i) => account(`saved-${i}`, `saved-${i}@example.invalid`))];
+ const f = fixture(initial); const before = structuredClone(initial); await mount(); await click(button("Manage…"));
+ assert.deepEqual([...byTest("chatgpt-account-footer").querySelectorAll("button")].map((b) => b.textContent), ["Add accounts", "Close"]);
+ assert.equal(byTest("chatgpt-add-accounts").getAttribute("data-variant"), "outline");
+ assert.match(byTest("chatgpt-add-accounts").className, /cursor-pointer/);
+ await click(byTest("chatgpt-add-accounts"));
+ assert(byTest("chatgpt-privacy-notice").textContent?.includes(CHATGPT_NOTICE)); assert(byTest("chatgpt-proceed"));
+ assert.equal(document.querySelector<HTMLSelectElement>('select[aria-label="Saved ChatGPT account"]')?.value, "");
+ assert.equal(toggle().getAttribute("aria-checked"), String(before.allowBackgroundUse));
+ assert.deepEqual(f.status, before); assert.deepEqual(f.calls.login, []); assert.deepEqual(f.calls.select, []); assert.deepEqual(f.calls.disconnect, []);
+ await click(toggle()); await click(button("Cancel", byTest("chatgpt-account-dialog")));
+ assert.deepEqual(f.status, before); assert.deepEqual(f.calls.consent, []); assert.equal(f.calls.cancel, 0);
+ await click(button("Manage…")); await click(byTest("chatgpt-add-accounts"));
+ assert.equal(toggle().getAttribute("aria-checked"), String(before.allowBackgroundUse));
+ await click(byTest("chatgpt-proceed")); assert.deepEqual(f.calls.login, [undefined], "existing login machinery receives no saved/current account ID");
+ assert.equal(f.status.activeId, before.activeId); assert.deepEqual(f.status.accounts, before.accounts);
+ await click(button("Cancel", byTest("chatgpt-account-dialog")));
+ assert.deepEqual(f.status, before); assert.equal(f.calls.cancel, 1); assert.deepEqual(f.calls.consent, []); assert.deepEqual(f.calls.disconnect, []);
+});
+
+test("Add accounts reuses the existing dialog's initial focus for the pre-auth transition", async () => {
+ const previous = HTMLElement.prototype.focus; const focused: HTMLElement[] = [];
+ HTMLElement.prototype.focus = function () { focused.push(this); };
+ try {
+  fixture(connected()); await mount(); await click(button("Manage…")); await click(byTest("chatgpt-add-accounts"));
+  assert(focused.at(-1) === document.querySelector('select[aria-label="Saved ChatGPT account"]'));
+ } finally { HTMLElement.prototype.focus = previous; }
+});
+
+test("Add accounts respects existing busy, pending and unavailable guards", async () => {
+ const held = deferred<ChatGPTStatus>(); const f = fixture(connected(), { consent: () => held.promise });
+ await mount(); await click(button("Manage…")); await click(toggle());
+ assert((byTest("chatgpt-add-accounts") as HTMLButtonElement).disabled);
+ await click(byTest("chatgpt-add-accounts")); assert(byTest("chatgpt-managed-identity")); assert(!document.querySelector('[data-testid="chatgpt-proceed"]'));
+ await act(async () => held.resolve(f.status)); assert.equal((byTest("chatgpt-add-accounts") as HTMLButtonElement).disabled, false);
+ await act(async () => f.push({ ...f.status, pending: true })); assert((byTest("chatgpt-add-accounts") as HTMLButtonElement).disabled);
+ await act(async () => f.push({ ...f.status, pending: false, available: false })); assert((byTest("chatgpt-add-accounts") as HTMLButtonElement).disabled);
+ assert.deepEqual(f.calls.login, []);
 });
 
 test("confirmed disconnect preserves identity/pending content until outcome, prevents duplicate clicks, then closes without selecting another account", async () => {

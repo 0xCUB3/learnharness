@@ -255,7 +255,7 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 	};
 	return <Context.Provider value={context}>
 		{children}
-		{dialog && <AccountDialog onClose={close} busy={busy && operation.current !== "login"}>
+		{dialog && <AccountDialog key={dialog.kind} onClose={close} busy={busy && operation.current !== "login"}>
 			{dialog.kind === "warning" ? <>
 				<p role="alert" className="rounded-sm border border-border px-3 py-2 text-xs text-foreground" data-testid="chatgpt-revocation-warning">{REVOCATION_WARNING}</p>
 				<div className="mt-4 flex justify-end"><Button variant="outline" size="sm" onClick={() => { context.dismissWarning(); showDialog(null); }}>Dismiss</Button></div>
@@ -305,6 +305,7 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 				{status.pending && <p role="status" className="mt-3 text-xs text-muted-foreground">Waiting for browser sign-in…</p>}
 				{context.error && <p role="alert" className="mt-3 text-xs text-red-400">{context.error}</p>}
 				<div className="mt-4 flex items-center justify-end gap-2" data-testid="chatgpt-account-footer">
+					{dialog.kind === "manage" && <Button variant="outline" size="sm" data-testid="chatgpt-add-accounts" className="cursor-pointer disabled:cursor-not-allowed" onClick={openConnect} disabled={busy || status.pending || !status.available}>Add accounts</Button>}
 					<Button variant="ghost" size="sm" onClick={close} disabled={busy && operation.current !== "login"}>{dialog.kind === "connect" ? "Cancel" : "Close"}</Button>
 					{dialog.kind === "connect" && <ContinueButton onClick={() => void login()} disabled={!status.available || busy || status.pending} testid="chatgpt-proceed" />}
 				</div>
