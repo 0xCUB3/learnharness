@@ -24,13 +24,14 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog, clipboard } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog, clipboard, nativeTheme } = require("electron");
 const { createChatGPT, fileStore } = require("./chatgpt.cjs");
 const { createSubscription, subscriptionFileStore } = require("./subscriptions.cjs");
 const { attachSubscriptionChild, subscriptionControl } = require("./subscriptions-ipc.cjs");
 const { pathToFileURL } = require("node:url");
 const { attachChatGPTChild, trustedSender, chatGPTControl } = require("./chatgpt-ipc.cjs");
 const { desktopAPIHeaders } = require("./desktop-api.cjs");
+const { DARK_THEME, parseTheme, readSavedTheme, symbolColor } = require("./theme.cjs");
 const { randomBytes } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -174,6 +175,17 @@ async function showSubscriptionDeviceCode({ provider, label, userCode }) {
 // Per-launch request capability, never OAuth tokens and never renderer state.
 let desktopAPISecret = null;
 const trustedAppWindows = new Set();
+
+/** The saved appearance as the native shell sees it: seeded from settings.json
+ *  at startup (packaged), then kept current by the renderer's "lh:theme:set". */
+let nativeThemeState = { ...DARK_THEME };
+function applyWindowTheme(win) {
+	if (win.isDestroyed()) return;
+	win.setBackgroundColor(nativeThemeState.background);
+	if (process.platform !== "darwin" && typeof win.setTitleBarOverlay === "function") {
+		win.setTitleBarOverlay({ color: nativeThemeState.background, symbolColor: symbolColor(nativeThemeState.background) });
+	}
+}
 
 // A GUI shell must never die to a stray exception (EPIPE dialogs, a race
 // in an event handler): the window + child server are the product, and
@@ -336,7 +348,7 @@ function createWindow(url) {
 				// height. Do not force the zoom-invariant native overlay to match
 				// the renderer's 60 CSS px bar: zooming out would cover its border.
 				// The renderer reserves the actual width via env(titlebar-area-*).
-				titleBarOverlay: { color: "#141414", symbolColor: "#e5e5e5" },
+				titleBarOverlay: { color: nativeThemeState.background, symbolColor: symbolColor(nativeThemeState.background) },
 				// Keep the custom bar alone; Alt reveals the native menu.
 				autoHideMenuBar: true,
 			}),
@@ -353,7 +365,7 @@ function createWindow(url) {
 		// The app background (#141414) fills the lag instead. `show: false` +
 		// ready-to-show is the same treatment for first paint: the window
 		// appears only once the page has actually rendered.
-		backgroundColor: "#141414",
+		backgroundColor: nativeThemeState.background,
 		show: false,
 		// Narrow-window behavior (owner, 2026-09-17): 640px is the floor —
 		// below it even a wrapped chrome row gets cramped and the chat header
@@ -624,6 +636,12 @@ async function main() {
 	// spawn, no packaging, full HMR. The rest of this shell still applies
 	// (guards, menu, single instance).
 	const devUrl = process.env.LH_DEV_URL;
+	// Dev servers keep their own data dir, so only the packaged app can read
+	// the saved mode before first paint; the renderer corrects dev on load.
+	if (!devUrl) {
+		nativeThemeState = readSavedTheme(path.join(DATA_DIR(), "settings.json"));
+		nativeTheme.themeSource = nativeThemeState.mode;
+	}
 	const url = devUrl ?? `http://127.0.0.1:${await freePort()}`;
 	if (!devUrl) {
 		desktopAPISecret = randomBytes(32).toString("hex");
@@ -675,6 +693,20 @@ async function main() {
 		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return { error: "Untrusted desktop request." };
 		if (!subscriptions.size || !serverProcess?.connected) return { available: false, pending: false, allowBackgroundUse: true, activeId: null, accounts: [], error: "Subscription sign-in requires the desktop app's private server connection." };
 		return subscriptionControl(command, subscriptions);
+	});
+
+	// Native theme: the renderer reports the saved mode + effective page color
+	// (components/settings/appearance.tsx). Same gate as the ChatGPT control:
+	// an owned window's main frame at the app origin, and a strictly validated
+	// payload — no arbitrary channel, colors or strings reach the native APIs.
+	ipcMain.on("lh:theme:set", (event, command) => {
+		const win = BrowserWindow.fromWebContents(event.sender);
+		if (!win || !trustedAppWindows.has(win) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return;
+		const theme = parseTheme(command);
+		if (!theme) return;
+		nativeThemeState = theme;
+		nativeTheme.themeSource = theme.mode;
+		for (const w of trustedAppWindows) applyWindowTheme(w);
 	});
 
 	installMenu();

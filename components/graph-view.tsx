@@ -76,6 +76,7 @@ import { MenuShell } from "@/components/menu-shell.tsx";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { Hint } from "@/components/ui/hint";
+import { useAppearance } from "@/components/settings/appearance";
 import {
 	ARROW_LENGTH_LADDER,
 	CHARGE_RANGE,
@@ -1055,6 +1056,8 @@ export function GraphView({
 	// changes (its camera is never reset by either); `posRef` carries the
 	// frozen layout out of the layout effect.
 	const rendererRef = useRef<GraphCanvasRenderer | null>(null);
+	// Canvas colors are resolved from theme tokens: a mode flip re-feeds them.
+	const themeMode = useAppearance().appearance.mode;
 	const posRef = useRef<Map<string, { x: number; y: number }> | null>(null);
 
 	// The id set that survives the current search — consumed by the
@@ -1432,7 +1435,7 @@ export function GraphView({
 			// Match the app typography (Geist via the body's stack).
 			fontFamily: getComputedStyle(document.body).fontFamily,
 		});
-	}, [snapshot, isEmpty]);
+	}, [snapshot, isEmpty, themeMode]);
 
 	// Feed #2 — settings: just marks the frame dirty. No rebuild, no
 	// re-layout, no camera touch (the whole point of the new renderer).
