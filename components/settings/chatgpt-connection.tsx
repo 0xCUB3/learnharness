@@ -13,10 +13,23 @@ const REVOCATION_WARNING = "Signed out locally. Remote revocation was not confir
 const empty: ChatGPTStatus = { available: false, pending: false, activeId: null, accounts: [], error: null };
 type Account = ChatGPTStatus["accounts"][number];
 type Dialog = { kind: "connect" } | { kind: "manage"; accountId: string } | { kind: "warning" };
+type LoginAttempt = { generation: number; dialog: Dialog; registration: string; background: boolean; pending: boolean; accountId?: string; phase: "starting" | "pending" | "consent" };
+const CONTROL_ERROR = "The ChatGPT connection could not be changed. Try again.";
+function isStatus(value: unknown): value is ChatGPTStatus {
+	if (!value || typeof value !== "object") return false;
+	const s = value as ChatGPTStatus;
+	return typeof s.available === "boolean" && typeof s.pending === "boolean" && (s.activeId === null || typeof s.activeId === "string") &&
+		(s.error === null || typeof s.error === "string") && (s.catalogError == null || typeof s.catalogError === "string") && Array.isArray(s.accounts) &&
+		s.accounts.every((a) => a && typeof a.id === "string" && typeof a.email === "string" && typeof a.registration === "string" && typeof a.connected === "boolean" && typeof a.background === "boolean" && (a.planEnabled === undefined || typeof a.planEnabled === "boolean"));
+}
+function replyError(value: unknown): string {
+	return value && typeof value === "object" && "error" in value && typeof value.error === "string" ? value.error : CONTROL_ERROR;
+}
 const Context = createContext({
 	status: empty,
 	busy: false,
 	error: null as string | null,
+	inlineError: null as string | null,
 	warning: null as string | null,
 	connect: () => {},
 	manage: (_id: string) => {},
@@ -34,95 +47,164 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 	const [dismissedError, setDismissedError] = useState<string | null>(null);
 	const [background, setBackground] = useState(false);
 	const [registration, setRegistration] = useState("");
-	const operation = useRef<"login" | "change" | "logout" | null>(null);
+	const operation = useRef<"login" | "cancel" | "change" | "logout" | null>(null);
 	const generation = useRef(0);
 	const statusSequence = useRef(0);
 	const mounted = useRef(false);
-	function publishStatus(next: ChatGPTStatus) { statusSequence.current++; setStatus(next); }
+	const dialogRef = useRef<Dialog | null>(null);
+	const statusRef = useRef(status);
+	const loginAttempt = useRef<LoginAttempt | null>(null);
+	const receive = useRef<(value: unknown) => void>(() => {});
+	function showDialog(next: Dialog | null) { dialogRef.current = next; setDialog(next); }
+	function publishStatus(value: unknown): ChatGPTStatus | null {
+		if (!isStatus(value)) { setError(replyError(value)); return null; }
+		statusSequence.current++; statusRef.current = value; setStatus(value);
+		return value;
+	}
+	function owns(attempt: LoginAttempt) { return mounted.current && loginAttempt.current === attempt && generation.current === attempt.generation; }
+	function finish(attempt: LoginAttempt) {
+		if (!owns(attempt)) return;
+		loginAttempt.current = null; operation.current = null; setBusy(false);
+	}
+	async function complete(attempt: LoginAttempt, next: ChatGPTStatus) {
+		const account = next.accounts.find((a) => a.id === next.activeId && a.connected);
+		if (next.error || !next.available || !account || (attempt.registration && account.id !== attempt.registration)) {
+			finish(attempt); setError(next.error || CONTROL_ERROR); return;
+		}
+		attempt.phase = "consent"; attempt.accountId = account.id;
+		try {
+			if (account.background !== attempt.background) {
+				operation.current = "change";
+				const result: unknown = await window.lh!.chatgpt!.consent(account.id, attempt.background);
+				if (!owns(attempt)) return;
+				const saved = publishStatus(result);
+				if (!saved) { finish(attempt); return; }
+				next = saved;
+			}
+			if (!owns(attempt)) return;
+			const current = next.accounts.find((a) => a.id === account.id && a.id === next.activeId && a.connected);
+			if (next.error || next.pending || !next.available || !current || current.background !== attempt.background) setError(next.error || CONTROL_ERROR);
+			else if (dialogRef.current === attempt.dialog) showDialog(null);
+		} catch { if (owns(attempt)) setError(CONTROL_ERROR); }
+		finally { finish(attempt); }
+	}
+	function reconcile(next: ChatGPTStatus, loginReply = false) {
+		const attempt = loginAttempt.current;
+		if (!attempt || !owns(attempt)) return;
+		if (attempt.phase === "consent") {
+			if (next.pending || next.error || !next.available || next.activeId !== attempt.accountId || !next.accounts.some((a) => a.id === attempt.accountId && a.connected)) {
+				finish(attempt); setError(next.error || CONTROL_ERROR);
+			}
+			return;
+		}
+		if (next.pending) { attempt.pending = true; attempt.phase = "pending"; return; }
+		// login() normally acknowledges pending immediately; verified completion is
+		// a later status notification. The acknowledgement itself is not success.
+		if (attempt.pending || loginReply) void complete(attempt, next);
+	}
+	receive.current = (value) => {
+		const next = publishStatus(value);
+		if (next) reconcile(next);
+	};
 	useEffect(() => {
 		mounted.current = true;
 		const bridge = window.lh?.chatgpt;
 		const refresh = async () => {
 			const request = ++statusSequence.current;
 			try {
-				const next = await bridge?.status();
-				if (next && mounted.current && request === statusSequence.current) setStatus(next);
-			} catch { if (mounted.current) setError("The desktop connection is unavailable. Retry when the app is ready."); }
+				const next: unknown = await bridge?.status();
+				if (next && mounted.current && request === statusSequence.current) receive.current(next);
+			} catch { if (mounted.current && request === statusSequence.current) setError("The desktop connection is unavailable. Retry when the app is ready."); }
 		};
 		void refresh();
 		const off = bridge?.onChange(() => void refresh());
-		return () => { mounted.current = false; generation.current++; off?.(); };
+		return () => { mounted.current = false; generation.current++; loginAttempt.current = null; off?.(); };
 	}, []);
 
 	const managed = dialog?.kind === "manage" ? status.accounts.find((a) => a.id === dialog.accountId && a.connected) : undefined;
 	const visibleError = error || (status.error !== dismissedError ? status.error : null) || status.catalogError || null;
 	const warning = visibleError === REVOCATION_WARNING ? visibleError : null;
 	function openConnect() {
+		if (operation.current) return;
 		setBackground(false);
 		setRegistration("");
 		setError(null);
 		setDismissedError(status.error);
-		setDialog({ kind: "connect" });
+		showDialog({ kind: "connect" });
 	}
 	function close() {
-		if (operation.current === "logout" || operation.current === "change") return;
-		generation.current++;
-		setDialog(null);
+		if (operation.current === "logout" || operation.current === "change" || operation.current === "cancel") return;
+		const cancel = loginAttempt.current !== null || statusRef.current.pending;
+		const intent = ++generation.current;
+		const owner = dialogRef.current;
+		loginAttempt.current = null;
+		if (!cancel) showDialog(null);
 		setError(null);
 		setDismissedError(status.error);
-		if (operation.current === "login") {
-			// Closing an in-flight sign-in cancels it and never applies the draft consent.
-			void window.lh?.chatgpt?.cancel().then((next) => {
-				if (mounted.current) { publishStatus(next); setDismissedError(next.error); }
-			}).catch(() => {});
+		if (cancel) {
+			// Keep cancellation serialized even after login's pending IPC reply.
+			operation.current = "cancel"; setBusy(true);
+			void window.lh?.chatgpt?.cancel().then((value: unknown) => {
+				if (!mounted.current || generation.current !== intent) return;
+				const next = publishStatus(value);
+				if (next && !next.pending) {
+					setDismissedError(next.error);
+					if (dialogRef.current === owner) showDialog(null);
+				} else if (next) setError(CONTROL_ERROR);
+			}).catch(() => { if (mounted.current && generation.current === intent) setError(CONTROL_ERROR); }).finally(() => {
+				if (mounted.current && generation.current === intent) { operation.current = null; setBusy(false); }
+			});
 		}
 	}
 	async function control(kind: "change" | "logout", action: () => Promise<ChatGPTStatus>) {
 		if (operation.current) return;
+		const intent = ++generation.current;
 		operation.current = kind;
 		setBusy(true); setError(null); setDismissedError(null);
 		try {
-			const next = await action();
-			if (!mounted.current) return;
-			publishStatus(next);
-			if (kind === "logout" && !next.accounts.find((a) => a.id === status.activeId && a.connected)) {
-				setDialog(next.error === REVOCATION_WARNING ? { kind: "warning" } : null);
-			} else setError(next.error);
-		} catch { if (mounted.current) setError("The ChatGPT connection could not be changed. Try again."); }
-		finally { operation.current = null; if (mounted.current) setBusy(false); }
+			const value: unknown = await action();
+			if (!mounted.current || intent !== generation.current) return;
+			const next = publishStatus(value);
+			if (!next) return; // Error-only IPC replies never replace safe status.
+			if (kind === "logout" && !next.error && !next.accounts.find((a) => a.id === status.activeId && a.connected)) showDialog(null);
+			else if (kind === "logout" && next.error === REVOCATION_WARNING) showDialog({ kind: "warning" });
+			else setError(next.error);
+		} catch { if (mounted.current && intent === generation.current) setError(CONTROL_ERROR); }
+		finally { if (intent === generation.current) { operation.current = null; if (mounted.current) setBusy(false); } }
 	}
 	async function login() {
 		const bridge = window.lh?.chatgpt;
-		if (!bridge || operation.current || !status.available) return;
-		const attempt = ++generation.current;
-		const allowBackground = background;
-		operation.current = "login";
+		const owner = dialogRef.current;
+		if (!bridge || operation.current || !status.available || status.pending || owner?.kind !== "connect") return;
+		const attempt: LoginAttempt = { generation: ++generation.current, dialog: owner, registration, background, pending: false, phase: "starting" };
+		loginAttempt.current = attempt; operation.current = "login";
+		const request = ++statusSequence.current;
 		setBusy(true); setError(null); setDismissedError(null);
 		try {
-			let next = await bridge.login(registration || undefined);
-			if (!mounted.current || attempt !== generation.current) return;
-			publishStatus(next);
-			const account = next.accounts.find((a) => a.id === next.activeId && a.connected);
-			if (account && !next.error) {
-				// Explicit initial choice is applied only after verified successful login.
-				// Choosing OFF also revokes any prior consent on a returning registration.
-				if (account.background !== allowBackground) {
-					operation.current = "change";
-					next = await bridge.consent(account.id, allowBackground);
-				}
-				if (!mounted.current || attempt !== generation.current) return;
-				publishStatus(next);
-				if (!next.error) setDialog(null);
+			let value: unknown = await bridge.login(registration || undefined);
+			if (!owns(attempt) || attempt.phase === "consent") return;
+			// Never publish an old acknowledgement over a newer event. If events
+			// coalesced past pending before the acknowledgement arrived, read the
+			// current backend state after it rather than losing that completion.
+			if (request !== statusSequence.current && isStatus(value)) {
+				if (value.error) { setError(value.error); finish(attempt); return; }
+				attempt.pending = true; attempt.phase = "pending";
+				const refresh = ++statusSequence.current;
+				value = await bridge.status();
+				if (!owns(attempt) || loginAttempt.current?.phase === "consent" || refresh !== statusSequence.current) return;
 			}
-			setError(next.error);
-		} catch { if (mounted.current && attempt === generation.current) setError("The ChatGPT connection could not be changed. Try again."); }
-		finally { operation.current = null; if (mounted.current) setBusy(false); }
+			const next = publishStatus(value);
+			if (!next) { finish(attempt); return; }
+			reconcile(next, true);
+		} catch { if (owns(attempt)) { setError(CONTROL_ERROR); finish(attempt); } }
+		// No finally: pending OAuth outlives this IPC promise. Only its status
+		// completion, failure, or explicit cancellation releases the attempt.
 	}
 	const bridge = typeof window !== "undefined" ? window.lh?.chatgpt : undefined;
 	const context = {
-		status, busy, error: warning ? null : visibleError, warning: dialog?.kind === "warning" ? null : warning,
+		status, busy, error: warning ? null : visibleError, inlineError: dialog || warning ? null : visibleError, warning: dialog?.kind === "warning" ? null : warning,
 		connect: openConnect,
-		manage: (id: string) => { setError(null); setDialog({ kind: "manage", accountId: id }); },
+		manage: (id: string) => { if (!operation.current) { setError(null); showDialog({ kind: "manage", accountId: id }); } },
 		select: (id: string) => { if (bridge) void control("change", () => bridge.select(id)); },
 		dismissWarning: () => { setDismissedError(REVOCATION_WARNING); setError(null); },
 	};
@@ -132,7 +214,7 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 			<h2 className="text-sm font-semibold text-foreground">{dialog.kind === "connect" ? "Continue with ChatGPT" : "ChatGPT account"}</h2>
 			{dialog.kind === "warning" ? <>
 				<p role="alert" className="mt-3 rounded-sm border border-border px-3 py-2 text-xs text-foreground" data-testid="chatgpt-revocation-warning">{REVOCATION_WARNING}</p>
-				<div className="mt-4 flex justify-end"><Button variant="outline" size="sm" onClick={() => { context.dismissWarning(); setDialog(null); }}>Dismiss</Button></div>
+				<div className="mt-4 flex justify-end"><Button variant="outline" size="sm" onClick={() => { context.dismissWarning(); showDialog(null); }}>Dismiss</Button></div>
 			</> : <>
 				{dialog.kind === "connect" && status.accounts.length > 0 && <label className="mt-3 flex flex-col gap-1 text-xs text-muted-foreground">
 					Saved ChatGPT account
@@ -219,6 +301,7 @@ export function ChatGPTConnection({ setup = false }: { setup?: boolean }) {
 				<Button type="button" size="xs" variant="ghost" disabled={ui.busy} onClick={() => ui.manage(active.id)}>Manage…</Button>
 			</> : <ContinueButton onClick={ui.connect} disabled={!ui.status.available || ui.busy || ui.status.pending} />}
 		</div>
+		{ui.inlineError && <p role="alert" className="text-xs text-red-400">{ui.inlineError}</p>}
 		{ui.warning && <div role="alert" data-testid="chatgpt-revocation-warning" className="rounded-sm border border-border px-3 py-2 text-xs text-muted-foreground">{ui.warning}<button type="button" className="ml-2 cursor-pointer underline underline-offset-2" onClick={ui.dismissWarning}>Dismiss</button></div>}
 	</div>;
 }
