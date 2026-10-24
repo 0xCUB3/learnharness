@@ -245,7 +245,7 @@ async function quitApp() {
 	if (runningCount() === 0) return;
 	log("asking LearnHarness to quit (no force kill)");
 	jxa("for (let i = 0; i < apps.count; i++) { var requested = apps.objectAtIndex(i).terminate; }");
-	for (let i = 0; i < 120; i++) {
+	for (const deadline = Date.now() + 60_000; Date.now() < deadline;) {
 		if (runningCount() === 0) return;
 		await sleep(500);
 	}
@@ -259,7 +259,7 @@ const logSize = () => (fs.existsSync(MAIN_LOG) ? fs.statSync(MAIN_LOG).size : 0)
 async function launchApp(app) {
 	const offset = logSize();
 	run("open", [app]);
-	for (let i = 0; i < 120; i++) {
+	for (const deadline = Date.now() + 60_000; Date.now() < deadline;) {
 		await sleep(500);
 		const size = logSize();
 		const text = size > 0 ? fs.readFileSync(MAIN_LOG).subarray(size < offset ? 0 : offset).toString("utf8") : "";
@@ -305,7 +305,7 @@ function extractBaseline(baselineApp, source, sourcePkg, dest) {
 
 export function restoreGeneratedNextEnv(file, original) {
  const current = fs.readFileSync(file, "utf8");
- const normalize = value => value.replaceAll(".next/dev/types/routes.d.ts", ".next/types/routes.d.ts");
+ const normalize = value => value.replaceAll(".next/dev/types/", ".next/types/");
  if (normalize(current) === normalize(original)) fs.writeFileSync(file, original);
 }
 

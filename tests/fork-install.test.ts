@@ -186,8 +186,8 @@ describe("generated Next types", () => {
  it("restores only the expected production/dev type-reference change", () => {
   const d = tmp(), f = path.join(d, "next-env.d.ts");
   try {
-   const original = 'import "./.next/dev/types/routes.d.ts";\n';
-   fs.writeFileSync(f, original.replace("/dev/", "/"));
+   const original = 'import "./.next/dev/types/routes.d.ts";\nimport "./.next/dev/types/root-params.d.ts";\n';
+   fs.writeFileSync(f, original.replaceAll("/dev/", "/"));
    fi.restoreGeneratedNextEnv(f, original);
    assert.equal(fs.readFileSync(f, "utf8"), original);
    fs.writeFileSync(f, "user change\n"); fi.restoreGeneratedNextEnv(f, original);
