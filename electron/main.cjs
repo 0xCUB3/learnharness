@@ -196,7 +196,11 @@ function startServer(port) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			process.execPath,
-			[serverEntry()],
+			// Only the macOS backend needs this: Next's native title setter
+			// otherwise checks this Node-mode process in as a foreground app.
+			process.platform === "darwin"
+				? ["--require", path.join(process.resourcesPath, "server-title-guard.cjs"), serverEntry()]
+				: [serverEntry()],
 			{
 				cwd: path.dirname(serverEntry()),
 				env: {
