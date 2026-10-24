@@ -23,6 +23,10 @@
  *   asks main to kill the server and quit-and-install. Browser builds:
  *   both absent, the banner never renders.
  *
+ *   window.lh.setTheme({mode, background}) — tells main the saved appearance
+ *   mode and effective #rrggbb page color so the native window background,
+ *   titlebar overlay and nativeTheme follow it. Main validates the shape.
+ *
  * Channel names are mirrored in electron/main.cjs — keep them in sync.
  */
 const { contextBridge, ipcRenderer } = require("electron");
@@ -70,4 +74,5 @@ contextBridge.exposeInMainWorld("lh", {
 		return () => ipcRenderer.removeListener("lh:update-status", listener);
 	},
 	installUpdate: () => ipcRenderer.send("lh:update-install"),
+	setTheme: (theme) => ipcRenderer.send("lh:theme:set", theme),
 });
