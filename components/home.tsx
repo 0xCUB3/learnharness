@@ -295,6 +295,7 @@ export function Home({
 					/>
 					<form
 						data-testid="home-composer"
+			data-image-composer
 						className="flex flex-wrap items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-lg"
 					onSubmit={(e) => {
 						e.preventDefault();

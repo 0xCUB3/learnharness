@@ -93,7 +93,7 @@ async function openSession(title) {
 }
 
 /**
- * Dispatch a REAL paste event carrying `files` at the surface's textarea.
+ * Dispatch a DOM paste event carrying `files` at the surface's textarea.
  * Every surface's own handler must pick it up (the bug this suite exists
  * for: home and the draft had no handler at all). `thenEnter` presses Enter
  * as the very next task, before the file read can finish.
@@ -177,17 +177,34 @@ describe("composer image paste (e2e)", () => {
 		assert.ok(box.width > 0 && box.height > 0, "the preview has real size");
 		assert.ok(cbox.x > box.x + box.width / 2, "cross on the RIGHT half");
 		assert.ok(cbox.y < box.y + box.height / 2, "cross on the TOP half");
-		await page.click('[data-testid="composer-images"] button[aria-label="View pasted image in full"]');
+		await page.click('[data-testid="composer-images"] button[aria-label="View image in full"]');
 		await page.waitForSelector('[data-testid="image-lightbox"] img');
 		await page.keyboard.press("Escape");
 		await page.waitForFunction(() => !document.querySelector('[data-testid="image-lightbox"]'));
 	});
 
+
+ it("home: image paste works with attachment-button or page focus", async () => {
+  for (const target of ['[data-testid="home-composer"] [aria-label="Attach images"]', 'body']) {
+   await page.goto(BASE + '/', { waitUntil: "domcontentloaded" }); await waitForHydrated(HOME);
+   if(target === 'body') await page.evaluate(() => { document.body.tabIndex = -1; });
+   assert.equal((await pasteFiles(target, png())).handled, true);
+   await page.waitForSelector('[data-testid="composer-images"] img');
+   assert.equal(await page.$$eval('[data-testid="composer-images"] img', els => els.length), 1);
+  }
+ });
+ it("home: another editor keeps ownership of image paste", async () => {
+  await page.goto(BASE + '/', { waitUntil: "domcontentloaded" }); await waitForHydrated(HOME);
+  await page.evaluate(() => { const e = document.createElement('textarea'); e.id = 'other-editor'; document.body.append(e); });
+  assert.equal((await pasteFiles('#other-editor', png())).handled, false);
+  assert.equal(await page.$$eval('[data-testid="composer-images"] img', els => els.length), 0);
+ });
+
 	it("session: click opens the picture full size, Esc closes it", async () => {
 		await openSession("e2e lightbox");
 		await pasteFiles(COMPOSER, png());
 		await page.waitForSelector('[data-testid="composer-images"] img');
-		await page.click('[data-testid="composer-images"] button[aria-label="View pasted image in full"]');
+		await page.click('[data-testid="composer-images"] button[aria-label="View image in full"]');
 		await page.waitForSelector('[data-testid="image-lightbox"] img');
 		const src = await page.$eval('[data-testid="image-lightbox"] img', (el) => el.getAttribute("src"));
 		assert.match(src, /^data:image\/png;base64,/, "the full view shows the pasted bytes");
