@@ -1,529 +1,251 @@
 "use strict";
-
-// Native Claude / Grok subscription controller. Main-process only.
-// OAuth flows come from the pinned pi-ai SDK via the injected getOAuth(); this
-// module never performs network requests, never exposes URLs, codes or tokens
-// outside main, and only stores opaque local account ids (no verified identity).
-const crypto = require("node:crypto");
-const fs = require("node:fs/promises");
+const { randomUUID } = require("node:crypto");
 const path = require("node:path");
+const { createRequire, registerHooks } = require("node:module");
+const { pathToFileURL } = require("node:url");
+const { PROVIDERS, fileStore, validateCredential, safeHttps, failure } = require("./subscription-store.cjs");
 
-const PROVIDERS = ["subscription-anthropic", "subscription-xai"];
-const CLAUDE_HOSTS = ["claude.ai", "platform.claude.com"];
-const REVOCATION_WARNING = "Account disconnected locally. Remote revocation could not be confirmed.";
-const LOGOUT_WARNING = "Signed out locally. Remote revocation could not be confirmed.";
-const fail = (code) => Object.assign(new Error(code), { code });
-const nonempty = (v) => typeof v === "string" && v.length > 0 && !/[\x00-\x20\x7f]/.test(v);
-
-/** User-facing text only. Raw SDK/provider/OS errors are never forwarded. */
-function publicError(err, label = "Subscription") {
-	return ({
-		cancelled: `${label} sign-in cancelled.`,
-		timeout: `${label} sign-in timed out and the old sign-in was closed. Start sign-in again.`,
-		storage: `${label} credentials could not be read or saved. Fix local file access, restart the app, then reconnect as needed.`,
-		disconnected: `This ${label} connection is disconnected. Reconnect in Providers.`,
-		background: `${label} background use is off in this app. Enable Allow background use in Providers, or explicitly select an API-key model for that workload.`,
-		catalog: `The ${label} model catalog is unavailable. Retry the connection; no API-key fallback was used.`,
-		expired: `The ${label} session could not be refreshed. Reconnect in Providers.`,
-		pending: `A ${label} sign-in is already pending.`,
-		unavailable: `${label} sign-in is unavailable.`,
-		browser: `${label} sign-in could not open your browser. Try again.`,
-		url: `${label} sign-in returned a link that was not trusted, so it was not opened.`,
-		unsupported: `${label} sign-in requested an option this app does not support.`,
-		account: `That ${label} account is no longer saved.`,
-		request: `Invalid ${label} request.`,
-	}[err?.code]) || `${label} sign-in failed. Try again; no API-key fallback was used.`;
-}
-
-const hasOnly = (o, keys) => !!o && typeof o === "object" && !Array.isArray(o) && Object.keys(o).every((k) => keys.includes(k));
-function validCredential(c) {
-	return hasOnly(c, ["type", "access", "refresh", "expires"]) && c.type === "oauth" && nonempty(c.access) && nonempty(c.refresh) && Number.isFinite(c.expires) && c.expires >= 0;
-}
-/** Strict schema. Any deviation rejects the whole record (fail closed). */
-function validateState(state, provider) {
-	if (!PROVIDERS.includes(provider) || !hasOnly(state, ["version", "provider", "activeId", "allowBackgroundUse", "accounts"])) throw fail("storage");
-	if (state.version !== 1 || state.provider !== provider || typeof state.allowBackgroundUse !== "boolean" || !Array.isArray(state.accounts)) throw fail("storage");
-	if (!(state.activeId === null || nonempty(state.activeId))) throw fail("storage");
-	const ids = new Set();
-	for (const a of state.accounts) {
-		if (!hasOnly(a, ["id", "label", "credential"]) || !nonempty(a.id) || ids.has(a.id) || typeof a.label !== "string" || !a.label.trim() || a.label.length > 100 || /[\x00-\x1f\x7f]/.test(a.label)) throw fail("storage");
-		if (a.credential !== undefined && !validCredential(a.credential)) throw fail("storage");
-		ids.add(a.id);
-	}
-	if (state.activeId !== null && !ids.has(state.activeId)) throw fail("storage");
-	return state;
-}
-
-/** Private, unencrypted JSON (dir 0700, file 0600). No legacy migration, no OS credential store. */
-function subscriptionFileStore(file, provider) {
-	const posix = process.platform !== "win32";
-	const uid = posix && typeof process.getuid === "function" ? process.getuid() : undefined;
-	const own = (st) => uid === undefined || st.uid === uid;
-	const dirOk = (ds) => !ds.isSymbolicLink() && ds.isDirectory() && own(ds) && !(posix && (ds.mode & 0o022) !== 0);
-	return {
-		async read() {
-			let text;
-			try {
-				// Parent first: a symlinked, foreign-owned or group/other-writable directory is never trusted.
-				const ds = await fs.lstat(path.dirname(file));
-				if (!dirOk(ds)) throw fail("storage");
-				const st = await fs.lstat(file);
-				if (st.isSymbolicLink() || !st.isFile() || !own(st) || (posix && (st.mode & 0o077) !== 0)) throw fail("storage");
-				text = await fs.readFile(file, "utf8");
-			} catch (err) {
-				if (err?.code === "ENOENT") return null;
-				throw fail("storage");
-			}
-			try { return validateState(JSON.parse(text), provider); } catch { throw fail("storage"); }
-		},
-		async write(state) {
-			validateState(state, provider);
-			const dir = path.dirname(file);
-			const temp = `${file}.${crypto.randomUUID()}.tmp`;
-			let handle;
-			try {
-				await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-				const ds = await fs.lstat(dir);
-				if (!dirOk(ds)) throw fail("storage");
-				const existing = await fs.lstat(file).catch((e) => { if (e?.code === "ENOENT") return null; throw e; });
-				if (existing && (existing.isSymbolicLink() || !existing.isFile() || !own(existing))) throw fail("storage");
-				handle = await fs.open(temp, "wx", 0o600);
-				if (posix) await handle.chmod(0o600);
-				await handle.writeFile(`${JSON.stringify(state)}\n`);
-				await handle.sync();
-				await handle.close();
-				handle = null;
-				await fs.rename(temp, file);
-				if (posix) {
-					const d = await fs.open(dir, "r");
-					try { await d.sync(); } finally { await d.close(); }
-				}
-			} catch { throw fail("storage"); }
-			finally {
-				await handle?.close().catch(() => {});
-				await fs.unlink(temp).catch(() => {});
-			}
-		},
+const LABELS = { "github-copilot": "GitHub Copilot", xai: "Grok" };
+const APIS = new Set(["openai-responses", "openai-completions", "anthropic-messages"]);
+const clone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+const MESSAGES = {
+	storage: "The saved connection could not be read or written safely. Reopen the app or reconnect after resolving the credential-file problem.",
+	login: "Sign-in did not complete. Try connecting again.",
+	refresh: "The connection could not be refreshed. Retry or reconnect in Providers.",
+	cancel: "Sign-in cancelled.",
+	unavailable: "This subscription connection is unavailable. Reconnect or explicitly choose another connection.",
+	background: "Background use is off for this connection. Automatic follow-up remains deferred in its queue.",
+	stale: "The connection or model catalog changed. Select an available model and retry.",
+	interaction: "This sign-in action is no longer available.",
+};
+function publicError(error) { return MESSAGES[error?.code] ?? MESSAGES.unavailable; }
+/** Resolve the SAME SDK installation as the standalone server, through public exports. */
+async function loadSubscriptionSDK(baseDirectory) {
+	const resolve = createRequire(path.join(baseDirectory, "package.json"));
+	const load = (id) => {
+		// Pi exports are import-only. Resolve the public export with ESM
+		// conditions, then remove this synchronous, exact-specifier hook
+		// BEFORE evaluation; no private package path or global hook remains.
+		const hook = registerHooks({ resolve(specifier, context, next) {
+			return next(specifier, specifier === id ? { ...context, conditions: [...context.conditions, "import"] } : context);
+		} });
+		let file;
+		try { file = resolve.resolve(id); } finally { hook.deregister(); }
+		return import(pathToFileURL(file).href);
 	};
+	const [sdk, copilot, xai] = await Promise.all([load("@earendil-works/pi-ai"), load("@earendil-works/pi-ai/providers/github-copilot"), load("@earendil-works/pi-ai/providers/xai")]);
+	return { ...sdk, ...copilot, ...xai };
 }
-
-function trustedUrl(value, provider) {
-	try {
-		const url = new URL(value);
-		if (url.protocol !== "https:" || url.username || url.password || !url.hostname) return false;
-		if (provider === "subscription-anthropic") return CLAUDE_HOSTS.includes(url.hostname);
-		const h = url.hostname.toLowerCase();
-		return ["x.ai", "grok.com"].some((d) => h === d || h.endsWith(`.${d}`));
-	} catch { return false; }
+function validEndpoint(providerId, auth, credential) {
+	if (!auth || (!(typeof auth.apiKey === "string" && auth.apiKey.length > 0) && !Object.entries(auth.headers ?? {}).some(([key, value]) => ["authorization", "x-api-key", "api-key"].includes(key.toLowerCase()) && typeof value === "string" && value.trim().length > 0))) return false;
+	const value = auth.baseUrl ?? (providerId === "xai" ? "https://api.x.ai/v1" : "https://api.individual.githubcopilot.com");
+	if (!safeHttps(value)) return false;
+	const url = new URL(value);
+	if (providerId === "xai") return url.origin === "https://api.x.ai" && url.pathname.replace(/\/$/, "") === "/v1" && !url.search && !url.hash;
+	const domain = credential?.enterpriseUrl;
+	return !url.search && !url.hash && url.pathname === "/" && (!url.port || url.port === "443") && (url.hostname.endsWith(".githubcopilot.com") || (domain && (url.hostname === domain || url.hostname.endsWith(`.${domain}`))));
 }
-
-function createSubscription({ provider, label, store, getOAuth, getModels, openExternal, showDeviceCode = async () => {}, onChange = () => {}, timeoutMs = 180000 }) {
-	if (!PROVIDERS.includes(provider)) throw new Error("Unsupported subscription provider");
-	let state;
-	let init;
-	let queue = Promise.resolve();
-	let epoch = 0;
-	let revision = 0;
-	let authorityRevision = 0;
-	let catalogSequence = 0;
-	let storageDenied = false;
-	let backgroundIntent;
-	let pending = null;
-	let catalog = [];
-	let catalogError = null;
-	let lastError = null;
-	let closed = false;
-	let paused = false;
-	let suspended = false;
-	let transportAbort = new AbortController();
-	let backgroundAbort = new AbortController();
-	const stamp = () => ({ epoch, authorityRevision, revision });
-	const err = (e) => publicError(e, label);
-	const serial = (fn) => {
-		const next = queue.then(fn, fn);
-		queue = next.catch(() => {});
-		return next;
-	};
-	const clone = (v) => structuredClone(v);
-	const active = () => !storageDenied && !suspended && !closed && !paused ? state?.accounts.find((a) => a.id === state.activeId && a.credential) : undefined;
-	const backgroundAllowed = () => state?.allowBackgroundUse !== false && backgroundIntent?.enabled !== false;
-	const notify = (invalidate = "none") => {
-		revision++;
-		try { onChange({ channel: "lh:subscription", kind: "state", provider, stamp: stamp(), status: snapshot(), invalidate }); } catch { /* listeners never break state */ }
-	};
-	function stop(backgroundOnly = false) {
-		if (backgroundOnly) {
-			backgroundAbort.abort();
-			backgroundAbort = new AbortController();
-			notify("background");
-			return;
-		}
-		suspended = true;
-		epoch++;
-		authorityRevision++;
-		catalogSequence++;
-		transportAbort.abort();
-		backgroundAbort.abort();
-		transportAbort = new AbortController();
-		backgroundAbort = new AbortController();
-		catalog = [];
-		catalogError = null;
-		notify("all");
-	}
-	async function ready() {
-		if (closed) throw fail("disconnected");
-		if (!init) init = (async () => {
-			const loaded = await store.read();
-			if (loaded) state = validateState(loaded, provider);
-			else {
-				const first = { version: 1, provider, activeId: null, allowBackgroundUse: true, accounts: [] };
-				await store.write(first);
-				state = first;
-			}
-		})();
-		try { await init; } catch (e) { denyStorage(e); throw fail("storage"); }
-	}
-	function denyStorage(e) {
-		if (!storageDenied) { storageDenied = true; lastError = err(fail("storage")); stop(); }
-	}
-	async function save(next) {
-		try { validateState(next, provider); await store.write(next); } catch (e) {
-			denyStorage(e);
-			lastError = err(fail("storage"));
-			notify();
-			throw fail("storage");
-		}
-		state = next;
-	}
-	function snapshot() {
+/** Main owns durable credentials and refresh. Everything returned by status/snapshot is explicitly projected. */
+function createSubscriptions(options) {
+	let sdk;
+	let closed = false, paused = false;
+	const entries = new Map(PROVIDERS.map((providerId) => [providerId, {
+		providerId, state: { version: 1, allowBackgroundUse: true }, disk: options.stores?.[providerId] ?? fileStore(path.join(options.directory, `${providerId}-credentials.json`), providerId),
+		epoch: 0, authorityRevision: 0, revision: 0, tail: Promise.resolve(), fatal: false, blocked: false, ready: false, error: undefined, authFailed: false, attempt: null, catalog: [], endpoint: null,
+	}]));
+	const entryFor = (id) => { const entry = entries.get(id); if (!entry) throw failure("unavailable"); return entry; };
+	function serialized(entry, fn) { const result = entry.tail.then(fn); entry.tail = result.catch(() => {}); return result; }
+	function statusOf(entry) {
+		const available = entry.ready && !closed && !paused && !entry.fatal;
+		const attempt = entry.attempt;
 		return {
-			available: !!state && !closed && !paused && !storageDenied,
-			pending: !!pending,
-			allowBackgroundUse: backgroundAllowed(),
-			activeId: state?.activeId ?? null,
-			accounts: (state?.accounts ?? []).map((a) => ({ id: a.id, label: a.label, connected: !storageDenied && !closed && !paused && !!a.credential && (!suspended || a.id !== state.activeId) })),
-			error: lastError,
-			catalogError,
+			providerId: entry.providerId, available, connected: !!(available && entry.state.credential && !entry.blocked && !entry.authFailed), pending: !!attempt, committing: attempt?.committing === true,
+			allowBackgroundUse: entry.state.allowBackgroundUse, connectionId: entry.state.connectionId ?? null,
+			epoch: entry.epoch, authorityRevision: entry.authorityRevision, revision: entry.revision,
+			...(entry.error ? { error: entry.error } : {}),
+			...(attempt ? { interaction: clone(attempt.public) } : {}),
 		};
 	}
-	async function status() {
-		try { await ready(); } catch (e) { return { ...snapshot(), available: false, error: err(e) }; }
-		return snapshot();
+	function snapshotNow() {
+		return { statuses: [...entries.values()].map(statusOf), models: Object.fromEntries([...entries.values()].map((entry) => [entry.providerId, statusOf(entry).connected ? clone(entry.catalog) : []])) };
 	}
-	const nextLabel = (s) => {
-		const n = s.accounts.reduce((max, a) => {
-			const m = a.label.startsWith(`${label} account `) ? Number(a.label.slice(label.length + 9)) : 0;
-			return Number.isSafeInteger(m) ? Math.max(max, m) : max;
-		}, 0);
-		return `${label} account ${n + 1}`;
-	};
-
-	// ---- login -----------------------------------------------------------------
-	async function login(accountId, allowBackgroundUse) {
-		await ready();
-		if ((accountId !== undefined && typeof accountId !== "string") || (allowBackgroundUse !== undefined && typeof allowBackgroundUse !== "boolean")) throw fail("request");
-		if (pending) throw fail("pending");
-		if (paused) throw fail("disconnected");
-		if (storageDenied) throw fail("storage");
-		if (accountId !== undefined && !state.accounts.some((a) => a.id === accountId)) throw fail("account");
-		const attemptEpoch = epoch;
-		const abort = new AbortController();
-		const tracked = [];
-		let timer;
-		const attempt = { abort, cancel: null };
-		const live = () => pending === attempt && !abort.signal.aborted && !closed;
-		const cancel = (code = "cancelled") => {
-			if (pending !== attempt && abort.signal.aborted) return;
-			abort.abort();
-			clearTimeout(timer);
-			if (pending === attempt) pending = null;
-			lastError = err(fail(code));
-			notify();
-		};
-		attempt.cancel = cancel;
-		pending = attempt;
-		lastError = null;
-		notify();
-		let oauth;
-		try {
-			oauth = await getOAuth();
-			if (!oauth || typeof oauth.login !== "function") throw fail("unavailable");
-		} catch (e) { cancel(e?.code === "unavailable" ? "unavailable" : "unavailable"); return snapshot(); }
-		if (!live()) return snapshot();
-		timer = setTimeout(() => cancel("timeout"), timeoutMs);
-		timer.unref?.();
-		const track = (promise) => { tracked.push(Promise.resolve(promise).then(() => null, () => fail("browser"))); };
-		const interaction = {
-			signal: abort.signal,
-			prompt(p) {
-				if (!live()) return Promise.reject(fail("cancelled"));
-				if (p?.type === "select" && provider === "subscription-anthropic" && Array.isArray(p.options) && p.options.some((o) => o?.id === "browser")) return Promise.resolve("browser");
-				if (p?.type === "manual_code") {
-					// Never exposed or answered. Waits for the SDK to abort it once the loopback callback wins.
-					return new Promise((_, reject) => {
-						const done = () => reject(fail("cancelled"));
-						for (const s of [p.signal, abort.signal]) {
-							if (!s) continue;
-							if (s.aborted) return done();
-							s.addEventListener("abort", done, { once: true });
-						}
-					});
-				}
-				cancel("unsupported");
-				return Promise.reject(fail("unsupported"));
-			},
-			notify(event) {
-				if (!live() || !event || typeof event !== "object") return;
-				if (event.type === "auth_url") {
-					if (!trustedUrl(event.url, provider)) return cancel("url");
-					track(Promise.resolve().then(() => openExternal(event.url)));
-				} else if (event.type === "device_code") {
-					if (provider !== "subscription-xai" || !trustedUrl(event.verificationUri, provider) || !nonempty(event.userCode) || event.userCode.length > 64) return cancel("url");
-					const userCode = event.userCode;
-					const opened = Promise.resolve().then(() => openExternal(event.verificationUri));
-					track(opened);
-					// The code dialog is informational: OAuth success never waits on its dismissal.
-					opened.then(() => (live() ? showDeviceCode({ provider, label, userCode }) : undefined)).catch(() => {});
-				}
-				// info / progress are ignored; none of their text reaches status.
-			},
-		};
-		void (async () => {
+	function changed(entry) { entry.revision++; try { options.onChange?.(snapshotNow()); } catch { /* observer cannot break credential writes */ } }
+	function catalog(entry) {
+		let models = entry.provider?.getModels().filter((model) => APIS.has(model.api)) ?? [];
+		if (!entry.state.credential) models = [];
+		else if (entry.providerId === "github-copilot" && !Array.isArray(entry.state.credential.availableModelIds)) models = [];
+		else if (entry.provider?.filterModels) models = [...entry.provider.filterModels(models, entry.state.credential)];
+		if (JSON.stringify(models) !== JSON.stringify(entry.catalog)) { entry.catalog = models; entry.authorityRevision++; }
+	}
+	async function updateEndpoint(entry) {
+		let endpoint = null;
+		if (entry.state.credential) {
+			const auth = await entry.provider.auth.oauth.toAuth(entry.state.credential);
+			if (!validEndpoint(entry.providerId, auth, entry.state.credential)) throw failure("storage");
+			endpoint = auth.baseUrl ?? (entry.providerId === "xai" ? "https://api.x.ai/v1" : "https://api.individual.githubcopilot.com");
+		}
+		if (entry.endpoint !== endpoint) { entry.endpoint = endpoint; entry.authorityRevision++; }
+	}
+	function storageFailed(entry) { entry.fatal = true; entry.blocked = true; entry.epoch++; entry.error = MESSAGES.storage; changed(entry); }
+	async function save(entry, state) {
+		try { await entry.disk.write(state); } catch { storageFailed(entry); throw failure("storage"); }
+		entry.state = clone(state);
+		try { await updateEndpoint(entry); catalog(entry); } catch { storageFailed(entry); throw failure("storage"); }
+		changed(entry);
+	}
+	const ready = (async () => {
+		try { sdk = options.sdk ?? await options.loadSDK(); }
+		catch { for (const entry of entries.values()) { entry.error = MESSAGES.unavailable; entry.fatal = true; changed(entry); } return; }
+		await Promise.all([...entries.values()].map(async (entry) => {
 			try {
-				const raw = await oauth.login(interaction);
-				if (!live()) throw fail("cancelled");
-				const results = await Promise.all(tracked);
-				const bad = results.find(Boolean);
-				if (bad) throw bad;
-				if (!raw || raw.type !== "oauth" || !nonempty(raw.access) || !nonempty(raw.refresh) || !Number.isFinite(raw.expires) || raw.expires < 0) throw fail("expired");
-				const credential = { type: "oauth", access: raw.access, refresh: raw.refresh, expires: raw.expires };
-				await serial(async () => {
-					if (!live() || epoch !== attemptEpoch) throw fail("cancelled");
-					const next = clone(state);
-					let rec;
-					if (accountId !== undefined) {
-						rec = next.accounts.find((a) => a.id === accountId);
-						if (!rec) throw fail("account");
-						rec.credential = credential;
-					} else {
-						rec = { id: crypto.randomUUID(), label: nextLabel(next), credential };
-						next.accounts.push(rec);
-					}
-					next.activeId = rec.id;
-					// Persisted in the same write as the credential, so the first status/lease already obeys the choice.
-					if (allowBackgroundUse !== undefined) next.allowBackgroundUse = allowBackgroundUse;
-					const previous = clone(state);
-					await save(next);
-					if (!live() || epoch !== attemptEpoch) {
-						await save(previous); // late cancel during persistence: roll back
-						throw fail("cancelled");
-					}
-					clearTimeout(timer);
-					pending = null;
-					stop();
-					storageDenied = false;
-					suspended = false;
-				});
-				lastError = null;
-			} catch (e) {
-				if (!abort.signal.aborted) { abort.abort(); lastError = err(e); }
-			} finally {
-				clearTimeout(timer);
-				if (pending === attempt) pending = null;
-				notify();
-			}
-		})();
-		return snapshot();
+				entry.state = clone(await entry.disk.read());
+				const native = entry.providerId === "github-copilot" ? sdk.githubCopilotProvider() : sdk.xaiProvider();
+				// No API-key auth method exists in this collection: ambient keys cannot become a fallback.
+				entry.provider = { ...native, auth: { oauth: native.auth.oauth } };
+				const store = {
+					read: async (id) => id === entry.providerId ? clone(entry.state.credential) : undefined,
+					list: async () => entry.state.credential ? [{ providerId: entry.providerId, type: "oauth" }] : [],
+					modify: (id, fn, operation) => serialized(entry, async () => {
+						if (id !== entry.providerId || entry.fatal || closed || paused || operation?.signal?.aborted) throw failure("unavailable");
+						const next = await fn(clone(entry.state.credential));
+						// A returned rotation must be saved even if the app paused while
+						// refresh was in flight. Admission is rechecked after resolution;
+						// queued logout deletes only after this serialized durable write.
+						if (next !== undefined && JSON.stringify(next) !== JSON.stringify(entry.state.credential)) {
+							try { validateCredential(id, next); } catch { storageFailed(entry); throw failure("storage"); }
+							await save(entry, { ...entry.state, credential: next });
+						}
+						return clone(entry.state.credential);
+					}),
+					delete: (id) => serialized(entry, async () => {
+						if (id !== entry.providerId || entry.fatal) throw failure("storage");
+						await save(entry, { version: 1, allowBackgroundUse: entry.state.allowBackgroundUse });
+					}),
+				};
+				entry.models = sdk.createModels({ credentials: store }); entry.models.setProvider(entry.provider);
+				await updateEndpoint(entry); entry.ready = true; catalog(entry); changed(entry);
+			} catch { entry.fatal = true; entry.error = MESSAGES.storage; changed(entry); }
+		}));
+	})();
+	function current(entry, scope) {
+		return statusOf(entry).connected && scope?.providerId === entry.providerId && scope.connectionId === entry.state.connectionId && scope.epoch === entry.epoch && scope.authorityRevision === entry.authorityRevision && entry.catalog.some((m) => m.id === scope.selectedModelId);
 	}
-	function cancelLogin() { pending?.cancel(); return snapshot(); }
-
-	// ---- leases ----------------------------------------------------------------
-	function authorized(background, expected, capturedEpoch) {
-		const account = active();
-		if (!account || (capturedEpoch !== undefined && capturedEpoch !== epoch)) throw fail("disconnected");
-		if (expected && (expected.expectedAccountId !== account.id || expected.expectedAuthorityRevision !== authorityRevision || !catalog.some((m) => m.id === expected.selectedModelId))) throw fail("catalog");
-		if (background && !backgroundAllowed()) throw fail("background");
-		return account;
+	async function consent(providerId, enabled) {
+		await ready; const entry = entryFor(providerId);
+		if (typeof enabled !== "boolean" || entry.fatal || closed || paused) throw failure("unavailable");
+		await serialized(entry, async () => { if (entry.state.allowBackgroundUse !== enabled) await save(entry, { ...entry.state, allowBackgroundUse: enabled }); });
 	}
-	/** Compare-and-swap persist: only into a still-existing account whose refresh handle is the one that was exchanged. */
-	async function persistRotation(accountId, oldRefresh, fresh) {
-		const target = state?.accounts.find((a) => a.id === accountId);
-		if (!target?.credential || target.credential.refresh !== oldRefresh) return false;
-		const next = clone(state);
-		next.accounts.find((a) => a.id === accountId).credential = fresh;
-		await save(next);
-		return true;
-	}
-	function rotated(result, old) {
-		if (!result || result.type !== "oauth" || !nonempty(result.access) || !Number.isFinite(result.expires) || result.expires <= Date.now()) throw fail("expired");
-		// Providers may omit a refresh token; keep the old valid one. A present-but-invalid one is a failed rotation.
-		const refresh = result.refresh === undefined || result.refresh === null || result.refresh === "" ? old.refresh : result.refresh;
-		if (!nonempty(refresh)) throw fail("expired");
-		return { type: "oauth", access: result.access, refresh, expires: result.expires };
-	}
-	async function credential(background, expected) {
-		await ready();
-		return serial(async () => {
-			const requestEpoch = epoch;
-			const account = authorized(background, expected);
-			if (account.credential.expires <= Date.now() + 60000) {
-				const old = clone(account.credential);
-				const refreshEpoch = epoch;
-				// Only account/transport changes and the timeout abort a refresh. Consent off must not: a rotation may already be consumed server-side.
-				const signal = AbortSignal.any([transportAbort.signal, AbortSignal.timeout(15000)]);
-				const failClosed = () => { if (!closed && refreshEpoch === epoch && !storageDenied) { lastError = err(fail("expired")); stop(); } };
-				let oauth;
-				let outcome;
-				try { oauth = await getOAuth(); } catch { failClosed(); throw fail("expired"); }
-				const call = Promise.resolve().then(() => oauth.refresh(clone(old), signal));
-				const aborted = new Promise((_, reject) => {
-					const done = () => reject(fail("disconnected"));
-					if (signal.aborted) return done();
-					signal.addEventListener("abort", done, { once: true });
-				});
-				try { outcome = await Promise.race([call, aborted]); }
-				catch (e) {
-					// If the SDK ignores abort and later rotates, still retain the newest refresh handle (CAS).
-					call.then((late) => serial(() => persistRotation(account.id, old.refresh, rotated(late, old))).catch(() => {}), () => {});
-					if (closed || refreshEpoch !== epoch) throw fail("disconnected"); // stopped by an account change
-					failClosed(); // refresh failed on its own: suspend until the user reconnects
-					throw fail("expired");
-				}
-				let fresh;
-				try { fresh = rotated(outcome, old); }
-				catch (e) {
-					// Rotation may have consumed the old handle: stop all use and surface a reconnect prompt.
-					stop();
-					lastError = err(fail("expired")); notify();
-					throw e;
-				}
-				await persistRotation(account.id, old.refresh, fresh); // durable before any lease
-				if (closed || refreshEpoch !== epoch || signal.aborted) throw fail("disconnected");
-			}
-			const current = authorized(background, expected, requestEpoch);
-			return { accessToken: current.credential.access, accountId: current.id, ...stamp() };
-		});
-	}
-	async function lease(background, expected) {
-		if (typeof background !== "boolean" || !expected || !nonempty(expected.expectedAccountId) || !Number.isSafeInteger(expected.expectedAuthorityRevision) || !nonempty(expected.selectedModelId)) throw fail("catalog");
-		return credential(background, expected);
-	}
-
-	// ---- catalog ---------------------------------------------------------------
-	const modelValue = () => ({ ...stamp(), status: snapshot(), accountId: active()?.id ?? null, models: catalog.map((m) => ({ id: m.id, name: m.name })) });
-	async function models() {
-		const sequence = ++catalogSequence;
+	async function login(providerId, enabled) {
+		await ready; const entry = entryFor(providerId);
+		if ((enabled !== undefined && typeof enabled !== "boolean") || entry.fatal || closed || paused || !entry.ready) throw failure("unavailable");
+		if ([...entries.values()].some((e) => e.attempt)) throw failure("interaction");
+		const abort = new AbortController();
+		const attempt = { id: randomUUID(), abort, committing: false, actions: new Map(), prompt: null, public: {} };
+		attempt.public = { attemptId: attempt.id }; entry.attempt = attempt; entry.error = undefined; changed(entry);
+		const active = () => entry.attempt === attempt && !abort.signal.aborted && !closed && !paused;
+		const addBrowser = (value) => {
+			if (!safeHttps(value)) throw failure("interaction");
+			const id = randomUUID(); attempt.actions.set(id, value);
+			const url = new URL(value); attempt.public.browser = { id, url: `${url.origin}${url.pathname}` };
+		};
 		try {
-			await ready();
-			const account = active();
-			if (!account) return modelValue();
-			const list = await getModels();
-			if (!Array.isArray(list)) throw fail("catalog");
-			const visible = list.map((m) => {
-				if (!m || !nonempty(m.id) || typeof m.name !== "string") throw fail("catalog");
-				return { id: m.id, name: m.name };
+			const staging = sdk.createModels(); staging.setProvider(entry.provider);
+			const credential = await staging.login(providerId, "oauth", {
+				signal: abort.signal,
+				notify: (event) => {
+					if (!active()) return;
+					if (event.type === "auth_url") addBrowser(event.url);
+					if (event.type === "device_code") { addBrowser(event.verificationUri); attempt.public.userCode = event.userCode; }
+					// Native provider diagnostics are never forwarded. Public prompt wording comes from SDK-owned prompts.
+					attempt.public.progress = event.type === "device_code" || event.type === "auth_url" ? "Complete sign-in in your browser." : "Waiting for the provider…";
+					changed(entry);
+				},
+				prompt: (prompt) => new Promise((resolve, reject) => {
+					if (!active() || prompt.signal?.aborted) { reject(failure("cancel")); return; }
+					const id = randomUUID();
+					const stop = () => { cleanup(); reject(failure("cancel")); };
+					const cleanup = () => { abort.signal.removeEventListener("abort", stop); prompt.signal?.removeEventListener("abort", stop); if (attempt.prompt?.id === id) { attempt.prompt = null; delete attempt.public.prompt; } };
+					attempt.prompt = { id, resolve: (value) => { cleanup(); resolve(value); }, reject: stop };
+					attempt.public.prompt = { id, type: prompt.type, message: prompt.message, ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}), ...(prompt.type === "select" ? { options: clone(prompt.options) } : {}) };
+					abort.signal.addEventListener("abort", stop, { once: true }); prompt.signal?.addEventListener("abort", stop, { once: true }); changed(entry);
+				}),
+			}, { agentName: "LearnHarness" });
+			if (!active()) throw failure("cancel"); validateCredential(providerId, credential);
+			const auth = await entry.provider.auth.oauth.toAuth(credential);
+			if (!validEndpoint(providerId, auth, credential) || !active()) throw failure("login");
+			await serialized(entry, async () => {
+				if (!active() || entry.fatal) throw failure("cancel");
+				attempt.committing = true; entry.blocked = true; entry.epoch++; changed(entry);
+				await save(entry, { version: 1, allowBackgroundUse: enabled ?? entry.state.allowBackgroundUse, connectionId: randomUUID(), credential });
+				entry.blocked = false; entry.authFailed = false; entry.error = undefined;
 			});
-			if (sequence !== catalogSequence || active()?.id !== account.id) throw fail("catalog");
-			const changed = JSON.stringify(visible) !== JSON.stringify(catalog);
-			catalog = visible;
-			if (changed) authorityRevision++;
-			const hadError = catalogError !== null; catalogError = null;
-			if (changed || hadError) notify();
-			return modelValue();
-		} catch {
-			if (sequence === catalogSequence) {
-				if (catalog.length) { catalog = []; authorityRevision++; }
-				catalogError = err(fail("catalog")); notify();
-			}
-			return modelValue();
+		} catch (error) {
+			if (active() && !entry.fatal) entry.error = error?.code === "cancel" ? undefined : MESSAGES.login;
+			if (!abort.signal.aborted) throw failure(entry.fatal ? "storage" : "login");
+		} finally { attempt.prompt?.reject(); if (entry.attempt === attempt) { entry.attempt = null; changed(entry); } }
+	}
+	function cancel(providerId) { const entry = entryFor(providerId); if (entry.attempt && !entry.attempt.committing) { entry.attempt.abort.abort(); entry.attempt = null; if (entry.authFailed && !entry.error) entry.error = MESSAGES.refresh; changed(entry); } }
+	async function resolveAuth(entry, modelId) {
+		if (entry.fatal || closed || paused || !entry.state.credential) throw failure("unavailable");
+		const connectionId = entry.state.connectionId, epoch = entry.epoch;
+		const unchanged = () => connectionId === entry.state.connectionId && epoch === entry.epoch && !entry.blocked && !closed && !paused;
+		try {
+			const model = entry.provider.getModels().find((m) => m.id === modelId);
+			if (!model) throw failure("stale");
+			const resolved = await entry.models.getAuth(model);
+			if (!unchanged()) throw failure("stale");
+			if (!validEndpoint(entry.providerId, resolved?.auth, entry.state.credential)) throw failure("unavailable");
+			return {
+				...(typeof resolved.auth.apiKey === "string" ? { apiKey: resolved.auth.apiKey } : {}),
+				...(resolved.auth.headers ? { headers: Object.fromEntries(Object.entries(resolved.auth.headers).filter(([, value]) => value === null || typeof value === "string")) } : {}),
+				...(typeof resolved.auth.baseUrl === "string" ? { baseUrl: resolved.auth.baseUrl } : {}),
+			};
+		} catch (error) {
+			if (!entry.fatal && unchanged()) { entry.authFailed = true; entry.error = MESSAGES.refresh; entry.epoch++; changed(entry); }
+			throw failure(entry.fatal ? "storage" : error?.code === "stale" ? "stale" : "refresh");
 		}
 	}
-
-	// ---- account controls ------------------------------------------------------
-	async function select(id) {
-		if (typeof id !== "string") throw fail("request");
-		pending?.cancel();
-		stop();
-		const intent = epoch;
-		await ready();
-		return serial(async () => {
-			try {
-				const account = state.accounts.find((a) => a.id === id);
-				if (!account?.credential) throw fail("disconnected");
-				await save({ ...clone(state), activeId: id });
-				if (epoch !== intent || closed || paused || storageDenied) throw fail("disconnected");
-				suspended = false;
-				lastError = null;
-				notify();
-				return snapshot();
-			} catch (e) {
-				// A refused selection leaves the prior active account untouched: resume it (no auto-selection, no credential change).
-				if (epoch === intent && !closed && !paused && !storageDenied && state?.accounts.some((a) => a.id === state.activeId && a.credential)) { suspended = false; notify(); }
-				throw e;
-			}
-		});
-	}
-	async function consent(enabled) {
-		if (typeof enabled !== "boolean") throw fail("request");
-		const intent = { enabled: false };
-		backgroundIntent = intent; // ON cannot grant until durably saved; OFF denies at once.
-		if (!enabled) stop(true);
-		await ready();
-		return serial(async () => {
-			try { await save({ ...clone(state), allowBackgroundUse: enabled }); }
-			catch (e) { throw e; }
-			if (backgroundIntent === intent && enabled) backgroundIntent = undefined;
-			notify();
-			return snapshot();
-		});
-	}
-	async function disconnect(id) {
-		if (typeof id !== "string") throw fail("request");
-		pending?.cancel();
-		let stopped = !!state && state.activeId === id && state.accounts.some((a) => a.id === id);
-		if (stopped) stop();
-		await ready();
-		return serial(async () => {
-			const target = state.accounts.find((a) => a.id === id);
-			if (!target) { if (stopped && !closed) suspended = false; throw fail("account"); }
-			const wasActive = state.activeId === id;
-			if (wasActive && !stopped) { stop(); stopped = true; }
-			const at = epoch;
-			const next = clone(state);
-			next.accounts = next.accounts.filter((a) => a.id !== id);
-			if (wasActive) next.activeId = null; // never auto-select another account
-			await save(next);
-			if (stopped && !closed && epoch === at) suspended = false;
-			lastError = REVOCATION_WARNING;
-			notify();
-			return snapshot();
-		});
-	}
-	async function logout(id) {
-		if (typeof id !== "string") throw fail("request");
-		pending?.cancel();
-		const wasActive = !!state && state.activeId === id;
-		if (wasActive) stop();
-		await ready();
-		return serial(async () => {
-			const target = state.accounts.find((a) => a.id === id);
-			if (!target) { if (wasActive && !closed) suspended = false; throw fail("account"); }
-			if (state.activeId === id && !wasActive) stop();
-			const at = epoch;
-			const next = clone(state);
-			delete next.accounts.find((a) => a.id === id).credential;
-			if (next.activeId === id) next.activeId = null;
-			await save(next);
-			if (!closed && epoch === at) suspended = false;
-			lastError = LOGOUT_WARNING;
-			notify();
-			return snapshot();
-		});
-	}
-	function close() { closed = true; pending?.cancel(); stop(); }
-	function pause() { paused = true; pending?.cancel(); stop(); notify(); }
-	function resume() { paused = false; if (!storageDenied) suspended = false; notify(); }
-	return { provider, label, status, login, cancelLogin, select, disconnect, logout, consent, models, lease, pause, resume, close, stamp };
+	return {
+		ready,
+		async snapshot() { await ready; return snapshotNow(); },
+		async status() { await ready; return snapshotNow().statuses; },
+		login, consent, cancel,
+		async respond(providerId, attemptId, promptId, value) {
+			const entry = entryFor(providerId), attempt = entry.attempt;
+			if (!attempt || attempt.id !== attemptId || attempt.prompt?.id !== promptId || typeof value !== "string" || value.length > 4096) throw failure("interaction");
+			const prompt = attempt.public.prompt;
+			if (prompt.type === "select" && !prompt.options.some((option) => option.id === value)) throw failure("interaction");
+			attempt.prompt.resolve(value); changed(entry);
+		},
+		async open(providerId, attemptId, actionId) {
+			const attempt = entryFor(providerId).attempt;
+			const target = attempt?.id === attemptId ? attempt.actions.get(actionId) : undefined;
+			if (!target || !safeHttps(target)) throw failure("interaction");
+			try { await options.openExternal(target); } catch { throw failure("interaction"); }
+		},
+		async lease(scope, background) {
+			await ready; const entry = entryFor(scope?.providerId);
+			if (!current(entry, scope)) throw failure("stale");
+			if (background && !entry.state.allowBackgroundUse) throw failure("background");
+			const auth = await resolveAuth(entry, scope.selectedModelId);
+			if (!current(entry, scope)) throw failure("stale");
+			if (background && !entry.state.allowBackgroundUse) throw failure("background");
+			return { scope: clone(scope), auth: clone(auth) };
+		},
+		async retry(providerId) {
+			await ready; const entry = entryFor(providerId);
+			const model = entry.catalog[0]; if (!model || entry.fatal || entry.blocked) throw failure("unavailable");
+			await resolveAuth(entry, model.id); entry.authFailed = false; entry.error = undefined; changed(entry);
+		},
+		async disconnect(providerId) {
+			await ready; const entry = entryFor(providerId); cancel(providerId);
+			if (entry.fatal) throw failure("storage");
+			entry.blocked = true; entry.epoch++; changed(entry);
+			await entry.models.logout(providerId); entry.blocked = false; entry.authFailed = false; entry.error = undefined; changed(entry);
+		},
+		pause() { paused = true; for (const entry of entries.values()) { cancel(entry.providerId); entry.epoch++; changed(entry); } },
+		resume() { if (closed) return; paused = false; for (const entry of entries.values()) changed(entry); },
+		close() { closed = true; for (const entry of entries.values()) { cancel(entry.providerId); entry.epoch++; changed(entry); } },
+	};
 }
-
-module.exports = { createSubscription, subscriptionFileStore, publicError, publicSubscriptionError: publicError, validateState, trustedUrl, PROVIDERS };
+module.exports = { createSubscriptions, loadSubscriptionSDK, publicError, validEndpoint, LABELS };

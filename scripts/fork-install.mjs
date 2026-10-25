@@ -345,10 +345,14 @@ async function buildLocalApp(source, identity, work) {
 	fs.cpSync(standalone, path.join(res, "server", "standalone"), { recursive: true, verbatimSymlinks: true });
 	fs.mkdirSync(path.join(res, "licenses"), { recursive: true });
 	fs.copyFileSync(path.join(source, "docs", "compaction-accounting.md"), path.join(res, "licenses", "pi-compaction.md"));
+	const titleGuard = path.join(source, "electron", "server-title-guard.cjs");
+	if (fs.existsSync(titleGuard)) fs.copyFileSync(titleGuard, path.join(res, "server-title-guard.cjs"));
 	assertNoEscapingLinks(app);
 
 	const infoFile = path.join(app, "Contents", "Info.plist");
 	const info = plist.parse(fs.readFileSync(infoFile, "utf8"));
+	info.CFBundleShortVersionString = identity.pkg.version;
+	info.CFBundleVersion = identity.pkg.version;
 	info.ElectronAsarIntegrity = { ...info.ElectronAsarIntegrity, [ASAR_KEY]: { algorithm: "SHA256", hash: asarHeaderHash(path.join(res, "app.asar")) } };
 	fs.writeFileSync(infoFile, plist.build(info));
 

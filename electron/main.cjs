@@ -24,12 +24,15 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog, clipboard, nativeTheme } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, nativeTheme, session, shell, dialog } = require("electron");
 const { createChatGPT, fileStore } = require("./chatgpt.cjs");
-const { createSubscription, subscriptionFileStore } = require("./subscriptions.cjs");
-const { attachSubscriptionChild, subscriptionControl } = require("./subscriptions-ipc.cjs");
-const { pathToFileURL } = require("node:url");
 const { attachChatGPTChild, trustedSender, chatGPTControl } = require("./chatgpt-ipc.cjs");
+const { createSubscriptions, loadSubscriptionSDK } = require("./subscriptions.cjs");
+const { attachSubscriptionChild, subscriptionControl } = require("./subscription-ipc.cjs");
+const { createSubscription, subscriptionFileStore: legacySubscriptionFileStore } = require("./legacy-subscriptions.cjs");
+const { attachSubscriptionChild: attachLegacySubscriptionChild, subscriptionControl: legacySubscriptionControl } = require("./subscriptions-ipc.cjs");
+const { migrateLegacyGrok } = require("./subscription-migration.cjs");
+const { pathToFileURL } = require("node:url");
 const { desktopAPIHeaders } = require("./desktop-api.cjs");
 const { DARK_THEME, parseTheme, readSavedTheme, symbolColor } = require("./theme.cjs");
 const { randomBytes } = require("node:crypto");
@@ -139,39 +142,31 @@ if (process.argv.includes("--browser-service")) {
 let serverProcess = null;
 let chatgpt = null;
 let chatgptChild = null;
-const subscriptions = new Map();
-let subscriptionsChild = null;
-const subscriptionSDK = new Map();
+let subscriptions = null;
+let subscriptionChild = null;
+const legacySubscriptions = new Map();
+let legacySubscriptionChild = null;
+const legacySDK = new Map();
 const deviceCodeDialogs = new Map();
-
-/** Load only this app's pinned SDK, never another app's installation or auth store. */
-async function nativeSubscriptionSDK(provider) {
-	const native = provider === "subscription-anthropic" ? "anthropic" : provider === "subscription-xai" ? "xai" : null;
-	if (!native) throw new Error("Unsupported subscription provider");
-	if (!subscriptionSDK.has(native)) subscriptionSDK.set(native, (async () => {
-		const entry = path.join(path.dirname(serverEntry()), "node_modules", "@earendil-works", "pi-ai", "dist", "providers", native + ".js");
-		const module = await import(pathToFileURL(entry).href);
-		return module[native + "Provider"]();
+async function legacyOAuth(provider) {
+	const native = provider === "subscription-anthropic" ? "anthropic" : "xai";
+	if (!legacySDK.has(native)) legacySDK.set(native, (async () => {
+		const entry = path.join(path.dirname(serverEntry()), "node_modules", "@earendil-works", "pi-ai", "dist", "providers", `${native}.js`);
+		const mod = await import(pathToFileURL(entry).href);
+		return mod[`${native}Provider`]();
 	})());
-	return subscriptionSDK.get(native);
+	return (await legacySDK.get(native)).auth.oauth;
 }
-
-/** Device codes, when needed, live in a trusted native dialog, not the web renderer. */
-async function showSubscriptionDeviceCode({ provider, label, userCode }) {
+async function showLegacyDeviceCode({ provider, label, userCode }) {
 	const focused = BrowserWindow.getFocusedWindow();
-	const win = focused && trustedAppWindows.has(focused) ? focused : [...trustedAppWindows].find((w) => !w.isDestroyed());
+	const win = focused && trustedAppWindows.has(focused) ? focused : [...trustedAppWindows].find((item) => !item.isDestroyed());
 	if (!win || win.isDestroyed()) return;
 	deviceCodeDialogs.get(provider)?.abort();
-	const controller = new AbortController();
-	deviceCodeDialogs.set(provider, controller);
+	const controller = new AbortController(); deviceCodeDialogs.set(provider, controller);
 	try {
-		const result = await dialog.showMessageBox(win, { type: "info", title: "Sign in to " + label,
-			message: "Enter this code in the sign-in page", detail: userCode,
-			buttons: ["Copy code", "Close"], defaultId: 0, cancelId: 1, signal: controller.signal });
-		if (result.response === 0 && !controller.signal.aborted) clipboard.writeText(userCode);
-	} finally {
-		if (deviceCodeDialogs.get(provider) === controller) deviceCodeDialogs.delete(provider);
-	}
+		const result = await dialog.showMessageBox(win, { type: "info", title: `Sign in to ${label}`, message: "Enter this code in the sign-in page", detail: userCode, buttons: ["Copy code", "Close"], defaultId: 0, cancelId: 1, signal: controller.signal });
+		if (result.response === 0 && !controller.signal.aborted) require("electron").clipboard.writeText(userCode);
+	} finally { if (deviceCodeDialogs.get(provider) === controller) deviceCodeDialogs.delete(provider); }
 }
 // Per-launch request capability, never OAuth tokens and never renderer state.
 let desktopAPISecret = null;
@@ -246,7 +241,11 @@ function startServer(port) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			process.execPath,
-			[serverEntry()],
+			// Only the macOS backend needs this: Next's native title setter
+			// otherwise checks this Node-mode process in as a foreground app.
+			process.platform === "darwin"
+				? ["--require", path.join(process.resourcesPath, "server-title-guard.cjs"), serverEntry()]
+				: [serverEntry()],
 			{
 				cwd: path.dirname(serverEntry()),
 				env: {
@@ -268,7 +267,8 @@ function startServer(port) {
 		);
 		serverProcess = child;
 		chatgptChild = attachChatGPTChild(child, chatgpt);
-		subscriptionsChild = attachSubscriptionChild(child, subscriptions);
+		subscriptionChild = attachSubscriptionChild(child, subscriptions);
+		legacySubscriptionChild = attachLegacySubscriptionChild(child, legacySubscriptions);
 		const fwd = (buf) => buf.toString().trimEnd().split("\n").forEach((l) => l && log(`server: ${l}`));
 		child.stdout.on("data", fwd);
 		child.stderr.on("data", fwd);
@@ -277,10 +277,13 @@ function startServer(port) {
 			serverProcess = null;
 			chatgptChild?.dispose();
 			chatgptChild = null;
-			subscriptionsChild?.dispose();
-			subscriptionsChild = null;
-			for (const connection of subscriptions.values()) connection.close();
+			subscriptionChild?.dispose();
+			subscriptionChild = null;
+			legacySubscriptionChild?.dispose();
+			legacySubscriptionChild = null;
+			for (const c of legacySubscriptions.values()) c.close();
 			chatgpt?.close();
+			subscriptions?.close();
 		});
 		resolve(child);
 	});
@@ -305,8 +308,9 @@ function waitUntilUp(url, tries = 150) {
 
 function killServer() {
 	chatgpt?.close();
-	for (const connection of subscriptions.values()) connection.close();
-	for (const controller of deviceCodeDialogs.values()) controller.abort();
+	subscriptions?.close();
+	for (const c of legacySubscriptions.values()) c.close();
+	for (const c of deviceCodeDialogs.values()) c.abort();
 	if (!serverProcess) return;
 	const child = serverProcess;
 	serverProcess = null;
@@ -634,7 +638,8 @@ function installMenu() {
 async function main() {
 	app.on("window-all-closed", () => {
 		chatgpt?.pause();
-		for (const connection of subscriptions.values()) connection.pause();
+		subscriptions?.pause();
+		for (const c of legacySubscriptions.values()) c.pause();
 		// macOS convention: the app stays resident, reactivated from the Dock.
 		if (process.platform !== "darwin") app.quit();
 	});
@@ -672,20 +677,26 @@ async function main() {
 				for (const win of BrowserWindow.getAllWindows()) win.webContents.send("lh:chatgpt:changed");
 			},
 		});
-		for (const [provider, label] of [["subscription-anthropic", "Claude"], ["subscription-xai", "Grok"]]) {
-			subscriptions.set(provider, createSubscription({ provider, label,
-				store: subscriptionFileStore(path.join(app.getPath("userData"), "subscription-credentials", provider + ".json"), provider),
-				getOAuth: async () => (await nativeSubscriptionSDK(provider)).auth.oauth,
-				getModels: async () => (await nativeSubscriptionSDK(provider)).getModels().map(({ id, name }) => ({ id, name })),
-				openExternal: (target) => shell.openExternal(target),
-				showDeviceCode: showSubscriptionDeviceCode,
-				onChange: (value) => {
-					if (!value.status.pending) deviceCodeDialogs.get(provider)?.abort();
-					subscriptionsChild?.send(value);
-					for (const win of trustedAppWindows) if (!win.isDestroyed()) win.webContents.send("lh:subscriptions:changed");
-				},
-			}));
-		}
+		const userData = app.getPath("userData");
+		try { await migrateLegacyGrok({ directory: userData }); } catch { log("Legacy Grok credential migration skipped; native subscriptions remain available."); }
+		legacySubscriptions.set("subscription-anthropic", createSubscription({
+			provider: "subscription-anthropic", label: "Claude",
+			store: legacySubscriptionFileStore(path.join(userData, "subscription-credentials", "subscription-anthropic.json"), "subscription-anthropic"),
+			getOAuth: () => legacyOAuth("subscription-anthropic"),
+			getModels: async () => (await import(pathToFileURL(path.join(path.dirname(serverEntry()), "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "anthropic.js")).href)).anthropicProvider().getModels().map(({ id, name }) => ({ id, name })),
+			openExternal: (target) => shell.openExternal(target), showDeviceCode: showLegacyDeviceCode,
+			onChange: (value) => { if (!value.status.pending) deviceCodeDialogs.get("subscription-anthropic")?.abort(); legacySubscriptionChild?.send(value); for (const win of trustedAppWindows) if (!win.isDestroyed()) win.webContents.send("lh:legacy-subscriptions:changed"); },
+		}));
+		subscriptions = createSubscriptions({
+			directory: userData,
+			loadSDK: () => loadSubscriptionSDK(path.dirname(serverEntry())),
+			openExternal: (target) => shell.openExternal(target),
+			onChange: (snapshot) => {
+				subscriptionChild?.send(snapshot);
+				for (const win of BrowserWindow.getAllWindows()) win.webContents.send("lh:subscriptions:changed");
+			},
+		});
+		await subscriptions.ready;
 		log(`starting server: ${serverEntry()}`);
 		log(`data dir: ${DATA_DIR()}${fs.existsSync(AUTH_FILE()) ? " · auth.json: present" : " · auth.json: ABSENT (no BYOK keys yet)"}`);
 		await startServer(new URL(url).port);
@@ -704,9 +715,18 @@ async function main() {
 	});
 
 	ipcMain.handle("lh:subscriptions:control", async (event, command) => {
-		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return { error: "Untrusted desktop request." };
-		if (!subscriptions.size || !serverProcess?.connected) return { available: false, pending: false, allowBackgroundUse: true, activeId: null, accounts: [], error: "Subscription sign-in requires the desktop app's private server connection." };
+		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) throw new Error("Untrusted desktop request.");
+		if (!subscriptions || !serverProcess?.connected) {
+			if (command?.op === "status") return [];
+			throw new Error("Subscription sign-in requires the desktop app's private server connection.");
+		}
 		return subscriptionControl(command, subscriptions);
+	});
+
+	ipcMain.handle("lh:legacy-subscriptions:control", async (event, command) => {
+		if (!trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) return { error: "Untrusted desktop request." };
+		if (!serverProcess?.connected) return { available: false, pending: false, activeId: null, accounts: [], error: "Claude sign-in requires the desktop app's private server connection." };
+		return legacySubscriptionControl(command, legacySubscriptions);
 	});
 
 	// Native theme: the renderer reports the saved mode + effective page color
@@ -748,7 +768,7 @@ async function main() {
 		if (width < target) win.setBounds({ x, y, width: target, height });
 	});
 	app.on("activate", () => {
-		if (BrowserWindow.getAllWindows().length === 0) { chatgpt?.resume(); for (const connection of subscriptions.values()) connection.resume(); createWindow(url); }
+		if (BrowserWindow.getAllWindows().length === 0) { chatgpt?.resume(); subscriptions?.resume(); for (const c of legacySubscriptions.values()) c.resume(); createWindow(url); }
 	});
 	createWindow(url);
 	log(`window open: ${url}`);

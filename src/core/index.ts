@@ -51,6 +51,8 @@ export * from "./tool-parts.ts";
 export * from "./prices.ts";
 export * from "./context-usage.ts";
 export type { ChatGPTStatus, ChatGPTControlBridge } from "./contracts/chatgpt.ts";
+export { NATIVE_SUBSCRIPTIONS } from "./contracts/subscriptions.ts";
+export type { NativeSubscriptionProviderId, NativeSubscriptionLogicalId, NativeSubscriptionStatus, NativeSubscriptionSnapshot, NativeSubscriptionScope, NativeSubscriptionControlBridge, SubscriptionInteraction, SubscriptionPrompt } from "./contracts/subscriptions.ts";
 export * from "./cost-summary.ts";
 export * from "./fuzzy.ts";
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
@@ -84,4 +86,4 @@ export * from "./provider-connections.ts";
 
 export * from "./model-speed.ts";
 
-export * from "./contracts/native-subscriptions.ts";
+export type { NativeSubscriptionProviderId as LegacySubscriptionProviderId, NativeSubscriptionStatus as LegacySubscriptionStatus, NativeSubscriptionControlBridge as LegacySubscriptionControlBridge } from "./contracts/native-subscriptions.ts";

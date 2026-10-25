@@ -16,9 +16,11 @@ import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { chatGPTModel } from "./chatgpt-bridge.ts";
 import { chatGPTStream } from "./chatgpt-stream.ts";
-import { nativeSubscriptionStream } from "./native-subscription-stream.ts";
+import { nativeSubscriptionStream as legacySubscriptionStream } from "./native-subscription-stream.ts";
 import { subscriptionProvider } from "../core/provider-connections.ts";
 import type { ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
+import { nativeSubscriptionId, nativeSubscriptionModel } from "./subscription-bridge.ts";
+import { nativeSubscriptionStream } from "./subscription-stream.ts";
 
 /** App identity is immutable and shared by Models and every native Agent.
  * Agent's default Pi attribution otherwise overrides the Models identity. */
@@ -127,7 +129,9 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 	const provider = canonicalSubscriptionProvider(spec.provider);
 	const subscription = subscriptionProvider(provider);
 	const models: Models = piModels();
-	const model = provider === "chatgpt" ? chatGPTModel(spec.id) : models.getModel(provider, spec.id);
+	const nativeId = nativeSubscriptionId(provider);
+	const legacy = subscriptionProvider(spec.provider);
+	const model = provider === "chatgpt" ? chatGPTModel(spec.id) : nativeId ? nativeSubscriptionModel(provider, spec.id) : models.getModel(legacy?.id === "subscription-anthropic" ? spec.provider : provider, spec.id);
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
@@ -144,16 +148,12 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 		// `reasoning` (undefined = off on pi-ai's scale); the clamp above keeps
 		// the pin honest even when config or settings drift off the map.
 		streamFn: (requestModel, context, options) => {
-			const connected = !!subscription || provider.startsWith("custom-");
+			const connected = !!subscription || !!nativeId || provider.startsWith("custom-");
 			const cleanOptions = connected ? { ...options, apiKey: undefined, env: undefined, headers: undefined } : options;
 			const purpose = typeof background === "function" ? background : () => background;
-			const stream = provider === "chatgpt" ? chatGPTStream(purpose, lifecycle, spec.serviceTier) : subscription ? nativeSubscriptionStream(subscription.id, purpose) : models.streamSimple.bind(models);
-			return stream(requestModel, context, {
-				...cleanOptions,
-				// A failed subscription request must not be retried as a different billing source.
-				...(connected || provider === "chatgpt" ? { maxRetries: 0 } : {}),
-				reasoning: level === "off" ? undefined : level,
-			});
+			const legacyClaude = spec.provider === "subscription-anthropic";
+			const stream = provider === "chatgpt" ? chatGPTStream(purpose, lifecycle, spec.serviceTier) : nativeId ? nativeSubscriptionStream(models.getProvider(nativeId)!, purpose, lifecycle) : legacyClaude ? legacySubscriptionStream("subscription-anthropic", purpose) : subscription ? legacySubscriptionStream(subscription.id, purpose) : models.streamSimple.bind(models);
+			return stream(requestModel, context, { ...cleanOptions, ...(connected || provider === "chatgpt" ? { maxRetries: 0 } : {}), reasoning: level === "off" ? undefined : level });
 		},
 	};
 }

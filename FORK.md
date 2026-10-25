@@ -15,14 +15,16 @@ The sync reads upstream PR status and builds a scratch candidate from the latest
 
 Tests and the production build run before the fork moves. A conflict, failed check or unknown commit on generated `main` stops the sync. The installed app is never touched by sync. Publication is a normal fast-forward with the old fork history retained; there is no force-push.
 
+The active fork-only series is based on the combined upstream 0.3.7 checkpoint. The previous `fork/customizations` branch is retained without rewriting its history.
+
 The branches have separate jobs.
 
 - `main` is the composed personal build and the default branch. Do not put new personal commits directly on it.
 - `upstream-main` is a clean, fast-forward-only upstream mirror.
-- `fork/customizations` is the linear fork-only patch series. Add personal changes here without merging upstream into it. `.fork/config.json` records its fixed base.
+- `fork/customizations-0.3.7` is the linear fork-only patch series. Add personal changes here without merging upstream into it. `.fork/config.json` records its fixed base.
 - `feat/subscription-auth` and `feat/chat-images` remain independent upstream PR branches. Fix pending PR work on its own branch.
 
-When upstream replaces a fork-only feature, add its commit ID to `retiredPatches` in `.fork/config.json` on `fork/customizations` and commit that change. The next sync omits that patch. No rebase or force-push is needed. An identical upstream patch is skipped automatically. Keep the workflow-control patch while using these commands.
+When upstream replaces a fork-only feature, add its commit ID to `retiredPatches` in `.fork/config.json` on `fork/customizations-0.3.7` and commit that change. The next sync omits that patch. No rebase or force-push is needed. An identical upstream patch is skipped automatically. Keep the workflow-control patch while using these commands.
 
 The generated `.fork/state.json` records the upstream commit and applied patches. Prior fork trees stay reachable through the composition history and local `fork-backup/*` tags.
 
@@ -45,8 +47,8 @@ Appearance → Mode offers Dark and Light. Dark remains the default. The saved s
 Choose the release explicitly. For example,
 
 ```sh
-npm run upstream:install -- v0.3.6
-npm run upstream:install -- v0.3.6 --confirm
+npm run upstream:install -- v0.3.7
+npm run upstream:install -- v0.3.7 --confirm
 ```
 
 This downloads the official macOS arm64 ZIP from the upstream release, checks its SHA-256 and signature/notarization, and backs up the current app before replacement. It does not remove the fork or change its branches. Course records keep the same location. Credentials are left alone. Avoid downgrading across an incompatible data format; a backup is not an automatic data migration.

@@ -49,6 +49,7 @@ describe("standalone JavaScript tracing exclusions and native workaround policy"
 			"node_modules/@earendil-works/pi-ai/dist/providers/data/**/*",
 			"node_modules/@earendil-works/pi-ai/dist/auth/oauth/**/*.js",
 			"node_modules/@earendil-works/pi-ai/dist/utils/oauth-page.js",
+			"node_modules/@earendil-works/pi-ai/dist/utils/sleep.js",
 			"node_modules/@earendil-works/pi-agent-core/dist/**/*.json",
 			"node_modules/gcp-metadata/**/*",
 			"node_modules/json-bigint/**/*",

@@ -14,7 +14,8 @@ import {
 } from "../components/settings/connections-section.tsx";
 import { SettingsDialogBody } from "../components/settings/settings-dialog.tsx";
 import { ChatGPTConnection, ChatGPTUIProvider } from "../components/settings/chatgpt-connection.tsx";
-import { NativeSubscriptionConnection, NativeSubscriptionsUIProvider } from "../components/settings/subscription-connections.tsx";
+import { NativeSubscriptionUIProvider, SubscriptionConnections } from "../components/settings/subscription-connections.tsx";
+import { CLAUDE_POLICY_NOTICE, LegacySubscriptionConnection, LegacySubscriptionsUIProvider } from "../components/settings/legacy-subscription-connections.tsx";
 import { SetupKeysBody } from "../components/setup-dialog.tsx";
 import { hasAvailableProvider, hasProviderKey } from "../components/setup-cta.tsx";
 
@@ -117,19 +118,17 @@ describe("connections SSR", () => {
 		// components its Subscriptions group uses.
 		const html = renderToStaticMarkup(
 			<ChatGPTUIProvider>
-				<NativeSubscriptionsUIProvider>
-					<ChatGPTConnection />
-					<NativeSubscriptionConnection provider="subscription-anthropic" />
-					<NativeSubscriptionConnection provider="subscription-xai" />
-				</NativeSubscriptionsUIProvider>
+				<NativeSubscriptionUIProvider><SubscriptionConnections /></NativeSubscriptionUIProvider>
+				<LegacySubscriptionsUIProvider><LegacySubscriptionConnection /></LegacySubscriptionsUIProvider>
 			</ChatGPTUIProvider>,
 		);
-		for (const k of ["chatgpt-login", "native-claude-login", "native-grok-login"]) assert.ok(html.includes(`data-testid="${k}"`), k);
-		assert.ok(html.includes("Continue with ChatGPT") && html.includes("Continue with Claude") && html.includes("Continue with Grok"));
+		for (const k of ["chatgpt-connection", "github-copilot-connection", "xai-connection", "native-claude-connection"]) assert.ok(html.includes(`data-testid="${k}"`), k);
+		assert.ok(html.includes("Connect") && html.includes("Continue with Claude"));
+		assert.ok(CLAUDE_POLICY_NOTICE.includes("Anthropic does not permit third-party Claude.ai login"));
 	});
 	it("setup first-key screen links to Connections and shows native buttons", () => {
 		const html = renderToStaticMarkup(
-			<NativeSubscriptionsUIProvider><SetupKeysBody
+			<ChatGPTUIProvider><NativeSubscriptionUIProvider><LegacySubscriptionsUIProvider><SetupKeysBody
 				providers={[]}
 				provider={null}
 				value=""
@@ -142,10 +141,10 @@ describe("connections SSR", () => {
 				onSave={noop}
 				menuAnchor={{ current: null }}
 				onOpenConnections={noop}
-			/></NativeSubscriptionsUIProvider>,
+			/></LegacySubscriptionsUIProvider></NativeSubscriptionUIProvider></ChatGPTUIProvider>,
 		);
 		assert.ok(html.includes('data-testid="setup-open-connections"'));
-		for (const k of ["chatgpt-login", "native-claude-login", "native-grok-login"]) assert.ok(html.includes(`data-testid="${k}"`), k);
-		assert.ok(html.includes("Continue with ChatGPT") && html.includes("Continue with Claude") && html.includes("Continue with Grok"));
+		for (const k of ["chatgpt-connection", "github-copilot-connection", "xai-connection", "native-claude-connection"]) assert.ok(html.includes(`data-testid="${k}"`), k);
+		assert.ok(html.includes("Connect") && html.includes("Continue with Claude"));
 	});
 });
