@@ -90,6 +90,7 @@ export function Composer({
 	return (
 		<form
 			data-testid="composer"
+			data-image-composer
 			className="flex flex-wrap items-end gap-1.5 p-1.5"
 			onSubmit={(e) => {
 				e.preventDefault();

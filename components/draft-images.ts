@@ -262,7 +262,13 @@ export function useImageDraft() {
 	const c = ref.current;
 	useEffect(() => {
 		c.revive();
-		return () => c.dispose();
+		const paste = (event: ClipboardEvent) => {
+			if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+			const target = event.target instanceof Element ? event.target : null;
+			if (imagePasteAllowed(target, document.activeElement)) handleImagePaste(event, c.addFiles);
+		};
+		document.addEventListener("paste", paste);
+		return () => { document.removeEventListener("paste", paste); c.dispose(); };
 	}, [c]);
 	const state = useSyncExternalStore(c.subscribe, c.getState, c.getState);
 	// Live mirror: a send resuming after an await reads the draft, not a closure.
@@ -292,18 +298,29 @@ export function useImageDraft() {
 
 // ── DOM handlers ────────────────────────────────────────────────────────────
 
-/**
- * The paste handler every composer textarea uses: image files (from `files`,
- * or `items` on clipboards that expose only those) go to the draft. A
- * clipboard that also carries text keeps its text.
- */
-export function handleImagePaste(e: React.ClipboardEvent, onPaste: ((files: File[]) => void) | undefined): void {
-	if (!onPaste) return;
-	const data = e.clipboardData;
-	const files = clipboardImageFiles(data);
-	if (files.length === 0) return;
-	if (!data || data.getData("text/plain").length === 0) e.preventDefault();
-	onPaste(files);
+/** Other editors own their paste; non-editable page/composer controls do not. */
+export function imagePasteAllowed(target: Element | null, active: Element | null): boolean {
+ const blocked = (element: Element | null) => {
+  if (element?.closest('[role="dialog"], [role="alertdialog"]')) return true;
+  const field = element?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
+  return !!field && !field.closest("[data-image-composer]");
+ };
+ return !blocked(target) && !blocked(active);
+}
+
+type ImagePasteEvent = Pick<ClipboardEvent, "clipboardData" | "preventDefault" | "defaultPrevented"> & { nativeEvent?: object };
+const handledImagePastes = new WeakSet<object>();
+
+/** Textarea and page listeners share one claim, including mixed text/image pastes. */
+export function handleImagePaste(e: ImagePasteEvent, onPaste: ((files: File[]) => void) | undefined): void {
+ const native = e.nativeEvent ?? e;
+ if (!onPaste || e.defaultPrevented || handledImagePastes.has(native)) return;
+ const data = e.clipboardData;
+ const files = clipboardImageFiles(data);
+ if (files.length === 0) return;
+ handledImagePastes.add(native);
+ if (!data || data.getData("text/plain").length === 0) e.preventDefault();
+ onPaste(files);
 }
 
 function hasFiles(data: DataTransfer | null): boolean {

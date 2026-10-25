@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { Composer } from "../components/composer.tsx";
 import {
 	handleImagePaste,
+	imagePasteAllowed,
 	handlePickedFiles,
 	ImageDraftController,
 	imageDropHandlers,
@@ -281,4 +282,32 @@ describe("Composer image surface", () => {
 		const html = renderToStaticMarkup(<Composer busy={false} value="" onChange={() => {}} onSend={() => {}} onStop={() => {}} canSend />);
 		assert.ok(!html.includes("composer-image-input"));
 	});
+});
+
+
+describe("page-level clipboard routing", () => {
+ const element = ({ field = false, composer = false, dialog = false } = {}) => ({
+  closest(selector: string) {
+   if (selector.includes('role=')) return dialog ? this : null;
+   if (selector === "[data-image-composer]") return composer ? this : null;
+   return field ? this : null;
+  },
+ }) as unknown as Element;
+ it("accepts page and attachment-button focus as well as the composer field", () => {
+  assert.ok(imagePasteAllowed(element(), element()));
+  assert.ok(imagePasteAllowed(element(), element({ field: true, composer: true })));
+  assert.ok(imagePasteAllowed(element({ field: true, composer: true }), element({ field: true, composer: true })));
+ });
+ it("leaves other inputs/editors and dialogs alone, even when the event targets body", () => {
+  assert.equal(imagePasteAllowed(element({ field: true }), element()), false);
+  assert.equal(imagePasteAllowed(element(), element({ field: true })), false);
+  assert.equal(imagePasteAllowed(element(), element({ dialog: true })), false);
+ });
+ it("does not duplicate mixed text/image events across React and document listeners", () => {
+  const image = file("image/png", pngBytes(1, 1)); let calls = 0, prevented = 0;
+  const native = { clipboardData: { files: [image], items: [], getData: () => "caption" }, defaultPrevented: false, preventDefault() { prevented++; } } as unknown as ClipboardEvent;
+  handleImagePaste({ ...native, nativeEvent: native }, () => calls++);
+  handleImagePaste(native, () => calls++);
+  assert.equal(calls, 1); assert.equal(prevented, 0);
+ });
 });
