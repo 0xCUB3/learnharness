@@ -269,7 +269,7 @@ test("revocation endpoint remains restricted to the exact secure issuer", () => 
 	assert(!allowedAuthEndpoint("https://auth.openai.com@evil.invalid/revoke"));
 });
 
-test("invalid rotating replacement is durably revocation-only; verified mapping and prior validated ID survive restart", async () => {
+for (const holdVerification of [false, true]) test(`invalid rotating replacement is durably revocation-only; verified mapping and prior validated ID survive restart${holdVerification ? " (held JWKS regression)" : ""}`, { timeout: 10000 }, async () => {
 	const f = await loggedIn({ expires: 1, token: async (form, url) => form.get("grant_type") === "refresh_token"
 		? Response.json({ access_token: "never-save-this-access", refresh_token: "likely-latest-revoke-handle", id_token: "invalid.signature.jwt", token_type: "Bearer", expires_in: 3600 })
 		: Response.json({ access_token: "old-verified-access", refresh_token: "old-refresh", id_token: await signed(form.get("client_id")!, url.searchParams.get("nonce")!), token_type: "Bearer", expires_in: 1, scope: SCOPES.join(" ") }) });
@@ -281,7 +281,22 @@ test("invalid rotating replacement is durably revocation-only; verified mapping 
 		for (const field of ["id", "issuer", "subject", "email", "clientId"]) assert.equal(restricted[field], before[field]);
 		assert.deepEqual(restricted.tokens, { ...before.tokens, refreshToken: "likely-latest-revoke-handle" });
 		assert(!JSON.stringify(f.saved).includes("never-save-this-access"));
-		const restarted = fixture({ state: f.saved });
+		const reconnectComplete = deferred<any>();
+		const verificationEntered = deferred(), verificationRelease = deferred();
+		let reconnectArmed = false, sawPending = false, completed = false;
+		const restarted = fixture({ state: f.saved,
+			change: (push) => {
+				if (!reconnectArmed) return;
+				if (push.status.pending) sawPending = true;
+				else if (sawPending) { completed = true; reconnectComplete.resolve(push.status); }
+			},
+			provider: async (url) => {
+				if (holdVerification && reconnectArmed && url.endsWith("jwks.json")) {
+					verificationEntered.resolve(); await verificationRelease.promise;
+				}
+				return undefined;
+			},
+		});
 		try {
 			await restarted.service.status();
 			await restarted.service.select(restricted.id);
@@ -293,17 +308,54 @@ test("invalid rotating replacement is durably revocation-only; verified mapping 
 			await restarted.service.logout(restricted.id);
 			assert.equal(restarted.requests.find((r) => r.form?.has("token_type_hint"))!.form!.get("token"), "likely-latest-revoke-handle");
 			assert.equal(restarted.saved.registrations[0].reconnectRequired, true);
-			await restarted.service.login(restricted.id); await restarted.callback(); await restarted.changed.promise;
-			// Wait for callback's asynchronous durable activation, not the prior status push.
-			for (let i = 0; i < 30 && restarted.saved.registrations[0].reconnectRequired; i++) await new Promise((resolve) => setImmediate(resolve));
+			// Earlier select/consent/logout notifications have already settled changed.
+			// Arm before this login and await its pending -> terminal transition instead.
+			reconnectArmed = true;
+			await restarted.service.login(restricted.id);
+			assert.equal(sawPending, true);
+			await restarted.callback(); // HTTP acknowledgement precedes verification/save.
+			if (holdVerification) {
+				await verificationEntered.promise;
+				assert.equal(completed, false, "the current attempt cannot complete before identity verification");
+				const held = await restarted.service.status();
+				assert.equal(held.pending, true); assert.equal(held.error, null);
+				assert.equal(held.accounts[0].connected, false); assert.equal(held.accounts[0].planEnabled, false);
+				assert.equal(restarted.saved.registrations[0].reconnectRequired, true);
+				assert.deepEqual((await restarted.service.models()).models, []);
+				const expected = { expectedAccountId: restricted.id, expectedAuthorityRevision: restarted.service.stamp().authorityRevision, selectedModelId: "gpt-5" };
+				await assert.rejects(restarted.rawLease(false, expected), /disconnected/);
+				await assert.rejects(restarted.rawLease(true, expected), /disconnected/);
+				assert.equal(completed, false, "status/catalog/lease checks cannot settle the pending attempt");
+				verificationRelease.resolve();
+			}
+			const terminal = await reconnectComplete.promise;
+			assert.equal(terminal.pending, false); assert.equal(terminal.error, null);
+			assert.equal(terminal.activeId, restricted.id);
+			assert.equal(terminal.accounts[0].connected, true);
 			assert.equal(restarted.saved.registrations[0].reconnectRequired, undefined);
-		} finally { restarted.service.close(); }
+		} finally { verificationRelease.resolve(); restarted.service.close(); }
 	} finally { f.service.close(); }
 });
 
-test("observed file write failure invalidates all work; status, consent and resume cannot reload stale credentials or repair authority", async () => {
+for (const holdVerification of [false, true]) test(`observed file write failure invalidates all work; status, consent and resume cannot reload stale credentials or repair authority${holdVerification ? " (held JWKS regression)" : ""}`, { timeout: 10000 }, async () => {
 	let lost = false, reads = 0; const pushes: any[] = [];
-	const f = await loggedIn({ read: () => { reads++; }, write: async () => { if (lost) throw Object.assign(new Error("storage"), { code: "storage" }); }, change: (push) => pushes.push(push) });
+	const reconnectComplete = deferred<any>();
+	const verificationEntered = deferred(), verificationRelease = deferred();
+	let reconnectArmed = false, sawPending = false, completed = false;
+	const f = await loggedIn({ read: () => { reads++; }, write: async () => { if (lost) throw Object.assign(new Error("storage"), { code: "storage" }); },
+		change: (push) => {
+			pushes.push(push);
+			if (!reconnectArmed) return;
+			if (push.status.pending) sawPending = true;
+			else if (sawPending) { completed = true; reconnectComplete.resolve(push.status); }
+		},
+		provider: async (url) => {
+			if (holdVerification && reconnectArmed && url.endsWith("jwks.json")) {
+				verificationEntered.resolve(); await verificationRelease.promise;
+			}
+			return undefined;
+		},
+	});
 	try {
 		await f.service.lease(false); const epoch = f.service.stamp().epoch;
 		lost = true;
@@ -315,10 +367,26 @@ test("observed file write failure invalidates all work; status, consent and resu
 		await assert.rejects(f.service.lease(false));
 		assert.equal((await f.service.status()).accounts[0].connected, false);
 		assert.equal(reads, 1, "a recovered disk never causes a stale credential reload");
-		await f.service.login(f.saved.activeId); await f.callback();
-		for (let i = 0; i < 100 && (await f.service.status()).pending; i++) await new Promise((resolve) => setImmediate(resolve));
-		assert.equal((await f.service.status()).accounts[0].connected, true, "verified login plus durable save can explicitly reconnect");
-	} finally { f.service.close(); }
+		const writesBeforeReconnect = f.writeCount;
+		// The initial login already settled fixture.changed; observe this attempt instead.
+		reconnectArmed = true;
+		await f.service.login(f.saved.activeId); assert.equal(sawPending, true); await f.callback();
+		if (holdVerification) {
+			await verificationEntered.promise;
+			assert.equal(completed, false, "HTTP acknowledgement cannot complete a pending identity verification");
+			const held = await f.service.status();
+			assert.equal(held.pending, true); assert.equal(held.error, null);
+			assert.equal(held.accounts[0].connected, false);
+			assert.equal(f.writeCount, writesBeforeReconnect, "unverified recovery cannot persist credentials");
+		}
+		verificationRelease.resolve();
+		const terminal = await reconnectComplete.promise;
+		assert.equal(terminal.pending, false); assert.equal(terminal.error, null);
+		assert.equal(terminal.accounts[0].connected, true, "verified login plus durable save can explicitly reconnect");
+		assert.equal(f.writeCount, writesBeforeReconnect + 1, "recovery requires a new durable credential write");
+		assert.equal(f.saved.activeId, terminal.activeId);
+		assert.equal(reads, 1, "explicit recovery still never reloads stale credentials");
+	} finally { verificationRelease.resolve(); f.service.close(); }
 });
 
 test("strict JSON schema rejects malformed marker/duplicates/token/active identity without changing original bytes", async () => {

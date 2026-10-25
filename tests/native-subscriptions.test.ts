@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 const require = createRequire(import.meta.url);
-const { createSubscription, subscriptionFileStore } = require("../electron/subscriptions.cjs");
+const { createSubscription, subscriptionFileStore } = require("../electron/legacy-subscriptions.cjs");
 const { attachSubscriptionChild, subscriptionControl } = require("../electron/subscriptions-ipc.cjs");
 
 const CLAUDE = "subscription-anthropic";
@@ -593,7 +593,7 @@ test("consent(false) does not abort an in-flight background refresh: rotation sa
 });
 
 test("Grok links are pinned to x.ai / grok.com; foreign https is rejected with a clear error", async () => {
-	const { trustedUrl } = require("../electron/subscriptions.cjs");
+	const { trustedUrl } = require("../electron/legacy-subscriptions.cjs");
 	for (const ok of ["https://x.ai/a", "https://accounts.x.ai/d", "https://grok.com/d", "https://auth.grok.com/d?c=1"]) assert.equal(trustedUrl(ok, GROK), true, ok);
 	for (const bad of ["https://evilx.ai/d", "https://x.ai.evil.example/d", "https://grok.com.evil.example/d", "https://example.com/d", "http://x.ai/d", "https://u@x.ai/d", "https://notgrok.com/d"]) assert.equal(trustedUrl(bad, GROK), false, bad);
 	const t = await tmp();

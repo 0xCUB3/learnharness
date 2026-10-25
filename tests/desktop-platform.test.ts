@@ -75,7 +75,7 @@ describe("desktop window chrome", () => {
 			process: { platform: "darwin", argv: [], env: {}, on() {} }, __dirname: dirname(mainFile), AbortController, ownedWindow };
 		runInNewContext(mainSource, context, { filename: mainFile });
 		runInNewContext("trustedAppWindows.add(ownedWindow)", context);
-		await runInNewContext('showSubscriptionDeviceCode({provider:"subscription-xai",label:"Grok",userCode:"SYNTHETIC"})', context);
+		await runInNewContext('showLegacyDeviceCode({provider:"subscription-xai",label:"Grok",userCode:"SYNTHETIC"})', context);
 		assert.deepEqual(calls, [ownedWindow]);
 	});
 
@@ -95,10 +95,11 @@ describe("desktop window chrome", () => {
 		};
 		runInNewContext(readFileSync(new URL("../electron/preload.cjs", import.meta.url), "utf8"), context);
 		assert.equal(bridge.platform, "win32");
-		assert.deepEqual(Object.keys(bridge.subscriptions as object).sort(), ["cancel", "consent", "disconnect", "login", "logout", "onChange", "select", "status"]);
+		assert.deepEqual(Object.keys(bridge.legacySubscriptions as object).sort(), ["cancel", "consent", "disconnect", "login", "logout", "onChange", "select", "status"]);
 		assert.deepEqual(Object.keys(bridge).sort(), [
-			"chatgpt", "expandWindow", "getZoom", "installUpdate", "onUpdateStatus", "onZoom", "platform", "subscriptions",
+			"chatgpt", "expandWindow", "getZoom", "installUpdate", "legacySubscriptions", "onUpdateStatus", "onZoom", "platform", "subscriptions",
 		]);
+		assert.deepEqual(Object.keys(bridge.subscriptions as object).sort(), ["cancel", "consent", "disconnect", "login", "onChange", "open", "respond", "retry", "status"]);
 	});
 });
 

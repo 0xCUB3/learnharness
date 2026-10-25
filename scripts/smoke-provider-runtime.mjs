@@ -103,8 +103,31 @@ async function probe(standalone) {
 			noNetwork();
 			console.log(`[smoke-provider-runtime] ${name}: native lazy Google adapter reached onPayload; generation stopped`);
 		}
+		// Exercise the public lazy OAuth surface offline. toAuth evaluates the
+		// real flow module and its imports but neither logs in nor refreshes.
+		for (const [name, factory] of [["github-copilot", "githubCopilotProvider"], ["xai", "xaiProvider"]]) {
+			const provider = (await import(new URL(`providers/${name}.js`, entry).href))[factory]();
+			const credential = { type: "oauth", access: name === "github-copilot" ? "tid=offline;proxy-ep=proxy.individual.githubcopilot.com;" : "offline-xai-oauth-not-a-token", refresh: "offline-refresh-not-a-token", expires: Date.now() + 3600000, availableModelIds: provider.getModels().map((model) => model.id) };
+			const auth = await provider.auth.oauth.toAuth(credential);
+			assert.equal(auth.apiKey, credential.access);
+			if (name === "github-copilot") assert.equal(auth.baseUrl, "https://api.individual.githubcopilot.com");
+			const seenApis = new Set();
+			for (const model of provider.getModels()) {
+				if (seenApis.has(model.api)) continue;
+				seenApis.add(model.api);
+				const sentinel = `LH_OFFLINE_SUBSCRIPTION_${randomUUID()}`;
+				let reached = 0;
+				const result = await provider.streamSimple({ ...model, ...(auth.baseUrl ? { baseUrl: auth.baseUrl } : {}) }, { messages: [{ role: "user", content: "Offline initialization only", timestamp: 0 }] }, {
+					...auth, maxRetries: 0, onPayload() { reached++; throw new Error(sentinel); },
+				}).result();
+				assert.equal(reached, 1, `${name}/${model.api}: ${result.errorMessage}`);
+				assert.equal(result.errorMessage, sentinel);
+			}
+			noNetwork();
+			console.log(`[smoke-provider-runtime] ${name}: public native OAuth and ${seenApis.size} transport APIs initialized offline`);
+		}
 		// Main uses these factories; import lazy OAuth modules without signing in.
-		for (const [name, factory, oauthName] of [["anthropic", "anthropicProvider", "anthropicOAuth"], ["xai", "xaiProvider", "xaiOAuth"]]) {
+		for (const [name, factory, oauthName] of [["anthropic", "anthropicProvider", "anthropicOAuth"]]) {
 			const provider = (await import(new URL(`providers/${name}.js`, entry).href))[factory]();
 			assert.equal(typeof provider.auth.oauth.login, "function");
 			assert.ok(provider.getModels().length > 0);

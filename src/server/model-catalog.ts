@@ -26,21 +26,26 @@ import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { piModels } from "../agent/models.ts";
 import { chatGPTConnected, chatGPTModel, chatGPTModels, refreshChatGPTModels } from "../agent/chatgpt-bridge.ts";
+import { NATIVE_SUBSCRIPTIONS } from "../core/contracts/subscriptions.ts";
+import { nativeSubscriptionId, nativeSubscriptionConnected, nativeSubscriptionModel, nativeSubscriptionModels, refreshSubscriptionModels } from "../agent/subscription-bridge.ts";
 
-export async function refreshConnectionCatalog(): Promise<void> {
-	await Promise.all([refreshChatGPTModels(piModels().getModels("openai").filter((m): m is Model<"openai-responses"> => m.api === "openai-responses")), refreshNativeSubscriptionModels()]);
+export async function refreshConnectionCatalog(provider?: string): Promise<void> {
+ await Promise.all([
+  !provider || provider === "chatgpt" ? refreshChatGPTModels(piModels().getModels("openai").filter((m): m is Model<"openai-responses"> => m.api === "openai-responses")) : Promise.resolve(),
+  !provider || !!nativeSubscriptionId(provider) ? refreshSubscriptionModels() : Promise.resolve(),
+  !provider || provider === "subscription-anthropic" ? refreshNativeSubscriptionModels() : Promise.resolve(),
+ ]);
 }
 function connectionModel(provider: string, id: string): Model<Api> | undefined {
-	provider = canonicalSubscriptionProvider(provider);
-	const subscription = subscriptionProvider(provider);
-	if (subscription && !nativeSubscriptionModelIds(subscription.id).has(id)) return undefined;
-	return provider === "chatgpt" ? chatGPTModel(id) : piModels().getModel(provider, id);
+ const canonical = canonicalSubscriptionProvider(provider);
+ if (canonical === "chatgpt") return chatGPTModel(id);
+ if (nativeSubscriptionId(canonical)) return nativeSubscriptionModel(canonical, id);
+ const legacy = subscriptionProvider(provider);
+ if (legacy && !nativeSubscriptionModelIds(legacy.id).has(id)) return undefined;
+ return piModels().getModel(provider, id);
 }
-function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt", "subscription-openai-codex"]; }
-function connectionModels(provider: string): Model<Api>[] {
- const subscription = subscriptionProvider(provider);
- return piModels().getModels(provider).filter((m) => !subscription || nativeSubscriptionModelIds(subscription.id).has(m.id));
-}
+function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt", "subscription-openai-codex", ...NATIVE_SUBSCRIPTIONS.map((p) => p.logicalId)]; }
+function connectionModels(provider: string): Model<Api>[] { const legacy = subscriptionProvider(provider); return piModels().getModels(provider).filter((m) => !legacy || nativeSubscriptionModelIds(legacy.id).has(m.id)); }
 import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
@@ -149,7 +154,7 @@ export function catalogProviders(): CatalogProvider[] {
 		id: p.id,
 		envVar: p.envVar,
 		keyPresent: keyValue(p.envVar) !== undefined,
-	})), ...connectionCatalogProviders(), { id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() }].sort((a, b) => a.id.localeCompare(b.id));
+	})), ...connectionCatalogProviders().filter((p) => p.id !== "subscription-xai"), { id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() }, ...NATIVE_SUBSCRIPTIONS.map((p) => ({ id: p.logicalId, envVar: "", keyPresent: nativeSubscriptionConnected(p.providerId) }))].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** The providers whose key is present — the picker federates exactly
@@ -201,7 +206,7 @@ export function catalogContextLimits(): Map<string, number> {
 			index.set(`${provider.id}:${model.id}`, model.contextWindow);
 		}
 	}
-	for (const model of chatGPTModels()) index.set(`chatgpt:${model.id}`, model.contextWindow);
+	for (const model of [...chatGPTModels(), ...nativeSubscriptionModels()]) index.set(`${model.provider}:${model.id}`, model.contextWindow);
 	return index;
 }
 
@@ -217,7 +222,7 @@ export function modelCatalog(): ModelCatalogResponse {
 		.flatMap((p) => connectionModels(p.id))
 		.map(toModelDto)
 		.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)))
-		.concat(chatGPTModels().map(toModelDto));
+		.concat([...chatGPTModels(), ...nativeSubscriptionModels()].map(toModelDto));
 	return {
 		models,
 		defaults: catalogDefaults(),

@@ -77,6 +77,7 @@ const nextConfig: NextConfig = {
 			// OAuth flows are lazy variable imports and are invisible to tracing.
 			"node_modules/@earendil-works/pi-ai/dist/auth/oauth/**/*.js",
 			"node_modules/@earendil-works/pi-ai/dist/utils/oauth-page.js",
+			"node_modules/@earendil-works/pi-ai/dist/utils/sleep.js",
 			"node_modules/@earendil-works/pi-agent-core/dist/**/*.json",
 			// Next 16.3.2 native Turbopack applies unanchored excludes while
 			// traversing modules; **/data/**/* still prunes gcp-metadata and

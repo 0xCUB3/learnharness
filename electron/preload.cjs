@@ -43,14 +43,29 @@ contextBridge.exposeInMainWorld("lh", {
 			return () => ipcRenderer.removeListener("lh:chatgpt:changed", listener);
 		},
 	},
+	legacySubscriptions: {
+		status: (provider) => ipcRenderer.invoke("lh:legacy-subscriptions:control", { provider, op: "status" }),
+		login: (provider, id, allowBackgroundUse) => ipcRenderer.invoke("lh:legacy-subscriptions:control", { provider, op: "login", id, allowBackgroundUse }),
+		cancel: (provider) => ipcRenderer.invoke("lh:legacy-subscriptions:control", { provider, op: "cancel" }),
+		select: (provider, id) => ipcRenderer.invoke("lh:legacy-subscriptions:control", { provider, op: "select", id }),
+		disconnect: (provider, id) => ipcRenderer.invoke("lh:legacy-subscriptions:control", { provider, op: "disconnect", id }),
+		logout: (provider, id) => ipcRenderer.invoke("lh:legacy-subscriptions:control", { provider, op: "logout", id }),
+		consent: (provider, enabled) => ipcRenderer.invoke("lh:legacy-subscriptions:control", { provider, op: "consent", enabled }),
+		onChange: (cb) => {
+			const listener = () => cb();
+			ipcRenderer.on("lh:legacy-subscriptions:changed", listener);
+			return () => ipcRenderer.removeListener("lh:legacy-subscriptions:changed", listener);
+		},
+	},
 	subscriptions: {
-		status: (provider) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "status" }),
-		login: (provider, id, allowBackgroundUse) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "login", id, allowBackgroundUse }),
-		cancel: (provider) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "cancel" }),
-		select: (provider, id) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "select", id }),
-		disconnect: (provider, id) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "disconnect", id }),
-		logout: (provider, id) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "logout", id }),
-		consent: (provider, enabled) => ipcRenderer.invoke("lh:subscriptions:control", { provider, op: "consent", enabled }),
+		status: () => ipcRenderer.invoke("lh:subscriptions:control", { op: "status" }),
+		login: (providerId, enabled) => ipcRenderer.invoke("lh:subscriptions:control", { op: "login", providerId, enabled }),
+		cancel: (providerId) => ipcRenderer.invoke("lh:subscriptions:control", { op: "cancel", providerId }),
+		respond: (providerId, attemptId, promptId, value) => ipcRenderer.invoke("lh:subscriptions:control", { op: "respond", providerId, attemptId, promptId, value }),
+		open: (providerId, attemptId, actionId) => ipcRenderer.invoke("lh:subscriptions:control", { op: "open", providerId, attemptId, actionId }),
+		retry: (providerId) => ipcRenderer.invoke("lh:subscriptions:control", { op: "retry", providerId }),
+		disconnect: (providerId) => ipcRenderer.invoke("lh:subscriptions:control", { op: "disconnect", providerId }),
+		consent: (providerId, enabled) => ipcRenderer.invoke("lh:subscriptions:control", { op: "consent", providerId, enabled }),
 		onChange: (cb) => {
 			const listener = () => cb();
 			ipcRenderer.on("lh:subscriptions:changed", listener);

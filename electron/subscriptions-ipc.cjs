@@ -1,5 +1,5 @@
 "use strict";
-const { publicError } = require("./subscriptions.cjs");
+const { publicError } = require("./legacy-subscriptions.cjs");
 
 const CHANNEL = "lh:subscription";
 const lookup = (map, provider) => {

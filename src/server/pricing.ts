@@ -5,12 +5,12 @@
 import { calculateCost, type Usage } from "@earendil-works/pi-ai";
 import { piModels } from "../agent/models.ts";
 import type { CallUsage, ChatRecord, JobRecord, TurnUsage } from "../core/contracts.ts";
-import { isChatGPTPlan, sessionCost as foldSessionCost, turnCost as foldTurnCost, jobCost as foldJobCost } from "../core/prices.ts";
+import { isSubscriptionModel, sessionCost as foldSessionCost, turnCost as foldTurnCost, jobCost as foldJobCost } from "../core/prices.ts";
 
 function catalogModel(id: string) {
 	const colon = id.indexOf(":");
 	// Subscription allowance is not API-dollar billing; custom rates remain picker metadata.
-	if (colon < 0 || isChatGPTPlan(id) || id.startsWith("subscription-") || id.startsWith("custom-")) return undefined;
+	if (colon < 0 || isSubscriptionModel(id) || id.startsWith("subscription-") || id.startsWith("custom-")) return undefined;
 	return piModels().getModel(id.slice(0, colon), id.slice(colon + 1));
 }
 

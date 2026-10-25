@@ -21,5 +21,5 @@ export function modelServiceTier(provider: string, id: string, value: unknown): 
 
 /** Older local builds used a duplicate Codex sign-in; use upstream ChatGPT instead. */
 export function canonicalSubscriptionProvider(provider: string): string {
- return provider === "subscription-openai-codex" ? "chatgpt" : provider;
+ return provider === "subscription-openai-codex" ? "chatgpt" : provider === "subscription-xai" ? "xai-subscription" : provider;
 }

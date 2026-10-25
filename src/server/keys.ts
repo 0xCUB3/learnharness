@@ -56,7 +56,7 @@ import {
 	validateKeyShape,
 } from "../core/auth-keys.ts";
 import { authStore } from "../store/auth.ts";
-import { chatGPTConnected } from "../agent/chatgpt-bridge.ts";
+import { isSubscriptionProvider, subscriptionConnected } from "../agent/subscription-connections.ts";
 
 // The once-per-process boot record — globalThis anchor (HMR re-imports the
 // module; the snapshot must not re-run and misread fill-gapped vars as real
@@ -206,7 +206,8 @@ export function keyValue(id: string): string | undefined {
  * no key at all: nothing to gate, present by definition. */
 export function providerKeyPresent(provider: string): boolean {
 	provider = canonicalSubscriptionProvider(provider);
-	if (provider === "chatgpt") return chatGPTConnected();
+	if (provider === "chatgpt") return subscriptionConnected(provider);
+	if (isSubscriptionProvider(provider)) return subscriptionConnected(provider);
 	const connected = connectionAvailable(provider);
 	if (connected !== undefined) return connected;
 	const info = AUTH_PROVIDER_KEYS.find((p) => p.id === provider);

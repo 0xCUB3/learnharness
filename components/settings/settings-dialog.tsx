@@ -51,7 +51,8 @@ import { Hint } from "@/components/ui/hint";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 import { ChatGPTUIProvider } from "./chatgpt-connection.tsx";
-import { NativeSubscriptionsUIProvider } from "./subscription-connections.tsx";
+import { NativeSubscriptionUIProvider } from "./subscription-connections.tsx";
+import { LegacySubscriptionsUIProvider } from "./legacy-subscription-connections.tsx";
 
 /** Owner (2026-09-20): hints earn their place — mechanics-explaining
  *  prose is out; only the keyboard note stays (storage location is a
@@ -95,12 +96,12 @@ export function SettingsDialogProvider({
 		setShow(true);
 	}, []);
 	return (
-		<ChatGPTUIProvider><NativeSubscriptionsUIProvider><DialogContext.Provider value={{ open }}>
+		<ChatGPTUIProvider><NativeSubscriptionUIProvider><LegacySubscriptionsUIProvider><DialogContext.Provider value={{ open }}>
 			{children}
 			{show && (
 				<SettingsDialog onClose={() => setShow(false)} initialSection={landOn} initialRow={landOnRow} />
 			)}
-		</DialogContext.Provider></NativeSubscriptionsUIProvider></ChatGPTUIProvider>
+		</DialogContext.Provider></LegacySubscriptionsUIProvider></NativeSubscriptionUIProvider></ChatGPTUIProvider>
 	);
 }
 
@@ -234,7 +235,6 @@ export function SettingsDialogBody({
 			body: object,
 		) => {
 			setError(null);
-			try {
 			const res = await fetch(`/api/settings/${section}`, {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
@@ -262,9 +262,6 @@ export function SettingsDialogBody({
 			notifySettingsSaved(section);
 			if (section === "appearance")
 				onAppearanceChange(body as AppearanceSettings);
-			} catch {
-				setError(`Could not save ${section} — check your connection and try again.`);
-			}
 		},
 		[onAppearanceChange],
 	);
@@ -383,15 +380,13 @@ export function SettingsDialogBody({
 									</SettingsRow>
 								</SettingsSection>
 							)}
-							{active === "connections" && (
-								<SettingsSection title="Connections" testid="section-connections">
-									<ConnectionsSection />
-								</SettingsSection>
-							)}
 							{active === "keys" && (
 								<SettingsSection title="Providers" testid="section-keys">
 									<KeysSection initialRow={initialRow ?? undefined} />
 								</SettingsSection>
+							)}
+							{active === "connections" && (
+								<SettingsSection title="Connections" testid="section-connections"><ConnectionsSection /></SettingsSection>
 							)}
 							{active === "agent" && (
 								<SettingsSection
@@ -404,7 +399,7 @@ export function SettingsDialogBody({
 										graph={record.graph}
 										compaction={record.compaction}
 										onModelsChange={(next: ModelsSettings) =>
-											write("models", next)
+											void write("models", next)
 										}
 										onSectionChange={(next: AgentSettings) =>
 											void write("agent", next)
