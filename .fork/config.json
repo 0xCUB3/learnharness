@@ -5,8 +5,8 @@
   "upstreamBranch": "main",
   "mainBranch": "main",
   "mirrorBranch": "upstream-main",
-  "customBranch": "fork/customizations",
-  "customBase": "a509e53896fa224a9fa6c3d954bcf6e8fbff47b9",
+  "customBranch": "fork/customizations-0.3.7",
+  "customBase": "5f35026684779736d6151a9d85ad4befa896b9af",
   "pulls": [
     {
       "number": 13,
