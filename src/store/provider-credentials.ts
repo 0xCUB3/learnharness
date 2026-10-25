@@ -375,6 +375,8 @@ class FileProviderCredentialStore implements ProviderCredentialStore {
 				} catch (e) {
 					const code = (e as NodeJS.ErrnoException).code;
 					if (code === "EEXIST" || code === "ENOTEMPTY" || code === "EISDIR" || code === "ENOTDIR") return false;
+					// Windows reports a rename onto an existing directory as EPERM: the lock is held.
+					if (process.platform === "win32" && code === "EPERM" && fs.existsSync(this.lockDir)) return false;
 					throw new CredentialStoreError("io", "Could not lock credentials.");
 				}
 			};
