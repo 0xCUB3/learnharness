@@ -74,7 +74,9 @@ export function ModelMenuList({
 	const results = (models ?? [])
 		.map((m) => ({ m, s: fuzzyScore(query, m.provider, m.id, m.name) }))
 		.filter((r) => r.s !== null)
-		.sort((a, b) => b.s! - a.s! || a.m.id.localeCompare(b.m.id))
+		// Score ties fall back to NEWEST-FIRST: descending natural order, so
+		// "claude-sonnet-5-5" ranks above "claude-sonnet-4-6" above "-4-5".
+		.sort((a, b) => b.s! - a.s! || b.m.id.localeCompare(a.m.id, undefined, { numeric: true }))
 		.map((r) => r.m);
 
 	return (
